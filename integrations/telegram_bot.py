@@ -6,7 +6,7 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 # Загружаем токен и чат
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 bot = Bot(token=TOKEN)
