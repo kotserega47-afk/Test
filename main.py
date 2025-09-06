@@ -1,16 +1,103 @@
-# This is a sample Python script.
+import os
+import time
+from utils.report_builder import build_report
+from analyzers.transactions import analyze
+from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
+from integrations.telegram_bot import send_message_sync, send_file_sync
+from utils.logger import logger
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+# -----------------------------
+# Проверка токенов
+# -----------------------------
+DROPBOX_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN") or os.getenv("DROPBOX_REFRESH_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT = os.getenv("TELEGRAM_CHAT_ID")
+
+if not DROPBOX_TOKEN:
+    raise ValueError(
+        "Dropbox токен не найден! Задайте DROPBOX_ACCESS_TOKEN или DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
+    )
+
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
+    raise ValueError(
+        "Telegram токен или chat_id не найдены! Задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID"
+    )
+
+# -----------------------------
+# Пути Dropbox
+# -----------------------------
+INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH", "/Ostin/platform/input")
+OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH", "/Ostin/platform/output")
+PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH", "/Ostin/platform/processed")
+
+# Локальные папки
+LOCAL_DATA = "data"
+LOCAL_REPORTS = "reports"
+os.makedirs(LOCAL_DATA, exist_ok=True)
+os.makedirs(LOCAL_REPORTS, exist_ok=True)
+
+# Интервал проверки новых файлов
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+def process_file(fname: str):
+    dropbox_file_path = f"{INPUT_PATH}/{fname}"
+    local_file_path = os.path.join(LOCAL_DATA, fname)
+
+    logger.info(f"Начинаем обработку файла: {fname}")
+
+    if not download_file(dropbox_file_path, local_file_path):
+        logger.error(f"Не удалось скачать {fname}")
+        return
+
+    try:
+        result = analyze(local_file_path)
+        if "error" in result:
+            raise ValueError(result["error"])
+
+        logger.info(f"Анализ завершён для {fname}")
+
+        report_local_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
+        build_report(result, report_local_path)
+        logger.info(f"Отчёт сохранён локально: {report_local_path}")
+
+        send_message_sync(f"✅ Отчёт по файлу {fname} готов")
+        send_file_sync(report_local_path)
+        logger.info(f"Отчёт отправлен в Telegram")
+
+        if upload_file(report_local_path, f"{OUTPUT_PATH}/report_{fname}.xlsx"):
+            logger.info(f"Отчёт загружен в Dropbox: {OUTPUT_PATH}/report_{fname}.xlsx")
+
+        if move_file(dropbox_file_path, f"{PROCESSED_PATH}/{fname}"):
+            logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
+
+    except Exception as e:
+        logger.exception(f"Ошибка при обработке {fname}: {e}")
+        send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+def main_loop():
+    logger.info("Запуск автоматического пайплайна...")
+    processed_files = set()
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    while True:
+        try:
+            files = list_files(INPUT_PATH)
+            new_files = [f for f in files if f not in processed_files]
+
+            if not new_files:
+                logger.info("Нет новых файлов для обработки")
+            else:
+                for fname in new_files:
+                    process_file(fname)
+                    processed_files.add(fname)
+
+        except Exception as e:
+            logger.exception(f"Ошибка при сканировании Dropbox: {e}")
+            send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
+
+        time.sleep(CHECK_INTERVAL)
+
+
+if __name__ == "__main__":
+    main_loop()

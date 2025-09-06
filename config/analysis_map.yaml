@@ -1,0 +1,7 @@
+transactions:
+  column: "ID операции"  # колонка для анализа транзакций
+
+users:
+  column: "User ID"      # пример для будущего анализатора users
+payments:
+  column: "Amount"       # пример для анализа платежей
