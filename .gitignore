@@ -1,8 +1,19 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.env
+# IDE
+.idea/
+
+# Виртуальное окружение
 .venv/
+
+# Логи
+logs/
+
+# Временные файлы Excel
+~$*.xlsx
+
+# Локальные папки с данными и отчетами
 data/
 reports/
+
+# Python
+__pycache__/
+*.pyc
