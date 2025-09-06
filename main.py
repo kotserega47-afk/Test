@@ -5,6 +5,7 @@ from analyzers.transactions import analyze
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
+from analyzers.selector import get_analyzer
 
 # -----------------------------
 # Проверка токенов
@@ -50,8 +51,15 @@ def process_file(fname: str):
         logger.error(f"Не удалось скачать {fname}")
         return
 
+    analyzer = get_analyzer(fname)
+    if analyzer is None:
+        msg = f"❌ Не найден анализатор для файла {fname}"
+        logger.warning(msg)
+        send_message_sync(msg)
+        return
+
     try:
-        result = analyze(local_file_path)
+        result = analyzer(local_file_path)
         if "error" in result:
             raise ValueError(result["error"])
 
