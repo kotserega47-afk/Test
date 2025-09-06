@@ -1,11 +1,10 @@
 import os
 import time
 from utils.report_builder import build_report
-from analyzers.transactions import analyze
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
-from analyzers.selector import get_analyzer
+from analyzers.selector import get_analyzer  # функция выбора анализатора по имени файла
 
 # -----------------------------
 # Проверка токенов
@@ -27,9 +26,9 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
 # -----------------------------
 # Пути Dropbox
 # -----------------------------
-INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH", "/Ostin/platform/input")
-OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH", "/Ostin/platform/output")
-PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH", "/Ostin/platform/processed")
+INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
+OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
+PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 
 # Локальные папки
 LOCAL_DATA = "data"
@@ -51,15 +50,16 @@ def process_file(fname: str):
         logger.error(f"Не удалось скачать {fname}")
         return
 
-    analyzer = get_analyzer(fname)
-    if analyzer is None:
+    analyzer_func, config = get_analyzer(fname)
+    if analyzer_func is None:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
         return
 
     try:
-        result = analyzer(local_file_path)
+        # Вызываем анализатор с передачей конфигурации колонок
+        result = analyzer_func(local_file_path, config.get("columns"))
         if "error" in result:
             raise ValueError(result["error"])
 
