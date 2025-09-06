@@ -50,15 +50,17 @@ def process_file(fname: str):
         logger.error(f"Не удалось скачать {fname}")
         return
 
-    analyzer_func, config = get_analyzer(fname)
-    if analyzer_func is None:
+    res = get_analyzer(fname)
+    if res is None:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
         return
 
+    analyzer_func, config = res
+
     try:
-        # Вызываем анализатор с передачей конфигурации колонок
+        # Передаём путь к файлу и конфигурацию колонок
         result = analyzer_func(local_file_path, config.get("columns"))
         if "error" in result:
             raise ValueError(result["error"])
