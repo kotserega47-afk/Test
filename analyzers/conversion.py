@@ -3,17 +3,21 @@ import pandas as pd
 import re
 from datetime import datetime
 
+
 def normalize_partner_name(name: str) -> str:
     return re.sub(r'\s*\(\d+\)$', '', name).strip()
+
 
 def normalize_partners_list(partners_str: str) -> list:
     partners = partners_str.split(',')
     return [normalize_partner_name(p) for p in partners if p.strip()]
 
+
 def load_data(filepath, col_mapping: dict):
     """
     Загружает CSV/Excel и нормализует колонки.
-    col_mapping = {'card': 'Карта', 'status': 'Статус', 'datetime': 'Дата/Время создания', 'partner': 'Партнёр'}
+    col_mapping = {'card': 'Карта', 'status': 'Статус',
+                   'datetime': 'Дата/Время создания', 'partner': 'Партнёр'}
     """
     if filepath.endswith((".xlsx", ".xls")):
         df = pd.read_excel(filepath, dtype={col_mapping['card']: str})
@@ -30,6 +34,7 @@ def load_data(filepath, col_mapping: dict):
     df.sort_values('datetime', ascending=False, inplace=True)
     return df
 
+
 def count_consecutive_errors(group):
     count = max_count = 0
     for status in group['status']:
@@ -42,10 +47,11 @@ def count_consecutive_errors(group):
             count = 0
     return max_count
 
+
 def analyze_conversion(file_path: str, card_path: str, col_mapping: dict) -> dict:
     """
     Универсальный анализ конверсии по картам и партнёрам.
-    Возвращает словарь: {'summary': {...}, 'data': pd.DataFrame}
+    Возвращает словарь: {'summary': {...}, 'data': pd.DataFrame, 'problem_cards': pd.DataFrame}
     """
     df = load_data(file_path, col_mapping)
     card_df = load_data(card_path, {'card': 'Карта', 'partner': 'Партнёр'})  # только нужные колонки
@@ -86,3 +92,13 @@ def analyze_conversion(file_path: str, card_path: str, col_mapping: dict) -> dic
     }
 
     return {'summary': summary, 'data': report_df, 'problem_cards': problem_cards_filtered}
+
+
+# 🚀 Входная точка для selector.py
+def run(file_path: str, columns: dict) -> dict:
+    """
+    Обёртка для analyze_conversion, чтобы selector мог вызывать единый интерфейс.
+    """
+    # Если у тебя есть отдельный card_path (например, словарь карт),
+    # можно добавить его через env или yaml. Пока используем только file_path.
+    return analyze_conversion(file_path, file_path, columns)
