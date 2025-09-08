@@ -16,20 +16,30 @@ def normalize_partners_list(partners_str: str) -> list:
 def load_data(filepath, col_mapping: dict):
     """
     Загружает CSV/Excel и нормализует колонки.
-    col_mapping = {'card': 'Карта', 'status': 'Статус',
-                   'datetime': 'Дата/Время создания', 'partner': 'Партнёр'}
+    col_mapping = {'card': 'Карта', 'status': 'Статус', 'datetime': 'Дата/Время создания', 'partner': 'Партнёр'}
     """
     if filepath.endswith((".xlsx", ".xls")):
         df = pd.read_excel(filepath, dtype={col_mapping['card']: str})
     else:
         df = pd.read_csv(filepath, sep=None, engine='python', encoding='utf-8')
 
+    # Проверяем, что все нужные колонки есть
+    for key, col in col_mapping.items():
+        if col not in df.columns:
+            raise ValueError(f"❌ В файле нет колонки '{col}' (ожидали для '{key}')")
+
     # Переименовываем колонки под стандарт
-    df.rename(columns={v: k for k, v in col_mapping.items() if v in df.columns}, inplace=True)
+    df.rename(columns={v: k for k, v in col_mapping.items()}, inplace=True)
+
+    # Нормализация
     df['card'] = df['card'].astype(str).str.strip()
-    df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-    df['status'] = df['status'].str.strip().str.lower()
-    df['partner'] = df['partner'].str.strip().str.lower()
+    df['status'] = df['status'].astype(str).str.strip().str.lower()
+    df['partner'] = df['partner'].astype(str).str.strip().str.lower()
+
+    # Преобразование даты с явным форматом
+    df['datetime'] = pd.to_datetime(df['datetime'], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+
+    # Убираем пустые
     df.dropna(subset=['card', 'status', 'datetime'], inplace=True)
     df.sort_values('datetime', ascending=False, inplace=True)
     return df
