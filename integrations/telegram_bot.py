@@ -1,53 +1,54 @@
 # integrations/telegram_bot.py
 import os
-import asyncio
-import logging
+import threading
+import queue
+import time
 from telegram import Bot
 from telegram.error import TelegramError
+from utils.logger import logger
 
-# Загружаем токен и чат
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+if not TOKEN or not CHAT_ID:
+    raise ValueError("Telegram токен или chat_id не найдены!")
+
 bot = Bot(token=TOKEN)
 
-# --- Настройка логирования ---
-logging.basicConfig(
-    filename="logs/telegram.log",  # файл логов
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Очередь сообщений
+_msg_queue = queue.Queue()
 
-
-async def send_message(text: str):
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=text)
-        logging.info(f"Message sent: {text}")
-    except TelegramError as e:
-        logging.error(f"Failed to send message: {e}")
-        # Дублируем ошибку в Telegram
+def _sender_loop():
+    """Фоновый поток для отправки сообщений из очереди."""
+    while True:
+        item = _msg_queue.get()
+        if item is None:
+            break  # сигнал завершения
+        msg_type, content = item
         try:
-            await bot.send_message(chat_id=CHAT_ID, text=f"❌ Ошибка при отправке сообщения: {e}")
-        except:
-            pass
+            if msg_type == "text":
+                bot.send_message(chat_id=CHAT_ID, text=content)
+            elif msg_type == "file":
+                bot.send_document(chat_id=CHAT_ID, document=open(content, 'rb'))
+            time.sleep(0.1)  # маленькая пауза, чтобы не перегружать Telegram
+        except TelegramError as e:
+            logger.error(f"Failed to send message/file: {e}")
+        finally:
+            _msg_queue.task_done()
 
+# Запускаем поток
+_thread = threading.Thread(target=_sender_loop, daemon=True)
+_thread.start()
 
 def send_message_sync(text: str):
-    asyncio.run(send_message(text))
-
-
-async def send_file(file_path: str):
-    try:
-        with open(file_path, "rb") as f:
-            await bot.send_document(chat_id=CHAT_ID, document=f)
-        logging.info(f"File sent: {file_path}")
-    except TelegramError as e:
-        logging.error(f"Failed to send file {file_path}: {e}")
-        try:
-            await bot.send_message(chat_id=CHAT_ID, text=f"❌ Ошибка при отправке файла: {e}")
-        except:
-            pass
-
+    """Добавляем текстовое сообщение в очередь."""
+    _msg_queue.put(("text", text))
 
 def send_file_sync(file_path: str):
-    asyncio.run(send_file(file_path))
+    """Добавляем файл в очередь на отправку."""
+    _msg_queue.put(("file", file_path))
+
+def shutdown():
+    """Останавливаем фоновый поток (вызывать при завершении программы)."""
+    _msg_queue.put(None)
+    _thread.join()
