@@ -16,7 +16,7 @@ def normalize_partners_list(partners_str: str) -> list:
 def load_data(filepath, col_mapping: dict):
     """
     Загружает CSV/Excel и нормализует колонки.
-    col_mapping = {'card': 'Карта', 'status': 'Статус', 'datetime': 'Дата/Время создания', 'partner': 'Партнёр'}
+    col_mapping = {'card': 'Карта', 'status': 'Статус', 'datetime': 'Дата/Время создания', 'partner': 'Партнер'}
     """
     if filepath.endswith((".xlsx", ".xls")):
         df = pd.read_excel(filepath, dtype={col_mapping['card']: str})
@@ -60,11 +60,11 @@ def count_consecutive_errors(group):
 
 def analyze_conversion(file_path: str, card_path: str, col_mapping: dict) -> dict:
     """
-    Универсальный анализ конверсии по картам и партнёрам.
+    Универсальный анализ конверсии по картам и партнерам.
     Возвращает словарь: {'summary': {...}, 'data': pd.DataFrame, 'problem_cards': pd.DataFrame}
     """
     df = load_data(file_path, col_mapping)
-    card_df = load_data(card_path, {'card': 'Карта', 'partner': 'Партнёр'})  # только нужные колонки
+    card_df = load_data(card_path, {'card': 'Карта', 'partner': 'Партнер'})  # только нужные колонки
 
     grouped = df.groupby(['card', 'partner'])
     results = []
