@@ -5,52 +5,37 @@ from utils.report_builder import build_report
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
-from analyzers.selector import get_analyzer  # функция выбора анализатора по имени файла
+from analyzers.selector import get_analyzer
 
 SLEEP_START = os.getenv("SLEEP_START", "01:00")
 SLEEP_END = os.getenv("SLEEP_END", "07:00")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
 
+LOCAL_DATA = "data"
+LOCAL_REPORTS = "reports"
+os.makedirs(LOCAL_DATA, exist_ok=True)
+os.makedirs(LOCAL_REPORTS, exist_ok=True)
 
-def parse_time(s: str) -> datetime.time:
-    return datetime.datetime.strptime(s, "%H:%M").time()
+INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
+OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
+PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 
-
-sleep_start = parse_time(SLEEP_START)
-sleep_end = parse_time(SLEEP_END)
-
-# -----------------------------
-# Проверка токенов
-# -----------------------------
 DROPBOX_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN") or os.getenv("DROPBOX_REFRESH_TOKEN")
 if not DROPBOX_TOKEN:
     raise ValueError(
         "Dropbox токен не найден! Задайте DROPBOX_ACCESS_TOKEN или DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
     )
 
-# -----------------------------
-# Пути Dropbox
-# -----------------------------
-INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
-OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
-PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+def parse_time(s: str) -> datetime.time:
+    return datetime.datetime.strptime(s, "%H:%M").time()
 
-# Локальные папки
-LOCAL_DATA = "data"
-LOCAL_REPORTS = "reports"
-os.makedirs(LOCAL_DATA, exist_ok=True)
-os.makedirs(LOCAL_REPORTS, exist_ok=True)
-
-# Интервал проверки новых файлов
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
-
+sleep_start = parse_time(SLEEP_START)
+sleep_end = parse_time(SLEEP_END)
 
 def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) -> bool:
-    """Проверяет, находится ли текущее время в интервале сна"""
     if start < end:
         return start <= now <= end
-    else:
-        return now >= start or now <= end
-
+    return now >= start or now <= end
 
 def process_file(fname: str):
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
@@ -59,38 +44,40 @@ def process_file(fname: str):
     logger.info(f"Начинаем обработку файла: {fname}")
 
     if not download_file(dropbox_file_path, local_file_path):
-        logger.error(f"Не удалось скачать {fname}")
-        send_message_sync(f"❌ Не удалось скачать {fname}")
+        msg = f"❌ Не удалось скачать {fname}"
+        logger.error(msg)
+        send_message_sync(msg)
         return
 
-    res = get_analyzer(fname)
-    if res is None:
+    analyzer_res = get_analyzer(fname)
+    if not analyzer_res:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
         return
 
-    analyzer_func, config = res
+    analyzer_func, config = analyzer_res
+    columns = config.get("columns")
+    if not columns:
+        msg = f"❌ В конфиге нет 'columns' для {fname}"
+        logger.error(msg)
+        send_message_sync(msg)
+        return
 
     try:
-        # Передаём путь к файлу и конфигурацию колонок
-        result = analyzer_func(local_file_path, config.get("columns"))
+        result = analyzer_func(local_file_path, columns)
         if "error" in result:
             raise ValueError(result["error"])
 
-        logger.info(f"Анализ завершён для {fname}")
-
-        report_local_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
-        build_report(result, report_local_path)
-        logger.info(f"Отчёт сохранён локально: {report_local_path}")
+        report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
+        build_report(result, report_path)
+        logger.info(f"Отчёт сохранён локально: {report_path}")
 
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
-        send_file_sync(report_local_path)
-        logger.info(f"Отчёт отправлен в Telegram")
+        send_file_sync(report_path)
 
-        if upload_file(report_local_path, f"{OUTPUT_PATH}/report_{fname}.xlsx"):
+        if upload_file(report_path, f"{OUTPUT_PATH}/report_{fname}.xlsx"):
             logger.info(f"Отчёт загружен в Dropbox: {OUTPUT_PATH}/report_{fname}.xlsx")
-
         if move_file(dropbox_file_path, f"{PROCESSED_PATH}/{fname}"):
             logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
 
@@ -98,14 +85,12 @@ def process_file(fname: str):
         logger.exception(f"Ошибка при обработке {fname}: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
 
-
 def main_loop():
     logger.info("Запуск автоматического пайплайна...")
     processed_files = set()
 
     while True:
         now = datetime.datetime.now().time()
-
         if in_sleep_time(now, sleep_start, sleep_end):
             logger.info(f"Ночной режим: пауза до {SLEEP_END}")
             today = datetime.date.today()
@@ -115,9 +100,7 @@ def main_loop():
                 wake_time = datetime.datetime.combine(tomorrow, sleep_end)
             elif now > sleep_end:
                 wake_time = datetime.datetime.combine(tomorrow, sleep_end)
-
-            sleep_seconds = (wake_time - datetime.datetime.now()).seconds
-            time.sleep(sleep_seconds)
+            time.sleep(max(0, (wake_time - datetime.datetime.now()).seconds))
             continue
 
         try:
@@ -126,17 +109,15 @@ def main_loop():
 
             if not new_files:
                 logger.info("Нет новых файлов для обработки")
-            else:
-                for fname in new_files:
-                    process_file(fname)
-                    processed_files.add(fname)
+            for fname in new_files:
+                process_file(fname)
+                processed_files.add(fname)
 
         except Exception as e:
             logger.exception(f"Ошибка при сканировании Dropbox: {e}")
             send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
 
         time.sleep(CHECK_INTERVAL)
-
 
 if __name__ == "__main__":
     main_loop()
