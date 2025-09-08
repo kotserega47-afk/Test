@@ -7,7 +7,6 @@ from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from analyzers.selector import get_analyzer  # функция выбора анализатора по имени файла
 
-
 SLEEP_START = os.getenv("SLEEP_START", "01:00")
 SLEEP_END = os.getenv("SLEEP_END", "07:00")
 
@@ -23,17 +22,9 @@ sleep_end = parse_time(SLEEP_END)
 # Проверка токенов
 # -----------------------------
 DROPBOX_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN") or os.getenv("DROPBOX_REFRESH_TOKEN")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT = os.getenv("TELEGRAM_CHAT_ID")
-
 if not DROPBOX_TOKEN:
     raise ValueError(
         "Dropbox токен не найден! Задайте DROPBOX_ACCESS_TOKEN или DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
-    )
-
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
-    raise ValueError(
-        "Telegram токен или chat_id не найдены! Задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID"
     )
 
 # -----------------------------
@@ -53,6 +44,14 @@ os.makedirs(LOCAL_REPORTS, exist_ok=True)
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
 
 
+def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) -> bool:
+    """Проверяет, находится ли текущее время в интервале сна"""
+    if start < end:
+        return start <= now <= end
+    else:
+        return now >= start or now <= end
+
+
 def process_file(fname: str):
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
@@ -61,6 +60,7 @@ def process_file(fname: str):
 
     if not download_file(dropbox_file_path, local_file_path):
         logger.error(f"Не удалось скачать {fname}")
+        send_message_sync(f"❌ Не удалось скачать {fname}")
         return
 
     res = get_analyzer(fname)
@@ -99,17 +99,6 @@ def process_file(fname: str):
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
 
 
-def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) -> bool:
-    """
-    Проверяет, находится ли текущее время в интервале сна.
-    Поддерживает диапазоны через полночь (например, 23:00–07:00).
-    """
-    if start < end:  # обычный интервал (01:00–07:00)
-        return start <= now <= end
-    else:  # интервал через полночь (например, 23:00–07:00)
-        return now >= start or now <= end
-
-
 def main_loop():
     logger.info("Запуск автоматического пайплайна...")
     processed_files = set()
@@ -117,26 +106,18 @@ def main_loop():
     while True:
         now = datetime.datetime.now().time()
 
-        # Проверяем ночное время
         if in_sleep_time(now, sleep_start, sleep_end):
+            logger.info(f"Ночной режим: пауза до {SLEEP_END}")
             today = datetime.date.today()
             tomorrow = today + datetime.timedelta(days=1)
+            wake_time = datetime.datetime.combine(today, sleep_end)
+            if sleep_start > sleep_end and now >= sleep_start:
+                wake_time = datetime.datetime.combine(tomorrow, sleep_end)
+            elif now > sleep_end:
+                wake_time = datetime.datetime.combine(tomorrow, sleep_end)
 
-            # вычисляем момент "просыпания"
-            if sleep_start < sleep_end:
-                wake_time = datetime.datetime.combine(today, sleep_end)
-                if now > sleep_end:
-                    wake_time = datetime.datetime.combine(tomorrow, sleep_end)
-            else:
-                # диапазон через полночь: например 23:00–07:00
-                if now >= sleep_start:  # сегодня ещё спим
-                    wake_time = datetime.datetime.combine(tomorrow, sleep_end)
-                else:  # уже после полуночи
-                    wake_time = datetime.datetime.combine(today, sleep_end)
-
-            sleep_seconds = int((wake_time - datetime.datetime.now()).total_seconds())
-            logger.info(f"Ночной режим: пауза до {wake_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            time.sleep(max(sleep_seconds, 1))
+            sleep_seconds = (wake_time - datetime.datetime.now()).seconds
+            time.sleep(sleep_seconds)
             continue
 
         try:
