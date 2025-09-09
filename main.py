@@ -7,6 +7,26 @@ from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from analyzers.selector import get_analyzer
 
+
+logger.info("🔍 Проверка файлов конфигурации перед стартом")
+
+cwd = os.getcwd()
+logger.info(f"Текущая рабочая директория: {cwd}")
+
+config_dir = os.path.join(cwd, "config")
+if os.path.exists(config_dir):
+    files = os.listdir(config_dir)
+    logger.info(f"Содержимое /config: {files}")
+    # Проверяем конкретные файлы
+    for fname in ["conversion_config.yaml", "analysis_map.yaml"]:
+        path = os.path.join(config_dir, fname)
+        if os.path.exists(path):
+            logger.info(f"✅ Файл найден: {fname}")
+        else:
+            logger.warning(f"❌ Файл отсутствует: {fname}")
+else:
+    logger.warning("❌ Папка /config не найдена в контейнере")
+
 LOCAL_DATA = "data"
 LOCAL_REPORTS = "reports"
 os.makedirs(LOCAL_DATA, exist_ok=True)
