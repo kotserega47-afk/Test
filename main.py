@@ -41,7 +41,7 @@ def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) 
     return now >= start or now <= end
 
 
-def process_file(fname: str, all_files: list):
+def process_file(fname: str):
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
 
@@ -53,41 +53,21 @@ def process_file(fname: str, all_files: list):
         send_message_sync(msg)
         return
 
-    analyzer_res = get_analyzer(fname)
-    if not analyzer_res:
-        msg = f"❌ Не найден анализатор для файла {fname}"
-        logger.warning(msg)
+    analyzer_func, config, requires = get_analyzer(fname)
+    if not analyzer_func or not config:
+        msg = f"ℹ️ Пропускаем файл {fname} — анализатор не найден"
+        logger.info(msg)
+        return
+
+    columns = config.get("columns")
+    if not columns:
+        msg = f"❌ В конфиге нет 'columns' для {fname}"
+        logger.error(msg)
         send_message_sync(msg)
         return
 
-    analyzer_func, config, requires = analyzer_res
-    columns = config.get("columns")
-
-    # --- Подгружаем зависимые файлы ---
-    extra_files_local = []
-    for mask in requires:
-        match = next((f for f in all_files if mask.lower() in f.lower()), None)
-        if not match:
-            msg = f"❌ Для {fname} не найден зависимый файл с маской '{mask}'"
-            logger.error(msg)
-            send_message_sync(msg)
-            return
-        dep_dropbox_path = f"{INPUT_PATH}/{match}"
-        dep_local_path = os.path.join(LOCAL_DATA, match)
-        if not download_file(dep_dropbox_path, dep_local_path):
-            msg = f"❌ Не удалось скачать зависимый файл {match}"
-            logger.error(msg)
-            send_message_sync(msg)
-            return
-        extra_files_local.append(dep_local_path)
-
     try:
-        # --- Запускаем анализ ---
-        if extra_files_local:
-            result = analyzer_func(local_file_path, *extra_files_local, columns)
-        else:
-            result = analyzer_func(local_file_path, columns)
-
+        result = analyzer_func(local_file_path, columns)
         if "error" in result:
             raise ValueError(result["error"])
 
