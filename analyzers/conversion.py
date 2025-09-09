@@ -1,91 +1,87 @@
 # analyzers/conversion.py
-import os
-import re
 import pandas as pd
-from datetime import datetime
-import yaml
+import re
+from utils.report_builder import build_report
+from utils.logger import logger
+from utils.data_loader import load_data, normalize_partners_list, count_consecutive_errors
+from integrations.telegram_bot import send_message_sync
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conversion_config.yaml")
+CONFIG_PATH = "config/conversion_config.yaml"
+
+import yaml
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     CONFIG = yaml.safe_load(f)
 
-def normalize_colname(name: str) -> str:
-    return str(name).strip().lower().replace("ё", "е")
 
-def normalize_partner_name(name: str) -> str:
-    return re.sub(r'\s*\(\d+\)$', '', str(name)).strip()
-
-def normalize_partners_list(partners_str: str) -> list:
-    partners = str(partners_str).split(',')
-    return [normalize_partner_name(p).lower() for p in partners if p.strip()]
-
-def load_data(filepath, col_mapping: dict):
-    if filepath.endswith((".xlsx", ".xls")):
-        df = pd.read_excel(filepath, dtype=str)
-    else:
-        df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8")
-
-    norm_cols = {normalize_colname(c): c for c in df.columns}
-    new_cols = {}
-    for key, expected_name in col_mapping.items():
-        expected_norm = normalize_colname(expected_name)
-        if expected_norm not in norm_cols:
-            raise ValueError(f"❌ В файле нет колонки '{expected_name}' (ожидали для '{key}')")
-        new_cols[norm_cols[expected_norm]] = key
-    df.rename(columns=new_cols, inplace=True)
-
-    if "card" in df: df["card"] = df["card"].astype(str).str.strip()
-    if "status" in df: df["status"] = df["status"].astype(str).str.strip().str.lower()
-    if "partner" in df: df["partner"] = df["partner"].astype(str).str.strip().str.lower()
-    if "datetime" in df: df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
-
-    required = [c for c in ["card", "status", "datetime"] if c in df]
-    if required: df.dropna(subset=required, inplace=True)
-    if "datetime" in df: df.sort_values("datetime", ascending=False, inplace=True)
-
-    return df
-
-def count_consecutive_errors(group, partner_name: str) -> tuple[int, int]:
-    count = max_count = 0
-    threshold = CONFIG.get("partners", {}).get(partner_name, 4)
-    for status in group['status']:
-        if status == 'оплачен': break
-        if status in ['ошибка', 'ожидает оплаты']:
-            count += 1
-            max_count = max(max_count, count)
-        else:
-            count = 0
-    return max_count, threshold
-
-def analyze_conversion(conv_file: str, card_file: str, col_mapping: dict) -> dict:
+def analyze_conversion(conv_file: str, card_files: list[str], col_mapping: dict) -> dict:
+    # --------------------------
+    # Загружаем данные
+    # --------------------------
     conv_df = load_data(conv_file, col_mapping)
-    card_df = load_data(card_file, {'card': 'Карта', 'partner': 'Партнер'})
 
+    card_dfs = [load_data(f, {"card": "Карта", "partner": "Партнер"}) for f in card_files]
+    card_df = pd.concat(card_dfs, ignore_index=True)
+
+    # --------------------------
+    # Подсчёт max consecutive errors
+    # --------------------------
     results = []
     for (card, partner), group in conv_df.groupby(['card', 'partner']):
         max_errors, threshold = count_consecutive_errors(group, partner)
-        results.append({"card": card, "partner": partner, "max_consecutive_errors": max_errors, "threshold": threshold})
-    report_df = pd.DataFrame(results)
+        results.append({
+            "card": card,
+            "partner": partner,
+            "max_consecutive_errors": max_errors,
+            "threshold": threshold
+        })
+    errors_df = pd.DataFrame(results)
 
-    merged = report_df.merge(card_df, on='card', how='left', suffixes=('', '_card'))
+    # --------------------------
+    # Проблемные карты для Отключить
+    # --------------------------
     problem_cards = []
-    for _, row in merged.iterrows():
-        partners_list = normalize_partners_list(row.get('partner_card', ''))
+    for _, row in errors_df.iterrows():
+        partners_list = normalize_partners_list(card_df.query("card == @row['card']")['partner'].sum())
         if row['partner'] in partners_list and row['max_consecutive_errors'] >= row['threshold']:
             problem_cards.append(row)
     problem_cards_df = pd.DataFrame(problem_cards)
 
-    summary = {
-        'total_cards': conv_df['card'].nunique(),
-        'total_partners': conv_df['partner'].nunique(),
-        'problem_cards': problem_cards_df['card'].nunique() if not problem_cards_df.empty else 0,
-        'total_rows': len(conv_df)
-    }
+    # --------------------------
+    # Summary
+    # --------------------------
+    summary = {}
+    summary['Карт в работе'] = conv_df['card'].nunique()
 
+    pools = CONFIG.get("pools", {})
+    for pool_name, pool_label in pools.items():
+        conv_pool_cards = conv_df.query("partner.str.contains(@pool_label, case=False, na=False)")['card'].nunique()
+        card_pool_cards = card_df.query("partner.str.contains(@pool_label, case=False, na=False)")['card'].nunique()
+        summary[f"Объем {pool_label}"] = conv_pool_cards / card_pool_cards if card_pool_cards else 0
+
+    summary['Max ошибки'] = errors_df['max_consecutive_errors'].max() if not errors_df.empty else 0
+    summary['Карты на отключение'] = problem_cards_df['card'].nunique() if not problem_cards_df.empty else 0
+
+    # --------------------------
+    # Подготовка листа Stat
+    # --------------------------
+    stat_rows = []
+    for card in conv_df['card'].unique():
+        row = {"Карты": card}
+        for bank in ["Сбер", "Тинь"]:
+            errs = conv_df.query("card==@card and partner.str.contains(@bank, case=False, na=False) and status=='ошибка'")['status'].count()
+            success = conv_df.query("card==@card and partner.str.contains(@bank, case=False, na=False) and status=='оплачен'")['status'].count()
+            row[f"{bank} Ошибки"] = errs
+            row[f"{bank} Успешно"] = success
+        stat_rows.append(row)
+    stat_df = pd.DataFrame(stat_rows)
+
+    # --------------------------
+    # Подготовка data_sheets
+    # --------------------------
     data_sheets = {
         "Data_conv": conv_df,
         "Data_card": card_df,
-        "Stat": pd.DataFrame(),
+        "Stat": stat_df,
         "Отключить": problem_cards_df[['card', 'partner', 'max_consecutive_errors']] if not problem_cards_df.empty else pd.DataFrame()
     }
 
@@ -95,5 +91,6 @@ def analyze_conversion(conv_file: str, card_file: str, col_mapping: dict) -> dic
         'problem_cards': problem_cards_df,
     }
 
-def run(conv_file: str, card_file: str, columns: dict) -> dict:
-    return analyze_conversion(conv_file, card_file, columns)
+
+def run(conv_file: str, card_files: list[str], columns: dict) -> dict:
+    return analyze_conversion(conv_file, card_files, columns)

@@ -1,7 +1,4 @@
-transactions:
-  file_pattern: "tran"
-  columns:
-    column: "ID операции"
+#config/analysis_map.yaml
 
 conversion:
   file_pattern: "conversion"
@@ -9,10 +6,4 @@ conversion:
     card: "Карта"
     status: "Статус"
     datetime: "Дата/Время создания"
-    partner: "Партнер"
-
-card:
-  file_pattern: "card"
-  columns:
-    card: "Карта"
     partner: "Партнер"

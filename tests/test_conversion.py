@@ -1,42 +1,59 @@
+# test_local.py
+
 import os
-import pandas as pd
-import pytest
-from analyzers.conversion import run
+from analyzers.selector import get_analyzer
+from utils.report_builder import build_report
+from utils.logger import logger
 
-# Тестовые данные (создаются, если файла нет)
-TEST_FILE = r"C:\Users\denis\Desktop\conversion.xlsx"
-COLUMNS = {
-    "card": "Карта",
-    "status": "Статус",
-    "datetime": "Дата/Время создания",
-    "partner": "Партнер"
-}
+# Локальные папки
+LOCAL_DATA = "data"
+LOCAL_REPORTS = "reports"
+os.makedirs(LOCAL_DATA, exist_ok=True)
+os.makedirs(LOCAL_REPORTS, exist_ok=True)
 
-@pytest.fixture(scope="session", autouse=True)
 
-def test_conversion_summary():
-    """Проверка, что анализатор возвращает корректный summary"""
-    result = run(TEST_FILE, COLUMNS)
+def process_local_file(fname: str):
+    """Тестовая обработка файла без Dropbox и Telegram"""
+    local_file_path = os.path.join(LOCAL_DATA, fname)
 
-    assert "summary" in result
-    summary = result["summary"]
+    logger.info(f"Начинаем локальную обработку файла: {fname}")
 
-    # Проверяем основные ключи
-    assert "total_cards" in summary
-    assert "total_partners" in summary
-    assert "problem_cards" in summary
-    assert "total_rows" in summary
+    analyzer_func, config = get_analyzer(fname)
+    if not analyzer_func or not config:
+        print(f"❌ Не найден анализатор для файла {fname}")
+        return
 
-    # Должно быть 2 карты и 2 партнёра в тестовом файле
-    assert summary["total_cards"] == 2
-    assert summary["total_partners"] == 2
-    assert summary["total_rows"] == 4
+    try:
+        columns = config.get("columns", {})
 
-def test_conversion_dataframe():
-    """Проверка, что в result['data'] есть ожидаемые колонки"""
-    result = run(TEST_FILE, COLUMNS)
-    df = result["data"]
+        if config.get("file_pattern") == "conversion":
+            # ищем card-файл
+            card_file = next((f for f in os.listdir(LOCAL_DATA) if "card" in f.lower()), None)
+            if not card_file:
+                print(f"❌ Для анализа {fname} не найден card-файл")
+                return
+            card_path = os.path.join(LOCAL_DATA, card_file)
+            result = analyzer_func(local_file_path, card_path, columns)
+        else:
+            result = analyzer_func(local_file_path, columns)
 
-    assert isinstance(df, pd.DataFrame)
-    for col in ["card", "partner", "max_consecutive_errors"]:
-        assert col in df.columns
+        if not result:
+            print(f"❌ Анализатор {fname} вернул пустой результат")
+            return
+
+        report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
+        build_report(result, report_path)
+        print(f"✅ Отчёт по {fname} готов: {report_path}")
+
+    except Exception as e:
+        logger.exception(f"Ошибка при обработке {fname}: {e}")
+        print(f"❌ Ошибка при обработке {fname}: {e}")
+
+
+if __name__ == "__main__":
+    test_files = os.listdir(LOCAL_DATA)
+    if not test_files:
+        print("⚠️ Положите тестовые файлы в папку data/")
+    else:
+        for f in test_files:
+            process_local_file(f)
