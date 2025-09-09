@@ -1,10 +1,15 @@
 # analyzers/conversion.py
 import pandas as pd
 import re
+import os
 import yaml
 from utils.logger import logger
 
-CONFIG_PATH = "config/conversion_config.yaml"
+# Абсолютный путь до conversion_config.yaml относительно этого файла
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "conversion_config.yaml")
+CONFIG_PATH = os.path.abspath(CONFIG_PATH)
+
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     CONFIG = yaml.safe_load(f)
 
@@ -70,19 +75,15 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     # Загружаем все Card файлы
     card_df_list = [load_data(f, {'card': 'Карта', 'partner': 'Партнер'}) for f in card_files]
-    card_df = pd.concat(card_df_list, ignore_index=True)
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame()
 
-    # -----------------------------
     # Data_conv и Data_card
-    # -----------------------------
     data_sheets = {
         "Data_conv": conv_df,
         "Data_card": card_df
     }
 
-    # -----------------------------
     # Статистика
-    # -----------------------------
     results = []
     problem_cards = []
 
@@ -98,9 +99,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     problem_cards_df = pd.DataFrame(problem_cards)
 
-    # -----------------------------
     # Summary
-    # -----------------------------
     pools = CONFIG.get("pools", {})
     summary = {
         "Карт в работе": conv_df['card'].nunique(),
@@ -108,15 +107,12 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         "Карты на отключение": problem_cards_df['card'].nunique() if not problem_cards_df.empty else 0
     }
 
-    # Объём по пуллам
     for key, pool_name in pools.items():
         conv_cards = conv_df.loc[conv_df['partner'].str.contains(pool_name.lower()), 'card'].nunique()
         card_cards = card_df.loc[card_df['partner'].str.contains(pool_name.lower()), 'card'].nunique()
         summary[f"Объем {pool_name}"] = conv_cards / card_cards if card_cards else 0
 
-    # -----------------------------
     # Лист Stat
-    # -----------------------------
     stat_list = []
     for card in conv_df['card'].unique():
         row = {"Карта": card}
@@ -127,9 +123,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         stat_list.append(row)
     data_sheets["Stat"] = pd.DataFrame(stat_list)
 
-    # -----------------------------
     # Лист Отключить
-    # -----------------------------
     data_sheets["Отключить"] = problem_cards_df[['card','partner','max_consecutive_errors']]
 
     return {
