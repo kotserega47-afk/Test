@@ -1,22 +1,11 @@
 # utils/report_builder.py
 import pandas as pd
 
-def build_report(result: dict, output_path: str):
-    """
-    Создаёт Excel-отчёт с двумя листами:
-    - Summary: ключевые показатели
-    - Data: исходная таблица
-    """
-    if "error" in result:
-        raise ValueError(f"Невозможно создать отчёт: {result['error']}")
+def build_report(result: dict, report_path: str):
+    with pd.ExcelWriter(report_path, engine='openpyxl') as writer:
+        for sheet_name, df in result.get("data_sheets", {}).items():
+            if df is not None and not df.empty:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    summary = result.get("summary", {})
-    df_data = result.get("data")
-
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        # Лист Summary
-        df_summary = pd.DataFrame(list(summary.items()), columns=["Metric", "Value"])
-        df_summary.to_excel(writer, sheet_name="Summary", index=False)
-
-        # Лист Data
-        df_data.to_excel(writer, sheet_name="Data", index=False)
+        summary_df = pd.DataFrame([result.get("summary", {})])
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)

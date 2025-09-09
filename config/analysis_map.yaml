@@ -1,3 +1,8 @@
+transactions:
+  file_pattern: "tran"
+  columns:
+    column: "ID операции"
+
 conversion:
   file_pattern: "conversion"
   columns:
