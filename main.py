@@ -41,7 +41,7 @@ def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) 
     return now >= start or now <= end
 
 
-def process_file(fname: str):
+def process_file(fname: str, all_files: list):
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
 
@@ -53,39 +53,38 @@ def process_file(fname: str):
         send_message_sync(msg)
         return
 
-    analyzer_func, config, requires = get_analyzer(fname)
-    if not analyzer_func:
+    analyzer_res = get_analyzer(fname)
+    if not analyzer_res:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
         return
 
+    analyzer_func, config, requires = analyzer_res
     columns = config.get("columns")
-    if not columns:
-        msg = f"❌ В конфиге нет 'columns' для {fname}"
-        logger.error(msg)
-        send_message_sync(msg)
-        return
 
-    # Загружаем обязательные файлы, если они указаны
-    required_local_files = {}
-    if requires:
-        for req in requires:
-            req_path = f"{INPUT_PATH}/{req}"
-            local_req_path = os.path.join(LOCAL_DATA, req)
-            if download_file(req_path, local_req_path):
-                required_local_files[req] = local_req_path
-                logger.info(f"Загружен обязательный файл {req}")
-            else:
-                msg = f"❌ Не удалось загрузить обязательный файл {req}"
-                logger.error(msg)
-                send_message_sync(msg)
-                return
+    # --- Подгружаем зависимые файлы ---
+    extra_files_local = []
+    for mask in requires:
+        match = next((f for f in all_files if mask.lower() in f.lower()), None)
+        if not match:
+            msg = f"❌ Для {fname} не найден зависимый файл с маской '{mask}'"
+            logger.error(msg)
+            send_message_sync(msg)
+            return
+        dep_dropbox_path = f"{INPUT_PATH}/{match}"
+        dep_local_path = os.path.join(LOCAL_DATA, match)
+        if not download_file(dep_dropbox_path, dep_local_path):
+            msg = f"❌ Не удалось скачать зависимый файл {match}"
+            logger.error(msg)
+            send_message_sync(msg)
+            return
+        extra_files_local.append(dep_local_path)
 
     try:
-        # Передаём зависимости в анализатор (если нужны)
-        if required_local_files:
-            result = analyzer_func(local_file_path, columns, required_local_files)
+        # --- Запускаем анализ ---
+        if extra_files_local:
+            result = analyzer_func(local_file_path, *extra_files_local, columns)
         else:
             result = analyzer_func(local_file_path, columns)
 
@@ -107,6 +106,7 @@ def process_file(fname: str):
     except Exception as e:
         logger.exception(f"Ошибка при обработке {fname}: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
+
 
 
 def main_loop():
