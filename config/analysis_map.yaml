@@ -1,16 +1,13 @@
-transactions:
-  column: ID операции
-  file_pattern: "tran"      # если имя файла содержит "tran", используем этот анализатор
-
-kyc:
-  column: user_id
-  file_pattern: "kyc"               # если имя файла содержит "kyc", используем другой анализатор
-
 conversion:
   file_pattern: "conversion"
-  requires: ["card"]   # обязательно нужны файлы с card_* для анализа
   columns:
     card: "Карта"
     status: "Статус"
     datetime: "Дата/Время создания"
+    partner: "Партнер"
+
+card:
+  file_pattern: "card"
+  columns:
+    card: "Карта"
     partner: "Партнер"

@@ -7,6 +7,9 @@ from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from analyzers.selector import get_analyzer
 
+# -----------------------------
+# Настройки
+# -----------------------------
 SLEEP_START = os.getenv("SLEEP_START", "01:00")
 SLEEP_END = os.getenv("SLEEP_END", "07:00")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
@@ -26,22 +29,25 @@ if not DROPBOX_TOKEN:
         "Dropbox токен не найден! Задайте DROPBOX_ACCESS_TOKEN или DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
     )
 
-
+# -----------------------------
+# Вспомогательные функции
+# -----------------------------
 def parse_time(s: str) -> datetime.time:
     return datetime.datetime.strptime(s, "%H:%M").time()
-
 
 sleep_start = parse_time(SLEEP_START)
 sleep_end = parse_time(SLEEP_END)
 
 
 def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) -> bool:
+    """Проверка ночного режима"""
     if start < end:
         return start <= now <= end
     return now >= start or now <= end
 
 
-def process_file(fname: str):
+def process_file(fname: str, all_files: list[str]):
+    """Обработка одного файла"""
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
 
@@ -53,24 +59,44 @@ def process_file(fname: str):
         send_message_sync(msg)
         return
 
-    analyzer_func, config, requires = get_analyzer(fname)
+    analyzer_func, config = get_analyzer(fname)
     if not analyzer_func or not config:
-        msg = f"ℹ️ Пропускаем файл {fname} — анализатор не найден"
-        logger.info(msg)
-        return
-
-    columns = config.get("columns")
-    if not columns:
-        msg = f"❌ В конфиге нет 'columns' для {fname}"
-        logger.error(msg)
+        msg = f"❌ Не найден анализатор для файла {fname}"
+        logger.warning(msg)
         send_message_sync(msg)
         return
 
     try:
-        result = analyzer_func(local_file_path, columns)
+        # Проверяем, conversion ли это
+        if config.get("file_pattern") == "conversion":
+            # ищем card-файл
+            card_file = next((f for f in all_files if "card" in f.lower()), None)
+            if not card_file:
+                msg = f"❌ Для анализа {fname} не найден card-файл"
+                logger.error(msg)
+                send_message_sync(msg)
+                return
+
+            card_path = os.path.join(LOCAL_DATA, card_file)
+            if not os.path.exists(card_path):
+                dropbox_card_path = f"{INPUT_PATH}/{card_file}"
+                if not download_file(dropbox_card_path, card_path):
+                    msg = f"❌ Не удалось скачать {card_file} для анализа {fname}"
+                    logger.error(msg)
+                    send_message_sync(msg)
+                    return
+
+            columns = config.get("columns", {})
+            result = analyzer_func(local_file_path, card_path, columns)
+
+        else:
+            columns = config.get("columns", {})
+            result = analyzer_func(local_file_path, columns)
+
         if "error" in result:
             raise ValueError(result["error"])
 
+        # Сохраняем отчёт
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
         build_report(result, report_path)
         logger.info(f"Отчёт сохранён локально: {report_path}")
@@ -86,7 +112,6 @@ def process_file(fname: str):
     except Exception as e:
         logger.exception(f"Ошибка при обработке {fname}: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-
 
 
 def main_loop():
