@@ -35,6 +35,7 @@ if not DROPBOX_TOKEN:
 def parse_time(s: str) -> datetime.time:
     return datetime.datetime.strptime(s, "%H:%M").time()
 
+
 sleep_start = parse_time(SLEEP_START)
 sleep_end = parse_time(SLEEP_END)
 
@@ -59,7 +60,8 @@ def process_file(fname: str, all_files: list[str]):
         send_message_sync(msg)
         return
 
-    analyzer_func, config = get_analyzer(fname)
+    # Распаковываем три значения: func, config, requires
+    analyzer_func, config, _ = get_analyzer(fname)
     if not analyzer_func or not config:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
@@ -67,9 +69,8 @@ def process_file(fname: str, all_files: list[str]):
         return
 
     try:
-        # Проверяем, conversion ли это
+        # Если это conversion, ищем соответствующий card-файл
         if config.get("file_pattern") == "conversion":
-            # ищем card-файл
             card_file = next((f for f in all_files if "card" in f.lower()), None)
             if not card_file:
                 msg = f"❌ Для анализа {fname} не найден card-файл"
@@ -88,7 +89,6 @@ def process_file(fname: str, all_files: list[str]):
 
             columns = config.get("columns", {})
             result = analyzer_func(local_file_path, card_path, columns)
-
         else:
             columns = config.get("columns", {})
             result = analyzer_func(local_file_path, columns)
