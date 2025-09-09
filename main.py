@@ -26,16 +26,20 @@ if not DROPBOX_TOKEN:
         "Dropbox токен не найден! Задайте DROPBOX_ACCESS_TOKEN или DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
     )
 
+
 def parse_time(s: str) -> datetime.time:
     return datetime.datetime.strptime(s, "%H:%M").time()
 
+
 sleep_start = parse_time(SLEEP_START)
 sleep_end = parse_time(SLEEP_END)
+
 
 def in_sleep_time(now: datetime.time, start: datetime.time, end: datetime.time) -> bool:
     if start < end:
         return start <= now <= end
     return now >= start or now <= end
+
 
 def process_file(fname: str):
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
@@ -49,14 +53,13 @@ def process_file(fname: str):
         send_message_sync(msg)
         return
 
-    analyzer_res = get_analyzer(fname)
-    if not analyzer_res:
+    analyzer_func, config, requires = get_analyzer(fname)
+    if not analyzer_func:
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
         return
 
-    analyzer_func, config = analyzer_res
     columns = config.get("columns")
     if not columns:
         msg = f"❌ В конфиге нет 'columns' для {fname}"
@@ -64,8 +67,28 @@ def process_file(fname: str):
         send_message_sync(msg)
         return
 
+    # Загружаем обязательные файлы, если они указаны
+    required_local_files = {}
+    if requires:
+        for req in requires:
+            req_path = f"{INPUT_PATH}/{req}"
+            local_req_path = os.path.join(LOCAL_DATA, req)
+            if download_file(req_path, local_req_path):
+                required_local_files[req] = local_req_path
+                logger.info(f"Загружен обязательный файл {req}")
+            else:
+                msg = f"❌ Не удалось загрузить обязательный файл {req}"
+                logger.error(msg)
+                send_message_sync(msg)
+                return
+
     try:
-        result = analyzer_func(local_file_path, columns)
+        # Передаём зависимости в анализатор (если нужны)
+        if required_local_files:
+            result = analyzer_func(local_file_path, columns, required_local_files)
+        else:
+            result = analyzer_func(local_file_path, columns)
+
         if "error" in result:
             raise ValueError(result["error"])
 
@@ -84,6 +107,7 @@ def process_file(fname: str):
     except Exception as e:
         logger.exception(f"Ошибка при обработке {fname}: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
+
 
 def main_loop():
     logger.info("Запуск автоматического пайплайна...")
@@ -110,7 +134,7 @@ def main_loop():
             if not new_files:
                 logger.info("Нет новых файлов для обработки")
             for fname in new_files:
-                process_file(fname)
+                process_file(fname, files)
                 processed_files.add(fname)
 
         except Exception as e:
@@ -118,6 +142,7 @@ def main_loop():
             send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
 
         time.sleep(CHECK_INTERVAL)
+
 
 if __name__ == "__main__":
     main_loop()

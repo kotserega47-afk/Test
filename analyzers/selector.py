@@ -1,8 +1,9 @@
 # analyzers/selector.py
+
 import yaml
 from analyzers import transactions
-from analyzers import conversion  # добавляем конверсию
-# from analyzers import kyc  # подключишь, когда сделаешь kyc-анализатор
+from analyzers import conversion
+# from analyzers import kyc  # подключим позже
 
 # Загружаем маппинг анализаторов
 with open("config/analysis_map.yaml", "r", encoding="utf-8") as f:
@@ -18,13 +19,14 @@ ANALYZERS = {
 
 def get_analyzer(file_name: str):
     """
-    Возвращает (функция_анализатора, конфиг) для файла по имени.
-    Если анализатор не найден, возвращает (None, None).
+    Возвращает (функция_анализатора, конфиг, requires) для файла по имени.
+    Если анализатор не найден, возвращает (None, None, None).
     """
     file_name_lower = file_name.lower()
     for key, conf in ANALYSIS_MAP.items():
         pattern = conf.get("file_pattern", "").lower()
         if pattern and pattern in file_name_lower:
             analyzer_func = ANALYZERS.get(key)
-            return analyzer_func, conf
-    return None, None
+            requires = conf.get("requires", [])
+            return analyzer_func, conf, requires
+    return None, None, None

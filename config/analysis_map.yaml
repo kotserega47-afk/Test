@@ -7,8 +7,9 @@ kyc:
   file_pattern: "kyc"               # если имя файла содержит "kyc", используем другой анализатор
 
 conversion:
-  file_pattern: "conversion"     # если имя файла содержит "conversion", используем анализатор конверсии
-  columns:                        # маппинг колонок для анализа
+  file_pattern: "conversion"
+  requires: ["card"]   # обязательно нужны файлы с card_* для анализа
+  columns:
     card: "Карта"
     status: "Статус"
     datetime: "Дата/Время создания"
