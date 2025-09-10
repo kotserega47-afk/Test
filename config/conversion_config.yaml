@@ -1,5 +1,4 @@
 #conversion_config.yaml
-
 partners:
   "Hedge Hog (А-мобайл Сбер +Выплаты)": 8
   "Hedge Hog (Амобайл Тинькофф)": 3
@@ -12,11 +11,15 @@ partners:
   "Hedge Hog (Кибит Тинь)": 3
   "Hedge Hog (Бакай Тинь)": 3
 
-
-
 pools:
   aurora: "Пул SMS"
   a-mobile: "Пул А-Мобайл"
   abhsber: "Пул Abhsber"
   cibit: "Пул Cibit"
   bakai: "Пул BakAi"
+
+columns:
+  card: "Карта"
+  partner: "Партнер"
+  status: "Статус"
+  datetime: "Дата/Время создания"
