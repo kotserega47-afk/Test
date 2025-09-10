@@ -1,0 +1,10 @@
+[services]
+  [services.main]
+    name = "file-analyzer"
+    start = "python main.py"
+    plan = "free"
+
+[triggers]
+  [triggers.cron]
+    service = "file-analyzer"
+    schedule = "*/5 * * * *"  # каждые 5 минут

@@ -87,25 +87,22 @@ def process_file(fname: str, all_files: list[str]):
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
 
 def main_loop():
-    logger.info("Запуск автоматического пайплайна...")
-    processed_files = set()
+    logger.info("🔍 Запуск автоматического пайплайна...")
 
-    while True:
-        try:
-            files = list_files(INPUT_PATH)
-            new_files = [f for f in files if f not in processed_files]
+    try:
+        files = list_files(INPUT_PATH)
+        if not files:
+            logger.info("Нет файлов для обработки в Dropbox.")
+            return
 
-            if new_files:
-                for fname in new_files:
-                    process_file(fname, files)
-                    processed_files.add(fname)
-            else:
-                logger.info("Нет новых файлов для обработки")
-        except Exception as e:
-            logger.exception(f"Ошибка при сканировании Dropbox: {e}")
-            send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
+        for fname in files:
+            process_file(fname, files)
 
-        time.sleep(CHECK_INTERVAL)
+    except Exception as e:
+        logger.exception(f"❌ Ошибка при сканировании Dropbox: {e}")
+        send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
+
+    logger.info("✅ Обработка завершена.")
 
 if __name__ == "__main__":
     main_loop()
