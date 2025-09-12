@@ -56,11 +56,14 @@ def move_to_processed(fname: str):
 # -------------------------------
 def process_file(fname: str, all_files: list[str]):
     logger.info(f"[{fname}] --- Начало обработки ---")
+
+    # Скачиваем основной файл
     local_file_path = download_to_local(fname)
     if not local_file_path:
         send_message_sync(f"❌ Не удалось скачать {fname}")
         return
 
+    # Получаем анализатор
     analyzer_func, config, requires_card = get_analyzer(fname)
     if not analyzer_func or not config:
         msg = f"❌ Не найден анализатор для файла {fname}"
@@ -68,10 +71,10 @@ def process_file(fname: str, all_files: list[str]):
         send_message_sync(msg)
         return
 
+    # Скачиваем карточные файлы, если требуется
     card_files = []
     try:
         if requires_card:
-            card_files = []
             for f in all_files:
                 if "card" in f.lower():
                     local_card = download_to_local(f)
@@ -79,9 +82,11 @@ def process_file(fname: str, all_files: list[str]):
                         card_files.append(local_card)
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
+        # Запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
 
+        # Генерация отчёта
         try:
             build_report(result, report_path)
             logger.info(f"[{fname}] Отчёт успешно сгенерирован: {report_path}")
@@ -92,25 +97,33 @@ def process_file(fname: str, all_files: list[str]):
             wb.save(report_path)
             logger.info(f"[{fname}] Создан пустой отчёт: {report_path}")
 
+        # Отправка отчёта в Telegram
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
+        # Отправка листа "Отключить" в Telegram, если есть проблемные карты
+        problem_cards_df = result.get("problem_cards")
+        if problem_cards_df is not None and not problem_cards_df.empty:
+            from openpyxl import Workbook
+            from openpyxl.utils.dataframe import dataframe_to_rows
+
+            disable_path = os.path.join(LOCAL_REPORTS, f"Отключить_{fname}.xlsx")
+            wb_disable = Workbook()
+            ws_disable = wb_disable.active
+            ws_disable.title = "Отключить"
+            for r in dataframe_to_rows(problem_cards_df, index=False, header=True):
+                ws_disable.append(r)
+            wb_disable.save(disable_path)
+
+            send_message_sync(f"📢 Карты на отключение для файла {fname}")
+            send_file_sync(disable_path)
+
+        # Загрузка отчёта в Dropbox
         upload_report(report_path, fname)
 
     except Exception as e:
         logger.exception(f"[{fname}] Ошибка при обработке файла: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-
-# -------------------------------
-# Перемещение всех исходных файлов после обработки
-# -------------------------------
-def move_all_files_to_processed(files: list[str]):
-    for fname in files:
-        move_to_processed(fname)
-        local_path = os.path.join(LOCAL_DATA, fname)
-        if os.path.exists(local_path):
-            os.remove(local_path)
-            logger.info(f"Локальный файл удалён: {local_path}")
 
 # -------------------------------
 # Основной цикл
