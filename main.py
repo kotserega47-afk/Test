@@ -142,7 +142,8 @@ def main_loop():
             process_file(fname, files)
 
         # Перемещаем все исходные файлы в PROCESSED
-        move_all_files_to_processed(files)
+        for fname in files:
+            move_to_processed(fname)
 
         logger.info("✅ Обработка завершена.")
 
