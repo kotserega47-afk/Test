@@ -139,4 +139,9 @@ def main_loop():
 
 
 if __name__ == "__main__":
-    main_loop()
+    import time
+    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL"))  # или оставить существующее значение
+
+    while True:
+        main_loop()
+        time.sleep(CHECK_INTERVAL)
