@@ -1,0 +1,9 @@
+#config/analysis_map.yaml
+
+conversion:
+  file_pattern: "conversion"
+  columns:
+    card: "Карта"
+    status: "Статус"
+    datetime: "Дата/Время создания"
+    partner: "Партнер"

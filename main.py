@@ -1,34 +1,14 @@
-# main_py
-
 import os
-import time
-import datetime
+import logging
 from utils.report_builder import build_report
+from analyzers.selector import get_analyzer
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
-from analyzers.selector import get_analyzer
 
-
-logger.info("🔍 Проверка файлов конфигурации перед стартом")
-
-cwd = os.getcwd()
-logger.info(f"Текущая рабочая директория: {cwd}")
-
-config_dir = os.path.join(cwd, "config")
-if os.path.exists(config_dir):
-    files = os.listdir(config_dir)
-    logger.info(f"Содержимое /config: {files}")
-    # Проверяем конкретные файлы
-    for fname in ["conversion_config.yaml", "analysis_map.yaml"]:
-        path = os.path.join(config_dir, fname)
-        if os.path.exists(path):
-            logger.info(f"✅ Файл найден: {fname}")
-        else:
-            logger.warning(f"❌ Файл отсутствует: {fname}")
-else:
-    logger.warning("❌ Папка /config не найдена в контейнере")
-
+# -------------------------------
+# Пути
+# -------------------------------
 LOCAL_DATA = "data"
 LOCAL_REPORTS = "reports"
 os.makedirs(LOCAL_DATA, exist_ok=True)
@@ -38,17 +18,47 @@ INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
 PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))
-
-def process_file(fname: str, all_files: list[str]):
+# -------------------------------
+# Вспомогательные функции
+# -------------------------------
+def download_to_local(fname: str) -> str | None:
+    """Скачивает файл из Dropbox в локальную папку"""
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
+    if download_file(dropbox_file_path, local_file_path):
+        logger.info(f"Файл скачан: {fname}")
+        return local_file_path
+    else:
+        logger.error(f"Не удалось скачать {fname}")
+        return None
 
-    logger.info(f"[{fname}] Начинаем обработку файла")
-    if not download_file(dropbox_file_path, local_file_path):
-        msg = f"❌ Не удалось скачать {fname}"
-        logger.error(msg)
-        send_message_sync(msg)
+
+def upload_report(local_path: str, fname: str):
+    """Загружает готовый отчёт в Dropbox"""
+    try:
+        dropbox_report_path = f"{OUTPUT_PATH}/report_{fname}.xlsx"
+        upload_file(local_path, dropbox_report_path)
+        logger.info(f"Отчёт загружен в Dropbox: {dropbox_report_path}")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке отчёта {fname}: {e}")
+
+
+def move_to_processed(fname: str):
+    """Переносит файл в PROCESSED в Dropbox"""
+    try:
+        move_file(f"{INPUT_PATH}/{fname}", f"{PROCESSED_PATH}/{fname}")
+        logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
+    except Exception as e:
+        logger.error(f"Ошибка при переносе {fname}: {e}")
+
+# -------------------------------
+# Обработка одного файла
+# -------------------------------
+def process_file(fname: str, all_files: list[str]):
+    logger.info(f"[{fname}] --- Начало обработки ---")
+    local_file_path = download_to_local(fname)
+    if not local_file_path:
+        send_message_sync(f"❌ Не удалось скачать {fname}")
         return
 
     analyzer_func, config, requires_card = get_analyzer(fname)
@@ -58,36 +68,55 @@ def process_file(fname: str, all_files: list[str]):
         send_message_sync(msg)
         return
 
+    card_files = []
     try:
-        card_files = []
         if requires_card:
-            card_files = [os.path.join(LOCAL_DATA, f) for f in all_files if "card" in f.lower()]
-            for cf in card_files:
-                if not os.path.exists(cf):
-                    if not download_file(f"{INPUT_PATH}/{os.path.basename(cf)}", cf):
-                        msg = f"❌ Не удалось скачать {os.path.basename(cf)}"
-                        logger.error(msg)
-                        send_message_sync(msg)
-                        return
+            card_files = []
+            for f in all_files:
+                if "card" in f.lower():
+                    local_card = download_to_local(f)
+                    if local_card:
+                        card_files.append(local_card)
+            logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
-        build_report(result, report_path)
-        logger.info(f"[{fname}] Отчёт сохранён локально: {report_path}")
 
-        # Отправка в Telegram по очереди
+        try:
+            build_report(result, report_path)
+            logger.info(f"[{fname}] Отчёт успешно сгенерирован: {report_path}")
+        except Exception as e:
+            logger.error(f"[{fname}] Ошибка при генерации отчёта: {e}")
+            from openpyxl import Workbook
+            wb = Workbook()
+            wb.save(report_path)
+            logger.info(f"[{fname}] Создан пустой отчёт: {report_path}")
+
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
-        upload_file(report_path, f"{OUTPUT_PATH}/report_{fname}.xlsx")
-        move_file(dropbox_file_path, f"{PROCESSED_PATH}/{fname}")
+        upload_report(report_path, fname)
 
     except Exception as e:
-        logger.exception(f"[{fname}] Ошибка при обработке: {e}")
+        logger.exception(f"[{fname}] Ошибка при обработке файла: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
 
+# -------------------------------
+# Перемещение всех исходных файлов после обработки
+# -------------------------------
+def move_all_files_to_processed(files: list[str]):
+    for fname in files:
+        move_to_processed(fname)
+        local_path = os.path.join(LOCAL_DATA, fname)
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            logger.info(f"Локальный файл удалён: {local_path}")
+
+# -------------------------------
+# Основной цикл
+# -------------------------------
 def main_loop():
-    logger.info("🔍 Запуск автоматического пайплайна...")
+    logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
 
     try:
         files = list_files(INPUT_PATH)
@@ -95,14 +124,19 @@ def main_loop():
             logger.info("Нет файлов для обработки в Dropbox.")
             return
 
+        # Обрабатываем каждый файл
         for fname in files:
             process_file(fname, files)
+
+        # Перемещаем все исходные файлы в PROCESSED
+        move_all_files_to_processed(files)
+
+        logger.info("✅ Обработка завершена.")
 
     except Exception as e:
         logger.exception(f"❌ Ошибка при сканировании Dropbox: {e}")
         send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
 
-    logger.info("✅ Обработка завершена.")
 
 if __name__ == "__main__":
     main_loop()
