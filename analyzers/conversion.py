@@ -5,7 +5,6 @@ import yaml
 import pandas as pd
 from utils.logger import logger
 
-
 # -----------------------------
 # Конфигурация
 # -----------------------------
@@ -23,22 +22,18 @@ PARTNERS = CONFIG.get("partners", {})
 POOLS = CONFIG.get("pools", {})
 COLUMNS = CONFIG.get("columns", {})
 
-
 # -----------------------------
 # Вспомогательные функции
 # -----------------------------
 def normalize_colname(name: str) -> str:
     return str(name).strip().lower().replace("ё", "е")
 
-
 def normalize_partner_name(name: str) -> str:
-    return re.sub(r"\s*\(\d+\)$", "", str(name)).strip()
-
+    return re.sub(r'\s*\(\d+\)$', '', str(name)).strip()
 
 def normalize_partners_list(partners_str: str) -> list[str]:
-    partners = str(partners_str).split(",")
+    partners = str(partners_str).split(',')
     return [normalize_partner_name(p).lower() for p in partners if p.strip()]
-
 
 def load_data(filepath: str, col_mapping: dict) -> pd.DataFrame:
     """Универсальная загрузка CSV/XLSX с нормализацией и проверкой колонок"""
@@ -82,7 +77,6 @@ def load_data(filepath: str, col_mapping: dict) -> pd.DataFrame:
 
     return df
 
-
 def count_consecutive_errors(group: pd.DataFrame, partner_name: str) -> tuple[int, int]:
     """Подсчёт максимальной серии ошибок подряд"""
     count = max_count = 0
@@ -97,26 +91,27 @@ def count_consecutive_errors(group: pd.DataFrame, partner_name: str) -> tuple[in
             count = 0
     return max_count, threshold
 
-
 # -----------------------------
 # Основная функция
 # -----------------------------
 def run(conv_file: str, card_files: list[str], col_mapping: dict) -> dict:
+    """Главная функция обработки: возвращает summary, data_sheets и problem_cards"""
     try:
-        # Загружаем conversion
+        # --- Conversion ---
         conv_df = load_data(conv_file, col_mapping)
 
-        # Загружаем все Card-файлы
+        # --- Card files ---
         card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер"}) for f in card_files]
         card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
+        card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
-        # Листы Data_conv и Data_card
+        # --- Data sheets ---
         data_sheets = {
             "Data_conv": conv_df,
             "Data_card": card_df
         }
 
-        # --- Подсчёт статистики ---
+        # --- Подсчёт ошибок и проблемные карты ---
         results = []
         problem_cards = []
 
@@ -129,8 +124,10 @@ def run(conv_file: str, card_files: list[str], col_mapping: dict) -> dict:
                 "threshold": threshold
             })
 
-            # Проверка на отключение
-            partners_list = normalize_partners_list(",".join(card_df.loc[card_df["card"] == card, "partner"]))
+            partners_list = []
+            if card in card_df["card"].values:
+                partners_list = [p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist]
+
             if partner in partners_list and max_errors >= threshold:
                 problem_cards.append({
                     "card": card,
@@ -152,7 +149,7 @@ def run(conv_file: str, card_files: list[str], col_mapping: dict) -> dict:
             card_cards = card_df.loc[card_df["partner"].str.contains(pool_name, case=False, na=False), "card"].nunique()
             summary[f"Объем {pool_name}"] = conv_cards / card_cards if card_cards else 0
 
-        # --- Лист Stat ---
+        # --- Stat ---
         stat_list = []
         for card in conv_df["card"].unique():
             row = {"Карта": card}
