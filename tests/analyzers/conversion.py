@@ -294,5 +294,6 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     return {
         "summary": summary,
-        "workbook": wb
+        "workbook": wb,
+        "problem_cards": problem_cards_df
     }

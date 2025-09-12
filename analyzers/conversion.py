@@ -1,22 +1,27 @@
 # analyzers/conversion.py
-import os
-import re
-import yaml
+
 import pandas as pd
+import re
+import os
+import yaml
+import logging
 from utils.logger import logger
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter
+from utils.excel_utils import flatten_lists_in_df, style_worksheet, write_df_to_sheet
 
 # -----------------------------
-# Конфигурация
+# Загрузка конфигурации
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "config", "conversion_config.yaml"))
 
-try:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        CONFIG = yaml.safe_load(f)
-except Exception as e:
-    logger.error(f"❌ Ошибка при загрузке конфигурации {CONFIG_PATH}: {e}")
-    CONFIG = {}
+with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    CONFIG = yaml.safe_load(f)
 
 PARTNERS = CONFIG.get("partners", {})
 POOLS = CONFIG.get("pools", {})
@@ -28,44 +33,43 @@ COLUMNS = CONFIG.get("columns", {})
 def normalize_colname(name: str) -> str:
     return str(name).strip().lower().replace("ё", "е")
 
-def normalize_partner_name(name: str) -> str:
-    return re.sub(r'\s*\(\d+\)$', '', str(name)).strip()
+def normalize_name(name: str) -> str:
+    if not isinstance(name, str):
+        return ""
+    # общий базовый слой
+    name = name.lower().strip()
+    name = name.replace("ё", "е")
+    name = name.replace("амобайл", "а-мобайл")
+    name = re.sub(r"\(\d+\)$", "", name)  # убираем коды (107) и т.п.
+    name = re.sub(r"\s+", " ", name)      # схлопываем пробелы
+    # унифицируем "выплаты"
+    name = re.sub(r"\+.*", "+выплаты", name)
+    return name.strip(", ")
 
-def normalize_partners_list(partners_str: str) -> list[str]:
+
+def normalize_partners_list(partners_str: str) -> list:
     partners = str(partners_str).split(',')
-    return [normalize_partner_name(p).lower() for p in partners if p.strip()]
+    return [normalize_name(p) for p in partners if p.strip()]
 
-def load_data(filepath: str, col_mapping: dict) -> pd.DataFrame:
-    """Универсальная загрузка CSV/XLSX с нормализацией и проверкой колонок"""
-    if not os.path.exists(filepath):
-        logger.warning(f"⚠️ Файл {filepath} не найден, возвращаю пустой DataFrame")
-        return pd.DataFrame(columns=col_mapping.keys())
+def load_data(filepath, col_mapping: dict):
+    """Загрузка CSV/XLSX и нормализация колонок"""
+    if filepath.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(filepath, dtype=str)
+    else:
+        df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8")
 
-    try:
-        if filepath.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(filepath, dtype=str)
-        else:
-            df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8", dtype=str)
-    except Exception as e:
-        logger.error(f"❌ Ошибка при чтении {filepath}: {e}")
-        return pd.DataFrame(columns=col_mapping.keys())
-
-    # Нормализация заголовков
     norm_cols = {normalize_colname(c): c for c in df.columns}
     new_cols = {}
     for key, expected_name in col_mapping.items():
         expected_norm = normalize_colname(expected_name)
         if expected_norm not in norm_cols:
-            logger.warning(f"⚠️ В {filepath} нет колонки '{expected_name}' (ожидали для '{key}')")
-            continue
+            raise ValueError(f"❌ В файле нет колонки '{expected_name}' (ожидали для '{key}')")
         new_cols[norm_cols[expected_norm]] = key
     df.rename(columns=new_cols, inplace=True)
 
-    # Очистка и нормализация
     for c in ["card", "status", "partner"]:
         if c in df:
             df[c] = df[c].astype(str).str.strip().str.lower()
-
     if "datetime" in df:
         df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
 
@@ -77,101 +81,219 @@ def load_data(filepath: str, col_mapping: dict) -> pd.DataFrame:
 
     return df
 
-def count_consecutive_errors(group: pd.DataFrame, partner_name: str) -> tuple[int, int]:
-    """Подсчёт максимальной серии ошибок подряд"""
+partners_thresholds = {
+    normalize_name(k): v for k, v in CONFIG.get("partners", {}).items()
+}
+
+def count_consecutive_errors(group, partner_name: str) -> tuple[int, int]:
+    partner_norm = normalize_name(partner_name)
+    threshold = partners_thresholds.get(partner_norm, 4)
+
     count = max_count = 0
-    threshold = CONFIG.get("partners", {}).get(partner_name, 4)
-    for status in group["status"]:
-        if status == "оплачен":
+    for status in group['status']:
+        if status == 'оплачен':
             break
-        if status in ["ошибка", "ожидает оплаты"]:
+        if status in ['ошибка']:
             count += 1
             max_count = max(max_count, count)
         else:
             count = 0
     return max_count, threshold
 
+
+def build_stat_sheet(conv_df: pd.DataFrame, wb: Workbook):
+    """
+    Создаёт лист Stat (широкая таблица карты × партнёры)
+    и лист Charts с вертикальным столбчатым графиком по партнёрам.
+    """
+    logger.info("Формируем лист Stat (широкая таблица)")
+
+    cards = conv_df["card"].unique()
+    partners = conv_df["partner_norm"].unique()
+
+    stat_rows = []
+    for card in cards:
+        row = {"Карта": card}
+        for partner in partners:
+            mask = (conv_df["card"] == card) & (conv_df["partner_norm"] == partner)
+            errors = conv_df.loc[mask & (conv_df["status"] == "ошибка"), "status"].count()
+            success = conv_df.loc[mask & (conv_df["status"] == "оплачен"), "status"].count()
+            row[f"{partner} Ошибки"] = errors
+            row[f"{partner} Успешно"] = success
+        stat_rows.append(row)
+
+    stat_df = pd.DataFrame(stat_rows)
+
+    # Лист Stat
+    write_df_to_sheet(wb, "Stat", flatten_lists_in_df(stat_df))
+
+    # -----------------------------
+    # Лист Charts
+    # -----------------------------
+    logger.info("Формируем лист Charts (вертикальный график)")
+    chart_ws = wb.create_sheet("Charts")
+
+    # Подготовка агрегированных данных
+    agg_list = []
+    for partner in partners:
+        errors = conv_df.loc[conv_df["partner_norm"] == partner].loc[conv_df["status"] == "ошибка", "status"].count()
+        success = conv_df.loc[conv_df["partner_norm"] == partner].loc[conv_df["status"] == "оплачен", "status"].count()
+        agg_list.append({"partner": partner, "errors": errors, "success": success})
+    agg_df = pd.DataFrame(agg_list)
+
+    # Запись данных на лист Charts
+    chart_ws.append(["Партнёр", "Оплачен", "Ошибка"])
+    for r in agg_df.itertuples(index=False):
+        chart_ws.append([r.partner, r.success, r.errors])
+
+    style_worksheet(chart_ws)
+
+    # Создание вертикального столбчатого графика
+    max_row = chart_ws.max_row
+    chart = BarChart()
+    chart.type = "col"
+    chart.title = "Ошибки и успехи по партнёрам"
+    chart.y_axis.title = "Количество"
+
+    # Зеленый = Оплачен, красный = Ошибка
+    for col, fill_color in zip([2, 3], ["00FF00", "FF0000"]):
+        # Данные (колонки Оплачен и Ошибка)
+        data = Reference(chart_ws, min_col=2, min_row=1, max_col=3, max_row=chart_ws.max_row)
+        chart.add_data(data, titles_from_data=True)
+        # Задаём цвет заливки (только для визуального различия в openpyxl)
+        for cell in chart_ws[get_column_letter(col)]:
+            cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+
+    # Категории (имена партнёров) снизу
+    cats = Reference(chart_ws, min_col=1, min_row=2, max_row=chart_ws.max_row)
+    chart.set_categories(cats)
+    chart.shape = 4
+    # Подписи данных сверху столбцов
+    chart.dataLabels = DataLabelList()
+    chart.dataLabels.showVal = True
+
+    # Добавляем график на лист
+    chart_ws.add_chart(chart, "E2")
+
+    logger.info("Лист Charts сформирован")
+
 # -----------------------------
-# Основная функция
+# Новая утилита
 # -----------------------------
-def run(conv_file: str, card_files: list[str], col_mapping: dict) -> dict:
-    """Главная функция обработки: возвращает summary, data_sheets и problem_cards"""
-    try:
-        # --- Conversion ---
-        conv_df = load_data(conv_file, col_mapping)
+def flatten_lists_in_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Преобразует списки в строку перед записью в Excel"""
+    def _cell_to_str(x):
+        if isinstance(x, (list, tuple)):
+            return ", ".join(map(str, x))
+        if pd.isna(x):
+            return ""
+        return x
+    for col in df.columns:
+        df[col] = df[col].apply(_cell_to_str)
+    return df
 
-        # --- Card files ---
-        card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер"}) for f in card_files]
-        card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
-        card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
+# -----------------------------
+# Основной запуск
+# -----------------------------
+def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
+    conv_df = load_data(conv_file, col_mapping)
+    conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
-        # --- Data sheets ---
-        data_sheets = {
-            "Data_conv": conv_df,
-            "Data_card": card_df
-        }
+    card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"}) for f in card_files]
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
+    card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
-        # --- Подсчёт ошибок и проблемные карты ---
-        results = []
-        problem_cards = []
+    results = []
+    problem_cards = []
 
-        for (card, partner), group in conv_df.groupby(["card", "partner"]):
-            max_errors, threshold = count_consecutive_errors(group, partner)
-            results.append({
+    VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
+
+    for (card, partner_norm), group in conv_df.groupby(["card", "partner_norm"]):
+        threshold = partners_thresholds.get(partner_norm, 4)
+        if partner_norm not in partners_thresholds:
+            logger.warning(f"[NO YAML] Партнёр '{partner_norm}' не найден в YAML. Использован порог {threshold}")
+
+        card_status_raw = card_df.loc[card_df["card"] == card, "status"]
+        card_status = (
+            card_status_raw.iloc[0].strip().lower()
+            if not card_status_raw.empty and pd.notna(card_status_raw.iloc[0])
+            else None
+        )
+
+        max_errors, _ = count_consecutive_errors(group, partner_norm)
+        results.append({
+            "card": card,
+            "partner": partner_norm,
+            "max_consecutive_errors": max_errors,
+            "threshold": threshold,
+            "status": card_status_raw.iloc[0] if not card_status_raw.empty else None
+        })
+
+        partners_list = [
+            p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist
+        ]
+        if (
+                partner_norm in partners_list
+                and max_errors >= threshold
+                and card_status in VALID_STATUSES
+        ):
+            problem_cards.append({
                 "card": card,
-                "partner": partner,
-                "max_consecutive_errors": max_errors,
-                "threshold": threshold
+                "partner": partner_norm,
+                "max_consecutive_errors": max_errors
             })
 
-            partners_list = []
-            if card in card_df["card"].values:
-                partners_list = [p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist]
+    problem_cards_df = pd.DataFrame(
+        problem_cards,
+        columns=["card", "partner", "max_consecutive_errors", "status"]
+    )
 
-            if partner in partners_list and max_errors >= threshold:
-                problem_cards.append({
-                    "card": card,
-                    "partner": partner,
-                    "max_consecutive_errors": max_errors
-                })
+    valid_results = [r for r in results if pd.notna(r["card"]) and str(r["card"]).strip() != ""]
+    if valid_results:
+        max_error_record = max(valid_results, key=lambda r: r["max_consecutive_errors"])
+        max_errors = max_error_record["max_consecutive_errors"]
+        max_error_card = max_error_record["card"]
+    else:
+        max_errors = 0
+        max_error_card = None
 
-        problem_cards_df = pd.DataFrame(problem_cards, columns=["card", "partner", "max_consecutive_errors"])
+    summary = {
+        "Карт в работе": conv_df["card"].nunique(),
+        "Max ошибки": max_errors,
+        "Карта с Max ошибками": max_error_card,
+        "Карты на отключение": int(problem_cards_df["card"].nunique()) if not problem_cards_df.empty else 0
+    }
 
-        # --- Summary ---
-        summary = {
-            "Карт в работе": conv_df["card"].nunique() if not conv_df.empty else 0,
-            "Max ошибки": max([r["max_consecutive_errors"] for r in results]) if results else 0,
-            "Карты на отключение": problem_cards_df["card"].nunique() if not problem_cards_df.empty else 0
-        }
+    # -----------------------------
+    # Workbook
+    # -----------------------------
+    wb = Workbook()
+    wb.remove(wb.active)
 
-        for key, pool_name in POOLS.items():
-            conv_cards = conv_df.loc[conv_df["partner"].str.contains(pool_name, case=False, na=False), "card"].nunique()
-            card_cards = card_df.loc[card_df["partner"].str.contains(pool_name, case=False, na=False), "card"].nunique()
-            summary[f"Объем {pool_name}"] = conv_cards / card_cards if card_cards else 0
+    # Data_conv
+    safe_conv = flatten_lists_in_df(conv_df.copy())
+    ws_conv = wb.create_sheet("Data_conv")
+    for r in dataframe_to_rows(safe_conv, index=False, header=True):
+        ws_conv.append(r)
 
-        # --- Stat ---
-        stat_list = []
-        for card in conv_df["card"].unique():
-            row = {"Карта": card}
-            for bank in ["Сбер", "Тинь"]:
-                bank_mask = conv_df["partner"].str.contains(bank, case=False, na=False) & (conv_df["card"] == card)
-                row[f"{bank} Ошибки"] = conv_df.loc[bank_mask & conv_df["status"].isin(["ошибка", "ожидает оплаты"]), "status"].count()
-                row[f"{bank} Успешно"] = conv_df.loc[bank_mask & (conv_df["status"] == "оплачен"), "status"].count()
-            stat_list.append(row)
+    # Data_card (без partner_list)
+    safe_card = flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy())
+    ws_card = wb.create_sheet("Data_card")
+    for r in dataframe_to_rows(safe_card, index=False, header=True):
+        ws_card.append(r)
 
-        data_sheets["Stat"] = pd.DataFrame(stat_list)
-        data_sheets["Отключить"] = problem_cards_df
+    # Отключить
+    if not problem_cards_df.empty:
+        safe_problem = flatten_lists_in_df(problem_cards_df.copy())
+        ws_prob = wb.create_sheet("Отключить")
+        for r in dataframe_to_rows(safe_problem, index=False, header=True):
+            ws_prob.append(r)
 
-        return {
-            "summary": summary,
-            "data_sheets": data_sheets,
-            "problem_cards": problem_cards_df
-        }
+    # Stat
+    build_stat_sheet(conv_df, wb)
 
-    except Exception as e:
-        logger.exception(f"❌ Ошибка в conversion.run: {e}")
-        return {
-            "summary": {"Ошибка": str(e)},
-            "data_sheets": {},
-            "problem_cards": pd.DataFrame()
-        }
+    return {
+        "summary": summary,
+        "workbook": wb,
+        "problem_cards": problem_cards_df
+    }
