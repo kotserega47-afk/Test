@@ -104,19 +104,22 @@ def process_file(fname: str, all_files: list[str]):
         # Отправка листа "Отключить" в Telegram, если есть проблемные карты
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
-            from openpyxl import Workbook
-            from openpyxl.utils.dataframe import dataframe_to_rows
+            # Заголовок
+            header = f"{'Карта':<20} {'Партнёр':<35} {'Ошибки':<7}"
 
-            disable_path = os.path.join(LOCAL_REPORTS, f"Отключить_{fname}.xlsx")
-            wb_disable = Workbook()
-            ws_disable = wb_disable.active
-            ws_disable.title = "Отключить"
-            for r in dataframe_to_rows(problem_cards_df, index=False, header=True):
-                ws_disable.append(r)
-            wb_disable.save(disable_path)
+            # Формируем строки с выравниванием
+            rows = problem_cards_df.apply(
+                lambda x: f"{x['card']:<20} {x['partner']:<35} {x['max_consecutive_errors']:<7}",
+                axis=1
+            ).tolist()
 
-            send_message_sync(f"📢 Карты на отключение для файла {fname}")
-            send_file_sync(disable_path)
+            # Собираем сообщение в код-блок
+            message = (
+                    f"📢 Карты на отключение для файла {fname}:\n\n"
+                    "```\n" + "\n".join([header] + rows) + "\n```"
+            )
+
+            send_message_sync(message)
 
         # Загрузка отчёта в Dropbox
         upload_report(report_path, fname)
