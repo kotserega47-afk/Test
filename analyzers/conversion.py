@@ -31,7 +31,12 @@ COLUMNS = CONFIG.get("columns", {})
 # Вспомогательные функции
 # -----------------------------
 def normalize_colname(name: str) -> str:
-    return str(name).strip().lower().replace("ё", "е")
+    if not isinstance(name, str):
+        return ""
+    name = name.lower().replace("ё", "е")
+    name = name.replace("\xa0", " ")  # заменяем неразрывный пробел на обычный
+    name = re.sub(r"\s+", " ", name)  # схлопываем все пробелы и табы
+    return name.strip()
 
 def normalize_name(name: str) -> str:
     if not isinstance(name, str):
@@ -197,6 +202,7 @@ def flatten_lists_in_df(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df = load_data(conv_file, col_mapping)
+    print(f"{conv_file} колонки после load_data: {conv_df.columns.tolist()}")
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     card_df_list = [load_data(f, col_mapping) for f in card_files]
