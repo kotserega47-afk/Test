@@ -83,7 +83,7 @@ def process_file(fname: str, all_files: list[str]):
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
         # Запуск анализатора
-        result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
+        result = analyzer_func(local_file_path, card_files, config.get("conversion", {}).get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
 
         # Генерация отчёта
