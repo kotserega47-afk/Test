@@ -102,24 +102,39 @@ def process_file(fname: str, all_files: list[str]):
         send_file_sync(report_path)
 
         # Отправка листа "Отключить" в Telegram, если есть проблемные карты
+        MAX_LEN = 4000  # запас меньше лимита 4096
+
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
-            # Заголовок
+            # Заголовок таблицы
             header = f"{'Карта':<20} {'Партнёр':<35} {'Ошибки':<7}"
 
-            # Формируем строки с выравниванием
+            # Формируем строки
             rows = problem_cards_df.apply(
                 lambda x: f"{x['card']:<20} {x['partner']:<35} {x['max_consecutive_errors']:<7}",
                 axis=1
             ).tolist()
 
-            # Собираем сообщение в код-блок
-            message = (
-                    f"📢 Карты на отключение для файла {fname}:\n\n"
-                    "```\n" + "\n".join([header] + rows) + "\n```"
-            )
+            # Полный текст таблицы
+            table_text = "\n".join([header] + rows)
 
-            send_message_sync(message)
+            # Добавляем шапку сообщения
+            base_message = f"📢 Карты на отключение для файла {fname}:\n\n"
+
+            # Разбиваем на куски с учётом лимита
+            chunk = ""
+            for line in table_text.splitlines():
+                # Проверяем, влезает ли строка в текущий блок
+                if len(base_message) + len(chunk) + len(line) + 10 > MAX_LEN:
+                    # Отправляем накопленный блок
+                    send_message_sync(base_message + "```\n" + chunk.rstrip() + "\n```")
+                    chunk = ""  # сбрасываем
+
+                chunk += line + "\n"
+
+            # Отправляем остаток
+            if chunk:
+                send_message_sync(base_message + "```\n" + chunk.rstrip() + "\n```")
 
         # Загрузка отчёта в Dropbox
         upload_report(report_path, fname)
