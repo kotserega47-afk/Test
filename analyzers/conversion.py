@@ -200,7 +200,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     card_df_list = [load_data(f, col_mapping) for f in card_files]
-    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner", "status", "datetime"])
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
     results = []
