@@ -1,4 +1,4 @@
-# analyzers/conversion.py
+# analyzers/conversion.py проверка
 
 import pandas as pd
 import re
