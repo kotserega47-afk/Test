@@ -1,7 +1,7 @@
 #config/analysis_map.yaml
 
 conversion:
-  file_pattern: "conv"
+  file_pattern: "conversion"
   columns:
     card: "Карта"
     status: "Статус"
