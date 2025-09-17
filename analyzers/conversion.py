@@ -284,6 +284,9 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     # Отключить
     if not problem_cards_df.empty:
+        # сортировка по колонке partner
+        problem_cards_df = problem_cards_df.sort_values(by=["partner", "card"])
+
         safe_problem = flatten_lists_in_df(problem_cards_df.copy())
         ws_prob = wb.create_sheet("Отключить")
         for r in dataframe_to_rows(safe_problem, index=False, header=True):
