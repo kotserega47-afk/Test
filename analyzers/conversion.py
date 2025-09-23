@@ -4,7 +4,6 @@ import pandas as pd
 import re
 import os
 import yaml
-import logging
 from utils.logger import logger
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -27,29 +26,30 @@ PARTNERS = CONFIG.get("partners", {})
 POOLS = CONFIG.get("pools", {})
 COLUMNS = CONFIG.get("columns", {})
 
+
 # -----------------------------
 # Вспомогательные функции
 # -----------------------------
 def normalize_colname(name: str) -> str:
     return str(name).strip().lower().replace("ё", "е")
 
+
 def normalize_name(name: str) -> str:
     if not isinstance(name, str):
         return ""
-    # общий базовый слой
     name = name.lower().strip()
     name = name.replace("ё", "е")
     name = name.replace("амобайл", "а-мобайл")
-    name = re.sub(r"\(\d+\)$", "", name)  # убираем коды (107) и т.п.
-    name = re.sub(r"\s+", " ", name)      # схлопываем пробелы
-    # унифицируем "выплаты"
+    name = re.sub(r"\(\d+\)$", "", name)
+    name = re.sub(r"\s+", " ", name)
     name = re.sub(r"\+.*", "+выплаты", name)
     return name.strip(", ")
 
 
 def normalize_partners_list(partners_str: str) -> list:
-    partners = str(partners_str).split(',')
+    partners = str(partners_str).split(",")
     return [normalize_name(p) for p in partners if p.strip()]
+
 
 def load_data(filepath, col_mapping: dict):
     """Загрузка CSV/XLSX и нормализация колонок"""
@@ -81,31 +81,36 @@ def load_data(filepath, col_mapping: dict):
 
     return df
 
-partners_thresholds = {
-    normalize_name(k): v for k, v in CONFIG.get("partners", {}).items()
-}
 
-def count_consecutive_errors(group, partner_name: str) -> tuple[int, int]:
-    partner_norm = normalize_name(partner_name)
-    threshold = partners_thresholds.get(partner_norm, 4)
+def get_partner_settings():
+    """Возвращает dict c нормализованным ключом -> {threshold, start}"""
+    partners = {}
+    for raw_name, settings in CONFIG.get("partners", {}).items():
+        norm_name = normalize_name(raw_name)
+        partners[norm_name] = {
+            "threshold": settings.get("threshold", 4),
+            "start": settings.get("start")
+        }
+    return partners
 
+
+PARTNER_SETTINGS = get_partner_settings()
+
+
+def count_consecutive_errors(group, partner_name: str) -> int:
     count = max_count = 0
-    for status in group['status']:
-        if status == 'оплачен':
+    for status in group["status"]:
+        if status == "оплачен":
             break
-        if status in ['ошибка']:
+        if status == "ошибка":
             count += 1
             max_count = max(max_count, count)
         else:
             count = 0
-    return max_count, threshold
+    return max_count
 
 
 def build_stat_sheet(conv_df: pd.DataFrame, wb: Workbook):
-    """
-    Создаёт лист Stat (широкая таблица карты × партнёры)
-    и лист Charts с вертикальным столбчатым графиком по партнёрам.
-    """
     logger.info("Формируем лист Stat (широкая таблица)")
 
     cards = conv_df["card"].unique()
@@ -123,74 +128,41 @@ def build_stat_sheet(conv_df: pd.DataFrame, wb: Workbook):
         stat_rows.append(row)
 
     stat_df = pd.DataFrame(stat_rows)
-
-    # Лист Stat
     write_df_to_sheet(wb, "Stat", flatten_lists_in_df(stat_df))
 
-    # -----------------------------
-    # Лист Charts
-    # -----------------------------
-    logger.info("Формируем лист Charts (вертикальный график)")
+    # Charts
+    logger.info("Формируем лист Charts")
     chart_ws = wb.create_sheet("Charts")
 
-    # Подготовка агрегированных данных
     agg_list = []
     for partner in partners:
-        errors = conv_df.loc[conv_df["partner_norm"] == partner].loc[conv_df["status"] == "ошибка", "status"].count()
-        success = conv_df.loc[conv_df["partner_norm"] == partner].loc[conv_df["status"] == "оплачен", "status"].count()
+        errors = conv_df.loc[(conv_df["partner_norm"] == partner) & (conv_df["status"] == "ошибка")].shape[0]
+        success = conv_df.loc[(conv_df["partner_norm"] == partner) & (conv_df["status"] == "оплачен")].shape[0]
         agg_list.append({"partner": partner, "errors": errors, "success": success})
     agg_df = pd.DataFrame(agg_list)
 
-    # Запись данных на лист Charts
     chart_ws.append(["Партнёр", "Оплачен", "Ошибка"])
     for r in agg_df.itertuples(index=False):
         chart_ws.append([r.partner, r.success, r.errors])
 
     style_worksheet(chart_ws)
 
-    # Создание вертикального столбчатого графика
-    max_row = chart_ws.max_row
     chart = BarChart()
     chart.type = "col"
     chart.title = "Ошибки и успехи по партнёрам"
     chart.y_axis.title = "Количество"
 
-    # Зеленый = Оплачен, красный = Ошибка
-    for col, fill_color in zip([2, 3], ["00FF00", "FF0000"]):
-        # Данные (колонки Оплачен и Ошибка)
-        data = Reference(chart_ws, min_col=2, min_row=1, max_col=3, max_row=chart_ws.max_row)
-        chart.add_data(data, titles_from_data=True)
-        # Задаём цвет заливки (только для визуального различия в openpyxl)
-        for cell in chart_ws[get_column_letter(col)]:
-            cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+    data = Reference(chart_ws, min_col=2, min_row=1, max_col=3, max_row=chart_ws.max_row)
+    chart.add_data(data, titles_from_data=True)
 
-    # Категории (имена партнёров) снизу
     cats = Reference(chart_ws, min_col=1, min_row=2, max_row=chart_ws.max_row)
     chart.set_categories(cats)
     chart.shape = 4
-    # Подписи данных сверху столбцов
     chart.dataLabels = DataLabelList()
     chart.dataLabels.showVal = True
 
-    # Добавляем график на лист
     chart_ws.add_chart(chart, "E2")
 
-    logger.info("Лист Charts сформирован")
-
-# -----------------------------
-# Новая утилита
-# -----------------------------
-def flatten_lists_in_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Преобразует списки в строку перед записью в Excel"""
-    def _cell_to_str(x):
-        if isinstance(x, (list, tuple)):
-            return ", ".join(map(str, x))
-        if pd.isna(x):
-            return ""
-        return x
-    for col in df.columns:
-        df[col] = df[col].apply(_cell_to_str)
-    return df
 
 # -----------------------------
 # Основной запуск
@@ -209,8 +181,21 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
 
     for (card, partner_norm), group in conv_df.groupby(["card", "partner_norm"]):
-        threshold = partners_thresholds.get(partner_norm, 4)
-        if partner_norm not in partners_thresholds:
+        settings = PARTNER_SETTINGS.get(partner_norm, {"threshold": 4, "start": None})
+        threshold = settings["threshold"]
+
+        # Фильтр по дате начала (если указан)
+        if settings["start"]:
+            try:
+                start_time = pd.to_datetime(settings["start"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+            except Exception:
+                start_time = pd.NaT
+            if pd.notna(start_time):
+                before_len = len(group)
+                group = group[group["datetime"] >= start_time]
+                logger.info(f"[{partner_norm}] фильтр по дате {start_time}, записей {before_len} → {len(group)}")
+
+        if partner_norm not in PARTNER_SETTINGS:
             logger.warning(f"[NO YAML] Партнёр '{partner_norm}' не найден в YAML. Использован порог {threshold}")
 
         card_status_raw = card_df.loc[card_df["card"] == card, "status"]
@@ -220,7 +205,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
             else None
         )
 
-        max_errors, _ = count_consecutive_errors(group, partner_norm)
+        max_errors = count_consecutive_errors(group, partner_norm)
         results.append({
             "card": card,
             "partner": partner_norm,
@@ -233,20 +218,18 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
             p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist
         ]
         if (
-                partner_norm in partners_list
-                and max_errors >= threshold
-                and card_status in VALID_STATUSES
+            partner_norm in partners_list
+            and max_errors >= threshold
+            and card_status in VALID_STATUSES
         ):
             problem_cards.append({
                 "card": card,
                 "partner": partner_norm,
-                "max_consecutive_errors": max_errors
+                "max_consecutive_errors": max_errors,
+                "status": card_status
             })
 
-    problem_cards_df = pd.DataFrame(
-        problem_cards,
-        columns=["card", "partner", "max_consecutive_errors", "status"]
-    )
+    problem_cards_df = pd.DataFrame(problem_cards)
 
     valid_results = [r for r in results if pd.notna(r["card"]) and str(r["card"]).strip() != ""]
     if valid_results:
@@ -264,9 +247,6 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         "Карты на отключение": int(problem_cards_df["card"].nunique()) if not problem_cards_df.empty else 0
     }
 
-    # -----------------------------
-    # Workbook
-    # -----------------------------
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -276,7 +256,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     for r in dataframe_to_rows(safe_conv, index=False, header=True):
         ws_conv.append(r)
 
-    # Data_card (без partner_list)
+    # Data_card
     safe_card = flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy())
     ws_card = wb.create_sheet("Data_card")
     for r in dataframe_to_rows(safe_card, index=False, header=True):
@@ -284,9 +264,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     # Отключить
     if not problem_cards_df.empty:
-        # сортировка по колонке partner
         problem_cards_df = problem_cards_df.sort_values(by=["partner", "card"])
-
         safe_problem = flatten_lists_in_df(problem_cards_df.copy())
         ws_prob = wb.create_sheet("Отключить")
         for r in dataframe_to_rows(safe_problem, index=False, header=True):

@@ -1,16 +1,38 @@
 #conversion_config.yaml
 partners:
-  "Hedge Hog (А-мобайл Сбер +Выплаты)": 8
-  "Hedge Hog (Амобайл Тинькофф)": 3
-  "Hedge Hog (Амобайл SBP IN ВТБ)": 8
-  "Hedge Hog (Abhsber IN) Тинь": 3
-  "Hedge Hog (Abhsber IN) Сбер": 5
-  "Hedge Hog (Аврора Тинь)": 3
-  "Hedge Hog (Аврора Сбер)": 5
-  "Hedge Hog (Кибит Сбер)": 8
-  "Hedge Hog (Кибит Тинь)": 3
-  "Hedge Hog (Бакай Тинь)": 3
-  "Hedge Hog (Амобайл - Сбер СБП) (118)": 8
+  "Hedge Hog (А-мобайл Сбер +Выплаты)":
+    threshold: 8
+    start:
+  "Hedge Hog (Амобайл Тинькофф)":
+    threshold: 3
+    start:
+  "Hedge Hog (Амобайл SBP IN ВТБ)":
+    threshold: 8
+    start:
+  "Hedge Hog (Abhsber IN) Тинь":
+    threshold: 3
+    start:
+  "Hedge Hog (Abhsber IN) Сбер":
+    threshold: 3
+    start:
+  "Hedge Hog (Аврора Тинь)":
+    threshold: 3
+    start:
+  "Hedge Hog (Аврора Сбер)":
+    threshold: 5
+    start:
+  "Hedge Hog (Кибит Сбер)":
+    threshold: 8
+    start:
+  "Hedge Hog (Кибит Тинь)":
+    threshold: 3
+    start: "01.09.2025 00:00:00"
+  "Hedge Hog (Бакай Тинь)":
+    threshold: 3
+    start:
+  "Hedge Hog (Амобайл - Сбер СБП) (118)":
+    threshold: 8
+    start:
 
 pools:
   aurora: "Пул SMS"
