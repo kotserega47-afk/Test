@@ -270,9 +270,6 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         for r in dataframe_to_rows(safe_problem, index=False, header=True):
             ws_prob.append(r)
 
-    # Stat
-    build_stat_sheet(conv_df, wb)
-
     return {
         "summary": summary,
         "workbook": wb,

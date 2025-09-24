@@ -26,7 +26,7 @@ partners:
     start:
   "Hedge Hog (Кибит Тинь)":
     threshold: 3
-    start: "23.09.2025 00:00:00"
+    start: "23.09.2025 00:00:00" # Для примера
   "Hedge Hog (Бакай Тинь)":
     threshold: 3
     start:
