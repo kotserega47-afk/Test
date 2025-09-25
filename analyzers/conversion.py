@@ -175,6 +175,15 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
+    from db.database import SessionLocal
+    from load_data import process_conversion
+
+    # Создаём сессию
+    session = SessionLocal()
+
+    # Обновляем базу перед аналитикой
+    process_conversion(card_df, conv_df, session)
+
     results = []
     problem_cards = []
 
