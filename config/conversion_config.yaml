@@ -1,36 +1,36 @@
 #conversion_config.yaml
 partners:
-  "Hedge Hog (А-мобайл Сбер +Выплаты)":
+  "HH (А-мобайл Сбер +Выплаты)":
     threshold: 8
     start:
-  "Hedge Hog (Амобайл Тинькофф)":
+  "HH (Амобайл Тинькофф)":
     threshold: 3
     start:
-  "Hedge Hog (Амобайл SBP IN ВТБ)":
+  "HH (Амобайл SBP IN ВТБ)":
     threshold: 8
     start:
-  "Hedge Hog (Abhsber IN) Тинь":
+  "HH (Abhsber IN) Тинь":
     threshold: 3
     start:
-  "Hedge Hog (Abhsber IN) Сбер":
+  "HH (Abhsber IN) Сбер":
     threshold: 3
     start:
-  "Hedge Hog (Аврора Тинь)":
+  "HH (Аврора Тинь)":
     threshold: 3
     start:
-  "Hedge Hog (Аврора Сбер)":
+  "HH (Аврора Сбер)":
     threshold: 5
     start:
-  "Hedge Hog (Кибит Сбер)":
+  "HH (Кибит Сбер)":
     threshold: 8
     start:
-  "Hedge Hog (Кибит Тинь)":
+  "HH (Кибит Тинь)":
     threshold: 3
     start: "23.09.2025 00:00:00" # Для примера
-  "Hedge Hog (Бакай Тинь)":
+  "HH (Бакай Тинь)":
     threshold: 3
     start:
-  "Hedge Hog (Амобайл - Сбер СБП) (118)":
+  "HH (Амобайл - Сбер СБП) (118)":
     threshold: 8
     start:
 
