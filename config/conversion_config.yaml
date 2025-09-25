@@ -33,6 +33,9 @@ partners:
   "HH (Амобайл - Сбер СБП) (118)":
     threshold: 8
     start:
+  "HH (Abhsber IN + Выплаты) Тинь":
+    threshold: 3
+    start:
 
 pools:
   aurora: "Пул SMS"
