@@ -1,6 +1,6 @@
 #conversion_config.yaml
 partners:
-  "HH (А-мобайл Сбер +Выплаты)":
+  "HH (А-мобайл Сбер + Выплаты)":
     threshold: 8
     start:
   "HH (Амобайл Тинькофф)":

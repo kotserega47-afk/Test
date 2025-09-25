@@ -42,7 +42,7 @@ def normalize_name(name: str) -> str:
     name = name.replace("амобайл", "а-мобайл")
     name = re.sub(r"\(\d+\)$", "", name)
     name = re.sub(r"\s+", " ", name)
-    name = re.sub(r"\+.*", "+Выплаты)", name)
+    # name = re.sub(r"\+.*", "+Выплаты)", name)
     return name.strip(", ")
 
 
