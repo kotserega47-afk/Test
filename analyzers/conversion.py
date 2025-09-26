@@ -174,6 +174,10 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df = load_data(conv_file, col_mapping)
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
+    # Преобразуем колонку datetime в datetime64[ns]
+    conv_df['datetime'] = pd.to_datetime(conv_df['datetime'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
+    logger.info(f"[INFO] Преобразованы даты, тип колонки datetime: {conv_df['datetime'].dtype}")
+
     # Загрузка карт
     card_df_list = [
         load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"})
@@ -203,7 +207,8 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
                 if pd.isna(start_ex) or pd.isna(end_ex):
                     logger.warning(
-                        f"[{partner_norm}] интервал {i} некорректный: start={interval.get('start')} end={interval.get('end')}")
+                        f"[{partner_norm}] интервал {i} некорректный: start={interval.get('start')} end={interval.get('end')}"
+                    )
                     continue
 
                 mask = (group["datetime"] >= start_ex) & (group["datetime"] <= end_ex)
@@ -218,7 +223,8 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
                 )
 
         logger.info(
-            f"[{partner_norm}] после всех исключений записей осталось {len(group)} (из {total_before}) для карты {card}")
+            f"[{partner_norm}] после всех исключений записей осталось {len(group)} (из {total_before}) для карты {card}"
+        )
 
         card_status_raw = card_df.loc[card_df["card"] == card, "status"]
         card_status = (
