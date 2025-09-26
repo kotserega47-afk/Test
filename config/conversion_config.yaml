@@ -2,37 +2,48 @@
 partners:
   "HH (А-мобайл Сбер +Выплаты)":
     threshold: 8
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Амобайл Тинькофф)":
     threshold: 3
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Амобайл SBP IN ВТБ)":
     threshold: 8
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Abhsber IN) Тинь":
     threshold: 3
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Abhsber IN) Сбер":
     threshold: 3
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Аврора Тинь)":
     threshold: 3
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Аврора Сбер)":
     threshold: 5
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Кибит Сбер)":
     threshold: 8
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Кибит Тинь)":
     threshold: 3
-    start: "23.09.2025 00:00:00" # Для примера
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Бакай Тинь)":
     threshold: 3
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
   "HH (Амобайл - Сбер СБП) (118)":
     threshold: 8
-    start:
+    exclude:
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
 
 pools:
   aurora: "Пул SMS"
