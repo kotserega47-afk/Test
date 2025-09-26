@@ -175,26 +175,53 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     # Загрузка карт
-    card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"}) for f in card_files]
-    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
+    card_df_list = [
+        load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"})
+        for f in card_files
+    ]
+    card_df = (
+        pd.concat(card_df_list, ignore_index=True)
+        if card_df_list
+        else pd.DataFrame(columns=["card", "partner"])
+    )
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
     results, problem_cards = [], []
     VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
 
     for (card, partner_norm), group in conv_df.groupby(["card", "partner_norm"]):
-        settings = PARTNER_SETTINGS.get(partner_norm, {"threshold": 4, "start": None})
-        threshold = settings["threshold"]
+        settings = PARTNER_SETTINGS.get(partner_norm, {"threshold": 4})
+        threshold = settings.get("threshold", 4)
 
-        # Фильтр по дате начала
-        if settings["start"]:
-            start_time = pd.to_datetime(settings["start"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
-            if pd.notna(start_time):
-                group = group[group["datetime"] >= start_time]
-                logger.info(f"[{partner_norm}] фильтр по дате {start_time}, записей осталось {len(group)}")
+        # Исключаем интервалы, если заданы
+        excludes = settings.get("exclude", [])
+        if excludes:
+            for interval in excludes:
+                try:
+                    start_ex = pd.to_datetime(
+                        interval.get("start"), format="%d.%m.%Y %H:%M:%S", errors="coerce"
+                    )
+                    end_ex = pd.to_datetime(
+                        interval.get("end"), format="%d.%m.%Y %H:%M:%S", errors="coerce"
+                    )
+                except Exception:
+                    start_ex, end_ex = pd.NaT, pd.NaT
+
+                if pd.notna(start_ex) and pd.notna(end_ex):
+                    before_len = len(group)
+                    group = group[
+                        ~((group["datetime"] >= start_ex) & (group["datetime"] <= end_ex))
+                    ]
+                    logger.info(
+                        f"[{partner_norm}] исключён интервал {start_ex} – {end_ex}, "
+                        f"записей {before_len} → {len(group)}"
+                    )
 
         if partner_norm not in PARTNER_SETTINGS:
-            logger.warning(f"[NO YAML] Партнёр '{partner_norm}' не найден в YAML. Использован порог {threshold}")
+            logger.warning(
+                f"[NO YAML] Партнёр '{partner_norm}' не найден в YAML. "
+                f"Использован порог {threshold}"
+            )
 
         card_status_raw = card_df.loc[card_df["card"] == card, "status"]
         card_status = (
@@ -204,29 +231,52 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         )
 
         max_errors = count_consecutive_errors(group, partner_norm)
-        results.append({
-            "card": card,
-            "partner": partner_norm,
-            "max_consecutive_errors": max_errors,
-            "threshold": threshold,
-            "status": card_status_raw.iloc[0] if not card_status_raw.empty else None
-        })
-
-        partners_list = [p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist]
-        if partner_norm in partners_list and max_errors >= threshold and card_status in VALID_STATUSES:
-            problem_cards.append({
+        results.append(
+            {
                 "card": card,
                 "partner": partner_norm,
                 "max_consecutive_errors": max_errors,
-                "status": card_status
-            })
+                "threshold": threshold,
+                "status": card_status_raw.iloc[0]
+                if not card_status_raw.empty
+                else None,
+            }
+        )
+
+        partners_list = [
+            p
+            for sublist in card_df.loc[card_df["card"] == card, "partner_list"]
+            for p in sublist
+        ]
+        if (
+            partner_norm in partners_list
+            and max_errors >= threshold
+            and card_status in VALID_STATUSES
+        ):
+            problem_cards.append(
+                {
+                    "card": card,
+                    "partner": partner_norm,
+                    "max_consecutive_errors": max_errors,
+                    "status": card_status,
+                }
+            )
 
     problem_cards_df = pd.DataFrame(problem_cards)
 
-    valid_results = [r for r in results if pd.notna(r["card"]) and str(r["card"]).strip() != ""]
+    valid_results = [
+        r
+        for r in results
+        if pd.notna(r["card"]) and str(r["card"]).strip() != ""
+    ]
     if valid_results:
-        max_error_record = max(valid_results, key=lambda r: r["max_consecutive_errors"])
-        max_errors, max_error_card = max_error_record["max_consecutive_errors"], max_error_record["card"]
+        max_error_record = max(
+            valid_results, key=lambda r: r["max_consecutive_errors"]
+        )
+        max_errors, max_error_card = (
+            max_error_record["max_consecutive_errors"],
+            max_error_record["card"],
+        )
     else:
         max_errors, max_error_card = 0, None
 
@@ -234,7 +284,9 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         "Карт в работе": conv_df["card"].nunique(),
         "Max ошибки": max_errors,
         "Карта с Max ошибками": max_error_card,
-        "Карты на отключение": int(problem_cards_df["card"].nunique()) if not problem_cards_df.empty else 0
+        "Карты на отключение": int(problem_cards_df["card"].nunique())
+        if not problem_cards_df.empty
+        else 0,
     }
 
     wb = Workbook()
@@ -242,16 +294,23 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
     # Sheets
     write_df_to_sheet(wb, "Data_conv", flatten_lists_in_df(conv_df.copy()))
-    write_df_to_sheet(wb, "Data_card", flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy()))
+    write_df_to_sheet(
+        wb,
+        "Data_card",
+        flatten_lists_in_df(
+            card_df.drop(columns=["partner_list"], errors="ignore").copy()
+        ),
+    )
 
     if not problem_cards_df.empty:
-        safe_problem = flatten_lists_in_df(problem_cards_df.sort_values(by=["partner", "card"]).copy())
+        safe_problem = flatten_lists_in_df(
+            problem_cards_df.sort_values(by=["partner", "card"]).copy()
+        )
         write_df_to_sheet(wb, "Отключить", safe_problem)
-
-    build_stat_sheet(conv_df, wb)
 
     return {
         "summary": summary,
         "workbook": wb,
-        "problem_cards": problem_cards_df
+        "problem_cards": problem_cards_df,
     }
+
