@@ -196,6 +196,7 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         # Исключаем интервалы, если заданы
         excludes = settings.get("exclude", [])
         if excludes:
+            total_before = len(group)
             for interval in excludes:
                 try:
                     start_ex = pd.to_datetime(
@@ -216,11 +217,9 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
                         f"[{partner_norm}] исключён интервал {start_ex} – {end_ex}, "
                         f"записей {before_len} → {len(group)}"
                     )
-
-        if partner_norm not in PARTNER_SETTINGS:
-            logger.warning(
-                f"[NO YAML] Партнёр '{partner_norm}' не найден в YAML. "
-                f"Использован порог {threshold}"
+            logger.info(
+                f"[{partner_norm}] после всех исключений записей осталось {len(group)} "
+                f"(из {total_before}) для карты {card}"
             )
 
         card_status_raw = card_df.loc[card_df["card"] == card, "status"]
