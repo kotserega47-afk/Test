@@ -195,32 +195,30 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 
         # Исключаем интервалы, если заданы
         excludes = settings.get("exclude", [])
+        total_before = len(group)
         if excludes:
-            total_before = len(group)
-            for interval in excludes:
-                try:
-                    start_ex = pd.to_datetime(
-                        interval.get("start"), format="%d.%m.%Y %H:%M:%S", errors="coerce"
-                    )
-                    end_ex = pd.to_datetime(
-                        interval.get("end"), format="%d.%m.%Y %H:%M:%S", errors="coerce"
-                    )
-                except Exception:
-                    start_ex, end_ex = pd.NaT, pd.NaT
+            for i, interval in enumerate(excludes, 1):
+                start_ex = pd.to_datetime(interval.get("start"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
+                end_ex = pd.to_datetime(interval.get("end"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
 
-                if pd.notna(start_ex) and pd.notna(end_ex):
-                    before_len = len(group)
-                    group = group[
-                        ~((group["datetime"] >= start_ex) & (group["datetime"] <= end_ex))
-                    ]
-                    logger.info(
-                        f"[{partner_norm}] исключён интервал {start_ex} – {end_ex}, "
-                        f"записей {before_len} → {len(group)}"
-                    )
-            logger.info(
-                f"[{partner_norm}] после всех исключений записей осталось {len(group)} "
-                f"(из {total_before}) для карты {card}"
-            )
+                if pd.isna(start_ex) or pd.isna(end_ex):
+                    logger.warning(
+                        f"[{partner_norm}] интервал {i} некорректный: start={interval.get('start')} end={interval.get('end')}")
+                    continue
+
+                mask = (group["datetime"] >= start_ex) & (group["datetime"] <= end_ex)
+                count_in_interval = mask.sum()
+                before_len = len(group)
+                group = group[~mask]
+                after_len = len(group)
+
+                logger.info(
+                    f"[{partner_norm}] интервал {i}: {start_ex} – {end_ex} | "
+                    f"попало {count_in_interval} записей, осталось {after_len} (до {before_len})"
+                )
+
+        logger.info(
+            f"[{partner_norm}] после всех исключений записей осталось {len(group)} (из {total_before}) для карты {card}")
 
         card_status_raw = card_df.loc[card_df["card"] == card, "status"]
         card_status = (
