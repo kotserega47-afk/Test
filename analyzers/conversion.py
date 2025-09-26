@@ -172,11 +172,13 @@ def build_stat_sheet(conv_df: pd.DataFrame, wb: Workbook):
 
 def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df = load_data(conv_file, col_mapping)
-    conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     # Преобразуем колонку datetime в datetime64[ns]
-    conv_df['datetime'] = pd.to_datetime(conv_df['datetime'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
+    conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
     logger.info(f"[INFO] Преобразованы даты, тип колонки datetime: {conv_df['datetime'].dtype}")
+
+    # Нормализуем партнёров
+    conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     # Загрузка карт
     card_df_list = [
