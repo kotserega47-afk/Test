@@ -1,6 +1,7 @@
+# migrations/env.py (фрагмент)
 from logging.config import fileConfig
 import os
-
+from db.database import Base
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
@@ -14,7 +15,7 @@ if database_url:
 
 # Если у тебя есть Base = declarative_base(), сюда нужно подтянуть metadata
 # from myapp.models import Base
-target_metadata = None  # замени на Base.metadata
+target_metadata = Base.metadata
 
 # Конфиг логов
 if config.config_file_name is not None:
