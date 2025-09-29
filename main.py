@@ -1,5 +1,9 @@
 import os
 import logging
+from typing import List
+
+import pandas as pd
+
 from utils.report_builder import build_report
 from analyzers.selector import get_analyzer
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
@@ -26,11 +30,12 @@ def download_to_local(fname: str) -> str | None:
     """Скачивает файл из Dropbox в локальную папку"""
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
-    if download_file(dropbox_file_path, local_file_path):
+    try:
+        download_file(dropbox_file_path, local_file_path)
         logger.info(f"Файл скачан: {fname}")
         return local_file_path
-    else:
-        logger.error(f"Не удалось скачать {fname}")
+    except Exception as e:
+        logger.error(f"Не удалось скачать {fname}: {e}")
         return None
 
 
@@ -51,6 +56,40 @@ def move_to_processed(fname: str):
         logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
     except Exception as e:
         logger.error(f"Ошибка при переносе {fname}: {e}")
+
+
+def read_source_file(file_path: str) -> pd.DataFrame:
+    """Загружает CSV/XLSX-файл с сохранением исходных колонок."""
+    try:
+        if file_path.lower().endswith((".xlsx", ".xls")):
+            return pd.read_excel(file_path)
+        return pd.read_csv(file_path, sep=None, engine="python", encoding="utf-8")
+    except Exception:
+        logger.exception(f"Не удалось загрузить данные из файла {file_path}")
+        raise
+
+
+def merge_card_dataframes(card_dfs: List[pd.DataFrame]) -> pd.DataFrame:
+    """Объединяет карточные DataFrame в один и гарантирует наличие колонок."""
+    base_columns = [
+        "Карта",
+        "Пул",
+        "Направление",
+        "Баланс",
+        "Метод пополнения",
+        "Имя",
+        "Фамилия",
+        "Bakai customer_id",
+    ]
+
+    if not card_dfs:
+        return pd.DataFrame(columns=base_columns)
+
+    combined = pd.concat(card_dfs, ignore_index=True, sort=False)
+    for column in base_columns:
+        if column not in combined.columns:
+            combined[column] = None
+    return combined[base_columns + [c for c in combined.columns if c not in base_columns]]
 
 # -------------------------------
 # Обработка одного файла
@@ -74,6 +113,19 @@ def process_file(fname: str, all_files: list[str]):
 
     # Скачиваем карточные файлы, если требуется
     card_files = []
+    card_dataframes: List[pd.DataFrame] = []
+    conversion_df_original: pd.DataFrame | None = None
+    is_conversion = bool(config.get("file_pattern") == "conversion")
+
+    if is_conversion:
+        try:
+            conversion_df_original = read_source_file(local_file_path)
+            logger.info(
+                f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк"
+            )
+        except Exception as exc:
+            logger.error(f"[{fname}] Ошибка при чтении конверсионного файла: {exc}")
+
     try:
         if requires_card:
             for f in all_files:
@@ -81,7 +133,27 @@ def process_file(fname: str, all_files: list[str]):
                     local_card = download_to_local(f)
                     if local_card:
                         card_files.append(local_card)
+                        if is_conversion:
+                            try:
+                                card_df = read_source_file(local_card)
+                                card_dataframes.append(card_df)
+                            except Exception as exc:
+                                logger.error(
+                                    f"[{fname}] Ошибка при чтении карточного файла {local_card}: {exc}"
+                                )
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
+
+        if is_conversion and conversion_df_original is not None:
+            try:
+                from db.database import get_session
+                import load_data
+
+                card_df_for_db = merge_card_dataframes(card_dataframes)
+                with get_session() as session:
+                    load_data.process_conversion(card_df_for_db, conversion_df_original, session)
+                logger.info(f"[{fname}] Данные из конверсионного файла сохранены в БД")
+            except Exception as exc:
+                logger.exception(f"[{fname}] Ошибка при сохранении данных в БД: {exc}")
 
         # Запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
@@ -108,80 +180,3 @@ def process_file(fname: str, all_files: list[str]):
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
             # Заголовок таблицы
-            header = f"{'Карта':<20} {'Партнёр':<35} {'Ошибки':<7}"
-
-            # Формируем строки
-            rows = problem_cards_df.apply(
-                lambda x: f"{x['card']:<20} {x['partner']:<35} {x['max_consecutive_errors']:<7}",
-                axis=1
-            ).tolist()
-
-            # Полный текст таблицы
-            table_text = "\n".join([header] + rows)
-
-            # Добавляем шапку сообщения
-            base_message = f"📢 Карты на отключение для файла {fname}:\n\n"
-
-            # Разбиваем на куски с учётом лимита
-            chunk = ""
-            for line in table_text.splitlines():
-                # Проверяем, влезает ли строка в текущий блок
-                if len(base_message) + len(chunk) + len(line) + 10 > MAX_LEN:
-                    # Отправляем накопленный блок
-                    send_message_sync(base_message + "```\n" + chunk.rstrip() + "\n```")
-                    chunk = ""  # сбрасываем
-
-                chunk += line + "\n"
-
-            # Отправляем остаток
-            if chunk:
-                send_message_sync(base_message + "```\n" + chunk.rstrip() + "\n```")
-
-        # Загрузка отчёта в Dropbox
-        upload_report(report_path, fname)
-
-        # Дополнительно: отчёт из БД
-        try:
-            send_card_events_report(days=1)
-            logger.info(f"[{fname}] Отчёт по БД успешно отправлен")
-        except Exception as e:
-            logger.error(f"[{fname}] Ошибка при отправке отчёта по БД: {e}")
-
-    except Exception as e:
-        logger.exception(f"[{fname}] Ошибка при обработке файла: {e}")
-        send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-
-# -------------------------------
-# Основной цикл
-# -------------------------------
-def main_loop():
-    logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
-
-    try:
-        files = list_files(INPUT_PATH)
-        if not files:
-            logger.info("Нет файлов для обработки в Dropbox.")
-            return
-
-        # Обрабатываем каждый файл
-        for fname in files:
-            process_file(fname, files)
-
-        # Перемещаем все исходные файлы в PROCESSED
-        for fname in files:
-            move_to_processed(fname)
-
-        logger.info("✅ Обработка завершена.")
-
-    except Exception as e:
-        logger.exception(f"❌ Ошибка при сканировании Dropbox: {e}")
-        send_message_sync(f"❌ Ошибка при сканировании Dropbox: {e}")
-
-
-if __name__ == "__main__":
-    import time
-    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL"))  # или оставить существующее значение
-
-    while True:
-        main_loop()
-        time.sleep(CHECK_INTERVAL)
