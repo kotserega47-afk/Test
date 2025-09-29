@@ -1,8 +1,11 @@
 # db/models.py
+
 from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from db.database import Base
+
 
 class Card(Base):
     __tablename__ = "cards"
@@ -25,6 +28,7 @@ class Card(Base):
 
     events = relationship("CardEvent", back_populates="card")
 
+
 class ErrorType(Base):
     __tablename__ = "error_types"
 
@@ -34,6 +38,7 @@ class ErrorType(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     events = relationship("CardEvent", back_populates="error")
+
 
 class CardEvent(Base):
     __tablename__ = "card_events"
@@ -46,6 +51,9 @@ class CardEvent(Base):
     created_at = Column(DateTime, nullable=False)
     error_id = Column(Integer, ForeignKey("error_types.id"), nullable=True)
     source_file = Column(String, nullable=True)
+
+
+    snapshot_data = Column(JSON, nullable=True)
     imported_at = Column(DateTime, server_default=func.now())
 
     card = relationship("Card", back_populates="events")

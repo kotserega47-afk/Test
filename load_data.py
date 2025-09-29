@@ -1,8 +1,57 @@
 # load_data.py
+import os
+import re
+from datetime import datetime
+from typing import Dict, List, Tuple
+
 import pandas as pd
+import yaml
+
 from db.database import SessionLocal
 from db.models import Card, CardEvent, ErrorType
-from datetime import datetime
+
+
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "conversion_config.yaml")
+
+
+def load_conversion_config(path: str = CONFIG_PATH) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def normalize_partner_name(name: str) -> str:
+    if not isinstance(name, str):
+        return ""
+    normalized = name.lower().strip()
+    normalized = normalized.replace("ё", "е")
+    normalized = normalized.replace("амобайл", "а-мобайл")
+    normalized = re.sub(r"\(\d+\)$", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip(", ")
+
+
+def build_partner_exclusions(config: dict) -> Dict[str, List[Tuple[datetime, datetime]]]:
+    exclusions: Dict[str, List[Tuple[datetime, datetime]]] = {}
+    partners = config.get("partners", {})
+
+    for raw_name, settings in partners.items():
+        partner_key = normalize_partner_name(raw_name)
+        periods: List[Tuple[datetime, datetime]] = []
+
+        for period in settings.get("exclude", []):
+            start_raw = pd.to_datetime(period.get("start"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
+            end_raw = pd.to_datetime(period.get("end"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
+
+            if pd.notna(start_raw) and pd.notna(end_raw):
+                start_dt = start_raw.to_pydatetime() if hasattr(start_raw, "to_pydatetime") else start_raw
+                end_dt = end_raw.to_pydatetime() if hasattr(end_raw, "to_pydatetime") else end_raw
+                periods.append((start_dt, end_dt))
+
+        exclusions[partner_key] = periods
+
+    return exclusions
 
 def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, session):
     """
@@ -11,6 +60,9 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     - Добавляет новые события с snapshot состояния карты
     - Пересчитывает агрегаты карты (жизненный цикл и сумму успешных операций)
     """
+    config = load_conversion_config()
+    partner_exclusions = build_partner_exclusions(config)
+
     # 1️⃣ Добавление или обновление карт
     for _, row in card_df.iterrows():
         card = session.query(Card).filter_by(card_number=row['Карта']).first()
@@ -40,6 +92,29 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
 
     # 2️⃣ Добавление новых событий
     for _, row in conversion_df.iterrows():
+        partner_norm = normalize_partner_name(row.get('Партнер'))
+        created_at_raw = pd.to_datetime(
+            row.get('Дата/Время создания'),
+            format="%d.%m.%Y %H:%M:%S",
+            errors="coerce"
+        )
+
+        if pd.isna(created_at_raw):
+            continue
+
+        created_at = (
+            created_at_raw.to_pydatetime()
+            if hasattr(created_at_raw, "to_pydatetime")
+            else created_at_raw
+        )
+
+        exclude_periods = partner_exclusions.get(partner_norm, [])
+        should_skip = any(start <= created_at <= end for start, end in exclude_periods)
+        if should_skip:
+            continue
+
+        status = str(row.get('Статус', '')).lower()
+
         card = session.query(Card).filter_by(card_number=row['Карта']).first()
         if not card:
             # На всякий случай создаём карту минимально
@@ -54,7 +129,7 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
 
         # Ошибка
         error_id = None
-        if row['Статус'].lower() == 'error' and row.get('Инфо'):
+        if status == 'error' and row.get('Инфо'):
             error = session.query(ErrorType).filter_by(code=row['Инфо']).first()
             if not error:
                 error = ErrorType(code=row['Инфо'], description=row['Инфо'])
@@ -62,27 +137,29 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
-        created_at = pd.to_datetime(row['Дата/Время создания'])
+        event_kwargs = {
+            "card_id": card.id,
+            "status": status,
+            "amount": row['Сумма'] if status == 'success' else None,
+            "operation_id": row['ID операции'],
+            "created_at": created_at,
+            "error_id": error_id,
+            "source_file": row.get('source_file', None),
+        }
 
-        # Создаём событие с snapshot
-        event = CardEvent(
-            card_id=card.id,
-            status=row['Статус'].lower(),
-            amount=row['Сумма'] if row['Статус'].lower() == 'success' else None,
-            operation_id=row['ID операции'],
-            created_at=created_at,
-            error_id=error_id,
-            source_file=row.get('source_file', None),
-            snapshot_data={
+        if hasattr(CardEvent, "snapshot_data"):
+            event_kwargs["snapshot_data"] = {
                 "direction": card.direction,
                 "balance": card.balance,
                 "replenishment_method": card.replenishment_method,
                 "first_name": card.first_name,
                 "last_name": card.last_name,
                 "bakai_customer_id": card.bakai_customer_id,
-                "pool_id": card.pool_id
+                "pool_id": card.pool_id,
             }
-        )
+
+        # Создаём событие с snapshot, если он поддерживается моделью
+        event = CardEvent(**event_kwargs)
         session.add(event)
 
     session.commit()
@@ -108,15 +185,3 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             card.last_error_at = max(e.created_at for e in error_events)
         else:
             card.first_error_at = None
-            card.last_error_at = None
-
-    session.commit()
-
-
-# 🔹 Пример вызова
-if __name__ == "__main__":
-    session = SessionLocal()
-    card_df = pd.read_excel("cards.xlsx")
-    conversion_df = pd.read_excel("conversion.xlsx")
-    process_conversion(card_df, conversion_df, session)
-    print("Данные успешно обработаны, карты обновлены, snapshot сохранён!")
