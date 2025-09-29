@@ -2,7 +2,7 @@
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import yaml
@@ -53,17 +53,31 @@ def build_partner_exclusions(config: dict) -> Dict[str, List[Tuple[datetime, dat
 
     return exclusions
 
+
+def parse_datetime(value: object) -> Optional[datetime]:
+    if value is None or pd.isna(value):
+        return None
+
+    parsed = pd.to_datetime(value, format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    return parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
+
 def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, session):
     """
     Обрабатывает данные при конверсии:
-    - Добавляет новые карты или обновляет существующие
-    - Добавляет новые события с snapshot состояния карты
-    - Пересчитывает агрегаты карты (жизненный цикл и сумму успешных операций)
+    1. Добавляет или обновляет карты
+    2. Добавляет новые события (CardEvent), учитывая периоды исключений
+    3. Пересчитывает агрегаты карт (жизненный цикл и сумму успешных операций)
     """
+    # Загружаем конфиг и строим исключения
     config = load_conversion_config()
     partner_exclusions = build_partner_exclusions(config)
 
+    # -------------------------------
     # 1️⃣ Добавление или обновление карт
+    # -------------------------------
     for _, row in card_df.iterrows():
         card = session.query(Card).filter_by(card_number=row['Карта']).first()
         if not card:
@@ -82,7 +96,8 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             # Обновляем карту текущей информацией
             card.pool_id = row.get('Пул') or card.pool_id
             card.direction = row.get('Направление') or card.direction
-            card.balance = row.get('Баланс') if row.get('Баланс') is not None else card.balance
+            if row.get('Баланс') is not None:
+                card.balance = row.get('Баланс')
             card.replenishment_method = row.get('Метод пополнения') or card.replenishment_method
             card.first_name = row.get('Имя') or card.first_name
             card.last_name = row.get('Фамилия') or card.last_name
@@ -90,41 +105,30 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
 
     session.commit()
 
+    # -------------------------------
     # 2️⃣ Добавление новых событий
+    # -------------------------------
     for _, row in conversion_df.iterrows():
+        created_at = parse_datetime(row.get('Дата/Время создания'))
+        if created_at is None:
+            continue
+
         partner_norm = normalize_partner_name(row.get('Партнер'))
-        created_at_raw = pd.to_datetime(
-            row.get('Дата/Время создания'),
-            format="%d.%m.%Y %H:%M:%S",
-            errors="coerce"
-        )
-
-        if pd.isna(created_at_raw):
-            continue
-
-        created_at = (
-            created_at_raw.to_pydatetime()
-            if hasattr(created_at_raw, "to_pydatetime")
-            else created_at_raw
-        )
-
         exclude_periods = partner_exclusions.get(partner_norm, [])
-        should_skip = any(start <= created_at <= end for start, end in exclude_periods)
-        if should_skip:
-            continue
+        if any(start <= created_at <= end for start, end in exclude_periods):
+            continue  # пропускаем исключённые периоды
 
         status = str(row.get('Статус', '')).lower()
 
+        # Получаем или создаём карту
         card = session.query(Card).filter_by(card_number=row['Карта']).first()
         if not card:
-            # На всякий случай создаём карту минимально
             card = Card(card_number=row['Карта'])
             session.add(card)
             session.flush()
 
         # Проверка дубля по operation_id
-        existing_event = session.query(CardEvent).filter_by(operation_id=row['ID операции']).first()
-        if existing_event:
+        if session.query(CardEvent).filter_by(operation_id=row['ID операции']).first():
             continue
 
         # Ошибка
@@ -137,51 +141,41 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
-        event_kwargs = {
-            "card_id": card.id,
-            "status": status,
-            "amount": row['Сумма'] if status == 'success' else None,
-            "operation_id": row['ID операции'],
-            "created_at": created_at,
-            "error_id": error_id,
-            "source_file": row.get('source_file', None),
-        }
-
-        if hasattr(CardEvent, "snapshot_data"):
-            event_kwargs["snapshot_data"] = {
-                "direction": card.direction,
-                "balance": card.balance,
-                "replenishment_method": card.replenishment_method,
-                "first_name": card.first_name,
-                "last_name": card.last_name,
-                "bakai_customer_id": card.bakai_customer_id,
-                "pool_id": card.pool_id,
-            }
-
-        # Создаём событие с snapshot, если он поддерживается моделью
-        event = CardEvent(**event_kwargs)
+        # Создаём событие
+        event = CardEvent(
+            card_id=card.id,
+            status=status,
+            amount=row.get('Сумма'),
+            operation_id=row['ID операции'],
+            created_at=created_at,
+            error_id=error_id,
+            source_file=None,  # можно пробросить имя файла, если известно
+            snapshot_data=row.to_dict()
+        )
         session.add(event)
 
     session.commit()
 
-    # 3️⃣ Пересчёт агрегатов карты
-    cards_to_update = session.query(Card).all()
-    for card in cards_to_update:
+    # -------------------------------
+    # 3️⃣ Пересчёт агрегатов карт
+    # -------------------------------
+    for card in session.query(Card).all():
         # Успешные операции
         success_events = session.query(CardEvent).filter_by(card_id=card.id, status='success').all()
         if success_events:
             card.first_success_at = min(e.created_at for e in success_events)
             card.last_success_at = max(e.created_at for e in success_events)
-            card.total_success_amount = sum(e.amount for e in success_events if e.amount)
+            card.total_success_amount = sum(e.amount or 0 for e in success_events)
         else:
-            card.first_success_at = None
-            card.last_success_at = None
+            card.first_success_at = card.last_success_at = None
             card.total_success_amount = 0
 
-        # Ошибки
+        # Ошибочные операции
         error_events = session.query(CardEvent).filter_by(card_id=card.id, status='error').all()
         if error_events:
             card.first_error_at = min(e.created_at for e in error_events)
             card.last_error_at = max(e.created_at for e in error_events)
         else:
-            card.first_error_at = None
+            card.first_error_at = card.last_error_at = None
+
+    session.commit()
