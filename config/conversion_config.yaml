@@ -50,6 +50,7 @@ partners:
     threshold: 3
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
+      - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
 
 pools:
   aurora: "Пул SMS"
