@@ -5,6 +5,7 @@ from analyzers.selector import get_analyzer
 from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
+from scripts.card_events_report import run as send_card_events_report
 
 # -------------------------------
 # Пути
@@ -138,6 +139,13 @@ def process_file(fname: str, all_files: list[str]):
 
         # Загрузка отчёта в Dropbox
         upload_report(report_path, fname)
+
+        # Дополнительно: отчёт из БД
+        try:
+            send_card_events_report(days=1)
+            logger.info(f"[{fname}] Отчёт по БД успешно отправлен")
+        except Exception as e:
+            logger.error(f"[{fname}] Ошибка при отправке отчёта по БД: {e}")
 
     except Exception as e:
         logger.exception(f"[{fname}] Ошибка при обработке файла: {e}")
