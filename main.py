@@ -70,8 +70,14 @@ def move_to_processed(fname: str):
 def read_source_file(file_path: str) -> pd.DataFrame:
     try:
         if file_path.lower().endswith((".xlsx", ".xls")):
-            return pd.read_excel(file_path)
-        return pd.read_csv(file_path, sep=None, engine="python", encoding="utf-8")
+            return pd.read_excel(file_path, dtype=str)   # ✅ читаем как строки
+        return pd.read_csv(
+            file_path,
+            sep=None,
+            engine="python",
+            encoding="utf-8",
+            dtype=str,  # ✅ читаем как строки
+        )
     except Exception:
         logger.exception(f"Не удалось загрузить данные из файла {file_path}")
         raise

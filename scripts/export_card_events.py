@@ -1,50 +1,30 @@
 # scripts/export_card_events.py
-import os
-import psycopg2
 import pandas as pd
+from db.database import get_session
+from db.models import CardEvent, Card, ErrorType
 
-# 🔑 параметры подключения (можно заменить на свои или подтянуть из .env)
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "your_db")
-DB_USER = os.getenv("DB_USER", "your_user")
-DB_PASS = os.getenv("DB_PASS", "your_password")
+def export_card_events_to_excel(file_path="card_events_export.xlsx"):
+    with get_session() as session:
+        events = session.query(CardEvent).all()
 
-OUTPUT_FILE = "card_events_export.xlsx"
+        data = []
+        for e in events:
+            data.append({
+                "id": e.id,
+                "card_id": e.card_id,
+                "card_number": e.card.card_number if e.card else None,
+                "status": e.status,
+                "amount": e.amount,
+                "operation_id": e.operation_id,
+                "created_at": e.created_at,
+                "error_code": e.error.code if e.error else None,
+                "error_description": e.error.description if e.error else None,
+                "source_file": e.source_file,
+            })
 
-
-def export_card_events():
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-    )
-
-    query = """
-        SELECT 
-            c.card_number,
-            e.status,
-            e.amount,
-            e.created_at,
-            et.code AS error_code,
-            et.description AS error_description
-        FROM card_events e
-        JOIN cards c ON e.card_id = c.id
-        LEFT JOIN error_types et ON e.error_id = et.id
-        ORDER BY e.created_at DESC
-    """
-
-    df = pd.read_sql(query, conn)
-
-    conn.close()
-
-    # Экспортируем в Excel
-    df.to_excel(OUTPUT_FILE, index=False, engine="openpyxl")
-
-    print(f"✅ Данные экспортированы в {OUTPUT_FILE}")
-
+        df = pd.DataFrame(data)
+        df.to_excel(file_path, index=False)
+        print(f"✅ Данные выгружены в {file_path}")
 
 if __name__ == "__main__":
-    export_card_events()
+    export_card_events_to_excel()

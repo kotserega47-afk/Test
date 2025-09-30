@@ -19,18 +19,18 @@ def load_conversion_config(path: str = CONFIG_PATH) -> dict:
 
 
 def normalize_card_number(value) -> str | None:
-    """Приведение card_number к строке без .0 и пробелов"""
-
-    if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
+    if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
         return None
 
-    card_str = str(value).strip()
-    logger.debug(f"[normalize_card_number] raw={value!r} → str={card_str!r}")
+    # если попал float (из Excel), форматируем без потери точности
+    if isinstance(value, float):
+        card_str = "{:.0f}".format(value)
+    else:
+        card_str = str(value).strip()
 
-    if card_str.endswith(".0"):  # Excel float → убираем .0
+    if card_str.endswith(".0"):
         card_str = card_str[:-2]
 
-    logger.debug(f"[normalize_card_number] final={card_str!r}")
     return card_str
 
 
@@ -185,17 +185,23 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             )
             continue
 
-        # проверка дубля по (card_id, operation_id)
-        operation_id = str(row.get("ID операции")).strip() if row.get("ID операции") not in [None, ""] else None
+        # -------------------------------
+        # Проверка ID операции
+        # -------------------------------
+        raw_operation_id = row.get("ID операции")
+        if raw_operation_id in [None, ""]:
+            continue
+
+        operation_id = str(raw_operation_id).strip()
         if not operation_id:
             continue
 
+        # проверка дубля по (card_id, operation_id)
         existing_event = (
             session.query(CardEvent)
             .filter_by(operation_id=operation_id, card_id=card.id)
             .first()
         )
-
         if existing_event:
             logger.debug(
                 f"[process_conversion] Дубликат события: card={card_num}, operation_id={operation_id} → пропущено"
@@ -203,7 +209,9 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             skipped_dupes += 1
             continue
 
-        # обработка ошибки
+        # -------------------------------
+        # Ошибка, если статус = error
+        # -------------------------------
         error_id = None
         if status == "error" and row.get("Инфо"):
             error = session.query(ErrorType).filter_by(code=row["Инфо"]).first()
@@ -213,13 +221,15 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
-        # создаём событие
+        # -------------------------------
+        # Создаём событие
+        # -------------------------------
         snapshot_dict = row.where(pd.notna(row), None).to_dict()
         event = CardEvent(
             card_id=card.id,
             status=status,
             amount=row.get("Сумма"),
-            operation_id=operation_id,
+            operation_id=str(operation_id),
             created_at=created_at,
             error_id=error_id,
             source_file=None,
