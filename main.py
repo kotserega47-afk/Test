@@ -1,3 +1,4 @@
+# main.py
 import os
 import logging
 from typing import List
@@ -10,6 +11,8 @@ from integrations.dropbox_watcher import list_files, download_file, upload_file,
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from scripts.card_events_report import run as send_card_events_report
+from db.database import get_session
+import load_data
 
 # -------------------------------
 # Пути
@@ -27,7 +30,6 @@ PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 # Вспомогательные функции
 # -------------------------------
 def download_to_local(fname: str) -> str | None:
-    """Скачивает файл из Dropbox в локальную папку"""
     dropbox_file_path = f"{INPUT_PATH}/{fname}"
     local_file_path = os.path.join(LOCAL_DATA, fname)
     try:
@@ -40,7 +42,6 @@ def download_to_local(fname: str) -> str | None:
 
 
 def upload_report(local_path: str, fname: str):
-    """Загружает готовый отчёт в Dropbox"""
     try:
         dropbox_report_path = f"{OUTPUT_PATH}/report_{fname}.xlsx"
         upload_file(local_path, dropbox_report_path)
@@ -50,7 +51,6 @@ def upload_report(local_path: str, fname: str):
 
 
 def move_to_processed(fname: str):
-    """Переносит файл в PROCESSED в Dropbox"""
     try:
         move_file(f"{INPUT_PATH}/{fname}", f"{PROCESSED_PATH}/{fname}")
         logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
@@ -59,7 +59,6 @@ def move_to_processed(fname: str):
 
 
 def read_source_file(file_path: str) -> pd.DataFrame:
-    """Загружает CSV/XLSX-файл с сохранением исходных колонок."""
     try:
         if file_path.lower().endswith((".xlsx", ".xls")):
             return pd.read_excel(file_path)
@@ -70,16 +69,9 @@ def read_source_file(file_path: str) -> pd.DataFrame:
 
 
 def merge_card_dataframes(card_dfs: List[pd.DataFrame]) -> pd.DataFrame:
-    """Объединяет карточные DataFrame в один и гарантирует наличие колонок."""
     base_columns = [
-        "Карта",
-        "Пул",
-        "Направление",
-        "Баланс",
-        "Метод пополнения",
-        "Имя",
-        "Фамилия",
-        "Bakai customer_id",
+        "Карта", "Пул", "Направление", "Баланс",
+        "Метод пополнения", "Имя", "Фамилия", "Bakai customer_id",
     ]
 
     if not card_dfs:
@@ -97,13 +89,11 @@ def merge_card_dataframes(card_dfs: List[pd.DataFrame]) -> pd.DataFrame:
 def process_file(fname: str, all_files: list[str]):
     logger.info(f"[{fname}] --- Начало обработки ---")
 
-    # Скачиваем основной файл
     local_file_path = download_to_local(fname)
     if not local_file_path:
         send_message_sync(f"❌ Не удалось скачать {fname}")
         return
 
-    # Получаем анализатор
     analyzer_func, config, requires_card = get_analyzer(fname)
     if not analyzer_func or not config:
         msg = f"❌ Не найден анализатор для файла {fname}"
@@ -111,7 +101,6 @@ def process_file(fname: str, all_files: list[str]):
         send_message_sync(msg)
         return
 
-    # Скачиваем карточные файлы, если требуется
     card_files = []
     card_dataframes: List[pd.DataFrame] = []
     conversion_df_original: pd.DataFrame | None = None
@@ -120,9 +109,7 @@ def process_file(fname: str, all_files: list[str]):
     if is_conversion:
         try:
             conversion_df_original = read_source_file(local_file_path)
-            logger.info(
-                f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк"
-            )
+            logger.info(f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк")
         except Exception as exc:
             logger.error(f"[{fname}] Ошибка при чтении конверсионного файла: {exc}")
 
@@ -138,16 +125,12 @@ def process_file(fname: str, all_files: list[str]):
                                 card_df = read_source_file(local_card)
                                 card_dataframes.append(card_df)
                             except Exception as exc:
-                                logger.error(
-                                    f"[{fname}] Ошибка при чтении карточного файла {local_card}: {exc}"
-                                )
+                                logger.error(f"[{fname}] Ошибка при чтении карточного файла {local_card}: {exc}")
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
+        # ✅ запись данных в БД
         if is_conversion and conversion_df_original is not None:
             try:
-                from db.database import get_session
-                import load_data
-
                 card_df_for_db = merge_card_dataframes(card_dataframes)
                 with get_session() as session:
                     load_data.process_conversion(card_df_for_db, conversion_df_original, session)
@@ -155,11 +138,10 @@ def process_file(fname: str, all_files: list[str]):
             except Exception as exc:
                 logger.exception(f"[{fname}] Ошибка при сохранении данных в БД: {exc}")
 
-        # Запуск анализатора
+        # ✅ запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
 
-        # Генерация отчёта
         try:
             build_report(result, report_path)
             logger.info(f"[{fname}] Отчёт успешно сгенерирован: {report_path}")
@@ -170,13 +152,42 @@ def process_file(fname: str, all_files: list[str]):
             wb.save(report_path)
             logger.info(f"[{fname}] Создан пустой отчёт: {report_path}")
 
-        # Отправка отчёта в Telegram
+        # ✅ отправка отчёта
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
-        # Отправка листа "Отключить" в Telegram, если есть проблемные карты
-        MAX_LEN = 4000  # запас меньше лимита 4096
-
+        # ⚡️ лист "Отключить"
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
-            # Заголовок таблицы
+            try:
+                text = problem_cards_df.to_string(index=False)
+                send_message_sync(f"⚠️ Карты для отключения:\n{text[:3900]}")  # урезаем под лимит
+            except Exception as e:
+                logger.error(f"Ошибка при отправке списка карт в Telegram: {e}")
+
+        # ✅ перенос в PROCESSED
+        move_to_processed(fname)
+
+    except Exception as e:
+        logger.exception(f"[{fname}] Общая ошибка обработки: {e}")
+        send_message_sync(f"❌ Ошибка обработки файла {fname}: {e}")
+
+# -------------------------------
+# Точка входа
+# -------------------------------
+def main():
+    try:
+        all_files = list_files(INPUT_PATH)
+        for fname in all_files:
+            process_file(fname, all_files)
+
+        # Дополнительный отчёт (пример)
+        send_card_events_report()
+
+    except Exception as e:
+        logger.exception(f"Ошибка в основном процессе: {e}")
+        send_message_sync(f"❌ Критическая ошибка: {e}")
+
+
+if __name__ == "__main__":
+    main()
