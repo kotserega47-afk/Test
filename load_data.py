@@ -2,10 +2,9 @@ import os
 import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-
+from utils.logger import logger
 import pandas as pd
 import yaml
-
 from db.models import Card, CardEvent, ErrorType
 
 
@@ -21,11 +20,18 @@ def load_conversion_config(path: str = CONFIG_PATH) -> dict:
 
 def normalize_card_number(value) -> str | None:
     """Приведение card_number к строке без .0 и пробелов"""
+    from utils.logger import logger
+
     if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
         return None
+
     card_str = str(value).strip()
+    logger.debug(f"[normalize_card_number] raw={value!r} → str={card_str!r}")
+
     if card_str.endswith(".0"):  # Excel float → убираем .0
         card_str = card_str[:-2]
+
+    logger.debug(f"[normalize_card_number] final={card_str!r}")
     return card_str
 
 
@@ -99,43 +105,51 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     # -------------------------------
     # 1️⃣ Карты
     # -------------------------------
-    for _, row in card_df.iterrows():
-        card_num = normalize_card_number(row.get("Карта"))
+    for _, row in conversion_df.iterrows():
+        created_at = parse_datetime(row.get("Дата/Время создания"))
+        if created_at is None:
+            continue
+
+        partner_norm = normalize_partner_name(row.get("Партнер"))
+        exclude_periods = partner_exclusions.get(partner_norm, [])
+        if any(start <= created_at <= end for start, end in exclude_periods):
+            skipped_excluded += 1
+            continue
+
+        status = normalize_status(row.get("Статус"))
+        raw_card_value = row.get("Карта")
+        card_num = normalize_card_number(raw_card_value)
+
+        logger.debug(
+            f"[process_conversion] row_card={raw_card_value!r} → normalized={card_num!r}, status={status}"
+        )
+
         if not card_num:
             continue
 
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
-            card = Card(
-                card_number=card_num,
-                pool_id=str(row.get("Пул") or "").strip() or None,
-                direction=str(row.get("Направление") or "").strip() or None,
-                balance=float(row.get("Баланс")) if row.get("Баланс") not in [None, ""] else None,
-                replenishment_method=str(row.get("Метод пополнения") or "").strip() or None,
-                first_name=str(row.get("Имя") or "").strip() or None,
-                last_name=str(row.get("Фамилия") or "").strip() or None,
-                bakai_customer_id=(
-                    str(row.get("Bakai customer_id")).strip()
-                    if row.get("Bakai customer_id") not in [None, "", float("nan")]
-                    else None
-                ),
+            logger.warning(
+                f"[process_conversion] ❌ Карта {card_num!r} не найдена в таблице cards "
+                f"(raw={raw_card_value!r}). Событие пропущено."
             )
-            session.add(card)
-        else:
-            if row.get("Пул"):
-                card.pool_id = str(row.get("Пул")).strip()
-            if row.get("Направление"):
-                card.direction = str(row.get("Направление")).strip()
-            if row.get("Баланс") not in [None, ""]:
-                card.balance = float(row.get("Баланс"))
-            if row.get("Метод пополнения"):
-                card.replenishment_method = str(row.get("Метод пополнения")).strip()
-            if row.get("Имя"):
-                card.first_name = str(row.get("Имя")).strip()
-            if row.get("Фамилия"):
-                card.last_name = str(row.get("Фамилия")).strip()
-            if row.get("Bakai customer_id") not in [None, "", float("nan")]:
-                card.bakai_customer_id = str(row.get("Bakai customer_id")).strip()
+            continue
+
+        # если карта найдена, можно обновлять её данные
+        if row.get("Пул"):
+            card.pool_id = str(row.get("Пул")).strip()
+        if row.get("Направление"):
+            card.direction = str(row.get("Направление")).strip()
+        if row.get("Баланс") not in [None, ""]:
+            card.balance = float(row.get("Баланс"))
+        if row.get("Метод пополнения"):
+            card.replenishment_method = str(row.get("Метод пополнения")).strip()
+        if row.get("Имя"):
+            card.first_name = str(row.get("Имя")).strip()
+        if row.get("Фамилия"):
+            card.last_name = str(row.get("Фамилия")).strip()
+        if row.get("Bakai customer_id") not in [None, "", float("nan")]:
+            card.bakai_customer_id = str(row.get("Bakai customer_id")).strip()
 
     session.commit()
 

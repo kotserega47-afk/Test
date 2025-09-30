@@ -42,10 +42,18 @@ def normalize_partners_list(partners_str: str) -> list:
 
 def load_data(filepath, col_mapping: dict):
     """Загрузка CSV/XLSX и нормализация колонок"""
+    from utils.logger import logger
+
     if filepath.endswith((".xlsx", ".xls")):
         df = pd.read_excel(filepath, dtype=str)
     else:
         df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8")
+
+    logger.info(f"[load_data] Загружен файл {filepath} с колонками: {list(df.columns)}")
+
+    # лог первых 5 карт
+    if "Карта" in df.columns:
+        logger.debug(f"[load_data] Первые карты из {filepath}: {df['Карта'].head(5).tolist()}")
 
     norm_cols = {normalize_colname(c): c for c in df.columns}
     new_cols = {}
