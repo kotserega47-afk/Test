@@ -20,6 +20,18 @@ def load_conversion_config(path: str = CONFIG_PATH) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+def normalize_card_number(value) -> str | None:
+    """Приведение card_number к строке без .0 и пробелов"""
+    if value is None or value == "":
+        return None
+    try:
+        card_str = str(value).strip()
+        if card_str.endswith(".0"):  # Excel float → убираем .0
+            card_str = card_str[:-2]
+        return card_str
+    except Exception:
+        return None
+
 
 def normalize_partner_name(name: str) -> str:
     if not isinstance(name, str):
@@ -107,6 +119,9 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         if not card_num:
             continue
 
+        card_num = normalize_card_number(row.get("Карта"))
+        if not card_num:
+            continue
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(
