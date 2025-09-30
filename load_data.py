@@ -1,4 +1,3 @@
-# load_data.py
 import os
 import re
 from datetime import datetime
@@ -7,7 +6,6 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import yaml
 
-from db.database import SessionLocal
 from db.models import Card, CardEvent, ErrorType
 
 
@@ -20,17 +18,15 @@ def load_conversion_config(path: str = CONFIG_PATH) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+
 def normalize_card_number(value) -> str | None:
     """Приведение card_number к строке без .0 и пробелов"""
-    if value is None or value == "":
+    if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
         return None
-    try:
-        card_str = str(value).strip()
-        if card_str.endswith(".0"):  # Excel float → убираем .0
-            card_str = card_str[:-2]
-        return card_str
-    except Exception:
-        return None
+    card_str = str(value).strip()
+    if card_str.endswith(".0"):  # Excel float → убираем .0
+        card_str = card_str[:-2]
+    return card_str
 
 
 def normalize_partner_name(name: str) -> str:
@@ -69,12 +65,11 @@ def build_partner_exclusions(config: dict) -> Dict[str, List[Tuple[datetime, dat
 def parse_datetime(value: object) -> Optional[datetime]:
     if value is None or pd.isna(value):
         return None
-
     parsed = pd.to_datetime(value, format="%d.%m.%Y %H:%M:%S", errors="coerce")
     if pd.isna(parsed):
         return None
-
     return parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
+
 
 def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, session):
     """
@@ -84,9 +79,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     3. Пересчитывает агрегаты карт
     """
 
-    # -------------------------------
-    # Подготовка
-    # -------------------------------
     config = load_conversion_config()
     partner_exclusions = build_partner_exclusions(config)
 
@@ -108,20 +100,10 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     # 1️⃣ Карты
     # -------------------------------
     for _, row in card_df.iterrows():
-        card_num = str(row.get("Карта")).strip() if row.get("Карта") not in [None, ""] else None
-        if not card_num:
-            continue
-
-        card_num = str(row.get("Карта")).strip() if row.get("Карта") not in [None, ""] else None
-        if card_num and card_num.endswith(".0"):  # убираем хвост от float
-            card_num = card_num[:-2]
-
-        if not card_num:
-            continue
-
         card_num = normalize_card_number(row.get("Карта"))
         if not card_num:
             continue
+
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(
@@ -140,15 +122,18 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             )
             session.add(card)
         else:
-            # обновление существующей карты
-            card.pool_id = str(row.get("Пул") or card.pool_id).strip() or card.pool_id
-            card.direction = str(row.get("Направление") or card.direction).strip() or card.direction
+            if row.get("Пул"):
+                card.pool_id = str(row.get("Пул")).strip()
+            if row.get("Направление"):
+                card.direction = str(row.get("Направление")).strip()
             if row.get("Баланс") not in [None, ""]:
                 card.balance = float(row.get("Баланс"))
-            card.replenishment_method = str(
-                row.get("Метод пополнения") or card.replenishment_method).strip() or card.replenishment_method
-            card.first_name = str(row.get("Имя") or card.first_name).strip() or card.first_name
-            card.last_name = str(row.get("Фамилия") or card.last_name).strip() or card.last_name
+            if row.get("Метод пополнения"):
+                card.replenishment_method = str(row.get("Метод пополнения")).strip()
+            if row.get("Имя"):
+                card.first_name = str(row.get("Имя")).strip()
+            if row.get("Фамилия"):
+                card.last_name = str(row.get("Фамилия")).strip()
             if row.get("Bakai customer_id") not in [None, "", float("nan")]:
                 card.bakai_customer_id = str(row.get("Bakai customer_id")).strip()
 
@@ -169,9 +154,11 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             continue
 
         status = normalize_status(row.get("Статус"))
+        card_num = normalize_card_number(row.get("Карта"))
+        if not card_num:
+            continue
 
-        # получаем карту
-        card = session.query(Card).filter_by(card_number=row["Карта"]).first()
+        card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(card_number=card_num)
             session.add(card)
@@ -182,7 +169,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             skipped_dupes += 1
             continue
 
-        # ошибка
         error_id = None
         if status == "error" and row.get("Инфо"):
             error = session.query(ErrorType).filter_by(code=row["Инфо"]).first()
@@ -192,10 +178,9 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
-        # создаём событие
         event = CardEvent(
             card_id=card.id,
-            status=status,  # уже нормализован
+            status=status,
             amount=row.get("Сумма"),
             operation_id=row["ID операции"],
             created_at=created_at,
@@ -230,9 +215,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
 
     session.commit()
 
-    # -------------------------------
-    # Логирование итогов
-    # -------------------------------
     from utils.logger import logger
     logger.info(
         f"События сохранены: добавлено {added}, "
