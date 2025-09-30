@@ -165,7 +165,11 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             session.flush()
 
         # проверка дубля
-        if session.query(CardEvent).filter_by(operation_id=row["ID операции"]).first():
+        operation_id = str(row.get("ID операции")).strip() if row.get("ID операции") not in [None, ""] else None
+        if not operation_id:
+            continue
+
+        if session.query(CardEvent).filter_by(operation_id=operation_id).first():
             skipped_dupes += 1
             continue
 
@@ -182,7 +186,7 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             card_id=card.id,
             status=status,
             amount=row.get("Сумма"),
-            operation_id=row["ID операции"],
+            operation_id=operation_id,  # ✅ всегда строка
             created_at=created_at,
             error_id=error_id,
             source_file=None,

@@ -51,8 +51,6 @@ class CardEvent(Base):
     created_at = Column(DateTime, nullable=False)
     error_id = Column(Integer, ForeignKey("error_types.id"), nullable=True)
     source_file = Column(String, nullable=True)
-
-
     snapshot_data = Column(JSON, nullable=True)
     imported_at = Column(DateTime, server_default=func.now())
 
