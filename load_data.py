@@ -96,31 +96,39 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     # 1️⃣ Карты
     # -------------------------------
     for _, row in card_df.iterrows():
-        card_num = str(row["Карта"]).strip() if row.get("Карта") is not None else None
+        card_num = str(row.get("Карта")).strip() if row.get("Карта") not in [None, ""] else None
         if not card_num:
             continue
+
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(
-                card_number=row["Карта"],
-                pool_id=row.get("Пул"),
-                direction=row.get("Направление"),
-                balance=row.get("Баланс"),
-                replenishment_method=row.get("Метод пополнения"),
-                first_name=row.get("Имя"),
-                last_name=row.get("Фамилия"),
-                bakai_customer_id=row.get("Bakai customer_id"),
+                card_number=card_num,
+                pool_id=str(row.get("Пул") or "").strip() or None,
+                direction=str(row.get("Направление") or "").strip() or None,
+                balance=float(row.get("Баланс")) if row.get("Баланс") not in [None, ""] else None,
+                replenishment_method=str(row.get("Метод пополнения") or "").strip() or None,
+                first_name=str(row.get("Имя") or "").strip() or None,
+                last_name=str(row.get("Фамилия") or "").strip() or None,
+                bakai_customer_id=(
+                    str(row.get("Bakai customer_id")).strip()
+                    if row.get("Bakai customer_id") not in [None, "", float("nan")]
+                    else None
+                ),
             )
             session.add(card)
         else:
-            card.pool_id = row.get("Пул") or card.pool_id
-            card.direction = row.get("Направление") or card.direction
-            if row.get("Баланс") is not None:
-                card.balance = row.get("Баланс")
-            card.replenishment_method = row.get("Метод пополнения") or card.replenishment_method
-            card.first_name = row.get("Имя") or card.first_name
-            card.last_name = row.get("Фамилия") or card.last_name
-            card.bakai_customer_id = row.get("Bakai customer_id") or card.bakai_customer_id
+            # обновление существующей карты
+            card.pool_id = str(row.get("Пул") or card.pool_id).strip() or card.pool_id
+            card.direction = str(row.get("Направление") or card.direction).strip() or card.direction
+            if row.get("Баланс") not in [None, ""]:
+                card.balance = float(row.get("Баланс"))
+            card.replenishment_method = str(
+                row.get("Метод пополнения") or card.replenishment_method).strip() or card.replenishment_method
+            card.first_name = str(row.get("Имя") or card.first_name).strip() or card.first_name
+            card.last_name = str(row.get("Фамилия") or card.last_name).strip() or card.last_name
+            if row.get("Bakai customer_id") not in [None, "", float("nan")]:
+                card.bakai_customer_id = str(row.get("Bakai customer_id")).strip()
 
     session.commit()
 
