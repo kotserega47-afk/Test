@@ -12,7 +12,7 @@ partners:
     threshold: 8
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
-  "HH (Abhsber IN) Тинь ":
+  "HH (Abhsber IN + Выплаты) Тинь ":
     threshold: 3
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
