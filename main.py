@@ -2,6 +2,7 @@
 import os
 import logging
 from typing import List
+import threading
 
 import pandas as pd
 
@@ -16,7 +17,6 @@ import load_data
 from db.models import CardDisableHistory
 from datetime import datetime
 
-
 # -------------------------------
 # Пути
 # -------------------------------
@@ -28,6 +28,12 @@ os.makedirs(LOCAL_REPORTS, exist_ok=True)
 INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
 PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+
+# -------------------------------
+# Флаг выполнения
+# -------------------------------
+is_running = False
+lock = threading.Lock()
 
 # -------------------------------
 # Вспомогательные функции
@@ -136,7 +142,6 @@ def process_file(fname: str, all_files: list[str]):
             with get_session() as session:
                 load_data.process_conversion(card_df_for_db, conversion_df_original, session)
 
-            # после записи можно проверить сколько реально есть карт в БД
             with get_session() as session:
                 from db.models import Card
                 db_count = session.query(Card).count()
@@ -146,11 +151,9 @@ def process_file(fname: str, all_files: list[str]):
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
 
-        # Генерация отчёта
         build_report(result, report_path)
         upload_report(report_path, fname)
 
-        # Отправка отчёта в Telegram
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
@@ -170,18 +173,24 @@ def process_file(fname: str, all_files: list[str]):
             text = problem_cards_df.to_string(index=False)
             send_message_sync(f"⚠️ Карты на отключение:\n{text[:3900]}")
 
-        # ⚡ Переносим в PROCESSED
         move_to_processed(fname)
 
     except Exception as e:
         logger.exception(f"[{fname}] Ошибка при обработке: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-        move_to_processed(fname)   # ⚡ даже при ошибке переносим
+        move_to_processed(fname)
 
 # -------------------------------
 # Основной цикл
 # -------------------------------
 def main_loop():
+    global is_running
+    with lock:
+        if is_running:
+            logger.warning("⚠️ main_loop пропущен — предыдущее выполнение ещё не завершено.")
+            return
+        is_running = True
+
     logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
 
     try:
@@ -193,20 +202,19 @@ def main_loop():
         for fname in files:
             process_file(fname, files)
 
-        # Дополнительный отчёт
         send_card_events_report()
 
     except Exception as e:
         logger.exception(f"Ошибка в основном процессе: {e}")
         send_message_sync(f"❌ Критическая ошибка: {e}")
-
+    finally:
+        with lock:
+            is_running = False
+        logger.info("✅ main_loop завершён")
 
 if __name__ == "__main__":
     import time
-
-    # Интервал проверки Dropbox (по умолчанию 60 секунд)
     CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-
     while True:
         main_loop()
         time.sleep(CHECK_INTERVAL)
