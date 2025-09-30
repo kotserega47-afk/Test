@@ -125,8 +125,6 @@ def process_file(fname: str, all_files: list[str]):
 
         # ✅ Записываем данные в БД
         if is_conversion and conversion_df_original is not None:
-            from db.database import get_session
-            import load_data
             card_df_for_db = merge_card_dataframes(card_dataframes)
             with get_session() as session:
                 load_data.process_conversion(card_df_for_db, conversion_df_original, session)
@@ -159,15 +157,21 @@ def process_file(fname: str, all_files: list[str]):
         move_to_processed(fname)   # ⚡ даже при ошибке переносим
 
 # -------------------------------
-# Точка входа
+# Основной цикл
 # -------------------------------
-def main():
-    try:
-        all_files = list_files(INPUT_PATH)
-        for fname in all_files:
-            process_file(fname, all_files)
+def main_loop():
+    logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
 
-        # Дополнительный отчёт (пример)
+    try:
+        files = list_files(INPUT_PATH)
+        if not files:
+            logger.info("Нет файлов для обработки в Dropbox.")
+            return
+
+        for fname in files:
+            process_file(fname, files)
+
+        # Дополнительный отчёт
         send_card_events_report()
 
     except Exception as e:
