@@ -56,3 +56,11 @@ class CardEvent(Base):
 
     card = relationship("Card", back_populates="events")
     error = relationship("ErrorType", back_populates="events")
+
+
+class CardDisableHistory(Base):
+    __tablename__ = 'card_disable_history'
+
+    id = Column(Integer, primary_key=True)
+    card_number = Column(String, nullable=False)
+    disabled_at = Column(DateTime, nullable=False)

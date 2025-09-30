@@ -13,6 +13,9 @@ from utils.logger import logger
 from scripts.card_events_report import run as send_card_events_report
 from db.database import get_session
 import load_data
+from db.models import CardDisableHistory
+from datetime import datetime
+
 
 # -------------------------------
 # Пути
@@ -154,6 +157,16 @@ def process_file(fname: str, all_files: list[str]):
         # Проблемные карты (лист "Отключить")
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
+            today = datetime.utcnow()
+            with get_session() as session:
+                for _, row in problem_cards_df.iterrows():
+                    history = CardDisableHistory(
+                        card_number=str(row["card"]),
+                        disabled_at=today
+                    )
+                    session.add(history)
+                session.commit()
+
             text = problem_cards_df.to_string(index=False)
             send_message_sync(f"⚠️ Карты на отключение:\n{text[:3900]}")
 
