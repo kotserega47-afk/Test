@@ -126,9 +126,18 @@ def process_file(fname: str, all_files: list[str]):
         # ✅ Записываем данные в БД
         if is_conversion and conversion_df_original is not None:
             card_df_for_db = merge_card_dataframes(card_dataframes)
+
+            total_cards_in_file = len(card_df_for_db)
+            logger.info(f"[{fname}] 📄 В card-файлах найдено {total_cards_in_file} карт.")
+
             with get_session() as session:
                 load_data.process_conversion(card_df_for_db, conversion_df_original, session)
-            logger.info(f"[{fname}] Данные сохранены в PostgreSQL")
+
+            # после записи можно проверить сколько реально есть карт в БД
+            with get_session() as session:
+                from db.models import Card
+                db_count = session.query(Card).count()
+                logger.info(f"[{fname}] ✅ В таблице cards теперь {db_count} карт.")
 
         # ✅ Запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
