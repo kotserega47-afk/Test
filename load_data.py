@@ -182,15 +182,18 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
+        # ✅ чистим NaN → None перед сохранением JSON
+        snapshot_dict = row.where(pd.notna(row), None).to_dict()
+
         event = CardEvent(
             card_id=card.id,
             status=status,
             amount=row.get("Сумма"),
-            operation_id=operation_id,  # ✅ всегда строка
+            operation_id=operation_id,  # строка
             created_at=created_at,
             error_id=error_id,
             source_file=None,
-            snapshot_data=row.to_dict(),
+            snapshot_data=snapshot_dict  # JSON без NaN
         )
         session.add(event)
         added += 1
