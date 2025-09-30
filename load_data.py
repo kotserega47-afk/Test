@@ -20,7 +20,6 @@ def load_conversion_config(path: str = CONFIG_PATH) -> dict:
 
 def normalize_card_number(value) -> str | None:
     """Приведение card_number к строке без .0 и пробелов"""
-    from utils.logger import logger
 
     if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -119,7 +118,7 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         status = normalize_status(row.get("Статус"))
         raw_card_value = row.get("Карта")
         card_num = normalize_card_number(raw_card_value)
-        from utils.logger import logger
+
         logger.debug(
             f"[process_conversion] row_card={raw_card_value!r} → normalized={card_num!r}, status={status}"
         )
@@ -175,7 +174,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         # 🔍 карта должна быть уже в БД (из файла cards)
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
-            from utils.logger import logger
             logger.error(
                 f"[process_conversion] Карта {card_num} не найдена в таблице cards, "
                 f"хотя она есть в conversion. Событие пропущено."
@@ -239,7 +237,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
 
     session.commit()
 
-    from utils.logger import logger
     logger.info(
         f"События сохранены: добавлено {added}, "
         f"дубликатов пропущено {skipped_dupes}, "
