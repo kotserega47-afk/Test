@@ -99,21 +99,19 @@ def process_file(fname: str, all_files: list[str]):
         msg = f"❌ Не найден анализатор для файла {fname}"
         logger.warning(msg)
         send_message_sync(msg)
+        move_to_processed(fname)   # ⚡ сразу переносим в PROCESSED
         return
 
     card_files = []
-    card_dataframes: List[pd.DataFrame] = []
-    conversion_df_original: pd.DataFrame | None = None
+    card_dataframes = []
+    conversion_df_original = None
     is_conversion = bool(config.get("file_pattern") == "conversion")
 
-    if is_conversion:
-        try:
+    try:
+        if is_conversion:
             conversion_df_original = read_source_file(local_file_path)
             logger.info(f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк")
-        except Exception as exc:
-            logger.error(f"[{fname}] Ошибка при чтении конверсионного файла: {exc}")
 
-    try:
         if requires_card:
             for f in all_files:
                 if "card" in f.lower():
@@ -121,56 +119,44 @@ def process_file(fname: str, all_files: list[str]):
                     if local_card:
                         card_files.append(local_card)
                         if is_conversion:
-                            try:
-                                card_df = read_source_file(local_card)
-                                card_dataframes.append(card_df)
-                            except Exception as exc:
-                                logger.error(f"[{fname}] Ошибка при чтении карточного файла {local_card}: {exc}")
+                            card_df = read_source_file(local_card)
+                            card_dataframes.append(card_df)
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
-        # ✅ запись данных в БД
+        # ✅ Записываем данные в БД
         if is_conversion and conversion_df_original is not None:
-            try:
-                card_df_for_db = merge_card_dataframes(card_dataframes)
-                with get_session() as session:
-                    load_data.process_conversion(card_df_for_db, conversion_df_original, session)
-                logger.info(f"[{fname}] Данные из конверсионного файла сохранены в БД")
-            except Exception as exc:
-                logger.exception(f"[{fname}] Ошибка при сохранении данных в БД: {exc}")
+            from db.database import get_session
+            import load_data
+            card_df_for_db = merge_card_dataframes(card_dataframes)
+            with get_session() as session:
+                load_data.process_conversion(card_df_for_db, conversion_df_original, session)
+            logger.info(f"[{fname}] Данные сохранены в PostgreSQL")
 
-        # ✅ запуск анализатора
+        # ✅ Запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
 
-        try:
-            build_report(result, report_path)
-            logger.info(f"[{fname}] Отчёт успешно сгенерирован: {report_path}")
-        except Exception as e:
-            logger.error(f"[{fname}] Ошибка при генерации отчёта: {e}")
-            from openpyxl import Workbook
-            wb = Workbook()
-            wb.save(report_path)
-            logger.info(f"[{fname}] Создан пустой отчёт: {report_path}")
+        # Генерация отчёта
+        build_report(result, report_path)
+        upload_report(report_path, fname)
 
-        # ✅ отправка отчёта
+        # Отправка отчёта в Telegram
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
-        # ⚡️ лист "Отключить"
+        # Проблемные карты (лист "Отключить")
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
-            try:
-                text = problem_cards_df.to_string(index=False)
-                send_message_sync(f"⚠️ Карты для отключения:\n{text[:3900]}")  # урезаем под лимит
-            except Exception as e:
-                logger.error(f"Ошибка при отправке списка карт в Telegram: {e}")
+            text = problem_cards_df.to_string(index=False)
+            send_message_sync(f"⚠️ Карты на отключение:\n{text[:3900]}")
 
-        # ✅ перенос в PROCESSED
+        # ⚡ Переносим в PROCESSED
         move_to_processed(fname)
 
     except Exception as e:
-        logger.exception(f"[{fname}] Общая ошибка обработки: {e}")
-        send_message_sync(f"❌ Ошибка обработки файла {fname}: {e}")
+        logger.exception(f"[{fname}] Ошибка при обработке: {e}")
+        send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
+        move_to_processed(fname)   # ⚡ даже при ошибке переносим
 
 # -------------------------------
 # Точка входа
