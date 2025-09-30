@@ -119,7 +119,7 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         status = normalize_status(row.get("Статус"))
         raw_card_value = row.get("Карта")
         card_num = normalize_card_number(raw_card_value)
-
+        from utils.logger import logger
         logger.debug(
             f"[process_conversion] row_card={raw_card_value!r} → normalized={card_num!r}, status={status}"
         )
