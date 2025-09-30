@@ -176,4 +176,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import time
+
+    # Интервал проверки Dropbox (по умолчанию 60 секунд)
+    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
+
+    while True:
+        main_loop()
+        time.sleep(CHECK_INTERVAL)
