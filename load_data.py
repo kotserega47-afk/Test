@@ -167,24 +167,39 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
             continue
 
         status = normalize_status(row.get("Статус"))
-        card_num = normalize_card_number(row.get("Карта"))
+        raw_card_value = row.get("Карта")
+        card_num = normalize_card_number(raw_card_value)
+
+        logger.debug(
+            f"[process_conversion] row_card={raw_card_value!r} → normalized={card_num!r}, status={status}"
+        )
+
         if not card_num:
             continue
 
-        # 🔍 карта должна быть уже в БД (из файла cards)
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
-            logger.error(
-                f"[process_conversion] Карта {card_num} не найдена в таблице cards, "
-                f"хотя она есть в conversion. Событие пропущено."
+            logger.warning(
+                f"[process_conversion] ❌ Карта {card_num!r} не найдена в таблице cards "
+                f"(raw={raw_card_value!r}). Событие пропущено."
             )
-            continue  # ⚠️ не создаём карту, просто пропускаем событие
+            continue
 
-        # проверка дубля по операции
+        # проверка дубля по (card_id, operation_id)
         operation_id = str(row.get("ID операции")).strip() if row.get("ID операции") not in [None, ""] else None
         if not operation_id:
             continue
-        if session.query(CardEvent).filter_by(operation_id=operation_id).first():
+
+        existing_event = (
+            session.query(CardEvent)
+            .filter_by(operation_id=operation_id, card_id=card.id)
+            .first()
+        )
+
+        if existing_event:
+            logger.debug(
+                f"[process_conversion] Дубликат события: card={card_num}, operation_id={operation_id} → пропущено"
+            )
             skipped_dupes += 1
             continue
 
@@ -212,8 +227,6 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         )
         session.add(event)
         added += 1
-
-    session.commit()
 
     # -------------------------------
     # 3️⃣ Агрегаты
