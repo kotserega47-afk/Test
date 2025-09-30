@@ -158,21 +158,25 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         if not card_num:
             continue
 
+        # 🔍 карта должна быть уже в БД (из файла cards)
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
-            card = Card(card_number=card_num)
-            session.add(card)
-            session.flush()
+            from utils.logger import logger
+            logger.error(
+                f"[process_conversion] Карта {card_num} не найдена в таблице cards, "
+                f"хотя она есть в conversion. Событие пропущено."
+            )
+            continue  # ⚠️ не создаём карту, просто пропускаем событие
 
-        # проверка дубля
+        # проверка дубля по операции
         operation_id = str(row.get("ID операции")).strip() if row.get("ID операции") not in [None, ""] else None
         if not operation_id:
             continue
-
         if session.query(CardEvent).filter_by(operation_id=operation_id).first():
             skipped_dupes += 1
             continue
 
+        # обработка ошибки
         error_id = None
         if status == "error" and row.get("Инфо"):
             error = session.query(ErrorType).filter_by(code=row["Инфо"]).first()
@@ -182,18 +186,17 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
                 session.flush()
             error_id = error.id
 
-        # ✅ чистим NaN → None перед сохранением JSON
+        # создаём событие
         snapshot_dict = row.where(pd.notna(row), None).to_dict()
-
         event = CardEvent(
             card_id=card.id,
             status=status,
             amount=row.get("Сумма"),
-            operation_id=operation_id,  # строка
+            operation_id=operation_id,
             created_at=created_at,
             error_id=error_id,
             source_file=None,
-            snapshot_data=snapshot_dict  # JSON без NaN
+            snapshot_data=snapshot_dict,
         )
         session.add(event)
         added += 1
