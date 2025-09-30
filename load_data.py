@@ -96,7 +96,10 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
     # 1️⃣ Карты
     # -------------------------------
     for _, row in card_df.iterrows():
-        card = session.query(Card).filter_by(card_number=row["Карта"]).first()
+        card_num = str(row["Карта"]).strip() if row.get("Карта") is not None else None
+        if not card_num:
+            continue
+        card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(
                 card_number=row["Карта"],
@@ -140,7 +143,7 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         # получаем карту
         card = session.query(Card).filter_by(card_number=row["Карта"]).first()
         if not card:
-            card = Card(card_number=row["Карта"])
+            card = Card(card_number=card_num)
             session.add(card)
             session.flush()
 
