@@ -100,6 +100,13 @@ def process_conversion(card_df: pd.DataFrame, conversion_df: pd.DataFrame, sessi
         if not card_num:
             continue
 
+        card_num = str(row.get("Карта")).strip() if row.get("Карта") not in [None, ""] else None
+        if card_num and card_num.endswith(".0"):  # убираем хвост от float
+            card_num = card_num[:-2]
+
+        if not card_num:
+            continue
+
         card = session.query(Card).filter_by(card_number=card_num).first()
         if not card:
             card = Card(
