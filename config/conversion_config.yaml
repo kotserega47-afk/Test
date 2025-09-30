@@ -12,18 +12,21 @@ partners:
     threshold: 8
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
-  "HH (Abhsber IN) Тинь":
+  "HH (Abhsber IN) Тинь ":
     threshold: 3
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
+      - { start: "30.09.2025 21:30:00", end: "30.09.2025 22:30:00" }
   "HH (Abhsber IN) Сбер":
     threshold: 3
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
+      - { start: "30.09.2025 21:30:00", end: "30.09.2025 22:30:00" }
   "HH (Аврора Тинь)":
     threshold: 3
     exclude:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
+      - { start: "30.09.2025 21:00:00", end: "30.09.2025 22:30:00" }
   "HH (Аврора Сбер)":
     threshold: 5
     exclude:

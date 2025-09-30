@@ -7,6 +7,7 @@ import yaml
 from utils.logger import logger
 from openpyxl import Workbook
 from utils.excel_utils import flatten_lists_in_df, style_worksheet, write_df_to_sheet
+from integrations.telegram_bot import send_message_sync
 
 # -----------------------------
 # Загрузка конфигурации
@@ -123,7 +124,17 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
 
     for (card, partner_norm), group in conv_df.groupby(["card", "partner_norm"]):
-        settings = PARTNER_SETTINGS.get(partner_norm, {"threshold": 4, "exclude": []})
+        if partner_norm in PARTNER_SETTINGS:
+            settings = PARTNER_SETTINGS[partner_norm]
+        else:
+            msg = (
+                f"⚠️ Для партнёра {partner_norm!r} нет настроек в YAML.\n"
+                f"Используем threshold=4 по умолчанию."
+            )
+            logger.warning(f"[analyzer] {msg}")
+            send_message_sync(msg)  # ✅ шлём в Телеграм
+            settings = {"threshold": 4, "exclude": []}
+
         threshold = settings.get("threshold", 4)
 
         # Фильтрация по exclude
