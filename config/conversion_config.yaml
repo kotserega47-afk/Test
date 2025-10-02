@@ -1,4 +1,4 @@
-#conversion_config.yaml
+# conversion_config.yaml
 partners:
   "HH (А-мобайл Сбер + Выплаты)":
     threshold: 8
