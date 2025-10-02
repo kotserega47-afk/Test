@@ -176,8 +176,12 @@ def process_file(fname: str, all_files: list[str]):
                     session.add(history)
                 session.commit()
 
-            text = problem_cards_df.to_string(index=False)
-            send_message_sync(f"⚠️ Карты на отключение:\n{text[:3900]}")
+            # Excel-отчёт остаётся без изменений
+            # А вот сообщение в Telegram формируем иначе
+            lines = [f"{row['card']} {row['partner']}" for _, row in problem_cards_df.iterrows()]
+            text_for_telegram = "\n".join(lines)
+
+            send_message_sync(f"⚠️ Карты на отключение:\n{text_for_telegram[:3900]}")
 
         move_to_processed(fname)
 
