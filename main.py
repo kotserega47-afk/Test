@@ -111,9 +111,7 @@ def process_file(fname: str, all_files: list[str]):
 
     analyzer_func, config, requires_card = get_analyzer(fname)
     if not analyzer_func or not config:
-        msg = f"❌ Не найден анализатор для файла {fname}"
-        logger.warning(msg)
-        send_message_sync(msg)
+
         move_to_processed(fname)   # ⚡ сразу переносим в PROCESSED
         return
 
@@ -145,9 +143,15 @@ def process_file(fname: str, all_files: list[str]):
             total_cards_in_file = len(card_df_for_db)
             logger.info(f"[{fname}] 📄 В card-файлах найдено {total_cards_in_file} карт.")
 
+            # ✅ Сначала добавляем карты в БД
+            with get_session() as session:
+                load_data.process_cards(card_df_for_db, session)
+
+            # ✅ Потом обрабатываем conversion (ивенты)
             with get_session() as session:
                 load_data.process_conversion(card_df_for_db, conversion_df_original, session)
 
+            # Логируем количество карт в БД
             with get_session() as session:
                 from db.models import Card
                 db_count = session.query(Card).count()
