@@ -6,6 +6,7 @@ from utils.logger import logger
 import pandas as pd
 import yaml
 from db.models import Card, CardEvent, ErrorType
+from db.models import Card
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "conversion_config.yaml")
@@ -33,6 +34,55 @@ def normalize_card_number(value) -> str | None:
 
     return card_str
 
+def process_cards(card_df: pd.DataFrame, session):
+    """
+    Загружает или обновляет карты в таблице cards
+    """
+    added = 0
+    updated = 0
+
+    for _, row in card_df.iterrows():
+        raw_card_value = row.get("Карта")
+        card_num = normalize_card_number(raw_card_value)
+
+        if not card_num:
+            continue
+
+        card = session.query(Card).filter_by(card_number=card_num).first()
+        if not card:
+            card = Card(
+                card_number=card_num,
+                pool_id=str(row.get("Пул") or "").strip() or None,
+                direction=str(row.get("Направление") or "").strip() or None,
+                balance=float(row.get("Баланс")) if row.get("Баланс") not in [None, ""] else None,
+                replenishment_method=str(row.get("Метод пополнения") or "").strip() or None,
+                first_name=str(row.get("Имя") or "").strip() or None,
+                last_name=str(row.get("Фамилия") or "").strip() or None,
+                bakai_customer_id=(str(row.get("Bakai customer_id")).strip()
+                                   if row.get("Bakai customer_id") not in [None, "", float("nan")]
+                                   else None),
+            )
+            session.add(card)
+            added += 1
+        else:
+            if row.get("Пул"):
+                card.pool_id = str(row.get("Пул")).strip()
+            if row.get("Направление"):
+                card.direction = str(row.get("Направление")).strip()
+            if row.get("Баланс") not in [None, ""]:
+                card.balance = float(row.get("Баланс"))
+            if row.get("Метод пополнения"):
+                card.replenishment_method = str(row.get("Метод пополнения")).strip()
+            if row.get("Имя"):
+                card.first_name = str(row.get("Имя")).strip()
+            if row.get("Фамилия"):
+                card.last_name = str(row.get("Фамилия")).strip()
+            if row.get("Bakai customer_id") not in [None, "", float("nan")]:
+                card.bakai_customer_id = str(row.get("Bakai customer_id")).strip()
+            updated += 1
+
+    session.commit()
+    logger.info(f"[process_cards] Добавлено {added}, обновлено {updated} карт")
 
 def normalize_partner_name(name: str) -> str:
     if not isinstance(name, str):
