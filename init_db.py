@@ -2,6 +2,8 @@
 from db.models import Base
 from db.database import engine
 
+from db.database import create_tables
+
 if __name__ == "__main__":
-    Base.metadata.create_all(bind=engine)
-    print("✅ Таблицы в PostgreSQL созданы")
+    create_tables()
+    print("Таблицы созданы!")
