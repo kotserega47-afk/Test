@@ -1,9 +1,10 @@
 # init_db.py
+from dotenv import load_dotenv
+load_dotenv()
+
 from db.models import Base
 from db.database import engine
 
-from db.database import create_tables
-
 if __name__ == "__main__":
-    create_tables()
-    print("Таблицы созданы!")
+    Base.metadata.create_all(bind=engine)
+    print("✅ Tables created")
