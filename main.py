@@ -1,234 +1,202 @@
 # main.py
+"""
+Главный модуль обработки новых файлов:
+- определяет нужный анализатор;
+- запускает обработку данных;
+- формирует Excel-отчёт;
+- отправляет уведомления в Telegram;
+- фиксирует отключаемые карты;
+- перемещает обработанные файлы в Dropbox /processed.
+"""
+
 import os
-import logging
-from typing import List
-import threading
-
 import pandas as pd
-
-from utils.report_builder import build_report
-from analyzers.selector import get_analyzer
-from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
-from integrations.telegram_bot import send_message_sync, send_file_sync
-from utils.logger import logger
-from scripts.card_events_report import run as send_card_events_report
-from db.database import get_session
-import load_data
-from db.models import CardDisableHistory
 from datetime import datetime
 
-# -------------------------------
-# Пути
-# -------------------------------
-LOCAL_DATA = "data"
-LOCAL_REPORTS = "reports"
-os.makedirs(LOCAL_DATA, exist_ok=True)
-os.makedirs(LOCAL_REPORTS, exist_ok=True)
+from db.database import get_session
+from db.models import CardDisableHistory
+from integrations.telegram_bot import send_message_sync, send_file_sync
+from integrations.dropbox_watcher import download_file, move_file
+from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
+from analyzers import conversion
+from utils.logger import logger
 
-INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
-OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
-PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+from openpyxl import Workbook
 
-# -------------------------------
-# Флаг выполнения
-# -------------------------------
-is_running = False
-lock = threading.Lock()
 
-# -------------------------------
-# Вспомогательные функции
-# -------------------------------
-def download_to_local(fname: str) -> str | None:
-    dropbox_file_path = f"{INPUT_PATH}/{fname}"
-    local_file_path = os.path.join(LOCAL_DATA, fname)
+# -----------------------------
+# Настройки путей из окружения
+# -----------------------------
+DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
+DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+LOCAL_TMP_PATH = "/tmp"  # временное хранилище Railway / Linux
+
+# -----------------------------
+# Основная функция обработки файла
+# -----------------------------
+def process_file(filename: str) -> None:
+    """
+    Обработка одного файла из Dropbox:
+    1. Скачивание
+    2. Анализ через analyzers/conversion
+    3. Сохранение Excel-отчёта
+    4. Telegram-уведомления
+    5. Запись карт на отключение
+    6. Перемещение в /processed
+    """
+
+    logger.info(f"=== Обработка файла {filename} ===")
+
+    local_path = os.path.join(LOCAL_TMP_PATH, filename)
+    dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
+
+    # 1️⃣ Скачивание
+    if not download_file(dropbox_path, local_path):
+        msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
+        logger.error(msg)
+        send_message_sync(msg)
+        return
+
+    # 2️⃣ Анализ файла
     try:
-        download_file(dropbox_file_path, local_file_path)
-        logger.info(f"Файл скачан: {fname}")
-        return local_file_path
-    except Exception as e:
-        logger.error(f"Не удалось скачать {fname}: {e}")
-        return None
+        logger.info(f"Запуск анализа для {filename}")
 
-
-def upload_report(local_path: str, fname: str):
-    try:
-        dropbox_report_path = f"{OUTPUT_PATH}/report_{fname}.xlsx"
-        upload_file(local_path, dropbox_report_path)
-        logger.info(f"Отчёт загружен в Dropbox: {dropbox_report_path}")
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке отчёта {fname}: {e}")
-
-
-def move_to_processed(fname: str):
-    try:
-        move_file(f"{INPUT_PATH}/{fname}", f"{PROCESSED_PATH}/{fname}")
-        logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
-    except Exception as e:
-        logger.error(f"Ошибка при переносе {fname}: {e}")
-
-
-def read_source_file(file_path: str) -> pd.DataFrame:
-    try:
-        if file_path.lower().endswith((".xlsx", ".xls")):
-            return pd.read_excel(file_path, dtype=str)   # ✅ читаем как строки
-        return pd.read_csv(
-            file_path,
-            sep=None,
-            engine="python",
-            encoding="utf-8",
-            dtype=str,  # ✅ читаем как строки
+        result = conversion.run(
+            conv_file=local_path,
+            card_files=[],
+            col_mapping=conversion.COLUMNS
         )
-    except Exception:
-        logger.exception(f"Не удалось загрузить данные из файла {file_path}")
-        raise
 
+        if not result:
+            raise ValueError("Анализатор не вернул результат")
 
-def merge_card_dataframes(card_dfs: List[pd.DataFrame]) -> pd.DataFrame:
-    base_columns = [
-        "Карта", "Пул", "Направление", "Баланс",
-        "Метод пополнения", "Имя", "Фамилия", "Bakai customer_id",
-    ]
-
-    if not card_dfs:
-        return pd.DataFrame(columns=base_columns)
-
-    combined = pd.concat(card_dfs, ignore_index=True, sort=False)
-    for column in base_columns:
-        if column not in combined.columns:
-            combined[column] = None
-    return combined[base_columns + [c for c in combined.columns if c not in base_columns]]
-
-# -------------------------------
-# Обработка одного файла
-# -------------------------------
-def process_file(fname: str, all_files: list[str]):
-    logger.info(f"[{fname}] --- Начало обработки ---")
-
-    local_file_path = download_to_local(fname)
-    if not local_file_path:
-        send_message_sync(f"❌ Не удалось скачать {fname}")
-        return
-
-    analyzer_func, config, requires_card = get_analyzer(fname)
-    if not analyzer_func or not config:
-
-        move_to_processed(fname)   # ⚡ сразу переносим в PROCESSED
-        return
-
-    card_files = []
-    card_dataframes = []
-    conversion_df_original = None
-    is_conversion = bool(config.get("file_pattern") == "conversion")
-
-    try:
-        if is_conversion:
-            conversion_df_original = read_source_file(local_file_path)
-            logger.info(f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк")
-
-        if requires_card:
-            for f in all_files:
-                if "card" in f.lower():
-                    local_card = download_to_local(f)
-                    if local_card:
-                        card_files.append(local_card)
-                        if is_conversion:
-                            card_df = read_source_file(local_card)
-                            card_dataframes.append(card_df)
-            logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
-
-        # ✅ Записываем данные в БД
-        if is_conversion and conversion_df_original is not None:
-            card_df_for_db = merge_card_dataframes(card_dataframes)
-
-            total_cards_in_file = len(card_df_for_db)
-            logger.info(f"[{fname}] 📄 В card-файлах найдено {total_cards_in_file} карт.")
-
-            # ✅ Сначала добавляем карты в БД
-            with get_session() as session:
-                load_data.process_cards(card_df_for_db, session)
-
-            # ✅ Потом обрабатываем conversion (ивенты)
-            with get_session() as session:
-                load_data.process_conversion(card_df_for_db, conversion_df_original, session)
-
-            # Логируем количество карт в БД
-            with get_session() as session:
-                from db.models import Card
-                db_count = session.query(Card).count()
-                logger.info(f"[{fname}] ✅ В таблице cards теперь {db_count} карт.")
-
-        # ✅ Запуск анализатора
-        result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
-        report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
-
-        build_report(result, report_path)
-        upload_report(report_path, fname)
-
-        send_message_sync(f"✅ Отчёт по файлу {fname} готов")
-        send_file_sync(report_path)
-
-        # Проблемные карты (лист "Отключить")
         problem_cards_df = result.get("problem_cards")
-        if problem_cards_df is not None and not problem_cards_df.empty:
-            today = datetime.utcnow()
-            with get_session() as session:
-                for _, row in problem_cards_df.iterrows():
-                    history = CardDisableHistory(
-                        card_number=str(row["card"]),
-                        disabled_at=today
-                    )
-                    session.add(history)
-                session.commit()
-
-            # Excel-отчёт остаётся без изменений
-            # А вот сообщение в Telegram формируем иначе
-            lines = [f"{row['card']} {row['partner']}" for _, row in problem_cards_df.iterrows()]
-            text_for_telegram = "\n".join(lines)
-
-            send_message_sync(f"⚠️ Карты на отключение:\n{text_for_telegram[:3900]}")
-
-        move_to_processed(fname)
+        summary = result.get("summary")
+        workbook = result.get("workbook")
 
     except Exception as e:
-        logger.exception(f"[{fname}] Ошибка при обработке: {e}")
-        send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-        move_to_processed(fname)
+        msg = f"❌ Ошибка при анализе {filename}: {e}"
+        logger.exception(msg)
+        send_message_sync(msg)
+        return
 
-# -------------------------------
-# Основной цикл
-# -------------------------------
-def main_loop():
-    global is_running
-    with lock:
-        if is_running:
-            logger.warning("⚠️ main_loop пропущен — предыдущее выполнение ещё не завершено.")
+    # 3️⃣ Сохранение отчёта
+    output_path = os.path.join(LOCAL_TMP_PATH, f"report_{filename}")
+    if workbook:
+        try:
+            workbook.save(output_path)
+            logger.info(f"Отчёт сохранён: {output_path}")
+        except Exception as e:
+            logger.exception(f"Ошибка при сохранении отчёта для {filename}: {e}")
+            send_message_sync(f"⚠️ Ошибка при сохранении отчёта для {filename}: {e}")
             return
-        is_running = True
+    else:
+        logger.warning(f"Анализатор не вернул workbook для {filename}")
 
-    logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
-
+    # 4️⃣ Уведомление Telegram
     try:
-        files = list_files(INPUT_PATH)
-        if not files:
-            logger.info("Нет файлов для обработки в Dropbox.")
-            return
+        summary_text = (
+            f"✅ Анализ файла *{filename}* завершён успешно.\n"
+            f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
+            f"На отключение: {summary.get('Карты на отключение', '—')}"
+        )
+        send_message_sync(summary_text)
+        if workbook:
+            send_file_sync(output_path, caption=f"📊 Отчёт по {filename}")
+        logger.info("Отчёт отправлен в Telegram")
+    except Exception as e:
+        logger.exception(f"Ошибка отправки отчёта в Telegram: {e}")
 
-        for fname in files:
-            process_file(fname, files)
+    # 5️⃣ Запись отключаемых карт
+    try:
+        if problem_cards_df is None or problem_cards_df.empty:
+            logger.info("Проблемных карт нет — отключений не требуется.")
+        else:
+            unique_cards = problem_cards_df.drop_duplicates(subset=["card"])
+            today = datetime.utcnow()
 
-        send_card_events_report()
+            added = 0
+            with get_session() as session:
+                for _, row in unique_cards.iterrows():
+                    card_number = str(row["card"]).strip()
+                    if not card_number:
+                        continue
+                    exists = (
+                        session.query(CardDisableHistory)
+                        .filter_by(card_number=card_number)
+                        .first()
+                    )
+                    if exists:
+                        continue
+                    session.add(CardDisableHistory(card_number=card_number, disabled_at=today))
+                    added += 1
+
+            if added:
+                cards_list = "\n".join(unique_cards["card"].astype(str))
+                send_message_sync(f"🚫 Отключить карты ({added} шт):\n{cards_list}")
+                logger.info(f"В историю добавлено {added} отключений.")
+            else:
+                logger.info("Новых карт для отключения не найдено.")
 
     except Exception as e:
-        logger.exception(f"Ошибка в основном процессе: {e}")
-        send_message_sync(f"❌ Критическая ошибка: {e}")
-    finally:
-        with lock:
-            is_running = False
-        logger.info("✅ main_loop завершён")
+        logger.exception(f"Ошибка при записи отключаемых карт: {e}")
+        send_message_sync(f"⚠️ Ошибка при записи отключаемых карт: {e}")
 
+    # 6️⃣ Перемещение обработанного файла
+    try:
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"Файл {filename} перемещён в /processed.")
+    except Exception as e:
+        logger.exception(f"Ошибка при перемещении файла {filename}: {e}")
+        send_message_sync(f"⚠️ Не удалось переместить {filename} в /processed.")
+
+def save_disabled_cards(problem_cards_df: pd.DataFrame):
+    """Сохраняет отключаемые карты в БД без дублей и уведомляет Telegram"""
+    if problem_cards_df is None or problem_cards_df.empty:
+        logger.info("Нет карт для отключения")
+        return
+
+    unique_cards = problem_cards_df.drop_duplicates(subset=["card"])
+    today = datetime.utcnow()
+
+    saved = 0
+    with get_session() as session:
+        for _, row in unique_cards.iterrows():
+            card_num = str(row["card"]).strip()
+            if not card_num:
+                continue
+
+            # Проверяем, есть ли уже в истории
+            exists = (
+                session.query(CardDisableHistory)
+                .filter_by(card_number=card_num)
+                .first()
+            )
+            if exists:
+                continue
+
+            session.add(
+                CardDisableHistory(card_number=card_num, disabled_at=today)
+            )
+            saved += 1
+
+    if saved:
+        msg = "\n".join(unique_cards["card"].astype(str))
+        send_message_sync(f"🚫 Отключить карты ({saved} шт):\n{msg}")
+        logger.info(f"Добавлено {saved} записей в историю отключений.")
+    else:
+        logger.info("Новых карт для отключения не найдено.")
+
+
+# -----------------------------
+# Точка входа
+# -----------------------------
 if __name__ == "__main__":
-    import time
-    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-    while True:
-        main_loop()
-        time.sleep(CHECK_INTERVAL)
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Использование: python main.py <имя_файла>")
+        sys.exit(0)
+
+    filename = sys.argv[1]
+    process_file(filename)
