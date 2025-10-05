@@ -1,6 +1,4 @@
 # db/database.py
-"""Инфраструктура подключения к базе данных проекта."""
-
 from __future__ import annotations
 
 import os
@@ -9,36 +7,28 @@ from typing import Iterator
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
-
+# -----------------------------
+# Настройка окружения
+# -----------------------------
 load_dotenv()
 
-
 def _get_database_url() -> str:
-    """Прочитать URL подключения из окружения и валидировать его."""
-
+    """Возвращает строку подключения к БД"""
     url = os.getenv("DATABASE_URL")
     if not url:
-        raise ValueError("DATABASE_URL не задана. Установите переменную окружения DATABASE_URL.")
+        raise ValueError("DATABASE_URL не задан. Установите переменную окружения DATABASE_URL.")
     return url
 
-
-# читаем URL из переменных окружения
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL не задана. Установите переменную окружения DATABASE_URL.")
 def _should_echo_sql() -> bool:
-    """Определить, нужно ли логировать SQL, по переменной окружения."""
+    """Определяет, нужно ли логировать SQL"""
+    val = os.getenv("SQL_ECHO", "").strip().lower()
+    return val in {"1", "true", "t", "yes", "y"}
 
-    # При отладке поставьте echo=True, чтобы видеть SQL в логах
-    engine = create_engine(DATABASE_URL, echo=False, future=True)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    flag = os.getenv("SQL_ECHO", "").lower()
-    return flag in {"1", "true", "t", "yes", "y"}
-
-
+# -----------------------------
+# Инициализация SQLAlchemy
+# -----------------------------
 engine = create_engine(_get_database_url(), echo=_should_echo_sql(), future=True)
 
 SessionLocal = sessionmaker(
@@ -50,25 +40,17 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-def create_tables():
-    """
-    Создать таблицы, описанные в db.models.
-    Импорт моделей внутри функции -- чтобы избежать циклических импортов.
-    """
-    import db.models  # гарантируем регистрацию всех моделей в Base.metadata
-
+# -----------------------------
+# Служебные функции
+# -----------------------------
 def create_tables() -> None:
-    """Создать таблицы, описанные в ``db.models``."""
-
-    import db.models  # noqa: F401  # регистрируем все модели в Base.metadata
-
+    """Создание таблиц, если их ещё нет"""
+    import db.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
-
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    """Предоставить сессию SQLAlchemy с автоматическим управлением транзакцией."""
-
+    """Контекстный менеджер безопасной сессии"""
     session = SessionLocal()
     try:
         yield session
