@@ -3,8 +3,8 @@ import os
 import logging
 from typing import List
 import threading
-
 import pandas as pd
+from datetime import datetime
 
 from utils.report_builder import build_report
 from analyzers.selector import get_analyzer
@@ -13,9 +13,8 @@ from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from scripts.card_events_report import run as send_card_events_report
 from db.database import get_session
-import load_data
 from db.models import CardDisableHistory
-from datetime import datetime
+import load_data
 
 # -------------------------------
 # Пути
@@ -70,13 +69,13 @@ def move_to_processed(fname: str):
 def read_source_file(file_path: str) -> pd.DataFrame:
     try:
         if file_path.lower().endswith((".xlsx", ".xls")):
-            return pd.read_excel(file_path, dtype=str)   # ✅ читаем как строки
+            return pd.read_excel(file_path, dtype=str)
         return pd.read_csv(
             file_path,
             sep=None,
             engine="python",
             encoding="utf-8",
-            dtype=str,  # ✅ читаем как строки
+            dtype=str,
         )
     except Exception:
         logger.exception(f"Не удалось загрузить данные из файла {file_path}")
@@ -111,8 +110,7 @@ def process_file(fname: str, all_files: list[str]):
 
     analyzer_func, config, requires_card = get_analyzer(fname)
     if not analyzer_func or not config:
-
-        move_to_processed(fname)   # ⚡ сразу переносим в PROCESSED
+        logger.warning(f"[{fname}] Не найден анализатор, файл будет пропущен.")
         return
 
     card_files = []
@@ -136,38 +134,30 @@ def process_file(fname: str, all_files: list[str]):
                             card_dataframes.append(card_df)
             logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
 
-        # ✅ Записываем данные в БД
         if is_conversion and conversion_df_original is not None:
             card_df_for_db = merge_card_dataframes(card_dataframes)
-
             total_cards_in_file = len(card_df_for_db)
             logger.info(f"[{fname}] 📄 В card-файлах найдено {total_cards_in_file} карт.")
 
-            # ✅ Сначала добавляем карты в БД
             with get_session() as session:
                 load_data.process_cards(card_df_for_db, session)
 
-            # ✅ Потом обрабатываем conversion (ивенты)
             with get_session() as session:
                 load_data.process_conversion(card_df_for_db, conversion_df_original, session)
 
-            # Логируем количество карт в БД
             with get_session() as session:
                 from db.models import Card
                 db_count = session.query(Card).count()
                 logger.info(f"[{fname}] ✅ В таблице cards теперь {db_count} карт.")
 
-        # ✅ Запуск анализатора
         result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
         report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
-
         build_report(result, report_path)
         upload_report(report_path, fname)
 
         send_message_sync(f"✅ Отчёт по файлу {fname} готов")
         send_file_sync(report_path)
 
-        # Проблемные карты (лист "Отключить")
         problem_cards_df = result.get("problem_cards")
         if problem_cards_df is not None and not problem_cards_df.empty:
             today = datetime.utcnow()
@@ -180,19 +170,13 @@ def process_file(fname: str, all_files: list[str]):
                     session.add(history)
                 session.commit()
 
-            # Excel-отчёт остаётся без изменений
-            # А вот сообщение в Telegram формируем иначе
             lines = [f"{row['card']} {row['partner']}" for _, row in problem_cards_df.iterrows()]
             text_for_telegram = "\n".join(lines)
-
             send_message_sync(f"⚠️ Карты на отключение:\n{text_for_telegram[:3900]}")
-
-        move_to_processed(fname)
 
     except Exception as e:
         logger.exception(f"[{fname}] Ошибка при обработке: {e}")
         send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
-        move_to_processed(fname)
 
 # -------------------------------
 # Основной цикл
@@ -213,18 +197,54 @@ def main_loop():
             logger.info("Нет файлов для обработки в Dropbox.")
             return
 
+        logger.info(f"Найдено файлов: {files}")
+        processed_files = set()
+        paired = []
+
+        # 🔹 Ищем пары conversion + card
         for fname in files:
-            process_file(fname, files)
+            if fname.startswith("conversion_"):
+                conv = fname
+                time_marker = conv.replace("conversion_", "").split(".")[0]
+                card = next((f for f in files if f.startswith("card_") and time_marker in f), None)
+                paired.append((conv, card))
+
+        # 🔹 Обрабатываем пары
+        for conv, card in paired:
+            try:
+                logger.info(f"[PAIR] Обработка пары: {conv} + {card}")
+                process_file(conv, files)
+                if card:
+                    processed_files.update({conv, card})
+                else:
+                    processed_files.add(conv)
+            except Exception as e:
+                logger.error(f"Ошибка при обработке пары {conv} + {card}: {e}")
+
+        # 🔹 Обрабатываем одиночные файлы
+        for fname in files:
+            if fname not in processed_files:
+                process_file(fname, files)
+                processed_files.add(fname)
+
+        # 🔹 Переносим все обработанные файлы после завершения
+        for fname in processed_files:
+            try:
+                move_to_processed(fname)
+            except Exception as e:
+                logger.error(f"Ошибка при переносе {fname}: {e}")
 
         send_card_events_report()
 
     except Exception as e:
         logger.exception(f"Ошибка в основном процессе: {e}")
         send_message_sync(f"❌ Критическая ошибка: {e}")
+
     finally:
         with lock:
             is_running = False
         logger.info("✅ main_loop завершён")
+
 
 if __name__ == "__main__":
     import time
