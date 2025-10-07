@@ -191,6 +191,8 @@ def save_disabled_cards(problem_cards_df: pd.DataFrame):
 # -----------------------------
 # Точка входа
 # -----------------------------
+from run_once_guard import acquire_lock, release_lock
+
 if __name__ == "__main__":
     import sys
 
@@ -198,5 +200,12 @@ if __name__ == "__main__":
         print("Использование: python main.py <имя_файла>")
         sys.exit(0)
 
-    filename = sys.argv[1]
-    process_file(filename)
+    # --- защита от параллельного запуска ---
+    if not acquire_lock(timeout=600):  # 10 мин защиты
+        sys.exit(0)
+
+    try:
+        filename = sys.argv[1]
+        process_file(filename)
+    finally:
+        release_lock()
