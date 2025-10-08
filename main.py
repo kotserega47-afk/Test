@@ -44,71 +44,78 @@ def process_file(filename: str) -> None:
         send_message_sync(msg)
         return
 
-    # 2️⃣ Быстрый анализ (критический путь)
-    try:
-        logger.info("🚀 Запуск ускоренного анализа run_fast()...")
-        result_fast = conversion.run_fast(
-            conv_file=local_path,
-            card_files=[],
-            col_mapping=conversion.COLUMNS,
-            generate_excel=False
-        )
-        problem_cards_df = result_fast.get("problem_cards", pd.DataFrame())
-        summary = result_fast.get("summary", {})
-        logger.info(f"✅ Быстрый анализ завершён: {len(problem_cards_df)} карт для проверки.")
-    except Exception as e:
-        msg = f"❌ Ошибка при выполнении run_fast для {filename}: {e}"
-        logger.exception(msg)
-        send_message_sync(msg)
-        return
+    # Определяем, какой тип файла обрабатываем
+    is_card_file = "card" in filename.lower()
+    col_mapping = conversion.COLUMNS  # общий маппинг из YAML
 
-    # 3️⃣ Запись карт на отключение
-    try:
-        if not problem_cards_df.empty:
-            unique_cards = problem_cards_df.drop_duplicates(subset=["card"])
-            today = datetime.utcnow()
-            added = 0
-            with get_session() as session:
-                for _, row in unique_cards.iterrows():
-                    card_number = str(row["card"]).strip()
-                    if not card_number:
-                        continue
-                    exists = session.query(CardDisableHistory).filter_by(card_number=card_number).first()
-                    if exists:
-                        continue
-                    session.add(CardDisableHistory(card_number=card_number, disabled_at=today))
-                    added += 1
-            if added:
-                msg = f"🚫 Отключить карты ({added} шт):\n" + "\n".join(unique_cards["card"])
-                send_message_sync(msg)
-                logger.info(f"В историю добавлено {added} отключений.")
+    # 2️⃣ Быстрый анализ (критический путь) — только для conversion
+    if not is_card_file:
+        try:
+            logger.info("🚀 Запуск ускоренного анализа run_fast()...")
+            result_fast = conversion.run_fast(
+                conv_file=local_path,
+                card_files=[],
+                col_mapping=col_mapping,
+                generate_excel=False
+            )
+            problem_cards_df = result_fast.get("problem_cards", pd.DataFrame())
+            summary = result_fast.get("summary", {})
+            logger.info(f"✅ Быстрый анализ завершён: {len(problem_cards_df)} карт для проверки.")
+        except Exception as e:
+            msg = f"❌ Ошибка при выполнении run_fast для {filename}: {e}"
+            logger.exception(msg)
+            send_message_sync(msg)
+            return
+
+        # 3️⃣ Запись карт на отключение
+        try:
+            if not problem_cards_df.empty:
+                unique_cards = problem_cards_df.drop_duplicates(subset=["card"])
+                today = datetime.utcnow()
+                added = 0
+                with get_session() as session:
+                    for _, row in unique_cards.iterrows():
+                        card_number = str(row["card"]).strip()
+                        if not card_number:
+                            continue
+                        exists = session.query(CardDisableHistory).filter_by(card_number=card_number).first()
+                        if exists:
+                            continue
+                        session.add(CardDisableHistory(card_number=card_number, disabled_at=today))
+                        added += 1
+                if added:
+                    msg = f"🚫 Отключить карты ({added} шт):\n" + "\n".join(unique_cards["card"])
+                    send_message_sync(msg)
+                    logger.info(f"В историю добавлено {added} отключений.")
+                else:
+                    logger.info("Новых карт для отключения не найдено.")
             else:
-                logger.info("Новых карт для отключения не найдено.")
-        else:
-            logger.info("Нет карт для отключения.")
-    except Exception as e:
-        logger.exception(f"Ошибка при записи отключаемых карт: {e}")
-        send_message_sync(f"⚠️ Ошибка при записи отключаемых карт: {e}")
+                logger.info("Нет карт для отключения.")
+        except Exception as e:
+            logger.exception(f"Ошибка при записи отключаемых карт: {e}")
+            send_message_sync(f"⚠️ Ошибка при записи отключаемых карт: {e}")
 
-    # 4️⃣ Telegram уведомление о завершении критического этапа
-    try:
-        summary_text = (
-            f"✅ Анализ *{filename}* завершён.\n"
-            f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
-            f"На отключение: {summary.get('Карты на отключение', '—')}"
-        )
-        send_message_sync(summary_text)
-    except Exception as e:
-        logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
+        # 4️⃣ Telegram уведомление о завершении критического этапа
+        try:
+            summary_text = (
+                f"✅ Анализ *{filename}* завершён.\n"
+                f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
+                f"На отключение: {summary.get('Карты на отключение', '—')}"
+            )
+            send_message_sync(summary_text)
+        except Exception as e:
+            logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
     # 5️⃣ Фоновый полный анализ (Excel + Telegram-файл + Dropbox)
     def full_analysis():
         try:
             logger.info("🕓 Запуск полного анализа run() в фоне...")
+
+            # Если это файл карт — передаём его как card_file
             result_full = conversion.run(
                 conv_file=local_path,
-                card_files=[],
-                col_mapping=conversion.COLUMNS
+                card_files=[local_path] if is_card_file else [],
+                col_mapping=col_mapping
             )
 
             workbook = result_full.get("workbook")
