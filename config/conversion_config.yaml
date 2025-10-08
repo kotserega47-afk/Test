@@ -62,6 +62,11 @@ columns:
   status: "Статус"
   datetime: "Дата/Время создания"
 
+columns_card:
+    card: "Карта"
+    partner: "Партнёр"
+    status: "Статус"
+
 valid_statuses:
   - Готов к работе
   - Активный вход
