@@ -116,8 +116,13 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
-    card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"}) for f in card_files]
-    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
+    card_df_list = [
+        load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"})
+        for f in card_files
+    ]
+
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(
+        columns=["card", "partner", "status"])
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
 
     results, problem_cards = [], []
