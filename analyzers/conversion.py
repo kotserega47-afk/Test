@@ -187,3 +187,82 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
         "workbook": wb,
         "problem_cards": problem_cards_df,
     }
+
+# =====================================================
+# ⚡ Ускоренная версия анализа для приоритетного пути
+# =====================================================
+def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel: bool = False) -> dict:
+    """
+    Ускоренная версия анализа:
+    - минимальная загрузка данных
+    - векторизованное вычисление последовательных ошибок
+    - формирует problem_cards максимально быстро
+    """
+    from openpyxl import Workbook
+
+    # -----------------------------
+    # 1️⃣ Загрузка данных
+    # -----------------------------
+    usecols = list(col_mapping.values())
+    df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
+         else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
+
+    df.rename(columns={v: k for k, v in col_mapping.items()}, inplace=True)
+    df["status"] = df["status"].astype(str).str.strip().str.lower()
+    df["partner_norm"] = df["partner"].apply(normalize_name)
+    df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    df.dropna(subset=["card", "datetime", "status"], inplace=True)
+
+    # 🔹 оставляем только нужные статусы
+    valid_statuses = [s.lower() for s in CONFIG.get("valid_statuses", [])]
+    df = df[df["status"].isin(["ошибка", "оплачен"] + valid_statuses)]
+
+    # -----------------------------
+    # 2️⃣ Векторизованное вычисление серий ошибок
+    # -----------------------------
+    df.sort_values(["card", "partner_norm", "datetime"], inplace=True)
+    df["err_block"] = (df["status"] != "ошибка").cumsum()
+    df["series_len"] = df.groupby(["card", "partner_norm", "err_block"])["status"].transform(
+        lambda s: len(s) if s.iloc[0] == "ошибка" else 0
+    )
+    max_errors = (
+        df.groupby(["card", "partner_norm"])["series_len"].max().reset_index(name="max_consecutive_errors")
+    )
+
+    # -----------------------------
+    # 3️⃣ Слияние с настройками порогов партнёров
+    # -----------------------------
+    settings_df = pd.DataFrame([
+        {"partner_norm": p, "threshold": s.get("threshold", 4)}
+        for p, s in PARTNER_SETTINGS.items()
+    ])
+    merged = max_errors.merge(settings_df, on="partner_norm", how="left").fillna({"threshold": 4})
+
+    # -----------------------------
+    # 4️⃣ Фильтрация проблемных карт
+    # -----------------------------
+    problem = merged[
+        merged["max_consecutive_errors"] >= merged["threshold"]
+    ].copy()
+
+    summary = {
+        "Карт в работе": df["card"].nunique(),
+        "Max ошибки": merged["max_consecutive_errors"].max() if not merged.empty else 0,
+        "Карты на отключение": problem["card"].nunique(),
+    }
+
+    # -----------------------------
+    # 5️⃣ Excel-отчёт (по желанию)
+    # -----------------------------
+    wb = None
+    if generate_excel:
+        wb = Workbook()
+        wb.remove(wb.active)
+        write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
+        write_df_to_sheet(wb, "Проблемные карты", problem)
+
+    return {
+        "summary": summary,
+        "problem_cards": problem,
+        "workbook": wb,
+    }
