@@ -209,6 +209,18 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     # 1️⃣ Загрузка данных
     # -----------------------------
     usecols = list(col_mapping.values())
+
+    # 🛡️ Безопасная загрузка данных (игнорируем отсутствующие колонки)
+    try:
+        df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
+            else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
+    except ValueError as e:
+        logger.warning(f"[run_fast] ⚠️ Не найдены все колонки ({usecols}), читаем доступные: {e}")
+        df = pd.read_excel(conv_file, dtype=str) if conv_file.endswith((".xlsx", ".xls")) \
+            else pd.read_csv(conv_file, dtype=str, sep=None, engine="python")
+
+    logger.info(f"[run_fast] Загружен файл {conv_file} с колонками: {list(df.columns)}")
+
     df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
          else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
 
