@@ -46,7 +46,12 @@ def process_file(filename: str) -> None:
 
     # Определяем, какой тип файла обрабатываем
     is_card_file = "card" in filename.lower()
-    col_mapping = conversion.COLUMNS  # общий маппинг из YAML
+    col_mapping = conversion.COLUMNS
+
+    # 🧩 выбираем columns_card для card-файлов
+    if is_card_file and hasattr(conversion, "CONFIG") and "columns_card" in conversion.CONFIG:
+        col_mapping = conversion.CONFIG["columns_card"]
+        logger.info(f"Используется маппинг columns_card для {filename}")
 
     # 2️⃣ Быстрый анализ (критический путь) — только для conversion
     if not is_card_file:
