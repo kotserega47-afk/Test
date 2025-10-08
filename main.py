@@ -1,9 +1,11 @@
 # main.py
 """
 Главный модуль обработки новых файлов:
-- выполняет быстрый приоритетный анализ (run_fast);
-- мгновенно формирует список карт на отключение;
-- запускает фоновый полный анализ (run) для отчёта, Telegram и Dropbox.
+- анализирует card и conversion файлы;
+- выполняет быстрый анализ для conversion;
+- обновляет базу и формирует отчёт;
+- отправляет результаты в Telegram;
+- перемещает обработанные файлы в Dropbox /processed.
 """
 
 import os
@@ -20,40 +22,33 @@ from utils.logger import logger
 from run_once_guard import acquire_lock, release_lock
 
 
-# -----------------------------
-# Настройки путей
-# -----------------------------
 DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
-LOCAL_TMP_PATH = "/tmp"  # временное хранилище Railway / Linux
+LOCAL_TMP_PATH = "/tmp"
 
 
-# -----------------------------
-# Основная функция
-# -----------------------------
 def process_file(filename: str) -> None:
     logger.info(f"=== Обработка файла {filename} ===")
-
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
-    # 1️⃣ Скачивание
+    # 1️⃣ Скачиваем файл
     if not download_file(dropbox_path, local_path):
         msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
         logger.error(msg)
         send_message_sync(msg)
         return
 
-    # Определяем, какой тип файла обрабатываем
+    # 2️⃣ Определяем тип и маппинг
     is_card_file = "card" in filename.lower()
     col_mapping = conversion.COLUMNS
-
-    # 🧩 выбираем columns_card для card-файлов
     if is_card_file and hasattr(conversion, "CONFIG") and "columns_card" in conversion.CONFIG:
         col_mapping = conversion.CONFIG["columns_card"]
-        logger.info(f"Используется маппинг columns_card для {filename}")
+        logger.info(f"🧩 Используется columns_card для {filename}")
 
-    # 2️⃣ Быстрый анализ (критический путь) — только для conversion
+    # 3️⃣ Быстрый анализ — только для conversion
+    problem_cards_df = pd.DataFrame()
+    summary = {}
     if not is_card_file:
         try:
             logger.info("🚀 Запуск ускоренного анализа run_fast()...")
@@ -67,40 +62,25 @@ def process_file(filename: str) -> None:
             summary = result_fast.get("summary", {})
             logger.info(f"✅ Быстрый анализ завершён: {len(problem_cards_df)} карт для проверки.")
         except Exception as e:
-            msg = f"❌ Ошибка при выполнении run_fast для {filename}: {e}"
+            msg = f"❌ Ошибка в run_fast для {filename}: {e}"
             logger.exception(msg)
             send_message_sync(msg)
             return
 
-        # 3️⃣ Запись карт на отключение
-        try:
-            if not problem_cards_df.empty:
-                unique_cards = problem_cards_df.drop_duplicates(subset=["card"])
-                today = datetime.utcnow()
-                added = 0
-                with get_session() as session:
-                    for _, row in unique_cards.iterrows():
-                        card_number = str(row["card"]).strip()
-                        if not card_number:
-                            continue
-                        exists = session.query(CardDisableHistory).filter_by(card_number=card_number).first()
-                        if exists:
-                            continue
-                        session.add(CardDisableHistory(card_number=card_number, disabled_at=today))
-                        added += 1
-                if added:
-                    msg = f"🚫 Отключить карты ({added} шт):\n" + "\n".join(unique_cards["card"])
-                    send_message_sync(msg)
-                    logger.info(f"В историю добавлено {added} отключений.")
-                else:
-                    logger.info("Новых карт для отключения не найдено.")
-            else:
-                logger.info("Нет карт для отключения.")
-        except Exception as e:
-            logger.exception(f"Ошибка при записи отключаемых карт: {e}")
-            send_message_sync(f"⚠️ Ошибка при записи отключаемых карт: {e}")
+        # 4️⃣ Формируем список карт на отключение (по бизнес-логике)
+        if not problem_cards_df.empty:
+            try:
+                unique_cards = problem_cards_df["card"].dropna().astype(str).unique().tolist()
+                msg = f"🚫 Карты, превысившие порог ошибок ({len(unique_cards)} шт):\n" + "\n".join(unique_cards[:100])
+                send_message_sync(msg)
+                logger.info(f"Отправлен список {len(unique_cards)} карт с ошибками.")
+            except Exception as e:
+                logger.exception(f"Ошибка при формировании списка карт: {e}")
+                send_message_sync(f"⚠️ Ошибка при формировании списка карт: {e}")
+        else:
+            logger.info("Нет карт, превысивших порог ошибок.")
 
-        # 4️⃣ Telegram уведомление о завершении критического этапа
+        # 5️⃣ Telegram уведомление об общем результате fast-run
         try:
             summary_text = (
                 f"✅ Анализ *{filename}* завершён.\n"
@@ -111,12 +91,12 @@ def process_file(filename: str) -> None:
         except Exception as e:
             logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
-    # 5️⃣ Фоновый полный анализ (Excel + Telegram-файл + Dropbox)
+    # 6️⃣ Полный анализ — общий для обоих типов файлов
     def full_analysis():
         try:
-            logger.info("🕓 Запуск полного анализа run() в фоне...")
+            file_type = "CARD" if is_card_file else "CONVERSION"
+            logger.info(f"🕓 Полный анализ ({file_type}) для {filename}")
 
-            # Если это файл карт — передаём его как card_file
             result_full = conversion.run(
                 conv_file=local_path,
                 card_files=[local_path] if is_card_file else [],
@@ -124,17 +104,16 @@ def process_file(filename: str) -> None:
             )
 
             workbook = result_full.get("workbook")
-            if not workbook:
+            if workbook:
+                output_path = os.path.join(LOCAL_TMP_PATH, f"report_{filename}")
+                workbook.save(output_path)
+                send_file_sync(output_path, caption=f"📊 Отчёт по {filename}")
+                logger.info(f"📁 Отчёт отправлен: {output_path}")
+            else:
                 logger.warning(f"⚠️ run() не вернул workbook для {filename}")
-                return
-
-            output_path = os.path.join(LOCAL_TMP_PATH, f"report_{filename}")
-            workbook.save(output_path)
-            send_file_sync(output_path, caption=f"📊 Отчёт по {filename}")
-            logger.info(f"📁 Отчёт {output_path} отправлен в Telegram.")
 
             move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
-            logger.info(f"Файл {filename} перемещён в /processed.")
+            logger.info(f"✅ Файл {filename} перемещён в /processed.")
         except Exception as e:
             logger.exception(f"Ошибка фонового анализа: {e}")
             send_message_sync(f"⚠️ Ошибка фонового анализа {filename}: {e}")
@@ -147,12 +126,10 @@ def process_file(filename: str) -> None:
 # -----------------------------
 if __name__ == "__main__":
     import sys
-
     if len(sys.argv) < 2:
         print("Использование: python main.py <имя_файла>")
         sys.exit(0)
 
-    # --- защита от параллельного запуска ---
     if not acquire_lock(timeout=600):  # 10 минут защиты
         sys.exit(0)
 
