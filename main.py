@@ -70,9 +70,28 @@ def process_file(filename: str) -> None:
         # 4️⃣ Формируем список карт на отключение (по бизнес-логике)
         if not problem_cards_df.empty:
             try:
-                unique_cards = problem_cards_df["card"].dropna().astype(str).unique().tolist()
-                msg = f"🚫 Карты, превысившие порог ошибок ({len(unique_cards)} шт):\n" + "\n".join(unique_cards[:100])
-                send_message_sync(msg)
+                # Подготовка: карта + партнёр, отсортировано по партнёру
+                card_partner_list = (
+                    problem_cards_df[["card", "partner"]]
+                    .dropna()
+                    .astype(str)
+                    .drop_duplicates()
+                    .sort_values(by=["partner", "card"])
+                )
+
+                # Формируем строки вида: 123456******7890 — А-Мобайл
+                card_lines = [f"{row['card']} — {row['partner']}" for _, row in card_partner_list.iterrows()]
+                total = len(card_lines)
+                BATCH_SIZE = 500
+
+                # Отправка сообщений по 500 строк
+                for i in range(0, total, BATCH_SIZE):
+                    chunk = card_lines[i:i + BATCH_SIZE]
+                    msg = (
+                            f"🚫 Карты с превышением порога (строки {i + 1}–{i + len(chunk)} из {total}):\n"
+                            + "\n".join(chunk)
+                    )
+                    send_message_sync(msg)
                 logger.info(f"Отправлен список {len(unique_cards)} карт с ошибками.")
             except Exception as e:
                 logger.exception(f"Ошибка при формировании списка карт: {e}")
