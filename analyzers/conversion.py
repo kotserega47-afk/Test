@@ -200,13 +200,13 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel: bool = False) -> dict:
     """
     Ускоренная версия анализа:
-    - минимальная загрузка данных
-    - векторизованное вычисление последовательных ошибок
-    - формирует problem_cards максимально быстро
+    - Загрузка conversion и card файлов
+    - Учитываются exclude периоды, статусы и партнёры
+    - Возвращает problem_cards по всем условиям
     """
     from openpyxl import Workbook
 
-    # 1️⃣ Загрузка данных conversion
+    # 1️⃣ Загрузка conversion-файла
     usecols = list(col_mapping.values())
     try:
         df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith(('.xlsx', '.xls')) \
@@ -225,7 +225,16 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     valid_statuses = [s.lower() for s in CONFIG.get("valid_statuses", [])]
     df = df[df["status"].isin(["ошибка", "оплачен"] + valid_statuses)]
 
-    # 2️⃣ Загрузка card-файлов (если есть)
+    # 2️⃣ Применяем exclude периоды
+    for partner_name, settings in PARTNER_SETTINGS.items():
+        for start, end in settings.get("exclude", []):
+            mask = (
+                (df["partner_norm"] == partner_name) &
+                (df["datetime"].between(start, end))
+            )
+            df = df[~mask]
+
+    # 3️⃣ Загрузка card-файлов
     card_df_list = [
         load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"})
         for f in card_files
@@ -234,7 +243,7 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
     card_df["status"] = card_df["status"].astype(str).str.strip().str.lower()
 
-    # 3️⃣ Вычисление серий ошибок
+    # 4️⃣ Подсчёт серий ошибок
     df.sort_values(["card", "partner_norm", "datetime"], inplace=True)
     df["err_block"] = (df["status"] != "ошибка").cumsum()
     df["series_len"] = df.groupby(["card", "partner_norm", "err_block"])["status"].transform(
@@ -242,30 +251,30 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     )
     max_errors = df.groupby(["card", "partner_norm"])["series_len"].max().reset_index(name="max_consecutive_errors")
 
-    # 4️⃣ Настройки партнёров
+    # 5️⃣ Применяем пороги YAML
     settings_df = pd.DataFrame([
         {"partner_norm": p, "threshold": s.get("threshold", 4)}
         for p, s in PARTNER_SETTINGS.items()
     ])
     merged = max_errors.merge(settings_df, on="partner_norm", how="left").fillna({"threshold": 4})
 
-    # 5️⃣ Добавляем статус карты и список партнёров из card_df
+    # 6️⃣ Добавляем статус и партнёров из card-файла
     card_status_map = card_df.set_index("card")["status"].to_dict()
     card_partners_map = card_df.set_index("card")["partner_list"].to_dict()
 
-    merged["status"] = merged["card"].map(card_status_map).str.lower()
+    merged["status"] = merged["card"].map(card_status_map).astype(str).str.strip().str.lower()
     merged["partner_list"] = merged["card"].map(card_partners_map)
 
-    # 6️⃣ Фильтрация
+    # 7️⃣ Фильтрация по всем условиям
     problem = merged[
         (merged["max_consecutive_errors"] >= merged["threshold"])
         & (merged["status"].isin(valid_statuses))
         & (merged.apply(lambda row: row["partner_norm"] in (row["partner_list"] or []), axis=1))
     ].copy()
 
-    # 7️⃣ Итог и отчёт
     problem.rename(columns={"partner_norm": "partner"}, inplace=True)
 
+    # 8️⃣ Финальный результат
     summary = {
         "Карт в работе": df["card"].nunique(),
         "Max ошибки": merged["max_consecutive_errors"].max() if not merged.empty else 0,
