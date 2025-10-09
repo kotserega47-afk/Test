@@ -21,34 +21,30 @@ from analyzers import conversion
 from utils.logger import logger
 from run_once_guard import acquire_lock, release_lock
 
-
 DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 LOCAL_TMP_PATH = "/tmp"
-
 
 def process_file(filename: str) -> None:
     logger.info(f"=== Обработка файла {filename} ===")
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
-    # 1️⃣ Скачиваем файл
     if not download_file(dropbox_path, local_path):
         msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
         logger.error(msg)
         send_message_sync(msg)
         return
 
-    # 2️⃣ Определяем тип и маппинг
     is_card_file = "card" in filename.lower()
     col_mapping = conversion.COLUMNS
     if is_card_file and hasattr(conversion, "CONFIG") and "columns_card" in conversion.CONFIG:
         col_mapping = conversion.CONFIG["columns_card"]
         logger.info(f"🧩 Используется columns_card для {filename}")
 
-    # 3️⃣ Быстрый анализ — только для conversion
     problem_cards_df = pd.DataFrame()
     summary = {}
+
     if not is_card_file:
         try:
             logger.info("🚀 Запуск ускоренного анализа run_fast()...")
@@ -67,39 +63,40 @@ def process_file(filename: str) -> None:
             send_message_sync(msg)
             return
 
-        # 4️⃣ Формируем список карт на отключение (по бизнес-логике)
         if not problem_cards_df.empty:
             try:
-                # Подготовка: карта + партнёр, отсортировано по партнёру
-                card_partner_list = (
-                    problem_cards_df[["card", "partner"]]
-                    .dropna()
-                    .astype(str)
-                    .drop_duplicates()
-                    .sort_values(by=["partner", "card"])
-                )
+                if all(col in problem_cards_df.columns for col in ["card", "partner", "max_consecutive_errors"]):
+                    card_lines = [
+                        f"{row['card']} {row['partner']} {row['max_consecutive_errors']}"
+                        for _, row in (
+                            problem_cards_df[["card", "partner", "max_consecutive_errors"]]
+                            .dropna()
+                            .astype(str)
+                            .drop_duplicates()
+                            .sort_values(by=["partner", "card"])
+                            .iterrows()
+                        )
+                    ]
 
-                # Формируем строки вида: 123456******7890 — А-Мобайл
-                card_lines = [f"{row['card']} — {row['partner']}" for _, row in card_partner_list.iterrows()]
-                total = len(card_lines)
-                BATCH_SIZE = 500
+                    total = len(card_lines)
+                    BATCH_SIZE = 500
 
-                # Отправка сообщений по 500 строк
-                for i in range(0, total, BATCH_SIZE):
-                    chunk = card_lines[i:i + BATCH_SIZE]
-                    msg = (
-                            f"🚫 Карты с превышением порога (строки {i + 1}–{i + len(chunk)} из {total}):\n"
-                            + "\n".join(chunk)
-                    )
-                    send_message_sync(msg)
-                logger.info(f"Отправлен список {len(unique_cards)} карт с ошибками.")
+                    for i in range(0, total, BATCH_SIZE):
+                        chunk = card_lines[i:i + BATCH_SIZE]
+                        msg = "🚫 Карты на отключение:\n" + "\n".join(chunk)
+                        send_message_sync(msg)
+
+                    logger.info(f"Отправлен список {total} карт с ошибками.")
+                else:
+                    send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
+                    logger.warning("В problem_cards_df не хватает одной из колонок: card, partner, max_consecutive_errors")
+
             except Exception as e:
                 logger.exception(f"Ошибка при формировании списка карт: {e}")
                 send_message_sync(f"⚠️ Ошибка при формировании списка карт: {e}")
         else:
             logger.info("Нет карт, превысивших порог ошибок.")
 
-        # 5️⃣ Telegram уведомление об общем результате fast-run
         try:
             summary_text = (
                 f"✅ Анализ *{filename}* завершён.\n"
@@ -110,7 +107,6 @@ def process_file(filename: str) -> None:
         except Exception as e:
             logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
-    # 6️⃣ Полный анализ — общий для обоих типов файлов
     def full_analysis():
         try:
             file_type = "CARD" if is_card_file else "CONVERSION"
@@ -140,16 +136,13 @@ def process_file(filename: str) -> None:
     Thread(target=full_analysis, daemon=True).start()
 
 
-# -----------------------------
-# Точка входа
-# -----------------------------
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
         print("Использование: python main.py <имя_файла>")
         sys.exit(0)
 
-    if not acquire_lock(timeout=600):  # 10 минут защиты
+    if not acquire_lock(timeout=600):
         sys.exit(0)
 
     try:
