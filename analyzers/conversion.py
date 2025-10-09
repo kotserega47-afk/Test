@@ -206,24 +206,15 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     """
     from openpyxl import Workbook
 
-    # -----------------------------
-    # 1️⃣ Загрузка данных
-    # -----------------------------
+    # 1️⃣ Загрузка данных conversion
     usecols = list(col_mapping.values())
-
-    # 🛡️ Безопасная загрузка данных (игнорируем отсутствующие колонки)
     try:
-        df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
-            else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
+        df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith(('.xlsx', '.xls')) \
+            else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine='python')
     except ValueError as e:
         logger.warning(f"[run_fast] ⚠️ Не найдены все колонки ({usecols}), читаем доступные: {e}")
-        df = pd.read_excel(conv_file, dtype=str) if conv_file.endswith((".xlsx", ".xls")) \
-            else pd.read_csv(conv_file, dtype=str, sep=None, engine="python")
-
-    logger.info(f"[run_fast] Загружен файл {conv_file} с колонками: {list(df.columns)}")
-
-    df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
-         else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
+        df = pd.read_excel(conv_file, dtype=str) if conv_file.endswith(('.xlsx', '.xls')) \
+            else pd.read_csv(conv_file, dtype=str, sep=None, engine='python')
 
     df.rename(columns={v: k for k, v in col_mapping.items()}, inplace=True)
     df["status"] = df["status"].astype(str).str.strip().str.lower()
@@ -231,37 +222,49 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
     df.dropna(subset=["card", "datetime", "status"], inplace=True)
 
-    # 🔹 оставляем только нужные статусы
     valid_statuses = [s.lower() for s in CONFIG.get("valid_statuses", [])]
     df = df[df["status"].isin(["ошибка", "оплачен"] + valid_statuses)]
 
-    # -----------------------------
-    # 2️⃣ Векторизованное вычисление серий ошибок
-    # -----------------------------
+    # 2️⃣ Загрузка card-файлов (если есть)
+    card_df_list = [
+        load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"})
+        for f in card_files
+    ]
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner", "status"])
+    card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
+    card_df["status"] = card_df["status"].astype(str).str.strip().str.lower()
+
+    # 3️⃣ Вычисление серий ошибок
     df.sort_values(["card", "partner_norm", "datetime"], inplace=True)
     df["err_block"] = (df["status"] != "ошибка").cumsum()
     df["series_len"] = df.groupby(["card", "partner_norm", "err_block"])["status"].transform(
         lambda s: len(s) if s.iloc[0] == "ошибка" else 0
     )
-    max_errors = (
-        df.groupby(["card", "partner_norm"])["series_len"].max().reset_index(name="max_consecutive_errors")
-    )
+    max_errors = df.groupby(["card", "partner_norm"])["series_len"].max().reset_index(name="max_consecutive_errors")
 
-    # -----------------------------
-    # 3️⃣ Слияние с настройками порогов партнёров
-    # -----------------------------
+    # 4️⃣ Настройки партнёров
     settings_df = pd.DataFrame([
         {"partner_norm": p, "threshold": s.get("threshold", 4)}
         for p, s in PARTNER_SETTINGS.items()
     ])
     merged = max_errors.merge(settings_df, on="partner_norm", how="left").fillna({"threshold": 4})
 
-    # -----------------------------
-    # 4️⃣ Фильтрация проблемных карт
-    # -----------------------------
+    # 5️⃣ Добавляем статус карты и список партнёров из card_df
+    card_status_map = card_df.set_index("card")["status"].to_dict()
+    card_partners_map = card_df.set_index("card")["partner_list"].to_dict()
+
+    merged["status"] = merged["card"].map(card_status_map).str.lower()
+    merged["partner_list"] = merged["card"].map(card_partners_map)
+
+    # 6️⃣ Фильтрация
     problem = merged[
-        merged["max_consecutive_errors"] >= merged["threshold"]
+        (merged["max_consecutive_errors"] >= merged["threshold"])
+        & (merged["status"].isin(valid_statuses))
+        & (merged.apply(lambda row: row["partner_norm"] in (row["partner_list"] or []), axis=1))
     ].copy()
+
+    # 7️⃣ Итог и отчёт
+    problem.rename(columns={"partner_norm": "partner"}, inplace=True)
 
     summary = {
         "Карт в работе": df["card"].nunique(),
@@ -269,17 +272,12 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         "Карты на отключение": problem["card"].nunique(),
     }
 
-    # -----------------------------
-    # 5️⃣ Excel-отчёт (по желанию)
-    # -----------------------------
     wb = None
     if generate_excel:
         wb = Workbook()
         wb.remove(wb.active)
         write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
-        write_df_to_sheet(wb, "Проблемные карты", problem)
-
-    problem.rename(columns={"partner_norm": "partner"}, inplace=True)
+        write_df_to_sheet(wb, "Проблемные карты", flatten_lists_in_df(problem))
 
     return {
         "summary": summary,
