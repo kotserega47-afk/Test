@@ -113,7 +113,8 @@ def count_consecutive_errors(group, partner_name: str) -> int:
 
 def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
     conv_df = load_data(conv_file, col_mapping)
-    conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    if "datetime" in conv_df.columns:
+        conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
 
     card_df_list = [
@@ -277,6 +278,8 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         wb.remove(wb.active)
         write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
         write_df_to_sheet(wb, "Проблемные карты", problem)
+
+    problem.rename(columns={"partner_norm": "partner"}, inplace=True)
 
     return {
         "summary": summary,
