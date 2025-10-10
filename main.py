@@ -1,9 +1,9 @@
 # main.py
 """
 Главный модуль обработки новых файлов:
-- анализирует card и conversion файлы;
-- выполняет быстрый анализ для conversion;
-- обновляет базу и формирует отчёт;
+- анализирует только conversion-файлы;
+- использует последний загруженный card-файл как справочник;
+- выполняет быстрый анализ + формирует отчёт;
 - отправляет результаты в Telegram;
 - перемещает обработанные файлы в Dropbox /processed.
 """
@@ -25,7 +25,12 @@ DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 LOCAL_TMP_PATH = "/tmp"
 
+# Глобальная переменная для хранения последнего card-файла
+last_card_path = None
+
 def process_file(filename: str) -> None:
+    global last_card_path
+
     logger.info(f"=== Обработка файла {filename} ===")
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
@@ -37,84 +42,90 @@ def process_file(filename: str) -> None:
         return
 
     is_card_file = "card" in filename.lower()
+
+    # 1️⃣ Если это card-файл — просто запоминаем его путь и завершаем
+    if is_card_file:
+        last_card_path = local_path
+        logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
+        return
+
+    # 2️⃣ Обработка conversion-файла
     col_mapping = conversion.COLUMNS
-    if is_card_file and hasattr(conversion, "CONFIG") and "columns_card" in conversion.CONFIG:
-        col_mapping = conversion.CONFIG["columns_card"]
-        logger.info(f"🧩 Используется columns_card для {filename}")
+    card_files = [last_card_path] if last_card_path else []
 
     problem_cards_df = pd.DataFrame()
     summary = {}
 
-    if not is_card_file:
+    try:
+        logger.info("🚀 Запуск ускоренного анализа run_fast()...")
+        result_fast = conversion.run_fast(
+            conv_file=local_path,
+            card_files=card_files,
+            col_mapping=col_mapping,
+            generate_excel=False
+        )
+        problem_cards_df = result_fast.get("problem_cards", pd.DataFrame())
+        summary = result_fast.get("summary", {})
+        logger.info(f"✅ Быстрый анализ завершён: {len(problem_cards_df)} карт для проверки.")
+    except Exception as e:
+        msg = f"❌ Ошибка в run_fast для {filename}: {e}"
+        logger.exception(msg)
+        send_message_sync(msg)
+        return
+
+    if not problem_cards_df.empty:
         try:
-            logger.info("🚀 Запуск ускоренного анализа run_fast()...")
-            result_fast = conversion.run_fast(
-                conv_file=local_path,
-                card_files=[],
-                col_mapping=col_mapping,
-                generate_excel=False
-            )
-            problem_cards_df = result_fast.get("problem_cards", pd.DataFrame())
-            summary = result_fast.get("summary", {})
-            logger.info(f"✅ Быстрый анализ завершён: {len(problem_cards_df)} карт для проверки.")
+            if all(col in problem_cards_df.columns for col in ["card", "partner", "max_consecutive_errors"]):
+                card_lines = [
+                    f"{row['card']} {row['partner']} {row['max_consecutive_errors']}"
+                    for _, row in (
+                        problem_cards_df[["card", "partner", "max_consecutive_errors"]]
+                        .dropna()
+                        .astype(str)
+                        .drop_duplicates()
+                        .sort_values(by=["partner", "card"])
+                        .iterrows()
+                    )
+                ]
+
+                total = len(card_lines)
+                BATCH_SIZE = 500
+
+                for i in range(0, total, BATCH_SIZE):
+                    chunk = card_lines[i:i + BATCH_SIZE]
+                    msg = "🚫 Карты на отключение:\n" + "\n".join(chunk)
+                    send_message_sync(msg)
+
+                logger.info(f"Отправлен список {total} карт с ошибками.")
+            else:
+                send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
+                logger.warning("В problem_cards_df не хватает одной из колонок: card, partner, max_consecutive_errors")
+
         except Exception as e:
-            msg = f"❌ Ошибка в run_fast для {filename}: {e}"
-            logger.exception(msg)
-            send_message_sync(msg)
-            return
+            logger.exception(f"Ошибка при формировании списка карт: {e}")
+            send_message_sync(f"⚠️ Ошибка при формировании списка карт: {e}")
+    else:
+        logger.info("Нет карт, превысивших порог ошибок.")
 
-        if not problem_cards_df.empty:
-            try:
-                if all(col in problem_cards_df.columns for col in ["card", "partner", "max_consecutive_errors"]):
-                    card_lines = [
-                        f"{row['card']} {row['partner']} {row['max_consecutive_errors']}"
-                        for _, row in (
-                            problem_cards_df[["card", "partner", "max_consecutive_errors"]]
-                            .dropna()
-                            .astype(str)
-                            .drop_duplicates()
-                            .sort_values(by=["partner", "card"])
-                            .iterrows()
-                        )
-                    ]
-
-                    total = len(card_lines)
-                    BATCH_SIZE = 500
-
-                    for i in range(0, total, BATCH_SIZE):
-                        chunk = card_lines[i:i + BATCH_SIZE]
-                        msg = "🚫 Карты на отключение:\n" + "\n".join(chunk)
-                        send_message_sync(msg)
-
-                    logger.info(f"Отправлен список {total} карт с ошибками.")
-                else:
-                    send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
-                    logger.warning("В problem_cards_df не хватает одной из колонок: card, partner, max_consecutive_errors")
-
-            except Exception as e:
-                logger.exception(f"Ошибка при формировании списка карт: {e}")
-                send_message_sync(f"⚠️ Ошибка при формировании списка карт: {e}")
-        else:
-            logger.info("Нет карт, превысивших порог ошибок.")
-
-        try:
-            summary_text = (
-                f"✅ Анализ *{filename}* завершён.\n"
-                f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
-                f"На отключение: {summary.get('Карты на отключение', '—')}"
-            )
-            send_message_sync(summary_text)
-        except Exception as e:
-            logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
+    try:
+        summary_text = (
+            f"✅ Анализ *{filename}* завершён.\n"
+            f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
+            f"На отключение: {summary.get('Карты на отключение', '—')}"
+        )
+        send_message_sync(summary_text)
+    except Exception as e:
+        logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
     def full_analysis():
         try:
-            file_type = "CARD" if is_card_file else "CONVERSION"
-            logger.info(f"🕓 Полный анализ ({file_type}) для {filename}")
+            logger.info(f"🕓 Полный анализ для {filename}")
 
             result_full = conversion.run(
                 conv_file=local_path,
-                card_files=[local_path] if is_card_file else [],
+                card_files=card_files,
                 col_mapping=col_mapping
             )
 
