@@ -288,6 +288,28 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
         write_df_to_sheet(wb, "Проблемные карты", flatten_lists_in_df(problem))
 
+    # 🧩 Сохраняем события в БД
+    try:
+        logger.info(f"[run] 🔄 Запись событий в БД из {conv_file}")
+        raw_df = load_data(conv_file, col_mapping)
+        from load_data import process_conversion
+        process_conversion(raw_df, source_file=os.path.basename(conv_file))
+    except Exception as e:
+        logger.warning(f"[run] ⚠️ Ошибка при записи событий в БД: {e}")
+
+    # 💾 Запись в card_disable_history
+    try:
+        if not problem_cards_df.empty and "card" in problem_cards_df.columns:
+            from db.models import CardDisableHistory
+            from db.database import get_session
+            with get_session() as session:
+                for card_number in problem_cards_df["card"].dropna().unique():
+                    history = CardDisableHistory(card_number=card_number)
+                    session.add(history)
+            logger.info(f"[run] 💾 Добавлено {len(problem_cards_df)} отключений в БД.")
+    except Exception as e:
+        logger.warning(f"[run] ⚠️ Ошибка при записи в CardDisableHistory: {e}")
+
     return {
         "summary": summary,
         "problem_cards": problem,
