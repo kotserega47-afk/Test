@@ -44,12 +44,14 @@ def safe_str(value):
 
 
 def to_datetime(value):
-    """Безопасное приведение значения к datetime"""
+    """Безопасное приведение значения к datetime с логом ошибок"""
     if is_blank(value):
         return None
     try:
-        return pd.to_datetime(value, errors="coerce")
-    except Exception:
+        return pd.to_datetime(value, format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    except Exception as e:
+        from utils.logger import logger
+        logger.debug(f"[to_datetime] Ошибка парсинга '{value}': {e}")
         return None
 
 
