@@ -43,7 +43,7 @@ def process_file(filename: str) -> None:
 
     is_card_file = "card" in filename.lower()
 
-    # 1️⃣ Если это card-файл — просто запоминаем его путь и завершаем
+    # 1️⃣ Если это card-файл — просто сохраняем путь и завершаем
     if is_card_file:
         last_card_path = local_path
         logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
@@ -51,9 +51,18 @@ def process_file(filename: str) -> None:
         logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
         return
 
-    # 2️⃣ Обработка conversion-файла
+    # 2️⃣ Проверка: есть ли актуальный card-файл
+    if not last_card_path or not os.path.exists(last_card_path):
+        msg = f"⚠️ Пропущен анализ {filename}: нет актуального card-файла."
+        logger.warning(msg)
+        send_message_sync(msg)
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"📦 Файл {filename} перемещён в /processed без анализа.")
+        return
+
+    # 3️⃣ Запуск анализа
     col_mapping = conversion.COLUMNS
-    card_files = [last_card_path] if last_card_path else []
+    card_files = [last_card_path]
 
     problem_cards_df = pd.DataFrame()
     summary = {}
@@ -89,10 +98,8 @@ def process_file(filename: str) -> None:
                         .iterrows()
                     )
                 ]
-
                 total = len(card_lines)
                 BATCH_SIZE = 500
-
                 for i in range(0, total, BATCH_SIZE):
                     chunk = card_lines[i:i + BATCH_SIZE]
                     msg = "🚫 Карты на отключение:\n" + "\n".join(chunk)
@@ -119,6 +126,7 @@ def process_file(filename: str) -> None:
     except Exception as e:
         logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
+    # 4️⃣ Полный анализ — в фоне
     def full_analysis():
         try:
             logger.info(f"🕓 Полный анализ для {filename}")
@@ -145,6 +153,7 @@ def process_file(filename: str) -> None:
             send_message_sync(f"⚠️ Ошибка фонового анализа {filename}: {e}")
 
     Thread(target=full_analysis, daemon=True).start()
+
 
 
 if __name__ == "__main__":
