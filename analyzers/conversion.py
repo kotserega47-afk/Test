@@ -321,29 +321,37 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
         write_df_to_sheet(wb, "Проблемные карты", flatten_lists_in_df(problem))
 
-    # 9️⃣ Запись событий в БД
+    # 9️⃣ Запись событий в БД (новая версия process_conversion)
     try:
+        from db.database import get_session
         logger.info(f"[run_fast] 🔄 Запись событий в БД ({conv_file})")
-        raw_df = load_data(conv_file, col_mapping)
-        process_conversion(raw_df, os.path.basename(conv_file))
+
+        raw_conv_df = load_data(conv_file, col_mapping)
+        card_df_list = [
+            load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"})
+            for f in card_files
+        ]
+        raw_card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame()
+
+        with get_session() as session:
+            process_conversion(raw_card_df, raw_conv_df, session)
+
     except Exception as e:
         logger.warning(f"[run_fast] ⚠️ Ошибка при записи событий в БД: {e}")
+
+    from datetime import datetime
 
     # 🔟 Запись в CardDisableHistory
     try:
         if not problem.empty and "card" in problem.columns:
             with get_session() as session:
                 for card_number in problem["card"].dropna().unique():
-                    session.add(CardDisableHistory(card_number=card_number))
+                    history = CardDisableHistory(
+                        card_number=card_number,
+                        disabled_at=datetime.utcnow()
+                    )
+                    session.add(history)
             logger.info(f"[run_fast] 💾 Добавлено {len(problem)} отключений в БД.")
     except Exception as e:
         logger.warning(f"[run_fast] ⚠️ Ошибка при записи в CardDisableHistory: {e}")
-
-    logger.info(f"[run_fast] 🏁 Завершено. Карт обработано: {df['card'].nunique()}, проблемных: {len(problem)}")
-
-    return {
-        "summary": summary,
-        "problem_cards": problem,
-        "workbook": wb,
-    }
 
