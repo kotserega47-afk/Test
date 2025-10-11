@@ -2,7 +2,7 @@
 """
 Главный модуль обработки новых файлов:
 - анализирует только conversion-файлы;
-- использует последний загруженный card-файл как справочник;
+- использует последний card-файл как справочник;
 - выполняет быстрый анализ + формирует отчёт;
 - отправляет результаты в Telegram;
 - перемещает обработанные файлы в Dropbox /processed.
@@ -25,8 +25,9 @@ DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
 LOCAL_TMP_PATH = "/tmp"
 
-# Глобальная переменная для хранения последнего card-файла
+# 🧩 сохраняем путь к последнему card-файлу
 last_card_path = None
+
 
 def process_file(filename: str) -> None:
     global last_card_path
@@ -35,6 +36,7 @@ def process_file(filename: str) -> None:
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
+    # 1️⃣ Скачиваем файл
     if not download_file(dropbox_path, local_path):
         msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
         logger.error(msg)
@@ -43,7 +45,7 @@ def process_file(filename: str) -> None:
 
     is_card_file = "card" in filename.lower()
 
-    # 1️⃣ Если это card-файл — просто сохраняем путь и завершаем
+    # 2️⃣ Если это card-файл — просто запоминаем путь
     if is_card_file:
         last_card_path = local_path
         logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
@@ -51,18 +53,9 @@ def process_file(filename: str) -> None:
         logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
         return
 
-    # 2️⃣ Проверка: есть ли актуальный card-файл
-    if not last_card_path or not os.path.exists(last_card_path):
-        msg = f"⚠️ Пропущен анализ {filename}: нет актуального card-файла."
-        logger.warning(msg)
-        send_message_sync(msg)
-        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
-        logger.info(f"📦 Файл {filename} перемещён в /processed без анализа.")
-        return
-
-    # 3️⃣ Запуск анализа
+    # 3️⃣ Обработка conversion-файла
+    card_files = [last_card_path] if last_card_path else []
     col_mapping = conversion.COLUMNS
-    card_files = [last_card_path]
 
     problem_cards_df = pd.DataFrame()
     summary = {}
@@ -84,6 +77,7 @@ def process_file(filename: str) -> None:
         send_message_sync(msg)
         return
 
+    # 4️⃣ Формируем и отправляем список карт на отключение
     if not problem_cards_df.empty:
         try:
             if all(col in problem_cards_df.columns for col in ["card", "partner", "max_consecutive_errors"]):
@@ -98,24 +92,23 @@ def process_file(filename: str) -> None:
                         .iterrows()
                     )
                 ]
+
                 total = len(card_lines)
                 BATCH_SIZE = 500
                 for i in range(0, total, BATCH_SIZE):
                     chunk = card_lines[i:i + BATCH_SIZE]
                     msg = "🚫 Карты на отключение:\n" + "\n".join(chunk)
                     send_message_sync(msg)
-
                 logger.info(f"Отправлен список {total} карт с ошибками.")
             else:
                 send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
-                logger.warning("В problem_cards_df не хватает одной из колонок: card, partner, max_consecutive_errors")
-
         except Exception as e:
             logger.exception(f"Ошибка при формировании списка карт: {e}")
             send_message_sync(f"⚠️ Ошибка при формировании списка карт: {e}")
     else:
         logger.info("Нет карт, превысивших порог ошибок.")
 
+    # 5️⃣ Telegram уведомление об общем результате fast-run
     try:
         summary_text = (
             f"✅ Анализ *{filename}* завершён.\n"
@@ -126,17 +119,15 @@ def process_file(filename: str) -> None:
     except Exception as e:
         logger.exception(f"Ошибка при отправке Telegram уведомления: {e}")
 
-    # 4️⃣ Полный анализ — в фоне
+    # 6️⃣ Фоновый полный анализ (run)
     def full_analysis():
         try:
             logger.info(f"🕓 Полный анализ для {filename}")
-
             result_full = conversion.run(
                 conv_file=local_path,
                 card_files=card_files,
                 col_mapping=col_mapping
             )
-
             workbook = result_full.get("workbook")
             if workbook:
                 output_path = os.path.join(LOCAL_TMP_PATH, f"report_{filename}")
@@ -155,7 +146,9 @@ def process_file(filename: str) -> None:
     Thread(target=full_analysis, daemon=True).start()
 
 
-
+# -----------------------------
+# Точка входа
+# -----------------------------
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
