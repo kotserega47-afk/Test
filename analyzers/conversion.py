@@ -199,12 +199,16 @@ def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
 # =====================================================
 def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel: bool = False) -> dict:
     """
-    Ускоренная версия анализа:
-    - Загрузка conversion и card файлов
-    - Учитываются exclude периоды, статусы и партнёры
+    ⚡ Ускоренная версия анализа:
+    - Загружает conversion и card файлы
+    - Учитывает exclude-периоды из YAML
+    - Проверяет статусы и партнёров
     - Возвращает problem_cards по всем условиям
     """
     from openpyxl import Workbook
+    from load_data import process_conversion
+    from db.models import CardDisableHistory
+    from db.database import get_session
 
     # 1️⃣ Загрузка conversion-файла
     usecols = list(col_mapping.values())
@@ -225,12 +229,12 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     valid_statuses = [s.lower() for s in CONFIG.get("valid_statuses", [])]
     df = df[df["status"].isin(["ошибка", "оплачен"] + valid_statuses)]
 
-    # 2️⃣ Применяем exclude периоды
+    # 2️⃣ Применяем exclude-периоды
     for partner_name, settings in PARTNER_SETTINGS.items():
         for start, end in settings.get("exclude", []):
             mask = (
-                (df["partner_norm"] == partner_name) &
-                (df["datetime"].between(start, end))
+                (df["partner_norm"] == partner_name)
+                & (df["datetime"].between(start, end))
             )
             df = df[~mask]
 
@@ -239,7 +243,9 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"})
         for f in card_files
     ]
-    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner", "status"])
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(
+        columns=["card", "partner", "status"]
+    )
     card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
     card_df["status"] = card_df["status"].astype(str).str.strip().str.lower()
 
@@ -269,12 +275,20 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     problem = merged[
         (merged["max_consecutive_errors"] >= merged["threshold"])
         & (merged["status"].isin(valid_statuses))
-        & (merged.apply(lambda row: row["partner_norm"] in (row["partner_list"] or []), axis=1))
+        & (
+            merged.apply(
+                lambda row: (
+                    isinstance(row["partner_list"], list)
+                    and row["partner_norm"] in row["partner_list"]
+                ),
+                axis=1,
+            )
+        )
     ].copy()
 
     problem.rename(columns={"partner_norm": "partner"}, inplace=True)
 
-    # 8️⃣ Финальный результат
+    # 8️⃣ Итоговый отчёт
     summary = {
         "Карт в работе": df["card"].nunique(),
         "Max ошибки": merged["max_consecutive_errors"].max() if not merged.empty else 0,
@@ -288,27 +302,23 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
         write_df_to_sheet(wb, "Data", flatten_lists_in_df(df))
         write_df_to_sheet(wb, "Проблемные карты", flatten_lists_in_df(problem))
 
-    # 🧩 Сохраняем события в БД
+    # 9️⃣ Сохраняем события в БД
     try:
-        logger.info(f"[run] 🔄 Запись событий в БД из {conv_file}")
+        logger.info(f"[run_fast] 🔄 Запись событий в БД из {conv_file}")
         raw_df = load_data(conv_file, col_mapping)
-        from load_data import process_conversion
         process_conversion(raw_df, source_file=os.path.basename(conv_file))
     except Exception as e:
-        logger.warning(f"[run] ⚠️ Ошибка при записи событий в БД: {e}")
+        logger.warning(f"[run_fast] ⚠️ Ошибка при записи событий в БД: {e}")
 
-    # 💾 Запись в card_disable_history
+    # 🔟 Запись в CardDisableHistory
     try:
-        if not problem_cards_df.empty and "card" in problem_cards_df.columns:
-            from db.models import CardDisableHistory
-            from db.database import get_session
+        if not problem.empty and "card" in problem.columns:
             with get_session() as session:
-                for card_number in problem_cards_df["card"].dropna().unique():
-                    history = CardDisableHistory(card_number=card_number)
-                    session.add(history)
-            logger.info(f"[run] 💾 Добавлено {len(problem_cards_df)} отключений в БД.")
+                for card_number in problem["card"].dropna().unique():
+                    session.add(CardDisableHistory(card_number=card_number))
+            logger.info(f"[run_fast] 💾 Добавлено {len(problem)} отключений в БД.")
     except Exception as e:
-        logger.warning(f"[run] ⚠️ Ошибка при записи в CardDisableHistory: {e}")
+        logger.warning(f"[run_fast] ⚠️ Ошибка при записи в CardDisableHistory: {e}")
 
     return {
         "summary": summary,
