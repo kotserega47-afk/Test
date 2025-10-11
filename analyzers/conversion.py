@@ -325,7 +325,7 @@ def run_fast(conv_file: str, card_files: list, col_mapping: dict, generate_excel
     try:
         logger.info(f"[run_fast] 🔄 Запись событий в БД ({conv_file})")
         raw_df = load_data(conv_file, col_mapping)
-        process_conversion(raw_df, source_file=os.path.basename(conv_file))
+        process_conversion(raw_df, os.path.basename(conv_file))
     except Exception as e:
         logger.warning(f"[run_fast] ⚠️ Ошибка при записи событий в БД: {e}")
 
