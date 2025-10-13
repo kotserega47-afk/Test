@@ -224,19 +224,26 @@ def run(
 
     logger.info(f"[run] 🧩 Загружено {len(card_df)} карт из card-файлов.")
 
-    # 4) Подсчёт серий ошибок (векторизовано)
-    # Сортировка важна для корректного расчёта последовательностей
-    conv_df.sort_values(["card", "partner_norm", "datetime"], inplace=True)
-    # Меняем группу каждый раз, когда статус не "ошибка"
-    conv_df["err_block"] = (conv_df["status"] != "ошибка").cumsum()
-    conv_df["series_len"] = conv_df.groupby(["card", "partner_norm", "err_block"])["status"].transform(
-        lambda s: len(s) if s.iloc[0] == "ошибка" else 0
-    )
-    max_errors = (
-        conv_df.groupby(["card", "partner_norm"])["series_len"]
-        .max()
-        .reset_index(name="max_consecutive_errors")
-    )
+    def count_last_error_streak(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Возвращает DataFrame с последней непрерывной серией ошибок по каждой карте и партнёру.
+        """
+        results = []
+        for (card, partner), group in df.groupby(["card", "partner_norm"]):
+            statuses = group.sort_values("datetime", ascending=False)["status"].tolist()
+            streak = 0
+            for s in statuses:
+                if s == "ошибка":
+                    streak += 1
+                elif s == "оплачен":
+                    break
+                else:
+                    break
+            results.append({"card": card, "partner_norm": partner, "max_consecutive_errors": streak})
+        return pd.DataFrame(results)
+
+    # 4) Подсчёт текущих серий ошибок
+    max_errors = count_last_error_streak(conv_df)
 
     # 5) Порог из YAML
     settings_df = pd.DataFrame(
