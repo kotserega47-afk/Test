@@ -1,254 +1,99 @@
 # main.py
+"""
+Главный модуль обработки новых файлов:
+- анализирует conversion-файлы с помощью analyzers/conversion.py;
+- использует последний card-файл как справочник;
+- запускает анализ, Telegram и формирование отчёта;
+- перемещает обработанные файлы в Dropbox /processed.
+"""
+
 import os
-import logging
-from typing import List
-import threading
 import pandas as pd
-from datetime import datetime
-
-from utils.report_builder import build_report
-from analyzers.selector import get_analyzer
-from integrations.dropbox_watcher import list_files, download_file, upload_file, move_file
-from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
-from scripts.card_events_report import run as send_card_events_report
-from db.database import get_session
-from db.models import CardDisableHistory
-import load_data
+from integrations.telegram_bot import send_message_sync
+from integrations.dropbox_watcher import download_file, move_file
+from analyzers import conversion
+from run_once_guard import acquire_lock, release_lock
 
-# -------------------------------
-# Пути
-# -------------------------------
-LOCAL_DATA = "data"
-LOCAL_REPORTS = "reports"
-os.makedirs(LOCAL_DATA, exist_ok=True)
-os.makedirs(LOCAL_REPORTS, exist_ok=True)
+DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
+DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+LOCAL_TMP_PATH = "/tmp"
 
-INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
-OUTPUT_PATH = os.getenv("DROPBOX_OUTPUT_PATH")
-PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
+# 🧩 сохраняем путь к последнему card-файлу
+last_card_path = None
 
-# -------------------------------
-# Флаг выполнения
-# -------------------------------
-is_running = False
-lock = threading.Lock()
 
-# -------------------------------
-# Вспомогательные функции
-# -------------------------------
-def download_to_local(fname: str) -> str | None:
-    dropbox_file_path = f"{INPUT_PATH}/{fname}"
-    local_file_path = os.path.join(LOCAL_DATA, fname)
+def process_file(filename: str) -> None:
+    """Обработка одного файла из Dropbox"""
+    global last_card_path
+
+    logger.info(f"=== Обработка файла {filename} ===")
+    local_path = os.path.join(LOCAL_TMP_PATH, filename)
+    dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
+
+    # 1️⃣ Скачиваем файл
+    if not download_file(dropbox_path, local_path):
+        msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
+        logger.error(msg)
+        send_message_sync(msg)
+        return
+
+    is_card_file = "card" in filename.lower()
+
+    # 2️⃣ Если это card-файл — просто сохраняем путь
+    if is_card_file:
+        last_card_path = local_path
+        logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
+        return
+
+    # 3️⃣ Если conversion-файл — запускаем анализ
+    card_files = [last_card_path] if last_card_path else []
+    col_mapping = conversion.COLUMNS
+
     try:
-        download_file(dropbox_file_path, local_file_path)
-        logger.info(f"Файл скачан: {fname}")
-        return local_file_path
-    except Exception as e:
-        logger.error(f"Не удалось скачать {fname}: {e}")
-        return None
-
-
-def upload_report(local_path: str, fname: str):
-    try:
-        dropbox_report_path = f"{OUTPUT_PATH}/report_{fname}.xlsx"
-        upload_file(local_path, dropbox_report_path)
-        logger.info(f"Отчёт загружен в Dropbox: {dropbox_report_path}")
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке отчёта {fname}: {e}")
-
-
-def move_to_processed(fname: str):
-    try:
-        move_file(f"{INPUT_PATH}/{fname}", f"{PROCESSED_PATH}/{fname}")
-        logger.info(f"Файл {fname} перемещён в {PROCESSED_PATH}")
-    except Exception as e:
-        logger.error(f"Ошибка при переносе {fname}: {e}")
-
-
-def read_source_file(file_path: str) -> pd.DataFrame:
-    try:
-        if file_path.lower().endswith((".xlsx", ".xls")):
-            return pd.read_excel(file_path, dtype=str)
-        return pd.read_csv(
-            file_path,
-            sep=None,
-            engine="python",
-            encoding="utf-8",
-            dtype=str,
+        logger.info("🚀 Запуск анализа conversion.run()...")
+        result = conversion.run(
+            conv_file=local_path,
+            card_files=card_files,
+            col_mapping=col_mapping,
+            generate_excel=True,
+            send_telegram=True
         )
-    except Exception:
-        logger.exception(f"Не удалось загрузить данные из файла {file_path}")
-        raise
 
-
-def merge_card_dataframes(card_dfs: List[pd.DataFrame]) -> pd.DataFrame:
-    base_columns = [
-        "Карта", "Пул", "Направление", "Баланс",
-        "Метод пополнения", "Имя", "Фамилия", "Bakai customer_id",
-    ]
-
-    if not card_dfs:
-        return pd.DataFrame(columns=base_columns)
-
-    combined = pd.concat(card_dfs, ignore_index=True, sort=False)
-    for column in base_columns:
-        if column not in combined.columns:
-            combined[column] = None
-    return combined[base_columns + [c for c in combined.columns if c not in base_columns]]
-
-# -------------------------------
-# Обработка одного файла
-# -------------------------------
-def process_file(fname: str, all_files: list[str]):
-    logger.info(f"[{fname}] --- Начало обработки ---")
-
-    local_file_path = download_to_local(fname)
-    if not local_file_path:
-        send_message_sync(f"❌ Не удалось скачать {fname}")
-        return
-
-    analyzer_func, config, requires_card = get_analyzer(fname)
-    if not analyzer_func or not config:
-        logger.warning(f"[{fname}] Не найден анализатор, файл будет пропущен.")
-        return
-
-    card_files = []
-    card_dataframes = []
-    conversion_df_original = None
-    is_conversion = bool(config.get("file_pattern") == "conversion")
-
-    try:
-        if is_conversion:
-            conversion_df_original = read_source_file(local_file_path)
-            logger.info(f"[{fname}] Конверсионный файл загружен: {len(conversion_df_original)} строк")
-
-        if requires_card:
-            for f in all_files:
-                if "card" in f.lower():
-                    local_card = download_to_local(f)
-                    if local_card:
-                        card_files.append(local_card)
-                        if is_conversion:
-                            card_df = read_source_file(local_card)
-                            card_dataframes.append(card_df)
-            logger.info(f"[{fname}] Найдено файлов для карты: {card_files}")
-
-        if is_conversion and conversion_df_original is not None:
-            card_df_for_db = merge_card_dataframes(card_dataframes)
-            total_cards_in_file = len(card_df_for_db)
-            logger.info(f"[{fname}] 📄 В card-файлах найдено {total_cards_in_file} карт.")
-
-            with get_session() as session:
-                load_data.process_cards(card_df_for_db, session)
-
-            with get_session() as session:
-                load_data.process_conversion(card_df_for_db, conversion_df_original, session)
-
-            with get_session() as session:
-                from db.models import Card
-                db_count = session.query(Card).count()
-                logger.info(f"[{fname}] ✅ В таблице cards теперь {db_count} карт.")
-
-        result = analyzer_func(local_file_path, card_files, config.get("columns", {}))
-        report_path = os.path.join(LOCAL_REPORTS, f"report_{fname}.xlsx")
-        build_report(result, report_path)
-        upload_report(report_path, fname)
-
-        send_message_sync(f"✅ Отчёт по файлу {fname} готов")
-        send_file_sync(report_path)
-
-        problem_cards_df = result.get("problem_cards")
-        if problem_cards_df is not None and not problem_cards_df.empty:
-            today = datetime.utcnow()
-            with get_session() as session:
-                for _, row in problem_cards_df.iterrows():
-                    history = CardDisableHistory(
-                        card_number=str(row["card"]),
-                        disabled_at=today
-                    )
-                    session.add(history)
-                session.commit()
-
-            lines = [f"{row['card']} {row['partner']}" for _, row in problem_cards_df.iterrows()]
-            text_for_telegram = "\n".join(lines)
-            send_message_sync(f"⚠️ Карты на отключение:\n{text_for_telegram[:3900]}")
+        summary = result.get("summary", {})
+        logger.info(f"✅ Анализ завершён: {summary}")
 
     except Exception as e:
-        logger.exception(f"[{fname}] Ошибка при обработке: {e}")
-        send_message_sync(f"❌ Ошибка при обработке {fname}: {e}")
+        msg = f"❌ Ошибка при анализе {filename}: {e}"
+        logger.exception(msg)
+        send_message_sync(msg)
+        return
 
-# -------------------------------
-# Основной цикл
-# -------------------------------
-def main_loop():
-    global is_running
-    with lock:
-        if is_running:
-            logger.warning("⚠️ main_loop пропущен — предыдущее выполнение ещё не завершено.")
-            return
-        is_running = True
-
-    logger.info("🔍 Запуск боевого пайплайна (Dropbox)...")
-
+    # 4️⃣ Перемещаем обработанный файл
     try:
-        files = list_files(INPUT_PATH)
-        if not files:
-            logger.info("Нет файлов для обработки в Dropbox.")
-            return
-
-        logger.info(f"Найдено файлов: {files}")
-        processed_files = set()
-        paired = []
-
-        # 🔹 Ищем пары conversion + card
-        for fname in files:
-            if fname.startswith("conversion_"):
-                conv = fname
-                time_marker = conv.replace("conversion_", "").split(".")[0]
-                card = next((f for f in files if f.startswith("card_") and time_marker in f), None)
-                paired.append((conv, card))
-
-        # 🔹 Обрабатываем пары
-        for conv, card in paired:
-            try:
-                logger.info(f"[PAIR] Обработка пары: {conv} + {card}")
-                process_file(conv, files)
-                if card:
-                    processed_files.update({conv, card})
-                else:
-                    processed_files.add(conv)
-            except Exception as e:
-                logger.error(f"Ошибка при обработке пары {conv} + {card}: {e}")
-
-        # 🔹 Обрабатываем одиночные файлы
-        for fname in files:
-            if fname not in processed_files:
-                process_file(fname, files)
-                processed_files.add(fname)
-
-        # 🔹 Переносим все обработанные файлы после завершения
-        for fname in processed_files:
-            try:
-                move_to_processed(fname)
-            except Exception as e:
-                logger.error(f"Ошибка при переносе {fname}: {e}")
-
-        send_card_events_report()
-
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"✅ Файл {filename} перемещён в /processed.")
     except Exception as e:
-        logger.exception(f"Ошибка в основном процессе: {e}")
-        send_message_sync(f"❌ Критическая ошибка: {e}")
-
-    finally:
-        with lock:
-            is_running = False
-        logger.info("✅ main_loop завершён")
+        logger.error(f"⚠️ Ошибка при перемещении {filename}: {e}")
+        send_message_sync(f"⚠️ Ошибка при перемещении {filename}: {e}")
 
 
+# -----------------------------
+# Точка входа
+# -----------------------------
 if __name__ == "__main__":
-    import time
-    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-    while True:
-        main_loop()
-        time.sleep(CHECK_INTERVAL)
+    import sys
+    if len(sys.argv) < 2:
+        print("Использование: python main.py <имя_файла>")
+        sys.exit(0)
+
+    if not acquire_lock(timeout=600):
+        sys.exit(0)
+
+    try:
+        filename = sys.argv[1]
+        process_file(filename)
+    finally:
+        release_lock()

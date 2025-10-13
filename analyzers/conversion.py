@@ -1,13 +1,16 @@
 # analyzers/conversion.py
 
-import pandas as pd
-import re
 import os
+import re
 import yaml
-from utils.logger import logger
+import tempfile
+import pandas as pd
+
 from openpyxl import Workbook
-from utils.excel_utils import flatten_lists_in_df, style_worksheet, write_df_to_sheet
-from integrations.telegram_bot import send_message_sync
+
+from utils.logger import logger
+from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
+from integrations.telegram_bot import send_message_sync, send_file_sync
 
 # -----------------------------
 # Загрузка конфигурации
@@ -16,16 +19,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "config", "conversion_config.yaml"))
 
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    CONFIG = yaml.safe_load(f)
+    CONFIG = yaml.safe_load(f) or {}
 
-COLUMNS = CONFIG.get("columns", {})
-PARTNER_SETTINGS = {}
+COLUMNS = CONFIG.get("columns", {})  # ожидаемые имена колонок входного conversion-файла
+PARTNER_SETTINGS = {}                # будет заполнено из YAML
+VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
+
 
 # -----------------------------
 # Вспомогательные функции
 # -----------------------------
 def normalize_colname(name: str) -> str:
     return str(name).strip().lower().replace("ё", "е")
+
 
 def normalize_name(name: str) -> str:
     if not isinstance(name, str):
@@ -37,50 +43,58 @@ def normalize_name(name: str) -> str:
     name = re.sub(r"\s+", " ", name)
     return name.strip(", ")
 
+
 def normalize_partners_list(partners_str: str) -> list:
     partners = str(partners_str).split(",")
     return [normalize_name(p) for p in partners if p.strip()]
 
-def load_data(filepath, col_mapping: dict):
-    """Загрузка CSV/XLSX и нормализация колонок"""
-    from utils.logger import logger
 
+def load_data(filepath, col_mapping: dict):
+    """
+    Универсальная загрузка CSV/XLSX и нормализация колонок по mappingу вида:
+    {"card": "Карта", "partner": "Партнёр", "status": "Статус", "datetime": "Дата/Время создания", ...}
+    """
     if filepath.endswith((".xlsx", ".xls")):
         df = pd.read_excel(filepath, dtype=str)
     else:
-        df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8")
+        df = pd.read_csv(filepath, sep=None, engine="python", encoding="utf-8", dtype=str)
 
     logger.info(f"[load_data] Загружен файл {filepath} с колонками: {list(df.columns)}")
-
-    # лог первых 5 карт
-    if "Карта" in df.columns:
-        logger.debug(f"[load_data] Первые карты из {filepath}: {df['Карта'].head(5).tolist()}")
 
     norm_cols = {normalize_colname(c): c for c in df.columns}
     new_cols = {}
     for key, expected_name in col_mapping.items():
         expected_norm = normalize_colname(expected_name)
         if expected_norm not in norm_cols:
-            raise ValueError(f"❌ В файле нет колонки '{expected_name}' (ожидали для '{key}')")
+            raise ValueError(f"❌ В файле {os.path.basename(filepath)} нет колонки '{expected_name}' (ожидали для '{key}')")
         new_cols[norm_cols[expected_norm]] = key
+
     df.rename(columns=new_cols, inplace=True)
 
+    # Приведение типов/регистров
     for c in ["card", "status", "partner"]:
         if c in df:
             df[c] = df[c].astype(str).str.strip().str.lower()
+
     if "datetime" in df:
+        # В conversion обычно формат "%d.%m.%Y %H:%M:%S"
         df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
 
-    required = [c for c in ["card", "status", "datetime"] if c in df]
+    required = [c for c in ["card", "status", "datetime"] if c in df.columns]
     if required:
         df.dropna(subset=required, inplace=True)
+
     if "datetime" in df:
         df.sort_values("datetime", ascending=False, inplace=True)
 
     return df
 
+
 def init_partner_settings():
-    """Возвращает dict с нормализованным ключом -> {threshold, start, exclude_periods}"""
+    """
+    Возвращает dict нормализованного имени партнёра -> {threshold, exclude: [(start, end), ...]}
+    где exclude — интервалы времени, которые исключаются из анализа.
+    """
     partners = {}
     for raw_name, settings in CONFIG.get("partners", {}).items():
         norm_name = normalize_name(raw_name)
@@ -92,98 +106,242 @@ def init_partner_settings():
                 exclude_periods.append((start, end))
         partners[norm_name] = {
             "threshold": settings.get("threshold", 4),
-            "start": settings.get("start"),
-            "exclude": exclude_periods
+            "exclude": exclude_periods,
         }
     return partners
 
+
 PARTNER_SETTINGS = init_partner_settings()
 
-def count_consecutive_errors(group, partner_name: str) -> int:
-    count = max_count = 0
-    for status in group["status"]:
-        if status == "оплачен":
-            break
-        if status == "ошибка":
-            count += 1
-            max_count = max(max_count, count)
-        else:
-            count = 0
-    return max_count
 
-def run(conv_file: str, card_files: list, col_mapping: dict) -> dict:
-    conv_df = load_data(conv_file, col_mapping)
-    conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
-    conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
+def _send_problem_cards_to_telegram(problem_df: pd.DataFrame) -> None:
+    """
+    Отправляет построчно список карт на отключение батчами по ~500 строк.
+    Формат строки: "<card> <partner> <max_consecutive_errors>"
+    """
+    if problem_df.empty:
+        return
 
-    card_df_list = [load_data(f, {"card": "Карта", "partner": "Партнер", "status": "Статус"}) for f in card_files]
-    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(columns=["card", "partner"])
-    card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
+    cols_ok = all(c in problem_df.columns for c in ["card", "partner", "max_consecutive_errors"])
+    if not cols_ok:
+        send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
+        return
 
-    results, problem_cards = [], []
-    VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
-
-    for (card, partner_norm), group in conv_df.groupby(["card", "partner_norm"]):
-        if partner_norm in PARTNER_SETTINGS:
-            settings = PARTNER_SETTINGS[partner_norm]
-        else:
-            msg = (
-                f"⚠️ Для партнёра {partner_norm!r} нет настроек в YAML.\n"
-                f"Используем threshold=4 по умолчанию."
-            )
-            logger.warning(f"[analyzer] {msg}")
-            send_message_sync(msg)  # ✅ шлём в Телеграм
-            settings = {"threshold": 4, "exclude": []}
-
-        threshold = settings.get("threshold", 4)
-
-        # Фильтрация по exclude
-        for start_ex, end_ex in settings.get("exclude", []):
-            group = group[~group["datetime"].between(start_ex, end_ex)]
-
-        card_status_raw = card_df.loc[card_df["card"] == card, "status"]
-        card_status = (
-            card_status_raw.iloc[0].strip().lower()
-            if not card_status_raw.empty and pd.notna(card_status_raw.iloc[0])
-            else None
+    msg_lines = [
+        f"{row['card']} {row['partner']} {row['max_consecutive_errors']}"
+        for _, row in (
+            problem_df[["card", "partner", "max_consecutive_errors"]]
+            .dropna()
+            .astype(str)
+            .drop_duplicates()
+            .sort_values(by=["partner", "card"])
+            .iterrows()
         )
+    ]
 
-        max_errors = count_consecutive_errors(group, partner_norm)
-        results.append({
-            "card": card,
-            "partner": partner_norm,
-            "max_consecutive_errors": max_errors,
-            "threshold": threshold,
-            "status": card_status_raw.iloc[0] if not card_status_raw.empty else None,
-        })
+    total = len(msg_lines)
+    if total == 0:
+        return
 
-        partners_list = [p for sublist in card_df.loc[card_df["card"] == card, "partner_list"] for p in sublist]
-        if partner_norm in partners_list and max_errors >= threshold and card_status in VALID_STATUSES:
-            problem_cards.append({
-                "card": card,
-                "partner": partner_norm,
-                "max_consecutive_errors": max_errors,
-                "status": card_status,
-            })
+    BATCH_SIZE = 500
+    for i in range(0, total, BATCH_SIZE):
+        chunk = msg_lines[i:i + BATCH_SIZE]
+        send_message_sync("🚫 Карты на отключение:\n" + "\n".join(chunk))
+    logger.info(f"[telegram] Отправлен список {total} карт на отключение.")
 
-    problem_cards_df = pd.DataFrame(problem_cards)
 
+# -----------------------------
+# Основная функция анализа
+# -----------------------------
+def run(
+    conv_file: str,
+    card_files: list,
+    col_mapping: dict,
+    *,
+    generate_excel: bool = True,
+    send_telegram: bool = True,
+) -> dict:
+    """
+    Универсальный анализатор conversion-файлов (без БД):
+    - Загружает conversion и card файлы
+    - Применяет exclude-периоды из YAML
+    - Подсчитывает серии ошибок по картам/партнёрам (векторизовано)
+    - Сравнивает с порогами из YAML
+    - Возвращает problem_cards и summary
+    - По желанию формирует Excel и отправляет результаты в Telegram
+    """
+    logger.info(f"[run] 🚀 Начало анализа: {os.path.basename(conv_file)}")
+
+    # 1) Загрузка conversion-файла
+    usecols = list(col_mapping.values())
+    try:
+        conv_df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
+            else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
+    except ValueError as e:
+        logger.warning(f"[run] ⚠️ Не найдены все колонки ({usecols}), читаем доступные: {e}")
+        conv_df = pd.read_excel(conv_file, dtype=str) if conv_file.endswith((".xlsx", ".xls")) \
+            else pd.read_csv(conv_file, dtype=str, sep=None, engine="python")
+
+    conv_df.rename(columns={v: k for k, v in col_mapping.items()}, inplace=True)
+
+    # Приведение типов/нормализация
+    conv_df["status"] = conv_df["status"].astype(str).str.strip().str.lower()
+    conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
+    conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    conv_df.dropna(subset=["card", "datetime", "status"], inplace=True)
+
+    # Оставляем только релевантные статусы
+    conv_df = conv_df[conv_df["status"].isin(["ошибка", "оплачен"] + VALID_STATUSES)]
+
+    logger.info(f"[run] 📄 Загружено {len(conv_df)} строк из conversion.")
+
+    # 2) Применяем exclude-периоды
+    for partner_name, settings in PARTNER_SETTINGS.items():
+        for start, end in settings.get("exclude", []):
+            before = len(conv_df)
+            mask = (conv_df["partner_norm"] == partner_name) & (conv_df["datetime"].between(start, end))
+            conv_df = conv_df[~mask]
+            if len(conv_df) != before:
+                logger.info(f"[run] ⏳ Исключено {before - len(conv_df)} строк по exclude для «{partner_name}»")
+
+    # 3) Загрузка card-файлов
+    card_df_list = []
+    for f in card_files or []:
+        try:
+            # В card-файле ожидаем минимум: "Карта", "Партнёр", "Статус"
+            card_df_list.append(load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"}))
+        except Exception as e:
+            logger.warning(f"[run] ⚠️ Пропускаю card-файл {os.path.basename(f)}: {e}")
+
+    card_df = pd.concat(card_df_list, ignore_index=True) if card_df_list else pd.DataFrame(
+        columns=["card", "partner", "status"]
+    )
+    if not card_df.empty:
+        card_df["partner_list"] = card_df["partner"].apply(normalize_partners_list)
+        card_df["status"] = card_df["status"].astype(str).str.strip().str.lower()
+    else:
+        card_df["partner_list"] = []
+
+    logger.info(f"[run] 🧩 Загружено {len(card_df)} карт из card-файлов.")
+
+    def count_last_error_streak(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Возвращает DataFrame с последней непрерывной серией ошибок по каждой карте и партнёру.
+        """
+        results = []
+        for (card, partner), group in df.groupby(["card", "partner_norm"]):
+            statuses = group.sort_values("datetime", ascending=False)["status"].tolist()
+            streak = 0
+            for s in statuses:
+                if s == "ошибка":
+                    streak += 1
+                elif s == "оплачен":
+                    break
+                else:
+                    break
+            results.append({"card": card, "partner_norm": partner, "max_consecutive_errors": streak})
+        return pd.DataFrame(results)
+
+    # 4) Подсчёт текущих серий ошибок
+    max_errors = count_last_error_streak(conv_df)
+
+    # 5) Порог из YAML
+    settings_df = pd.DataFrame(
+        [{"partner_norm": p, "threshold": s.get("threshold", 4)} for p, s in PARTNER_SETTINGS.items()]
+    )
+    merged = max_errors.merge(settings_df, on="partner_norm", how="left").fillna({"threshold": 4})
+
+    # 6) Добавляем статус и партнёров из card-файлов
+    card_status_map = card_df.set_index("card")["status"].to_dict() if not card_df.empty else {}
+    card_partners_map = card_df.set_index("card")["partner_list"].to_dict() if not card_df.empty else {}
+
+    merged["status"] = merged["card"].map(card_status_map).astype(str).str.strip().str.lower()
+    merged["partner_list"] = merged["card"].map(card_partners_map)
+
+    # 7) Фильтрация проблемных карт
+    problem_mask = (
+        (merged["max_consecutive_errors"] >= merged["threshold"])
+        & (merged["status"].isin(VALID_STATUSES))
+        & merged.apply(
+            lambda r: isinstance(r["partner_list"], list) and r["partner_norm"] in r["partner_list"],
+            axis=1
+        )
+    )
+    problem = merged.loc[problem_mask].copy()
+    problem.rename(columns={"partner_norm": "partner"}, inplace=True)
+
+    # 8) Итоговый отчёт и Telegram
     summary = {
         "Карт в работе": conv_df["card"].nunique(),
-        "Max ошибки": max([r["max_consecutive_errors"] for r in results], default=0),
-        "Карта с Max ошибками": max(results, key=lambda r: r["max_consecutive_errors"])["card"] if results else None,
-        "Карты на отключение": int(problem_cards_df["card"].nunique()) if not problem_cards_df.empty else 0
+        "Max ошибки": int(merged["max_consecutive_errors"].max()) if not merged.empty else 0,
+        "Карты на отключение": int(problem["card"].nunique() if not problem.empty else 0),
     }
 
-    wb = Workbook()
-    wb.remove(wb.active)
-    write_df_to_sheet(wb, "Data_conv", flatten_lists_in_df(conv_df.copy()))
-    write_df_to_sheet(wb, "Data_card", flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy()))
-    if not problem_cards_df.empty:
-        write_df_to_sheet(wb, "Отключить", flatten_lists_in_df(problem_cards_df.sort_values(by=["partner", "card"]).copy()))
+    logger.info(f"[run] ✅ Обнаружено {summary['Карты на отключение']} карт на отключение.")
 
+    # Excel отчёт
+    wb = None
+    report_path = None
+    if generate_excel:
+        wb = Workbook()
+        wb.remove(wb.active)
+        # Данные
+        write_df_to_sheet(wb, "Data_conv", flatten_lists_in_df(conv_df.copy()))
+        write_df_to_sheet(
+            wb,
+            "Data_card",
+            flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy())
+            if not card_df.empty else card_df,
+        )
+        # Проблемные (если есть)
+        if not problem.empty:
+            write_df_to_sheet(
+                wb,
+                "Отключить",
+                flatten_lists_in_df(problem.sort_values(by=["partner", "card"]).copy())
+            )
+
+        # Сохраняем во временный файл
+        tmp_dir = tempfile.gettempdir()
+        base_name = f"report_{os.path.basename(conv_file)}"
+        # Гарантируем расширение .xlsx
+        if not base_name.lower().endswith(".xlsx"):
+            base_name += ".xlsx"
+        report_path = os.path.join(tmp_dir, base_name)
+        wb.save(report_path)
+        logger.info(f"[run] 📁 Отчёт сохранён: {report_path}")
+
+    # Telegram отправки
+    if send_telegram:
+        # список карт
+        if not problem.empty:
+            _send_problem_cards_to_telegram(problem)
+        else:
+            send_message_sync("ℹ️ Нет карт, превысивших порог ошибок.")
+
+        # summary
+        try:
+            summary_text = (
+                f"✅ Анализ *{os.path.basename(conv_file)}* завершён.\n"
+                f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
+                f"На отключение: {summary.get('Карты на отключение', '—')}"
+            )
+            send_message_sync(summary_text)
+        except Exception as e:
+            logger.exception(f"[run] Ошибка при отправке Telegram summary: {e}")
+
+        # файл
+        if generate_excel and report_path and os.path.exists(report_path):
+            try:
+                send_file_sync(report_path, caption=f"📊 Отчёт по {os.path.basename(conv_file)}")
+                logger.info(f"[run] Файл отчёта отправлен в Telegram: {report_path}")
+            except Exception as e:
+                logger.exception(f"[run] Ошибка при отправке отчёта в Telegram: {e}")
+
+    # Возвращаем результат
     return {
         "summary": summary,
-        "workbook": wb,
-        "problem_cards": problem_cards_df,
+        "workbook": wb,              # может быть None, если generate_excel=False
+        "problem_cards": problem,    # DataFrame
+        "report_path": report_path,  # путь к файлу, если generate_excel=True
     }

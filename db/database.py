@@ -1,5 +1,4 @@
-"""Инфраструктура подключения к базе данных проекта."""
-
+# db/database.py
 from __future__ import annotations
 
 import os
@@ -8,37 +7,29 @@ from typing import Iterator
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
+# -----------------------------
+# Настройка окружения
+# -----------------------------
 load_dotenv()
 
-
 def _get_database_url() -> str:
-    """Прочитать URL подключения из окружения и привести к корректному виду."""
+    """Возвращает строку подключения к БД"""
     url = os.getenv("DATABASE_URL")
     if not url:
-        raise ValueError("DATABASE_URL не задана. Установите переменную окружения DATABASE_URL.")
-
-    # Принудительно добавляем psycopg2-драйвер (иначе Windows может выбросить UnicodeDecodeError)
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-
+        raise ValueError("DATABASE_URL не задан. Установите переменную окружения DATABASE_URL.")
     return url
 
-
 def _should_echo_sql() -> bool:
-    """Определить, нужно ли логировать SQL по переменной окружения."""
-    flag = os.getenv("SQL_ECHO", "").lower()
-    return flag in {"1", "true", "t", "yes", "y"}
+    """Определяет, нужно ли логировать SQL"""
+    val = os.getenv("SQL_ECHO", "").strip().lower()
+    return val in {"1", "true", "t", "yes", "y"}
 
-
-# Создание движка с правильной кодировкой
-engine = create_engine(
-    _get_database_url(),
-    echo=_should_echo_sql(),
-    future=True,
-    connect_args={"client_encoding": "utf8"},
-)
+# -----------------------------
+# Инициализация SQLAlchemy
+# -----------------------------
+engine = create_engine(_get_database_url(), echo=_should_echo_sql(), future=True)
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -49,16 +40,17 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-
+# -----------------------------
+# Служебные функции
+# -----------------------------
 def create_tables() -> None:
-    """Создать таблицы, описанные в db.models."""
-    import db.models  # noqa: F401 — регистрируем модели
+    """Создание таблиц, если их ещё нет"""
+    import db.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
-
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    """Предоставить сессию SQLAlchemy с автоматическим управлением транзакцией."""
+    """Контекстный менеджер безопасной сессии"""
     session = SessionLocal()
     try:
         yield session
