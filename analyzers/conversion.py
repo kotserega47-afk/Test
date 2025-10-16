@@ -213,6 +213,16 @@ def run(
             logger.info(f"[run] 📥 special_cards.xlsx загружен: {dropbox_special_file} → {local_special_path}")
             # читаем файл
             df_special = pd.read_excel(local_special_path, dtype=str)
+
+            df_special.rename(
+                columns={
+                    "Карта": "card",
+                    "Партнер": "partner",
+                    "Дата": "start_date",
+                },
+                inplace=True
+            )
+
             # обязательные колонки
             missing_cols = [c for c in ["card", "partner", "start_date"] if c not in df_special.columns]
             if missing_cols:
@@ -232,6 +242,20 @@ def run(
                 special_rules = df_special.set_index(["card", "partner_norm"])["start_date"].to_dict()
                 latest_special_date = df_special["start_date"].max()
                 special_loaded = True
+
+                # 🔹 Telegram-отчёт по сегодняшним special-картам
+                if send_telegram:
+                    today = pd.Timestamp.now().normalize()
+                    today_special = df_special[df_special["start_date"] == today]
+                    if not today_special.empty:
+                        counts = today_special["partner_norm"].value_counts()
+                        stats = "\n".join([f"• {p}: {int(c)}" for p, c in counts.items()])
+                        send_message_sync(
+                            f"📊 Добавленные special-карты за {today.strftime('%d.%m.%Y')}:\n{stats}"
+                        )
+                        logger.info(f"[run] 📊 Найдено {len(today_special)} новых special-карт.")
+                    else:
+                        send_message_sync(f"ℹ️ За {today.strftime('%d.%m.%Y')} новых special-карт не добавлено.")
         else:
             logger.warning("[run] ⚠️ Не удалось скачать special_cards.xlsx из Dropbox.")
             if send_telegram:
@@ -278,17 +302,6 @@ def run(
     conv_df = conv_df[conv_df["status"].isin(["ошибка", "оплачен"] + VALID_STATUSES)]
     logger.info(f"[run] 📄 Загружено {len(conv_df)} строк из conversion.")
 
-    # 2.1) Telegram: отчёт по сегодняшним строкам (по партнёрам) с явной датой
-    if send_telegram:
-        report_date = pd.Timestamp.now().normalize()
-        today_df = conv_df[conv_df["datetime"] >= report_date]
-        if not today_df.empty:
-            counts = today_df["partner_norm"].value_counts()
-            stats = "\n".join([f"• {p}: {int(c)}" for p, c in counts.items()])
-            send_message_sync(f"📊 Добавленные строки за {report_date.strftime('%d.%m.%Y')}:\n{stats}")
-            logger.info(f"[run] 📊 Строк за сегодня: {len(today_df)}")
-        else:
-            send_message_sync(f"ℹ️ За {report_date.strftime('%d.%m.%Y')} новых строк не добавлено.")
 
     # 3) Применяем индивидуальные ограничения по special_rules (карта + партнёр)
     if special_rules:
