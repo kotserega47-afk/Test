@@ -232,7 +232,7 @@ def run(
                 df_special["card"] = df_special["card"].astype(str).str.strip()
                 df_special["partner_norm"] = df_special["partner"].apply(normalize_name)
                 df_special["start_date"] = pd.to_datetime(
-                    df_special["start_date"], format="%d.%m.%Y", errors="coerce"
+                    df_special["start_date"].astype(str).str.strip(), dayfirst=True, errors="coerce"
                 )
                 # дубликаты: оставляем запись с самой свежей датой по (card, partner_norm)
                 df_special.sort_values("start_date", ascending=False, inplace=True, na_position="last")
