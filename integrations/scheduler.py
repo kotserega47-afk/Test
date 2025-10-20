@@ -50,6 +50,7 @@ def run_scheduler():
 
             try:
                 logger.info(f"🔍 Проверка новых файлов в {DROPBOX_INPUT_PATH}...")
+                print(os.getenv("DROPBOX_INPUT_PATH"))
                 files = list_files(DROPBOX_INPUT_PATH)
                 if not files:
                     logger.info("📂 Новых файлов не найдено.")
