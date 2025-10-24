@@ -414,9 +414,31 @@ def run(
         .sort_values(ascending=False)
     )
 
+    # === Карт в работе по пулам ===
+    if "pool" in card_df.columns:
+        active_pools = card_df[
+            card_df["status"].isin(ACTIVE_STATUSES)
+            & card_df["pool"].notna()
+            & (card_df["pool"].str.strip() != "")
+            ].copy()
+
+        # Исключаем карты на отключение
+        if not problem.empty:
+            active_pools = active_pools[~active_pools["card"].isin(problem["card"])]
+
+        cards_in_work_by_pool = (
+            active_pools.drop_duplicates(subset=["pool", "card"])
+            .groupby("pool")["card"]
+            .nunique()
+            .sort_values(ascending=False)
+        )
+    else:
+        cards_in_work_by_pool = pd.Series(dtype=int)
+
     # Формируем summary
     summary = {
         "Карт в работе по партнёрам": cards_in_work_by_partner.to_dict(),
+        "Карт в работе по пулам": cards_in_work_by_pool.to_dict(),
         "Max ошибки": int(merged["max_consecutive_errors"].max()) if not merged.empty else 0,
         "Карты на отключение": int(problem["card"].nunique() if not problem.empty else 0),
     }
@@ -430,22 +452,16 @@ def run(
     if generate_excel:
         wb = Workbook()
         wb.remove(wb.active)
-        # Данные
-        write_df_to_sheet(wb, "Data_conv", flatten_lists_in_df(conv_df.copy()))
-        write_df_to_sheet(
-            wb,
-            "Data_card",
-            flatten_lists_in_df(card_df.drop(columns=["partner_list"], errors="ignore").copy())
-            if not card_df.empty else card_df,
-        )
-        # Проблемные (если есть)
+
+        # Проблемные карты (если есть)
         if not problem.empty:
             write_df_to_sheet(
                 wb,
                 "Отключить",
                 flatten_lists_in_df(problem.sort_values(by=["partner", "card"]).copy())
             )
-        # Добавляем лист "Карт в работе"
+
+        # Карт в работе по партнёрам
         if not cards_in_work_by_partner.empty:
             write_df_to_sheet(
                 wb,
@@ -455,7 +471,17 @@ def run(
                 )
             )
 
-        # Сохраняем во временный файл
+        # Карт в работе по пулам
+        if not cards_in_work_by_pool.empty:
+            write_df_to_sheet(
+                wb,
+                "Карт в работе (Пулы)",
+                cards_in_work_by_pool.reset_index().rename(
+                    columns={"pool": "Пул", "card": "Карт в работе"}
+                )
+            )
+
+        # Сохраняем отчёт
         tmp_dir = tempfile.gettempdir()
         base_name = f"report_{os.path.basename(conv_file)}"
         if not base_name.lower().endswith(".xlsx"):
