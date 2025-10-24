@@ -61,11 +61,11 @@ partners:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
 
 pools:
-  aurora: "Пул SMS"
-  a-mobile: "Пул А-Мобайл"
-  abhsber: "Пул Abhsber"
-  cibit: "Пул Cibit"
-  bakai: "Пул BakAi"
+  aurora: "SMS"
+  a-mobile: "А-Мобайл"
+  abhsber: "Abhsber"
+  cibit: "Cibit"
+  bakai: "BakAi"
 
 columns:
   card: "Карта"

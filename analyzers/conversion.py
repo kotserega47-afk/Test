@@ -24,6 +24,7 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
 
 COLUMNS = CONFIG.get("columns", {})  # ожидаемые имена колонок входного conversion-файла
 VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
+POOLS = CONFIG.get("pools", {})
 
 
 # -----------------------------
@@ -337,7 +338,8 @@ def run(
     for f in card_files or []:
         try:
             # В card-файле ожидаем минимум: "Карта", "Партнёр", "Статус"
-            card_df_list.append(load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус"}))
+            card_df_list.append(load_data(f, {"card": "Карта", "partner": "Партнёр", "status": "Статус", "pool": "Пул"}))
+
         except Exception as e:
             logger.warning(f"[run] ⚠️ Пропускаю card-файл {os.path.basename(f)}: {e}")
 
@@ -351,6 +353,7 @@ def run(
         card_df["partner_list"] = []
 
     logger.info(f"[run] 🧩 Загружено {len(card_df)} карт из card-файлов.")
+    logger.info(f"[run] Колонки в card_df: {list(card_df.columns)}")
 
     # 6) Подсчёт текущих серий ошибок (только последняя непрерывная)
     # Сортировка важна для корректного расчёта последовательностей
@@ -487,6 +490,7 @@ def run(
         if not base_name.lower().endswith(".xlsx"):
             base_name += ".xlsx"
         report_path = os.path.join(tmp_dir, base_name)
+        logger.info(f"[run] Листы отчёта: {wb.sheetnames}")
         wb.save(report_path)
         logger.info(f"[run] 📁 Отчёт сохранён: {report_path}")
 
