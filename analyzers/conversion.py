@@ -382,14 +382,47 @@ def run(
     problem = merged.loc[problem_mask].copy()
     problem.rename(columns={"partner_norm": "partner"}, inplace=True)
 
-    # 10) Итоговый отчёт и Telegram
+    # 10) Подсчёт "Карт в работе по партнёрам"
+    # Берём карты из card_df в статусе "Готов к работе"/"Активный вход" и с заполненным партнёром
+    ACTIVE_STATUSES = VALID_STATUSES
+
+    active_cards = card_df[
+        card_df["status"].isin(ACTIVE_STATUSES)
+        & card_df["partner"].notna()
+        & (card_df["partner"].str.strip() != "")
+        ].copy()
+
+    # Исключаем карты, которые попали в problem (на отключение)
+    if not problem.empty:
+        active_cards = active_cards[~active_cards["card"].isin(problem["card"])]
+
+    # Разворачиваем многозначных партнёров из поля "Партнёр"
+    def split_partners(row):
+        parts = [p.strip() for p in str(row["partner"]).split(",") if p.strip()]
+        return [(p, row["card"]) for p in parts]
+
+    pairs = active_cards.apply(split_partners, axis=1).explode()
+    pairs = pairs.dropna()
+    pairs = pairs.apply(pd.Series)
+    pairs.columns = ["partner_display", "card"]
+
+    # Считаем количество уникальных карт по партнёрам
+    cards_in_work_by_partner = (
+        pairs.drop_duplicates(subset=["partner_display", "card"])
+        .groupby("partner_display")["card"]
+        .nunique()
+        .sort_values(ascending=False)
+    )
+
+    # Формируем summary
     summary = {
-        "Карт в работе": conv_df["card"].nunique(),
+        "Карт в работе по партнёрам": cards_in_work_by_partner.to_dict(),
         "Max ошибки": int(merged["max_consecutive_errors"].max()) if not merged.empty else 0,
         "Карты на отключение": int(problem["card"].nunique() if not problem.empty else 0),
     }
 
     logger.info(f"[run] ✅ Обнаружено {summary['Карты на отключение']} карт на отключение.")
+    logger.info(f"[run] 📊 Карт в работе по партнёрам: {summary['Карт в работе по партнёрам']}")
 
     # Excel отчёт
     wb = None
@@ -412,6 +445,15 @@ def run(
                 "Отключить",
                 flatten_lists_in_df(problem.sort_values(by=["partner", "card"]).copy())
             )
+        # Добавляем лист "Карт в работе"
+        if not cards_in_work_by_partner.empty:
+            write_df_to_sheet(
+                wb,
+                "Карт в работе",
+                cards_in_work_by_partner.reset_index().rename(
+                    columns={"partner_display": "Партнёр", "card": "Карт в работе"}
+                )
+            )
 
         # Сохраняем во временный файл
         tmp_dir = tempfile.gettempdir()
@@ -432,10 +474,11 @@ def run(
 
         # summary
         try:
+            msg_lines = [f"• {p}: {n}" for p, n in cards_in_work_by_partner.items()]
             summary_text = (
-                f"✅ Анализ *{os.path.basename(conv_file)}* завершён.\n"
-                f"Карт в работе: {summary.get('Карт в работе', '—')}\n"
-                f"На отключение: {summary.get('Карты на отключение', '—')}"
+                    f"✅ Анализ *{os.path.basename(conv_file)}* завершён.\n"
+                    f"Карт в работе по партнёрам:\n" + "\n".join(msg_lines) + "\n"
+                                                                              f"На отключение: {summary.get('Карты на отключение', '—')}"
             )
             send_message_sync(summary_text)
         except Exception as e:
@@ -452,7 +495,7 @@ def run(
     # Возвращаем результат
     return {
         "summary": summary,
-        "workbook": wb,              # может быть None, если generate_excel=False
-        "problem_cards": problem,    # DataFrame
-        "report_path": report_path,  # путь к файлу, если generate_excel=True
+        "workbook": wb,
+        "problem_cards": problem,
+        "report_path": report_path,
     }
