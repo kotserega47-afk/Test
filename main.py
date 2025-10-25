@@ -14,6 +14,7 @@ from integrations.telegram_bot import send_message_sync
 from integrations.dropbox_watcher import download_file, move_file
 from analyzers import conversion
 from run_once_guard import acquire_lock, release_lock
+from datetime import datetime
 
 DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
@@ -31,6 +32,11 @@ def process_file(filename: str) -> None:
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
+    # Формируем новое имя с датой в формате (ДД.ММ.ГГГГ)
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    name, ext = os.path.splitext(filename)
+    filename_with_date = f"{name}_({current_date}){ext}"
+
     # 1️⃣ Скачиваем файл
     if not download_file(dropbox_path, local_path):
         msg = f"❌ Не удалось скачать файл {filename} из Dropbox."
@@ -44,7 +50,7 @@ def process_file(filename: str) -> None:
     if is_card_file:
         last_card_path = local_path
         logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
-        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename_with_date}")
         logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
         return
 
@@ -73,7 +79,7 @@ def process_file(filename: str) -> None:
 
     # 4️⃣ Перемещаем обработанный файл
     try:
-        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename_with_date}")
         logger.info(f"✅ Файл {filename} перемещён в /processed.")
     except Exception as e:
         logger.error(f"⚠️ Ошибка при перемещении {filename}: {e}")

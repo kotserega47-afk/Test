@@ -7,7 +7,7 @@ import tempfile
 import pandas as pd
 
 from openpyxl import Workbook
-
+from datetime import datetime
 from utils.logger import logger
 from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
@@ -486,10 +486,10 @@ def run(
 
         # Сохраняем отчёт
         tmp_dir = tempfile.gettempdir()
-        base_name = f"report_{os.path.basename(conv_file)}"
-        if not base_name.lower().endswith(".xlsx"):
-            base_name += ".xlsx"
-        report_path = os.path.join(tmp_dir, base_name)
+        # Добавляем дату в формате (ДД.ММ.ГГГГ) к имени отчёта
+        current_date = datetime.now().strftime("%d.%m.%Y")
+        base_name = f"report_{os.path.splitext(os.path.basename(conv_file))[0]}_({current_date}).xlsx"
+        report_path = os.path.join(tempfile.gettempdir(), base_name)
         logger.info(f"[run] Листы отчёта: {wb.sheetnames}")
         wb.save(report_path)
         logger.info(f"[run] 📁 Отчёт сохранён: {report_path}")
