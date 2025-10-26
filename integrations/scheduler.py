@@ -58,21 +58,40 @@ def run_scheduler():
                 grouped = group_files_by_prefix(files)
 
                 for prefix, pair in grouped.items():
+                    # card/conversion
                     card = pair.get("card")
                     conv = pair.get("conversion")
+                    # cd/payout
+                    cd = pair.get("cd")
+                    payout = pair.get("payout")
 
+                    # --- обработка conversion (старое поведение)
                     if card and conv:
                         if card not in processed:
                             logger.info(f"🧩 Загружаем card-файл: {card}")
                             process_file(card)
                             processed.add(card)
-
                         if conv not in processed:
                             logger.info(f"🚀 Обработка conversion-файла: {conv}")
                             process_file(conv)
                             processed.add(conv)
+
+                    # --- обработка payout (новое поведение)
+                    elif cd and payout:
+                        if cd not in processed:
+                            logger.info(f"🧩 Загружаем cd-файл: {cd}")
+                            process_file(cd)
+                            processed.add(cd)
+                        if payout not in processed:
+                            logger.info(f"🚀 Обработка payout-файла: {payout}")
+                            process_file(payout)
+                            processed.add(payout)
+
                     else:
-                        logger.info(f"⏳ Пропуск пары {prefix}: не хватает {'card' if not card else 'conversion'}")
+                        logger.info(
+                            f"⏳ Пропуск пары {prefix}: не хватает "
+                            f"{'card/cd' if not (card or cd) else 'conversion/payout'}"
+                        )
 
             finally:
                 release_lock()
