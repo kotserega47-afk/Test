@@ -45,6 +45,13 @@ def process_file(filename: str, aux_filename: str | None = None) -> None:
         if not os.path.exists(aux_local_path):
             if download_file(aux_dropbox_path, aux_local_path):
                 logger.info(f"🧩 Вспомогательный файл скачан: {aux_filename}")
+                # После успешного анализа или сразу после скачивания — переносим вспомогательный файл
+                try:
+                    aux_processed_path = f"{DROPBOX_PROCESSED_PATH}/{aux_filename[:-5]}_{datetime.now().strftime('(%d.%m.%Y)')}.xlsx"
+                    move_file(aux_dropbox_path, aux_processed_path)
+                    logger.info(f"✅ Вспомогательный файл {aux_filename} перемещён в /processed.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось переместить вспомогательный файл {aux_filename}: {e}")
             else:
                 logger.warning(f"⚠️ Не удалось скачать вспомогательный файл {aux_filename}")
                 aux_local_path = None

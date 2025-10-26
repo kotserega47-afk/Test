@@ -47,6 +47,16 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     df_payout.columns = df_payout.columns.str.strip()
     df_payout.rename(columns=lambda c: c.strip().lower(), inplace=True)
 
+    rename_map = {
+        "статус": "status",
+        "инфо": "info",
+        "дата/время создания": "дата/время создания",
+        "телефон": "телефон",
+        "выделено": "выделено",
+        "карта": "карта"
+    }
+    df_payout.rename(columns=rename_map, inplace=True)
+
     # приводим дату/время в формат datetime
     if "дата/время создания".lower() in df_payout.columns:
         col = "дата/время создания".lower()
