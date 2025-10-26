@@ -172,12 +172,31 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                         break  # карта уже попала в список — дальше не анализируем
                 else:
                     # неизвестная ошибка → в список "Проверить"
-                    check_cards.add((card, phone, pool, info))
+                    err_dt = row.get("дата/время создания")
+                    if pd.notna(err_dt):
+                        try:
+                            err_dt = pd.to_datetime(err_dt).strftime("%d.%m.%Y %H:%M:%S")
+                        except Exception:
+                            err_dt = str(err_dt)
+                    else:
+                        err_dt = ""
+
+                    check_cards.add((card, phone, pool, info, err_dt))
     # === 8️⃣ Формирование итоговых таблиц ===
 
     # Преобразуем списки в DataFrame
     df_problem = pd.DataFrame(problem_cards)
-    df_check = pd.DataFrame(list(check_cards), columns=["Карта", "Телефон", "Выделено", "Info"])
+    # Формируем df_check с новой колонкой "Дата ошибки"
+    df_check = pd.DataFrame(
+        list(check_cards),
+        columns=["Карта", "Телефон", "Выделено", "Info", "Дата ошибки"]
+    )
+
+    # Сортировка по дате (от новых к старым), при этом "Дата ошибки" остаётся строкой
+    if not df_check.empty and "Дата ошибки" in df_check.columns:
+        df_check["_sort_key"] = pd.to_datetime(df_check["Дата ошибки"], errors="coerce")
+        df_check.sort_values("_sort_key", ascending=False, na_position="last", inplace=True)
+        df_check.drop(columns=["_sort_key"], inplace=True)
 
     # Сортируем df_problem по дате ошибки (от новых к старым)
     if not df_problem.empty and "Последняя дата ошибки" in df_problem.columns:
@@ -187,11 +206,17 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
         df_problem.sort_values("_sort_key", ascending=False, inplace=True)
         df_problem.drop(columns=["_sort_key"], inplace=True)
 
-    # Удаляем дубликаты (на всякий случай)
+    # Удаляем дубликаты по карте (оставляем самую свежую)
     if not df_problem.empty:
         df_problem.drop_duplicates(subset=["Карта"], inplace=True)
     if not df_check.empty:
         df_check.drop_duplicates(subset=["Карта"], inplace=True)
+
+    # Страхуем формат дат перед сохранением
+    if "Последняя дата ошибки" in df_problem.columns:
+        df_problem["Последняя дата ошибки"] = df_problem["Последняя дата ошибки"].astype(str)
+    if "Дата ошибки" in df_check.columns:
+        df_check["Дата ошибки"] = df_check["Дата ошибки"].astype(str)
 
     # === 9️⃣ Формирование Excel-отчёта ===
     wb = Workbook()
