@@ -63,10 +63,20 @@ def process_file(filename: str) -> None:
 
     try:
         logger.info(f"🚀 Запуск анализа {analyzer_func.__module__}.run()...")
-        result = analyzer_func(
-            payout_file=local_path,  # одинаковый аргумент, как conv_file
-            card_files=[last_card_path] if requires_card else []
-        )
+        # Определяем имя основного аргумента
+        arg_name = "conv_file" if "conversion" in analyzer_func.__module__ else "payout_file"
+
+        kwargs = {
+            arg_name: local_path,
+            "card_files": [last_card_path] if requires_card else []
+        }
+        if requires_card and not last_card_path:
+            msg = f"⚠️ Для {filename} не найден cd/card-файл. Анализ пропущен."
+            logger.warning(msg)
+            send_message_sync(msg)
+            return
+
+        result = analyzer_func(**kwargs)
 
         summary = result.get("summary", {})
         logger.info(f"✅ Анализ завершён: {summary}")
