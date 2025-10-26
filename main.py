@@ -15,6 +15,7 @@ from integrations.dropbox_watcher import download_file, move_file
 from analyzers import conversion
 from run_once_guard import acquire_lock, release_lock
 from datetime import datetime
+from analyzers.selector import get_analyzer
 
 DROPBOX_INPUT_PATH = os.getenv("DROPBOX_INPUT_PATH")
 DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
@@ -29,6 +30,10 @@ def process_file(filename: str) -> None:
     global last_card_path
 
     logger.info(f"=== Обработка файла {filename} ===")
+    analyzer_func, config, requires_card = get_analyzer(filename)
+    if not analyzer_func:
+        logger.warning(f"⚠️ Не найден анализатор для {filename}")
+        return
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
@@ -54,25 +59,20 @@ def process_file(filename: str) -> None:
         logger.info(f"✅ Файл {filename} перемещён в /processed.")
         return
 
-    # 3️⃣ Если conversion-файл — запускаем анализ
-    card_files = [last_card_path] if last_card_path else []
-    col_mapping = conversion.COLUMNS
+    # 3️⃣ Определяем и запускаем нужный анализатор
+    from analyzers.selector import get_analyzer
 
     try:
-        logger.info("🚀 Запуск анализа conversion.run()...")
-        result = conversion.run(
-            conv_file=local_path,
-            card_files=card_files,
-            col_mapping=col_mapping,
-            generate_excel=True,
-            send_telegram=True
+        logger.info(f"🚀 Запуск анализа {analyzer_func.__module__}.run()...")
+        result = analyzer_func(
+            payout_file=local_path,  # одинаковый аргумент, как conv_file
+            card_files=[last_card_path] if requires_card else []
         )
 
         summary = result.get("summary", {})
         logger.info(f"✅ Анализ завершён: {summary}")
-
     except Exception as e:
-        msg = f"❌ Ошибка при анализе {filename}: {e}"
+        msg = f"❌ Ошибка в анализаторе {analyzer_func.__module__} для {filename}: {e}"
         logger.exception(msg)
         send_message_sync(msg)
         return
