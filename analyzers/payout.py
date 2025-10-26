@@ -179,6 +179,13 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     df_problem = pd.DataFrame(problem_cards)
     df_check = pd.DataFrame(list(check_cards), columns=["Карта", "Телефон", "Выделено", "Info"])
 
+    # Сортируем df_problem по дате ошибки (от новых к старым)
+    if not df_problem.empty and "Последняя дата ошибки" in df_problem.columns:
+        df_problem["Последняя дата ошибки"] = pd.to_datetime(
+            df_problem["Последняя дата ошибки"], format="%d.%m.%Y %H:%M:%S", errors="coerce"
+        )
+        df_problem.sort_values("Последняя дата ошибки", ascending=False, inplace=True)
+
     # Удаляем дубликаты (на всякий случай)
     if not df_problem.empty:
         df_problem.drop_duplicates(subset=["Карта"], inplace=True)
