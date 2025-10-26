@@ -101,17 +101,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     df_payout = df_payout[df_payout["status"].isin(valid_statuses)].copy()
     logger.info(f"[payout] 🧮 Оставлено {len(df_payout)} строк (из {before}), где статус ошибка/оплачен.")
 
-    # фильтруем игнорируемые ошибки (IgnoreErrors, частичное совпадение)
-    if "info" in df_payout.columns:
-        before = len(df_payout)
-        df_payout = df_payout[
-            ~df_payout["info"].astype(str).str.lower().apply(
-                lambda x: any(phrase in x for phrase in ignore_errors_norm)
-            )
-        ].copy()
-        logger.info(f"[payout] 🔍 Исключено {before - len(df_payout)} строк по IgnoreErrors.")
-
-    # === 7️⃣ Анализ последовательностей ошибок ===
+        # === 7️⃣ Анализ последовательностей ошибок ===
 
     problem_cards = []   # для списка "Перевести в IN"
     check_cards = set()  # для списка "Проверить"
@@ -144,12 +134,11 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
 
             # Если статус "ошибка"
             if status == "ошибка":
-                # Проверяем, известная ли ошибка (частичное совпадение)
                 matched_error = next((err for err in payouts_errors_norm if err in info), None)
 
                 if matched_error:
+                    # ✅ приоритет у известных ошибок
                     threshold = payouts_errors_norm[matched_error].get("threshold", 1)
-                    # если продолжается та же ошибка
                     if last_info == matched_error:
                         consecutive += 1
                     else:
@@ -170,7 +159,12 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                             ),
                         })
                         break  # карта уже попала в список — дальше не анализируем
+
                 else:
+                    # 🧩 только если ошибка НЕизвестная, проверяем игнор
+                    if any(phrase in info for phrase in ignore_errors_norm):
+                        continue  # просто пропускаем эту строку (игнорируем)
+
                     # неизвестная ошибка → в список "Проверить"
                     err_dt = row.get("дата/время создания")
                     if pd.notna(err_dt):
@@ -182,6 +176,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                         err_dt = ""
 
                     check_cards.add((card, phone, pool, info, err_dt))
+
     # === 8️⃣ Формирование итоговых таблиц ===
 
     # Преобразуем списки в DataFrame
