@@ -164,7 +164,10 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                             "Выделено": pool,
                             "Info": matched_error,
                             "Количество подряд ошибок": consecutive,
-                            "Последняя дата ошибки": last_datetime
+                            "Последняя дата ошибки": (
+                                pd.to_datetime(last_datetime).strftime("%d.%m.%Y %H:%M:%S")
+                                if pd.notna(last_datetime) else ""
+                            ),
                         })
                         break  # карта уже попала в список — дальше не анализируем
                 else:
