@@ -249,8 +249,8 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
         if os.path.exists(tmp_path):
             caption = (
                 f"📊 Отчёт по {os.path.basename(payout_file)}\n"
-                f"Карты на перевод: {len(df_problem)}\n"
-                f"Карты на проверку: {len(df_check)}"
+                f"Карт на перевод в in: {len(df_problem)}\n"
+                f"Карт на проверку: {len(df_check)}"
             )
             send_file_sync(tmp_path, caption=caption)
             logger.info(f"[payout] 📤 Отчёт отправлен в Telegram: {tmp_path}")
