@@ -92,6 +92,11 @@ def process_file(filename: str, aux_filename: str | None = None) -> None:
             "card_files": [pair_path] if requires_card else []
         }
 
+        # если анализатор conversion — добавляем col_mapping
+        if "conversion" in analyzer_func.__module__:
+            from analyzers import conversion
+            kwargs["col_mapping"] = conversion.COLUMNS
+
         result = analyzer_func(**kwargs)
 
         summary = result.get("summary", {})
