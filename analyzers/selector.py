@@ -17,6 +17,6 @@ def get_analyzer(filename: str):
         if pattern and pattern in filename.lower():
             module_name = f"analyzers.{name}"
             analyzer_module = __import__(module_name, fromlist=["run"])
-            requires_card = pattern == "conversion"  # для conversion нужен card-файл
+            requires_card = pattern in {"conversion", "payout"}  # для conversion и payout нужен второй файл
             return analyzer_module.run, config, requires_card
     return None, None, False

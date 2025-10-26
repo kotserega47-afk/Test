@@ -44,14 +44,14 @@ def process_file(filename: str) -> None:
         send_message_sync(msg)
         return
 
-    is_card_file = "card" in filename.lower()
+    is_card_file = any(tag in filename.lower() for tag in ["card", "cd"])
 
     # 2️⃣ Если это card-файл — просто сохраняем путь
     if is_card_file:
         last_card_path = local_path
-        logger.info(f"🧩 Card-файл загружен и сохранён: {filename}")
-        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename_with_date}")
-        logger.info(f"✅ Card-файл {filename} перемещён в /processed.")
+        logger.info(f"🧩 Card/CD-файл загружен и сохранён: {filename}")
+        move_file(dropbox_path, f"{DROPBOX_PROCESSED_PATH}/{filename}")
+        logger.info(f"✅ Файл {filename} перемещён в /processed.")
         return
 
     # 3️⃣ Если conversion-файл — запускаем анализ

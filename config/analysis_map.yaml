@@ -7,3 +7,7 @@ conversion:
     status: "Статус"
     datetime: "Дата/Время создания"
     partner: "Партнер"
+
+payout:
+  file_pattern: "payout"
+  description: "Анализ выплатных файлов"

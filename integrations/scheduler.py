@@ -20,7 +20,7 @@ def group_files_by_prefix(file_list):
     Группирует файлы по префиксу: card_13.46.xlsx → префикс=13.46
     Возвращает dict: { '13.46': {'card': ..., 'conversion': ...}, ... }
     """
-    pattern = re.compile(r"(card|conversion)[_\-]?(.+?)\.xlsx", re.IGNORECASE)
+    pattern = re.compile(r"(card|cd|conversion|payout)[_\-]?(.+?)\.xlsx", re.IGNORECASE)
     grouped = defaultdict(dict)
 
     for fname in file_list:
