@@ -25,7 +25,7 @@ LOCAL_TMP_PATH = "/tmp"
 last_card_path = None
 
 
-def process_file(filename: str) -> None:
+def process_file(filename: str, aux_filename: str | None = None) -> None:
     """Обработка одного файла из Dropbox"""
     global last_card_path
 
@@ -36,6 +36,18 @@ def process_file(filename: str) -> None:
         return
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
+
+    aux_local_path = None
+    if aux_filename:
+        aux_dropbox_path = f"{DROPBOX_INPUT_PATH}/{aux_filename}"
+        aux_local_path = os.path.join(LOCAL_TMP_PATH, aux_filename)
+        # если вспомогательный файл ещё не скачан в /tmp — скачаем
+        if not os.path.exists(aux_local_path):
+            if download_file(aux_dropbox_path, aux_local_path):
+                logger.info(f"🧩 Вспомогательный файл скачан: {aux_filename}")
+            else:
+                logger.warning(f"⚠️ Не удалось скачать вспомогательный файл {aux_filename}")
+                aux_local_path = None
 
     # Формируем новое имя с датой в формате (ДД.ММ.ГГГГ)
     current_date = datetime.now().strftime("%d.%m.%Y")
@@ -66,15 +78,19 @@ def process_file(filename: str) -> None:
         # Определяем имя основного аргумента
         arg_name = "conv_file" if "conversion" in analyzer_func.__module__ else "payout_file"
 
-        kwargs = {
-            arg_name: local_path,
-            "card_files": [last_card_path] if requires_card else []
-        }
-        if requires_card and not last_card_path:
-            msg = f"⚠️ Для {filename} не найден cd/card-файл. Анализ пропущен."
+        # если пришёл вспомогательный файл — используем его; если нет — fallback на last_card_path
+        pair_path = aux_local_path or last_card_path
+
+        if requires_card and not pair_path:
+            msg = f"⚠️ Для {filename} не найден вспомогательный файл (card/cd). Анализ пропущен."
             logger.warning(msg)
             send_message_sync(msg)
             return
+
+        kwargs = {
+            arg_name: local_path,
+            "card_files": [pair_path] if requires_card else []
+        }
 
         result = analyzer_func(**kwargs)
 

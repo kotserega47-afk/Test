@@ -72,19 +72,22 @@ def run_scheduler():
                             process_file(card)
                             processed.add(card)
                         if conv not in processed:
-                            logger.info(f"🚀 Обработка conversion-файла: {conv}")
-                            process_file(conv)
+                            logger.info(f"🚀 Обработка conversion-файла: {conv} (пара с {card})")
+                            process_file(conv, aux_filename=card)
                             processed.add(conv)
 
                     # --- обработка payout (новое поведение)
                     elif cd and payout:
+                        # Сначала обрабатываем cd (вспомогательный)
                         if cd not in processed:
                             logger.info(f"🧩 Загружаем cd-файл: {cd}")
                             process_file(cd)
                             processed.add(cd)
+
+                        # Затем основной payout, передавая вспомогательный файл
                         if payout not in processed:
-                            logger.info(f"🚀 Обработка payout-файла: {payout}")
-                            process_file(payout)
+                            logger.info(f"🚀 Обработка payout-файла: {payout} (пара с {cd})")
+                            process_file(payout, aux_filename=cd)
                             processed.add(payout)
 
                     else:
