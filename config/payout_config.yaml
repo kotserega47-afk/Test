@@ -2,10 +2,17 @@
 
 PayoutsErrors:
   # пример: фраза из столбца Info и порог подряд идущих ошибок
-  "Недостаточно средств":
+  "Unistream_1":
     threshold: 1
   "Ошибка авторизации":
     threshold: 3
+  "Unistream_2":
+    threshold: 1
+  "ORA-20001":
+    threshold: 2
+
+
+
 
 IgnoreErrors:
   # сюда заносим фразы Info, которые полностью игнорируем

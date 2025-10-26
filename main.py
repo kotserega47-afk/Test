@@ -60,7 +60,6 @@ def process_file(filename: str) -> None:
         return
 
     # 3️⃣ Определяем и запускаем нужный анализатор
-    from analyzers.selector import get_analyzer
 
     try:
         logger.info(f"🚀 Запуск анализа {analyzer_func.__module__}.run()...")
