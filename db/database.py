@@ -8,7 +8,6 @@ from typing import Iterator
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
-from sqlalchemy.pool import StaticPool  # 🔧 ДЛЯ ОПТИМИЗАЦИИ
 
 # -----------------------------
 # Настройка окружения
@@ -28,24 +27,15 @@ def _should_echo_sql() -> bool:
     return val in {"1", "true", "t", "yes", "y"}
 
 # -----------------------------
-# 🚨 ОПТИМИЗИРОВАННАЯ Инициализация SQLAlchemy
+# Инициализация SQLAlchemy
 # -----------------------------
-engine = create_engine(
-    _get_database_url(),
-    echo=_should_echo_sql(),
-    future=True,
-    # 🔧 КРИТИЧЕСКИЕ ОПТИМИЗАЦИИ ПАМЯТИ:
-    pool_size=5,           # Ограничиваем пул соединений
-    max_overflow=10,       # Максимальное количество сверх pool_size
-    pool_pre_ping=True,    # Проверка соединения перед использованием
-    pool_recycle=3600,     # Пересоздавать соединения каждый час
-)
+engine = create_engine(_get_database_url(), echo=_should_echo_sql(), future=True)
 
 SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
-    expire_on_commit=False,  # 🔧 Важно для производительности
+    expire_on_commit=False,
 )
 
 Base = declarative_base()
@@ -70,6 +60,3 @@ def get_session() -> Iterator[Session]:
         raise
     finally:
         session.close()
-        # 🔧 ОПТИМИЗАЦИЯ: Принудительная сборка мусора после сессии
-        import gc
-        gc.collect()
