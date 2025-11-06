@@ -21,9 +21,6 @@ dropbox>=12.0.0
 pyyaml>=6.0
 
 # Минимум для твоего проекта с PostgreSQL и миграциями:
-sqlalchemy~=2.0.43
+sqlalchemy
 psycopg2-binary
-alembic~=1.16.5
-
-pytest~=8.4.2
-psutil~=7.1.3
+alembic
