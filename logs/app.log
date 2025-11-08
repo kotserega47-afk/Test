@@ -1,0 +1,2 @@
+2025-11-08 17:23:53,149 [INFO] Request to files/list_folder
+2025-11-08 17:23:53,935 [ERROR] Ошибка list_files(): AuthError('1bb12f3ccd1741e1a141e47d690f5274', AuthError('invalid_access_token', None))
