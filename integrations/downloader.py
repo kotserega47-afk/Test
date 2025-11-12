@@ -28,6 +28,12 @@ from integrations.dropbox_watcher import upload_file
 from main import process_file
 from run_once_guard import acquire_lock, release_lock  # если у тебя уже есть этот модуль-сторож
 from integrations.telegram_bot import send_message_sync
+import zoneinfo  # встроено в Python 3.9+
+
+def _ts() -> str:
+    # Локальное время для Москвы
+    tz = zoneinfo.ZoneInfo("Europe/Moscow")
+    return datetime.now(tz).strftime("%H.%M")
 
 
 LOGIN = os.getenv("ANTARES_LOGIN")
