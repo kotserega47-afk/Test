@@ -24,3 +24,6 @@ pyyaml>=6.0
 sqlalchemy
 psycopg2-binary
 alembic
+
+# Автоматизация браузера для выгрузки файлов
+playwright>=1.48.0
