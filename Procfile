@@ -1,7 +1,3 @@
-
-
-downloader: python -u download_cron.py
-
 # Устанавливаем системные пакеты для Chromium
 postinstall: |
   apt-get update && apt-get install -y \
