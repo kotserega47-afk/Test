@@ -9,4 +9,3 @@ postinstall: |
   && echo "📦 Installing Playwright browsers..." \
   && python -m playwright install chromium
 
-downloader: python -u download_cron.py
