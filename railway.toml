@@ -1,3 +1,6 @@
+[build]
+builder = "NIXPACKS"
+
 [services]
   [services.main]
     name = "file-analyzer"
