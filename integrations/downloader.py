@@ -3,13 +3,15 @@ from playwright.sync_api import sync_playwright
 from datetime import datetime, timedelta
 import os
 import time
-
+import sys
 from utils.logger import logger
 from integrations.dropbox_watcher import upload_file
 from main import process_file
 from run_once_guard import acquire_lock, release_lock  # если у тебя уже есть этот модуль-сторож
 from integrations.telegram_bot import send_message_sync
 
+# Добавляем корень проекта в PYTHONPATH
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 LOGIN = os.getenv("ANTARES_LOGIN")
 PASSWORD = os.getenv("ANTARES_PASSWORD")
