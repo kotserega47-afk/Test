@@ -1,9 +1,24 @@
 # integrations/downloader.py
-import os
-import sys
+import os, sys, subprocess
 
 # Добавляем корень проекта в PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# Проверим, установлен ли Chromium Playwright
+playwright_cache = "/root/.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell"
+
+if not os.path.exists(playwright_cache):
+    print("⚙️ Chromium не найден, устанавливаем...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True
+        )
+        print("✅ Chromium успешно установлен.")
+    except Exception as e:
+        print(f"❌ Не удалось установить Chromium: {e}")
+        raise
 
 from playwright.sync_api import sync_playwright
 from datetime import datetime, timedelta
@@ -172,7 +187,12 @@ def run_download():
     send_message_sync(f"🕒 Запущен выгрузчик данных (ts={timestamp})")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
+        # 🚀 Запуск браузера с безопасными параметрами для Railway
+        browser = p.chromium.launch(
+            headless=HEADLESS,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+
         try:
             context = browser.new_context(accept_downloads=True)
             if os.path.exists(AUTH_STATE_FILE):
