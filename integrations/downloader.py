@@ -1,6 +1,10 @@
 # integrations/downloader.py
 import os, sys, subprocess, time
 from datetime import datetime, timedelta
+
+# === Добавляем корень проекта в PYTHONPATH ===
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.logger import logger
 from playwright.sync_api import sync_playwright
 from integrations.dropbox_watcher import upload_file
