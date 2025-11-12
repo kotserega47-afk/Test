@@ -7,7 +7,6 @@ builder = "NIXPACKS"
     start = "/opt/venv/bin/python integrations/downloader.py"
     plan = "free"
 
-[triggers]
-  [triggers.cron]
-    service = "file-analyzer"
-    schedule = "0 * * * *"
+[triggers.cron]
+service = "file-analyzer"
+schedule = "0,30 8-23 * * *"

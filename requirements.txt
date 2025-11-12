@@ -2,11 +2,6 @@
 pandas>=2.1.0
 openpyxl>=3.1.0
 
-# Визуализация
-matplotlib>=3.8.0
-
-# Веб-интерфейс (если нужен Streamlit)
-streamlit>=1.30.0
 
 # Работа с переменными окружения
 python-dotenv>=1.0.0
@@ -19,11 +14,6 @@ dropbox>=12.0.0
 
 # Работа с YAML
 pyyaml>=6.0
-
-# Минимум для твоего проекта с PostgreSQL и миграциями:
-sqlalchemy
-psycopg2-binary
-alembic
 
 # Автоматизация браузера для выгрузки файлов
 playwright>=1.48.0

@@ -10,11 +10,3 @@ def _sleep_until_next_hour():
     delta = (nxt - now).total_seconds()
     logger.info(f"⏰ Сплю {int(delta)} сек до следующего часа ({nxt.strftime('%H:%M')})")
     time.sleep(max(1, int(delta)))
-
-if __name__ == "__main__":
-    while True:
-        try:
-            run_download()
-        except Exception as e:
-            logger.exception(f"Downloader упал: {e}")
-        _sleep_until_next_hour()
