@@ -9,4 +9,4 @@ builder = "NIXPACKS"
 
 [triggers.cron]
 service = "file-analyzer"
-schedule = "0,30 8-23 * * *"
+schedule = "0,02 * * * *"
