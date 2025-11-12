@@ -2,11 +2,12 @@
 import os
 import sys
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import yaml
+import pytz
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,11 +28,8 @@ STATE_PATH = Path("/tmp/wallet_alerts_state.json")
 # ==============================================
 
 def _now_msk():
-    try:
-        import zoneinfo
-        return datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
-    except:
-        return datetime.now().astimezone()
+    tz = pytz.timezone("Europe/Moscow")
+    return datetime.now(tz)
 
 
 def _normalize(v):
@@ -111,12 +109,18 @@ def analyze_wallets(payin_path: str):
     COL_INFO = "Инфо"
     COL_AMOUNT = "Сумма"
 
-    # Парсинг даты
+    # --- Парсинг даты с tz-aware ---
+    tz = pytz.timezone("Europe/Moscow")
     df["_dt"] = pd.to_datetime(df[COL_DT], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+
+    # Добавим таймзону (если отсутствует)
+    if df["_dt"].dt.tz is None:
+        df["_dt"] = df["_dt"].dt.tz_localize(tz, nonexistent="shift_forward", ambiguous="NaT")
+
     df["_partner_norm"] = df[COL_PARTNER].astype(str).apply(_normalize)
     df["_status"] = df[COL_STATUS].astype(str)
 
-    now = _now_msk()
+    now = datetime.now(tz)
 
     # ------------------------------------------------------
     #  ОКНО АНАЛИЗА (window + offset)
@@ -148,16 +152,13 @@ def analyze_wallets(payin_path: str):
         subset = df_window[df_window["_partner_norm"] == key_norm]
         total = len(subset)
 
-        # анти-шум
         if total < min_events:
             continue
 
-        # успешные
         success = subset["_status"].apply(_status_success).sum()
         conv = success / total if total else 0
         thr = settings.get("threshold", 0.8)
 
-        # конверсия
         if conv < thr:
             text = (
                 f"⚠️ Низкая конверсия у *{partner_name}*\n"
@@ -218,7 +219,6 @@ def analyze_wallets(payin_path: str):
             )
             alerts.append((key_norm, text))
 
-
     # =============================================
     #  ОТПРАВКА АЛЕРТОВ (с учётом cooldown)
     # =============================================
@@ -232,7 +232,7 @@ def analyze_wallets(payin_path: str):
         if last:
             try:
                 last_dt = datetime.fromisoformat(last)
-                if (now - last_dt) < timedelta(minutes=cooldown_min):
+                if (now - last_dt) < timedelta(minutes=cfg["alert_cooldown_min"]):
                     can_send = False
             except:
                 pass
