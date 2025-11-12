@@ -7,7 +7,17 @@ builder = "NIXPACKS"
     start = "/opt/venv/bin/python integrations/downloader.py"
     plan = "free"
 
-[triggers.cron]
-service = "file-analyzer"
-schedule = "0,02 * * * *"
-#schedule = "0,30 8-23 * * *"
+  [services.wallet_downloader]
+    name = "wallet-handler"
+    start = "/opt/venv/bin/python integrations/downloader_wallets.py"
+    plan = "free"
+
+[triggers]
+  [triggers.cron]
+    service = "file-analyzer"
+    schedule = "*/2 * * * *"
+    #schedule = "0,30 8-23 * * *"
+
+  [triggers.cron_wallet]
+    service = "wallet-handler"
+    schedule = "*/5 8-23 * * *"
