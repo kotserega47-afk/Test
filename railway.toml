@@ -36,8 +36,3 @@ aptPkgs = [
   "libxfixes3",
   "libx11-6"
 ]
-
-[triggers]
-  [triggers.cron]
-    service = "file-analyzer"
-    schedule = "0 * * * *"  # запуск каждый час, в начале часа
