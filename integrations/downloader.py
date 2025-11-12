@@ -251,3 +251,14 @@ def run_download():
         logger.exception(msg)
         send_message_sync(msg)
         raise
+
+if __name__ == "__main__":
+    try:
+        logger.info("🚀 Запуск run_download() из контейнера Railway")
+        send_message_sync("🚀 Downloader запущен вручную на Railway")
+        run_download()
+    except Exception as e:
+        msg = f"❌ Downloader завершился с ошибкой: {e}"
+        logger.exception(msg)
+        send_message_sync(msg)
+        raise
