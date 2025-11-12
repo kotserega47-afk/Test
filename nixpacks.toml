@@ -2,8 +2,8 @@
 aptPkgs = [
   "libnss3",
   "libxss1",
-  "libasound2",
-  "libatk-bridge-2.0-0",
+  "libasound2t64",
+  "libatk-bridge2.0-0",
   "libgtk-3-0",
   "libdrm2",
   "libxdamage1",
