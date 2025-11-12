@@ -1,5 +1,9 @@
 # integrations/downloader_wallets.py
 import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
