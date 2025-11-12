@@ -1,0 +1,50 @@
+# окно для расчёта конверсии (в минутах)
+window_minutes: 8
+#Сдвиг когда начать расчёт
+offset_minutes: 8
+# минимальное число событий за окно, чтобы считать конверсию (анти-шум)
+min_events: 10
+
+# Время на подсчёт успехов по каждому партнеру (Нужно последние 5 мин видеть где нет вообще успехов)
+success_window_minutes: 5
+
+# пороги по партнёрам (ключ — как в выгрузке PayIn)
+partners:
+  "HH (А-мобайл Сбер + Выплаты)":
+    threshold: 0.85
+    daily_max_amount: 2_000_000
+    api_cancel_threshold: 4             # лимит процента ошибок "Отмена по API"
+    api_cancel_keyword: "Отмена по API"    # Текст ошибки в инфо
+
+  "HH (Амобайл Тинькофф)":
+    threshold: 0.85
+    daily_max_amount: 2_000_000
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+
+
+
+
+ # "HH (Амобайл Тинькофф)":                    { threshold: 0.90 }
+  #"HH (Амобайл SBP IN ВТБ)":                  { threshold: 0.80 }
+ # "HH (Abhsber IN + Выплаты) Тинь":           { threshold: 0.90 }
+##  "HH (Abhsber IN) Сбер":                     { threshold: 0.90 }
+#  "HH (Аврора Тинь)":                         { threshold: 0.90 }
+#  "HH (Аврора Сбер)":                         { threshold: 0.90 }
+#  "HH (Кибит Сбер)":                          { threshold: 0.90 }
+#  "HH (Кибит Тинь)":                          { threshold: 0.90 }
+#  "HH (Бакай Тинь)":                          { threshold: 0.90 }
+#  "HH (Амобайл - Сбер СБП)":                  { threshold: 0.90 }
+
+
+
+
+
+
+
+
+
+
+
+
