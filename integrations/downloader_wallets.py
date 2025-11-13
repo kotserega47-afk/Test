@@ -9,7 +9,7 @@ import pytz
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from integrations.telegram_bot import send_message_sync
+from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.logger import logger
 from analyzers.wallet_analyzer import analyze_wallets
 
@@ -106,6 +106,11 @@ def run_wallet_cycle():
         browser.close()
 
     analyze_wallets(payin_path)
+    send_file_sync(
+        file_path=payin_path,
+        caption=f"📥 PayIn файл ({ts})",
+        chat_id=CHAT_ID_WALLET
+    )
     send_message_sync("✅ Мониторинг PayIn завершён", chat_id=CHAT_ID_WALLET)
 
 

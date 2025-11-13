@@ -57,13 +57,16 @@ def send_message_sync(content: str, chat_id: str | None = None):
     except Exception as e:
         logger.error(f"❌ Не удалось отправить сообщение в Telegram (chat_id={chat_id}): {e}")
 
-def send_file_sync(file_path: str, caption: str = None):
-    """Отправка файла в Telegram (синхронно)"""
+def send_file_sync(file_path: str, caption: str = None, chat_id: str | None = None):
+    """Отправка файла в Telegram (с поддержкой chat_id)"""
     try:
+        if chat_id is None:
+            chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
         with open(file_path, "rb") as f:
             loop.run_until_complete(
-                bot.send_document(chat_id=CHAT_ID, document=InputFile(f), caption=caption)
+                bot.send_document(chat_id=chat_id, document=InputFile(f), caption=caption)
             )
-        logger.info(f"Файл {file_path} отправлен в Telegram")
+        logger.info(f"Файл {file_path} отправлен в Telegram (chat_id={chat_id})")
     except Exception as e:
         logger.error(f"Не удалось отправить файл в Telegram: {e}")
