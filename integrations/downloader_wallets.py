@@ -49,7 +49,10 @@ def _download_payin(page, ts: str) -> str:
 
     # дата = сегодня
     tz = datetime.now().astimezone().tzinfo
-    target_date = (datetime.now(tz)).strftime("%Y-%m-%d")
+    use_yesterday = os.getenv("USE_YESTERDAY", "true").lower() == "true"
+    days_back = 1 if use_yesterday else 0
+
+    target_date = (datetime.now(tz) - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
     logger.info(f"📅 Устанавливаем дату: {target_date}")
 
