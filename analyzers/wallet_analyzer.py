@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 import pytz
+import re
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -31,7 +32,14 @@ def _normalize(v):
     if not isinstance(v, str):
         return ""
     v = v.strip().lower().replace("ё", "е")
+
+    # 🔥 Удаляем хвосты вида " (123)", "(45)", "(7)"
+    v = re.sub(r"\(\d+\)$", "", v).strip()
+
+    # Приводим Амобайл → А-мобайл
     v = v.replace("амобайл", "а-мобайл")
+
+    # Убираем двойные пробелы
     return " ".join(v.split())
 
 
