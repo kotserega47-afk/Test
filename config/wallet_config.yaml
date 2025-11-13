@@ -45,3 +45,33 @@ partners:
     daily_max_amount: 5_000_000
     api_cancel_threshold: 20
     api_cancel_keyword: "Отмена по API"
+
+  "HH (Abhsber IN + Выплаты) Тинь":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+  "HH (Abhsber IN) Сбер":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+  "HH (Аврора Тинь)":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+  "HH (Аврора Сбер)":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+  "HH (Кибит Сбер)":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
+
+  "HH (Кибит Тинь)":
+    threshold: 0.20
+    api_cancel_threshold: 5
+    api_cancel_keyword: "Отмена по API"
