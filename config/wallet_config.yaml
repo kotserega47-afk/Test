@@ -20,7 +20,7 @@ groups:
       - "HH (Аврора Сбер)"
 
   kibit:
-    daily_max_amount: 8_000_000     # общий лимит 8 млн
+    daily_max_amount: 15_000_000     # общий лимит 8 млн
     partners:
       - "HH (Кибит Сбер)"
       - "HH (Кибит Тинь)"
