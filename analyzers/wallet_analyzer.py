@@ -3,7 +3,6 @@ import sys
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from load_data import normalize_partner_name
 import pandas as pd
 import yaml
 import pytz
@@ -12,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync
 from utils.logger import logger
+from load_data import normalize_partner_name
 
 
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
@@ -52,7 +52,6 @@ def analyze_wallets(payin_path: str):
     cfg = _load_cfg()
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
-    success_window = cfg["success_window_minutes"]
     min_events = cfg["min_events"]
 
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
@@ -75,9 +74,18 @@ def analyze_wallets(payin_path: str):
     COL_INFO = "Инфо"
     COL_AMOUNT = "Сумма"
 
-    # === Нормализация ===
+    # === Нормализация дат и партнёров ===
     tz = pytz.timezone("Europe/Moscow")
-    df["_dt"] = pd.to_datetime(df[COL_DT], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+
+    df[COL_DT] = (
+        df[COL_DT]
+        .astype(str)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+
+    df["_dt"] = pd.to_datetime(df[COL_DT], dayfirst=True, errors="coerce")
+
     if df["_dt"].dt.tz is None:
         df["_dt"] = df["_dt"].dt.tz_localize(tz, nonexistent="shift_forward", ambiguous="NaT")
 
@@ -92,14 +100,14 @@ def analyze_wallets(payin_path: str):
     end_time = now - timedelta(minutes=offset_min)
     start_time = end_time - timedelta(minutes=window_min)
 
-    # окно конверсии
+    # окно конверсии (8 мин)
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
 
-    # последние 2 часа — фильтр показа партнёров
+    # последние 2 часа
     start_2h = now - timedelta(hours=2)
     df_last2h = df[(df["_dt"] >= start_2h) & (df["_dt"] <= now)]
 
-    # за сутки — лимиты
+    # за сутки
     df_today = df[df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
 
     partners_cfg = cfg["partners"]
@@ -118,7 +126,7 @@ def analyze_wallets(payin_path: str):
         success = subset["_status"].apply(_status_success).sum()
         conv = (success / total * 100) if total else 0
 
-        # последние 2 часа → фильтр видимости
+        # последние 2 часа
         last2h_total = len(df_last2h[df_last2h["_partner_norm"] == key_norm])
         if last2h_total == 0:
             continue  # скрыть партнёра полностью
@@ -142,16 +150,42 @@ def analyze_wallets(payin_path: str):
 
         # === Лимиты ===
         daily_limit = settings.get("daily_max_amount")
+        group_name = None
+        group_daily_limit = None
 
-        # если партнёр принадлежит группе → использовать лимит группы
+        # Проверяем групповую принадлежность
         for gname, gdata in groups_cfg.items():
             if partner_name in gdata.get("partners", []):
-                daily_limit = gdata.get("daily_max_amount", daily_limit)
+                group_name = gname
+                group_daily_limit = gdata.get("daily_max_amount")
                 break
 
+        # Если партнёр в группе → лимит группы
+        if group_daily_limit is not None:
+            daily_limit = group_daily_limit
+
+        # === Процент заполненности ===
+        if daily_limit:
+            if group_name:
+                group_partners = groups_cfg[group_name]["partners"]
+                df_group_today = df_today[
+                    df_today["_partner_norm"].isin([normalize_partner_name(p) for p in group_partners])
+                ]
+                group_amount_today = pd.to_numeric(df_group_today[COL_AMOUNT], errors="coerce").sum()
+                percent_filled = int(group_amount_today / daily_limit * 100)
+            else:
+                percent_filled = int(amount_today / daily_limit * 100)
+        else:
+            percent_filled = 0
+
         limit_icon = "🟢"
-        if daily_limit is not None and amount_today > daily_limit:
+        if daily_limit and amount_today > daily_limit:
             limit_icon = "🚨"
+
+        # === Последняя операция ===
+        df_partner_all = df[df["_partner_norm"] == key_norm]
+        last_op_time = df_partner_all["_dt"].max()
+        last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
 
         # === Формирование сообщения ===
         msg = (
@@ -159,9 +193,10 @@ def analyze_wallets(payin_path: str):
             f"🕒 Окно: {window_min} мин (смещение {offset_min})\n"
             f"Всего операций: {total}\n"
             f"Успешных: {success}\n"
-            f"Конверсия: {conv:.1f}% (< {threshold*100:.1f}%) — {conv_icon}\n"
-            f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} — {limit_icon}\n"
+            f"Конверсия: {conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}\n"
+            f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} ({percent_filled}%) — {limit_icon}\n"
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
+            f"Последняя операция: {last_op_str}\n"
             f"⏰ {now_iso}"
         )
 
