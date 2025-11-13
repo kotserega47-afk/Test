@@ -207,7 +207,6 @@ def analyze_wallets(payin_path: str):
         # сообщение
         msg = (
             f"📊 *{partner_name}*\n"
-            f"🕒 Окно: {window_min} мин (смещение {offset_min})\n"
             f"Всего операций: {total}\n"
             f"Успешных: {success}\n"
             f"Конверсия: {conv:.1f}% (< {threshold*100:.1f}%) — {conv_icon}\n"
@@ -251,11 +250,12 @@ def analyze_wallets(payin_path: str):
                 })
 
     # отправка основного блока
-    if messages:
-        send_message_sync(
-            "📦 *Wallet Analyzer — статистика*\n\n" + "\n\n".join(messages),
-            chat_id=CHAT_ID
-        )
+    send_message_sync(
+        "📦 *Wallet Analyzer — статистика*\n\n"
+        f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
+        + "\n\n".join(messages),
+        chat_id=CHAT_ID
+    )
 
     # отправка BAD-блока
     if not bad:
