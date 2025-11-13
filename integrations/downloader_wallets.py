@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
+import pytz
 
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +22,8 @@ BASE_DIR = "/tmp"
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+MSK_TZ = pytz.timezone("Europe/Moscow")
 
 
 def _ensure_logged_in(page, context):
@@ -41,20 +44,18 @@ def _ensure_logged_in(page, context):
 
 
 def _download_payin(page, ts: str) -> str:
-    """Скачивание файла PayIn (поступления)"""
+    """Скачивание файла PayIn"""
     logger.info("⬇️ PayIn → экспорт…")
 
     page.goto("https://antares.plus/lkcard/#/payin")
     page.wait_for_load_state("networkidle")
 
-    # дата = сегодня
-    tz = datetime.now().astimezone().tzinfo
+    # дата = сегодня/вчера по МСК
     use_yesterday = os.getenv("USE_YESTERDAY", "true").lower() == "true"
     days_back = 1 if use_yesterday else 0
 
-    target_date = (datetime.now(tz) - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-    logger.info(f"📅 Устанавливаем дату: {target_date}")
+    target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    logger.info(f"📅 Устанавливаем дату (МСК): {target_date}")
 
     # Выбор даты
     page.click("label.form-control")
@@ -69,6 +70,7 @@ def _download_payin(page, ts: str) -> str:
     page.wait_for_load_state("networkidle")
     time.sleep(1.3)
 
+    # Загрузка файла
     with page.expect_download(timeout=300000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
@@ -80,13 +82,13 @@ def _download_payin(page, ts: str) -> str:
 
 
 def run_wallet_cycle():
-    """Основной цикл – скачивает только PayIn и запускает анализ"""
+    """Основной цикл – скачивает PayIn и запускает анализ"""
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
 
     CHAT_ID_WALLET = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
 
-    ts = datetime.now().strftime("%H.%M")
+    ts = datetime.now(MSK_TZ).strftime("%H.%M")
     logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
     send_message_sync(f"🕒 Старт мониторинга PayIn ({ts})", chat_id=CHAT_ID_WALLET)
 
@@ -112,4 +114,5 @@ if __name__ == "__main__":
         run_wallet_cycle()
     except Exception as e:
         logger.exception(f"❌ Ошибка в wallet-handler: {e}")
-        send_message_sync(f"❌ Ошибка в wallet-handler: {e}")
+        CHAT_ID_WALLET = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
+        send_message_sync(f"❌ Ошибка в wallet-handler: {e}", chat_id=CHAT_ID_WALLET)
