@@ -4,20 +4,5 @@ builder = "NIXPACKS"
 [services]
   [services.main]
     name = "file-analyzer"
-    start = "/opt/venv/bin/python integrations/downloader.py"
+    start = "/opt/venv/bin/python scheduler.py"
     plan = "free"
-
-  [services.wallet_downloader]
-    name = "wallet-handler"
-    start = "/opt/venv/bin/python integrations/downloader_wallets.py"
-    plan = "free"
-
-[triggers]
-  [triggers.cron]
-    service = "file-analyzer"
-    schedule = "*/2 * * * *"
-    #schedule = "0,30 8-23 * * *"
-
-  [triggers.cron_wallet]
-    service = "wallet-handler"
-    schedule = "*/5 8-23 * * *"
