@@ -251,7 +251,7 @@ def analyze_wallets(payin_path: str):
 
     # отправка основного блока
     send_message_sync(
-        "📦 *Wallet Analyzer — статистика*\n\n"
+        "📦 *Wallet Analyzer — статистика*\n"
         f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
         + "\n\n".join(messages),
         chat_id=CHAT_ID
