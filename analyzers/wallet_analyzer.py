@@ -96,7 +96,14 @@ def analyze_wallets(payin_path: str):
     end_time = now - timedelta(minutes=offset_min)
     start_time = end_time - timedelta(minutes=window_min)
 
+    # окно для расчёта конверсии
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
+
+    # последние 2 часа — для фильтра "партнера не показывать"
+    start_2h = now - timedelta(hours=2)
+    df_last2h = df[(df["_dt"] >= start_2h) & (df["_dt"] <= now)]
+
+    # сегодня — для лимитов
     df_today = df[(df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)) & (df["_dt"] <= now)]
 
     partners_cfg = cfg["partners"]
@@ -106,21 +113,29 @@ def analyze_wallets(payin_path: str):
     now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
 
     for partner_name, settings in partners_cfg.items():
+
         key_norm = _normalize(partner_name)
 
-        # фильтрация по партнёру
+        # за окно
         subset = df_window[df_window["_partner_norm"] == key_norm]
         total = len(subset)
         success = subset["_status"].apply(_status_success).sum()
         conv = (success / total * 100) if total else 0
 
+        # за 2 часа — фильтр скрытия
+        df_last2h_p = df_last2h[df_last2h["_partner_norm"] == key_norm]
+        last2h_total = len(df_last2h_p)
+
+        if last2h_total == 0:
+            continue  # скрываем партнёра полностью
+
+        # суммы за сутки
         df_today_p = df_today[df_today["_partner_norm"] == key_norm]
         amount_today = pd.to_numeric(df_today_p[COL_AMOUNT], errors="coerce").sum()
 
-        # --- Получить threshold ---
+        # --- threshold конверсии ---
         threshold = settings.get("threshold", 0)
 
-        # --- Иконка конверсии ---
         conv_icon = "🟢"
         if conv < threshold * 100:
             conv_icon = "🚨"
@@ -128,6 +143,7 @@ def analyze_wallets(payin_path: str):
         # --- API ошибки ---
         api_keyword = settings.get("api_cancel_keyword", "").lower()
         api_threshold = settings.get("api_cancel_threshold", 100)
+
         api_total = subset["_info_norm"].str.contains(api_keyword).sum()
         api_rate = (api_total / total * 100) if total else 0
 
@@ -135,10 +151,10 @@ def analyze_wallets(payin_path: str):
         if api_rate > api_threshold:
             api_icon = "🚨"
 
-        # --- Определяем дневной лимит ---
+        # --- Лимиты ---
         daily_limit = settings.get("daily_max_amount", None)
 
-        # если партнёр в группе — берем лимит группы
+        # если в группе — заменить групповым лимитом
         for group_name, group_data in groups_cfg.items():
             if partner_name in group_data.get("partners", []):
                 daily_limit = group_data.get("daily_max_amount", daily_limit)
@@ -148,7 +164,7 @@ def analyze_wallets(payin_path: str):
         if daily_limit and amount_today > daily_limit:
             limit_icon = "🚨"
 
-        # --- Формируем сообщение ---
+        # --- Сообщение ---
         msg = (
             f"📊 *{partner_name}*\n"
             f"🕒 Окно: {window_min} мин (смещение {offset_min})\n"
