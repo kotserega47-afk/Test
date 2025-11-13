@@ -157,6 +157,11 @@ def analyze_wallets(payin_path: str):
         api_bad = api_rate > api_threshold
         api_icon = "🟢" if not api_bad else "🚨"
 
+        # === Нет кошельков ===
+        nok_wallets_total = sub_all["_info_norm"].str.contains("нет кошельков").sum()
+        nok_bad = nok_wallets_total > 0
+        nok_icon = "🟢" if not nok_bad else "🚨"
+
         # лимиты
         daily_limit = settings.get("daily_max_amount")
         group_name = None
@@ -208,6 +213,7 @@ def analyze_wallets(payin_path: str):
             f"Конверсия: {conv:.1f}% (< {threshold*100:.1f}%) — {conv_icon}\n"
             f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} ({percent_filled}%) — {limit_icon}\n"
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
+            f"Нет кошельков: {nok_wallets_total} шт — {nok_icon}\n"
             f"Последняя операция: {last_op_str}\n"
             f"⏰ {now_iso}"
         )
@@ -225,6 +231,8 @@ def analyze_wallets(payin_path: str):
                 is_bad = True
             if limit_warn:
                 is_bad = True
+            if nok_bad:
+                is_bad = True
 
             if is_bad:
                 bad.append({
@@ -238,6 +246,8 @@ def analyze_wallets(payin_path: str):
                     "percent": percent_filled,
                     "conv_bad": conv_bad,
                     "api_bad": api_bad,
+                    "nok_bad": nok_bad,
+                    "nok_count": nok_wallets_total,
                 })
 
     # отправка основного блока
@@ -266,6 +276,8 @@ def analyze_wallets(payin_path: str):
                 )
             if p["limit_bad"]:
                 block += "Лимит превышен — 🚨\n"
+            if p["nok_bad"]:
+                block += f"Нет кошельков: {p['nok_count']} — 🚨\n"
             if p["limit_warn"]:
                 block += f"Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
 
