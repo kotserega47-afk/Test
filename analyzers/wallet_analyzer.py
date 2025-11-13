@@ -52,7 +52,6 @@ def analyze_wallets(payin_path: str):
     cfg = _load_cfg()
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
-    min_events = cfg["min_events"]
 
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
 
@@ -100,7 +99,7 @@ def analyze_wallets(payin_path: str):
     end_time = now - timedelta(minutes=offset_min)
     start_time = end_time - timedelta(minutes=window_min)
 
-    # окно конверсии (8 мин)
+    # окно конверсии
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
 
     # последние 2 часа
@@ -114,6 +113,7 @@ def analyze_wallets(payin_path: str):
     groups_cfg = cfg["groups"]
 
     messages = []
+    bad = []   # список проблемных партнёров
 
     # === Основной цикл по партнёрам ===
     for partner_name, settings in partners_cfg.items():
@@ -141,46 +141,63 @@ def analyze_wallets(payin_path: str):
         api_threshold = settings.get("api_cancel_threshold", 100)
 
         # === Конверсия ===
-        conv_icon = "🟢" if conv >= threshold * 100 else "🚨"
+        conv_bad = conv < threshold * 100
+        conv_icon = "🟢" if not conv_bad else "🚨"
 
         # === API ошибки ===
         api_total = subset["_info_norm"].str.contains(api_keyword).sum()
         api_rate = (api_total / total * 100) if total else 0
-        api_icon = "🟢" if api_rate <= api_threshold else "🚨"
+
+        api_bad = api_rate > api_threshold
+        api_icon = "🟢" if not api_bad else "🚨"
 
         # === Лимиты ===
         daily_limit = settings.get("daily_max_amount")
         group_name = None
         group_daily_limit = None
 
-        # Проверяем групповую принадлежность
+        # группа?
         for gname, gdata in groups_cfg.items():
             if partner_name in gdata.get("partners", []):
                 group_name = gname
                 group_daily_limit = gdata.get("daily_max_amount")
                 break
 
-        # Если партнёр в группе → лимит группы
         if group_daily_limit is not None:
             daily_limit = group_daily_limit
 
-        # === Процент заполненности ===
+        # процент заполненности лимита
         if daily_limit:
-            if group_name:
+            if group_name:  # групповой лимит
                 group_partners = groups_cfg[group_name]["partners"]
                 df_group_today = df_today[
                     df_today["_partner_norm"].isin([normalize_partner_name(p) for p in group_partners])
                 ]
                 group_amount_today = pd.to_numeric(df_group_today[COL_AMOUNT], errors="coerce").sum()
                 percent_filled = int(group_amount_today / daily_limit * 100)
-            else:
+            else:  # индивидуальный лимит
                 percent_filled = int(amount_today / daily_limit * 100)
         else:
             percent_filled = 0
 
-        limit_icon = "🟢"
-        if daily_limit and amount_today > daily_limit:
-            limit_icon = "🚨"
+        # уровни лимита:
+        # 🟢 < 90%
+        # 🟡 >= 90%
+        # 🚨 превышен
+        limit_bad = False
+        limit_prewarning = False
+
+        if daily_limit:
+            if amount_today > daily_limit:
+                limit_bad = True
+                limit_icon = "🚨"
+            elif percent_filled >= 90:
+                limit_prewarning = True
+                limit_icon = "🟡"
+            else:
+                limit_icon = "🟢"
+        else:
+            limit_icon = "🟢"
 
         # === Последняя операция ===
         df_partner_all = df[df["_partner_norm"] == key_norm]
@@ -202,8 +219,55 @@ def analyze_wallets(payin_path: str):
 
         messages.append(msg)
 
-    # === Отправка в Telegram WALLET ===
+        # === Классификация BAD ===
+        has_ops = total > 0
+        is_bad = False
+
+        if has_ops:
+            if conv_bad:
+                is_bad = True
+            if api_bad:
+                is_bad = True
+            if limit_bad:
+                is_bad = True
+            if limit_prewarning:
+                is_bad = True
+
+        if is_bad:
+            bad.append({
+                "name": partner_name,
+                "conv": conv,
+                "threshold": threshold,
+                "api_rate": api_rate,
+                "api_threshold": api_threshold,
+                "limit_bad": limit_bad,
+                "limit_prewarning": limit_prewarning,
+                "percent": percent_filled,
+                "conv_bad": conv_bad,
+                "api_bad": api_bad,
+            })
+
+    # === Основное сообщение ===
     if messages:
         full_message = "📦 *Wallet Analyzer — статистика*\n\n" + "\n\n".join(messages)
         send_message_sync(full_message, chat_id=CHAT_ID)
         logger.info(f"[Analyzer] Отправлено {len(messages)} отчётов партнёров")
+
+    # === Второе сообщение: BAD ===
+    if len(bad) == 0:
+        send_message_sync("🟢 *Все партнёры в норме!*", chat_id=CHAT_ID)
+    else:
+        summary = ["❗ *Обнаружены отклонения:*"]
+        for p in bad:
+            block = f"\n📊 *{p['name']}*\n"
+            if p["conv_bad"]:
+                block += f"Конверсия: {p['conv']:.1f}% (< {p['threshold']*100:.1f}%) — 🚨\n"
+            if p["api_bad"]:
+                block += f"API ошибки: {p['api_rate']:.1f}% (> {p['api_threshold']}%) — 🚨\n"
+            if p["limit_bad"]:
+                block += f"Лимит превышен — 🚨\n"
+            if p["limit_prewarning"]:
+                block += f"Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
+            summary.append(block)
+
+        send_message_sync("\n".join(summary), chat_id=CHAT_ID)
