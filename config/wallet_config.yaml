@@ -1,60 +1,42 @@
-# окно для расчёта конверсии (в минутах)
-window_minutes: 8
-#Сдвиг когда начать расчёт
-offset_minutes: 8
-# минимальное число событий за окно, чтобы считать конверсию (анти-шум)
-min_events: 10
+# === ОБЩИЕ НАСТРОЙКИ ОКНА ===
+window_minutes: 8              # ширина окна анализа
+offset_minutes: 8              # смещение окна
+success_window_minutes: 5      # окно подсчёта успехов
+min_events: 10                 # анти-шум
 
-# Время на подсчёт успехов по каждому партнеру (Нужно последние 5 мин видеть где нет вообще успехов)
-success_window_minutes: 5
+# === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
+groups:
 
-# пороги по партнёрам (ключ — как в выгрузке PayIn)
+  abhsber:
+    daily_max_amount: 8_000_000     # общий лимит 8 млн
+    partners:
+      - "HH (Abhsber IN + Выплаты) Тинь"
+      - "HH (Abhsber IN) Сбер"
+
+  aurora:
+    daily_max_amount: 5_000_000     # общий лимит 5 млн
+    partners:
+      - "HH (Аврора Тинь)"
+      - "HH (Аврора Сбер)"
+
+  kibit:
+    daily_max_amount: 8_000_000     # общий лимит 8 млн
+    partners:
+      - "HH (Кибит Сбер)"
+      - "HH (Кибит Тинь)"
+
+# === ИНДИВИДУАЛЬНЫЕ ПАРТНЁРЫ (всё, что не принадлежит группам) ===
 partners:
+
   "HH (А-мобайл Сбер + Выплаты)":
     threshold: 0.36
     daily_max_amount: 2_200_000
-    api_cancel_threshold: 9             # лимит процента ошибок "Отмена по API"
-    api_cancel_keyword: "Отмена по API"    # Текст ошибки в инфо
+    api_cancel_threshold: 9         # проценты
+    api_cancel_keyword: "Отмена по API"
 
   "HH (Амобайл Тинькофф)":
     threshold: 0.36
     daily_max_amount: 500_000
-    api_cancel_threshold: 5
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Abhsber IN + Выплаты) Тинь":
-    threshold: 0.36
-    daily_max_amount: 8_000_000
-    api_cancel_threshold: 3
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Abhsber IN) Сбер":
-    threshold: 0.34
-    daily_max_amount: 8_000_000
-    api_cancel_threshold: 4
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Аврора Тинь)":
-    threshold: 0.22
-    daily_max_amount: 5_000_000
-    api_cancel_threshold: 3
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Аврора Сбер)":
-    threshold: 0.32
-    daily_max_amount: 5_000_000
-    api_cancel_threshold: 4
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Кибит Сбер)":
-    threshold: 0.34
-    daily_max_amount: 8_000_000
-    api_cancel_threshold: 5
-    api_cancel_keyword: "Отмена по API"
-
-  "HH (Кибит Тинь)":
-    threshold: 0.34
-    daily_max_amount: 8_000_000
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
 
@@ -63,9 +45,3 @@ partners:
     daily_max_amount: 5_000_000
     api_cancel_threshold: 20
     api_cancel_keyword: "Отмена по API"
-
-
-
-
-
-
