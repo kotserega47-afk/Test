@@ -3,7 +3,7 @@ import sys
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-
+from load_data import normalize_partner_name
 import pandas as pd
 import yaml
 import pytz
@@ -25,16 +25,8 @@ CONFIG_PATH = os.path.join(
 STATE_PATH = Path("/tmp/wallet_alerts_state.json")
 
 
-def _normalize(v):
-    if not isinstance(v, str):
-        return ""
-    v = v.strip().lower().replace("ё", "е")
-    v = v.replace("амобайл", "а-мобайл")
-    return " ".join(v.split())
-
-
 def _status_success(s):
-    s = _normalize(s)
+    s = normalize_partner_name(s)
     return s in {"оплачен", "успешно", "success", "paid"}
 
 
@@ -89,7 +81,7 @@ def analyze_wallets(payin_path: str):
     if df["_dt"].dt.tz is None:
         df["_dt"] = df["_dt"].dt.tz_localize(tz, nonexistent="shift_forward", ambiguous="NaT")
 
-    df["_partner_norm"] = df[COL_PARTNER].astype(str).apply(_normalize)
+    df["_partner_norm"] = df[COL_PARTNER].astype(str).apply(normalize_partner_name)
     df["_status"] = df[COL_STATUS].astype(str)
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
 
@@ -118,7 +110,7 @@ def analyze_wallets(payin_path: str):
     # === Основной цикл по партнёрам ===
     for partner_name, settings in partners_cfg.items():
 
-        key_norm = _normalize(partner_name)
+        key_norm = normalize_partner_name(partner_name)
 
         # окно конверсии
         subset = df_window[df_window["_partner_norm"] == key_norm]
