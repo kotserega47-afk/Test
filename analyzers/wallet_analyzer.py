@@ -219,28 +219,35 @@ def analyze_wallets(payin_path: str):
             )
             alerts.append((key_norm, text))
 
-    # =============================================
-    #  ОТПРАВКА АЛЕРТОВ (с учётом cooldown)
-    # =============================================
-    sent = 0
-    now_iso = now.isoformat()
+        # =============================================
+        #  ТЕСТОВЫЙ ВЫВОД ВСЕХ ЦИФР В TELEGRAM
+        # =============================================
+        messages = []
+        now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    for key_norm, text in alerts:
-        last = state.get(key_norm)
-        can_send = True
+        for partner_name, settings in partners_cfg.items():
+            key_norm = _normalize(partner_name)
+            subset = df_window[df_window["_partner_norm"] == key_norm]
+            total = len(subset)
+            success = subset["_status"].apply(_status_success).sum()
+            conv = (success / total * 100) if total else 0
 
-        if last:
-            try:
-                last_dt = datetime.fromisoformat(last)
-                if (now - last_dt) < timedelta(minutes=cfg["alert_cooldown_min"]):
-                    can_send = False
-            except:
-                pass
+            df_today_p = df_today[df_today["_partner_norm"] == key_norm]
+            amount_today = pd.to_numeric(df_today_p[COL_AMOUNT], errors="coerce").sum()
 
-        if can_send:
-            send_message_sync(text, chat_id=CHAT_ID)
-            state[key_norm] = now_iso
-            sent += 1
+            msg = (
+                f"📊 *{partner_name}*\n"
+                f"🕒 Окно: {window_min} мин (смещение {offset_min})\n"
+                f"Всего операций: {total}\n"
+                f"Успешных: {success}\n"
+                f"Конверсия: {conv:.1f}%\n"
+                f"Сумма за сутки: {amount_today:,.2f}\n"
+                f"⏰ {now_iso}"
+            )
+            messages.append(msg)
 
-    _save_state(state)
-    logger.info(f"[Analyzer] отправлено алертов: {sent}")
+        # Отправляем всё одним сообщением (чтобы не спамить)
+        if messages:
+            full_message = "📦 *Wallet Analyzer — статистика*\n\n" + "\n\n".join(messages)
+            send_message_sync(full_message, chat_id=CHAT_ID)
+            logger.info(f"[Analyzer] Отправлено {len(messages)} отчётов партнёров")
