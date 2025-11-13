@@ -215,7 +215,7 @@ def analyze_wallets(payin_path: str):
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"Нет кошельков: {nok_wallets_total} шт — {nok_icon}\n"
             f"Последняя операция: {last_op_str}\n"
-            f"⏰ {now_iso}"
+
         )
 
         messages.append(msg)

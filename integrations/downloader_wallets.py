@@ -90,7 +90,7 @@ def run_wallet_cycle():
 
     ts = datetime.now(MSK_TZ).strftime("%H.%M")
     logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
-    send_message_sync(f"🕒 Старт мониторинга PayIn ({ts})", chat_id=CHAT_ID_WALLET)
+
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
@@ -111,7 +111,7 @@ def run_wallet_cycle():
         caption=f"📥 PayIn файл ({ts})",
         chat_id=CHAT_ID_WALLET
     )
-    send_message_sync("✅ Мониторинг PayIn завершён", chat_id=CHAT_ID_WALLET)
+
 
 
 if __name__ == "__main__":
