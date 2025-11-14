@@ -1,2 +1,943 @@
 2025-11-08 17:23:53,149 [INFO] Request to files/list_folder
 2025-11-08 17:23:53,935 [ERROR] Ошибка list_files(): AuthError('1bb12f3ccd1741e1a141e47d690f5274', AuthError('invalid_access_token', None))
+2025-11-14 01:33:23,276 [INFO] 🕒 WalletHandler стартовал (ts=01.33)
+2025-11-14 01:33:34,429 [INFO] 🔑 Логинимся в Antares…
+2025-11-14 01:33:50,570 [INFO] ✅ Сессия сохранена
+2025-11-14 01:33:50,571 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 01:33:50,579 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-13
+2025-11-14 01:33:50,873 [INFO] ✅ Дата выбрана: 2025-11-13
+2025-11-14 01:34:17,714 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_01.33.xlsx
+2025-11-14 01:34:17,784 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_01.33.xlsx
+2025-11-14 01:34:20,015 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 01:34:20,017 [INFO] ✅ Сообщение отправлено в Telegram (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 8 мин (смещение 8)
+
+📊 *HH (Бакай Тинь)*...
+2025-11-14 01:34:20,020 [ERROR] ❌ Не удалось отправить сообщение в Telegram (chat_id=-1003431226386): Unknown error in HTTP implementation: RuntimeError('Event loop is closed')
+2025-11-14 01:34:20,908 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendDocument "HTTP/1.1 200 OK"
+2025-11-14 01:34:20,908 [INFO] Файл /tmp\wallet_handler\payin_01.33.xlsx отправлен в Telegram (chat_id=-1003431226386)
+2025-11-14 01:37:48,840 [INFO] 🕒 WalletHandler стартовал (ts=01.37)
+2025-11-14 01:37:49,408 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 01:37:49,409 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 01:37:51,948 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-13
+2025-11-14 01:37:52,149 [INFO] ✅ Дата выбрана: 2025-11-13
+2025-11-14 01:38:18,750 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_01.37.xlsx
+2025-11-14 01:38:18,817 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_01.37.xlsx
+2025-11-14 01:38:21,723 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 01:38:21,727 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 8 мин (смещение 8)
+
+📊 *HH (Бакай Тинь)*
+2025-11-14 01:38:22,590 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 01:38:22,594 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 46.2% (> 20%) — 🚨
+
+2025-11-14 01:38:23,967 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendDocument "HTTP/1.1 200 OK"
+2025-11-14 01:38:23,968 [INFO] 📁 Файл отправлен: /tmp\wallet_handler\payin_01.37.xlsx (chat_id=-1003431226386)
+2025-11-14 02:09:29,034 [ERROR] ❌ Некорректный формат FAKE_TIME: 2025-11-13 12:34:00. Использую текущее время.
+2025-11-14 02:09:29,035 [INFO] 🕒 WalletHandler стартовал (ts=02.09)
+2025-11-14 02:09:29,585 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:09:29,585 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:09:41,950 [ERROR] ❌ Некорректный формат FAKE_TIME: 2025-11-13 12:34:00. Использую текущее время.
+2025-11-14 02:09:41,950 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-13 02:09:41.950881+03:00
+2025-11-14 02:10:12,047 [WARNING] ⚠️ Не удалось выбрать дату
+2025-11-14 02:10:42,134 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 128, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 118, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 82, in _download_payin
+    page.click("button:has-text('Применить')")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+2025-11-14 02:10:43,041 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:10:43,045 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:10:56,740 [INFO] 🕒 WalletHandler стартовал (ts=12.34)
+2025-11-14 02:10:57,289 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:10:57,289 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:10:59,974 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12 12:34:00+03:00
+2025-11-14 02:11:30,116 [WARNING] ⚠️ Не удалось выбрать дату
+2025-11-14 02:12:00,234 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 128, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 118, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 82, in _download_payin
+    page.click("button:has-text('Применить')")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+2025-11-14 02:12:01,123 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:12:01,125 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:14:30,805 [ERROR] ❌ Некорректный формат FAKE_TIME: 2025-11-13. Использую текущее время.
+2025-11-14 02:14:30,805 [INFO] 🕒 WalletHandler стартовал (ts=02.14)
+2025-11-14 02:14:31,353 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:14:31,353 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:14:33,842 [ERROR] ❌ Некорректный формат FAKE_TIME: 2025-11-13. Использую текущее время.
+2025-11-14 02:14:33,843 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-13 02:14:33.843428+03:00
+2025-11-14 02:15:03,934 [WARNING] ⚠️ Не удалось выбрать дату
+2025-11-14 02:15:34,016 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 128, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 118, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 82, in _download_payin
+    page.click("button:has-text('Применить')")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+2025-11-14 02:15:34,940 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:15:34,950 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:16:31,224 [INFO] 🕒 WalletHandler стартовал (ts=12.34)
+2025-11-14 02:16:31,783 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:16:31,783 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:16:34,246 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12 12:34:00+03:00
+2025-11-14 02:17:04,354 [WARNING] ⚠️ Не удалось выбрать дату
+2025-11-14 02:17:34,431 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    56 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+    - waiting for element to be visible, enabled and stable
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 128, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 118, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 82, in _download_payin
+    page.click("button:has-text('Применить')")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    56 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+    - waiting for element to be visible, enabled and stable
+
+2025-11-14 02:17:35,244 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:17:35,249 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:18:04,636 [INFO] 🕒 WalletHandler стартовал (ts=00.00)
+2025-11-14 02:18:05,185 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:18:05,185 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:18:07,654 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12 00:00:00+03:00
+2025-11-14 02:18:37,764 [WARNING] ⚠️ Не удалось выбрать дату
+2025-11-14 02:19:07,856 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 128, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 118, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 82, in _download_payin
+    page.click("button:has-text('Применить')")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text('Применить')")
+    - locator resolved to <button type="button" data-v-ce80dfe9="" class="btn btn-primary btn-sm"> Применить </button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    57 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <small title="воскресенье" aria-label="воскресенье" class="col text-truncate">вс</small> from <div class="wdtp mt-2" data-v-ce80dfe9="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+2025-11-14 02:19:09,293 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:19:09,297 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:27:04,921 [INFO] 🕒 WalletHandler стартовал (ts=00.00)
+2025-11-14 02:27:05,467 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:27:05,467 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:27:17,764 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12
+2025-11-14 02:27:17,967 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 02:28:11,396 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 02:28:11,464 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 02:28:16,261 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:28:16,263 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 02:28:17,030 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:28:17,034 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 44.4% (> 20%) — 🚨
+
+2025-11-14 02:41:50,695 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 02:41:51,264 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:41:51,264 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:42:03,828 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 02:42:04,034 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 02:42:39,279 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:42:39,341 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:42:42,449 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:42:42,453 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 02:42:43,152 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:42:43,156 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 28.6% (> 20%) — 🚨
+
+2025-11-14 02:48:25,779 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 02:48:26,326 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:48:26,326 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:48:29,120 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 02:48:29,314 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 02:48:59,391 [ERROR] ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button#__BVID__657")
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 181, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 173, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 131, in _download_payin
+    page.click("button#__BVID__657")
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 9927, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 857, in click
+    return await self._main_frame.click(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button#__BVID__657")
+
+2025-11-14 02:49:00,264 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:49:00,269 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.click: Timeout 30000ms exceeded.
+Call log:
+  - w
+2025-11-14 02:52:38,830 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 02:52:39,390 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:52:39,390 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:52:42,233 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 02:52:42,448 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 02:53:18,023 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:53:18,093 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:53:21,070 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:53:21,074 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 02:53:21,796 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:53:21,801 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 30.8% (> 20%) — 🚨
+
+2025-11-14 02:58:22,682 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 02:58:23,240 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 02:58:23,240 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 02:58:26,082 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 02:58:26,273 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 02:59:01,339 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:59:01,401 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 02:59:04,583 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:59:04,588 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 02:59:05,357 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 02:59:05,361 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 03:01:21,203 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:01:21,753 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:01:21,753 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:01:24,651 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:01:24,850 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:01:26,921 [ERROR] ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 2000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 196, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 188, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 132, in _download_payin
+    page.wait_for_selector("div.dropdown-menu.show", timeout=2000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 2000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show") to be visible
+
+2025-11-14 03:01:27,795 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:01:27,799 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 2000ms exceeded.
+Call
+2025-11-14 03:04:13,562 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:04:14,103 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:04:14,104 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:04:16,953 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:04:17,144 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:04:17,250 [ERROR] ❌ Ошибка в wallet-handler: Locator.click: Error: strict mode violation: locator("div.b-form-timepicker button:has(svg[aria-label='clock'])") resolved to 2 elements:
+    1) <button type="button" id="__BVID__122" class="btn h-auto" aria-expanded="false" aria-haspopup="dialog">…</button> aka get_by_role("button", name=":00")
+    2) <button type="button" id="__BVID__128" class="btn h-auto" aria-expanded="false" aria-haspopup="dialog">…</button> aka get_by_role("button", name=":59")
+
+Call log:
+  - waiting for locator("div.b-form-timepicker button:has(svg[aria-label='clock'])")
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 182, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 174, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 131, in _download_payin
+    time_button.click()
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 15573, in click
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_locator.py", line 160, in click
+    return await self._frame.click(self._selector, strict=True, **params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 549, in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: Locator.click: Error: strict mode violation: locator("div.b-form-timepicker button:has(svg[aria-label='clock'])") resolved to 2 elements:
+    1) <button type="button" id="__BVID__122" class="btn h-auto" aria-expanded="false" aria-haspopup="dialog">…</button> aka get_by_role("button", name=":00")
+    2) <button type="button" id="__BVID__128" class="btn h-auto" aria-expanded="false" aria-haspopup="dialog">…</button> aka get_by_role("button", name=":59")
+
+Call log:
+  - waiting for locator("div.b-form-timepicker button:has(svg[aria-label='clock'])")
+
+2025-11-14 03:04:18,088 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:04:18,093 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Locator.click: Error: strict mode violation: locator(
+2025-11-14 03:06:14,289 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:06:14,843 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:06:14,843 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:06:17,651 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:06:17,862 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:06:17,903 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:06:23,749 [ERROR] ❌ Ошибка в wallet-handler: Locator.inner_text: Timeout 500ms exceeded.
+Call log:
+  - waiting for locator("output[aria-label='Hours']").locator("bdi")
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 189, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 181, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 142, in _download_payin
+    set_time(page, dt)
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 77, in set_time
+    cur_hour = int(hours_spin.locator("bdi").inner_text(timeout=500))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 17018, in inner_text
+    self._sync(self._impl_obj.inner_text(timeout=timeout))
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_locator.py", line 458, in inner_text
+    return await self._frame.inner_text(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 695, in inner_text
+    return await self._channel.send(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Locator.inner_text: Timeout 500ms exceeded.
+Call log:
+  - waiting for locator("output[aria-label='Hours']").locator("bdi")
+
+2025-11-14 03:06:24,655 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:06:24,658 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Locator.inner_text: Timeout 500ms exceeded.
+Call log:
+2025-11-14 03:11:44,311 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:11:44,859 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:11:44,859 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:11:49,781 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:11:49,975 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:11:50,026 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:11:58,361 [ERROR] ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show output[aria-label='Hours']") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 187, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 179, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 140, in _download_payin
+    set_time(page, dt)
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 73, in set_time
+    page.wait_for_selector("div.dropdown-menu.show output[aria-label='Hours']", timeout=3000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show output[aria-label='Hours']") to be visible
+
+2025-11-14 03:11:59,279 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:11:59,283 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call
+2025-11-14 03:13:32,282 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:13:32,823 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:13:32,824 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:13:35,450 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:13:35,642 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:13:35,688 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:13:44,075 [ERROR] ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show output[aria-label='Hours']") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 187, in <module>
+    run_wallet_cycle()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 179, in run_wallet_cycle
+    payin_path = _download_payin(page, ts)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 140, in _download_payin
+    set_time(page, dt)
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader_wallets.py", line 73, in set_time
+    page.wait_for_selector("div.dropdown-menu.show output[aria-label='Hours']", timeout=3000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("div.dropdown-menu.show output[aria-label='Hours']") to be visible
+
+2025-11-14 03:13:44,904 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:13:44,909 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❌ Ошибка в wallet-handler: Page.wait_for_selector: Timeout 3000ms exceeded.
+Call
+2025-11-14 03:19:18,371 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:19:18,923 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:19:18,923 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:19:21,747 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:19:21,940 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:19:21,992 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:20:19,837 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:20:19,902 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:20:24,911 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:20:24,914 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:20:25,640 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:20:25,643 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 03:23:08,719 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:23:09,280 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:23:09,280 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:23:12,089 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:23:12,281 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:23:12,331 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:24:10,520 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:24:10,617 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:24:16,467 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:24:16,469 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:24:17,464 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:24:17,467 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 03:25:16,033 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:25:16,588 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:25:16,590 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:25:19,364 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:25:19,559 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:25:19,608 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:26:18,728 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:26:18,807 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:26:24,762 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:26:24,767 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:26:25,663 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:26:25,667 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 03:36:06,416 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:36:07,064 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:36:07,065 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:36:20,698 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:36:22,205 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:36:24,379 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:38:03,704 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:38:03,786 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:38:08,589 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:38:08,592 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:38:09,374 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:38:09,378 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 28.6% (> 20%) — 🚨
+
+2025-11-14 03:51:16,455 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:51:17,156 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:51:17,156 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:51:30,696 [INFO] 📅 Устанавливаем дату/время (МСК): 2025-11-12 19:00:00+03:00
+2025-11-14 03:51:31,414 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:51:32,014 [INFO] ⏱️ Правый timepicker открыт
+2025-11-14 03:52:43,975 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:52:44,070 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:52:48,924 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:52:48,927 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:52:49,666 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:52:49,668 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 33.3% (> 20%) — 🚨
+
+2025-11-14 03:56:37,785 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 03:56:38,437 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 03:56:38,437 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 03:56:42,093 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12
+2025-11-14 03:56:42,819 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 03:57:38,167 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:57:38,238 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 03:57:42,741 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:57:42,744 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 03:57:43,486 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 03:57:43,489 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+Конверсия: 16.7% (< 20.0%) — 🚨
+A
+2025-11-14 04:02:53,084 [INFO] 🕒 WalletHandler стартовал (ts=19.00)
+2025-11-14 04:02:53,784 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 04:02:53,785 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 04:02:57,590 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12
+2025-11-14 04:02:58,293 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 04:03:53,837 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 04:03:53,895 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_19.00.xlsx
+2025-11-14 04:03:58,731 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:03:58,733 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 04:03:59,506 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:03:59,510 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 04:05:12,353 [INFO] 🕒 WalletHandler стартовал (ts=00.00)
+2025-11-14 04:05:12,990 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 04:05:12,990 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 04:05:16,808 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-13
+2025-11-14 04:05:17,510 [INFO] ✅ Дата выбрана: 2025-11-13
+2025-11-14 04:05:44,572 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:05:44,840 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:05:47,845 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:05:47,846 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 480)
+
+📊 *HH (Бакай Тин
+2025-11-14 04:05:48,652 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:05:48,654 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 04:10:46,495 [INFO] 🕒 WalletHandler стартовал (ts=00.00)
+2025-11-14 04:10:47,062 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 04:10:47,062 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 04:10:50,765 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-12
+2025-11-14 04:10:51,471 [INFO] ✅ Дата выбрана: 2025-11-12
+2025-11-14 04:11:44,770 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:11:44,840 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:11:49,168 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:11:49,172 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 480)
+
+📊 *HH (Бакай Тин
+2025-11-14 04:11:49,912 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:11:49,915 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 🟢 *Все партнёры в норме!*
+2025-11-14 04:14:57,902 [INFO] 🕒 WalletHandler стартовал (ts=00.00)
+2025-11-14 04:14:58,446 [INFO] 🔐 Используем сохранённую сессию
+2025-11-14 04:14:58,446 [INFO] ⬇️ PayIn → экспорт…
+2025-11-14 04:15:02,219 [INFO] 📅 Устанавливаем дату (МСК): 2025-11-11
+2025-11-14 04:15:02,930 [INFO] ✅ Дата выбрана: 2025-11-11
+2025-11-14 04:16:24,638 [INFO] ✅ PayIn сохранён: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:16:24,698 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_00.00.xlsx
+2025-11-14 04:16:30,528 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:16:30,532 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): 📦 *Wallet Analyzer — статистика*
+🕒 Окно: 15 мин (смещение 0)
+
+📊 *HH (Бакай Тинь)
+2025-11-14 04:16:31,247 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2025-11-14 04:16:31,252 [INFO] ✅ Сообщение отправлено (chat_id=-1003431226386): ❗ *Обнаружены отклонения:*
+
+📊 *HH (Бакай Тинь)*
+API ошибки: 25.0% (> 20%) — 🚨
+

@@ -146,14 +146,39 @@ def analyze_wallets(payin_path: str):
         api_keyword = settings.get("api_cancel_keyword", "").lower()
         api_threshold = settings.get("api_cancel_threshold", 100)
 
+        # === Проверка min_events ===
+        min_events = cfg["min_events"]
+        if total < min_events:
+            conv_icon = "ℹ️"
+            conv_bad = False
+            conv_text = f"{conv:.1f}% — ℹ️ Недостаточно данных ({total} < {min_events})"
+        else:
+            conv_bad = conv < threshold * 100
+            conv_icon = "🟢" if not conv_bad else "🚨"
+            conv_text = f"{conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}"
+
         # конверсия
         conv_bad = conv < threshold * 100
         conv_icon = "🟢" if not conv_bad else "🚨"
 
         # API ошибки — считаем только среди countable
-        api_total = sub_all["_info_norm"].str.contains(api_keyword).sum()
-        api_rate = (api_total / total * 100) if total else 0
 
+        error_keyword = "отмена по api"
+
+        one_hour_ago = now - timedelta(hours=1)
+
+        # операции за последний час — только по этому партнёру
+        last_hour = df[(df["_partner_norm"] == key_norm) & (df["_dt"] >= one_hour_ago)]
+
+        # countable за последний час
+        lh_countable = last_hour[last_hour["_status_count"]]
+        lh_total = len(lh_countable)
+
+        # PAPI ошибки в countable-операциях за последний час
+        lh_papi = lh_countable["_info_norm"].str.contains(error_keyword, case=False, na=False).sum()
+
+        api_total = lh_papi
+        api_rate = (lh_papi / lh_total * 100) if lh_total else 0
         api_bad = api_rate > api_threshold
         api_icon = "🟢" if not api_bad else "🚨"
 
@@ -209,7 +234,7 @@ def analyze_wallets(payin_path: str):
             f"📊 *{partner_name}*\n"
             f"Всего операций: {total}\n"
             f"Успешных: {success}\n"
-            f"Конверсия: {conv:.1f}% (< {threshold*100:.1f}%) — {conv_icon}\n"
+            f"Конверсия: {conv_text}\n"
             f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} ({percent_filled}%) — {limit_icon}\n"
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
