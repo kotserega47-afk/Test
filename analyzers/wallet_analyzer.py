@@ -253,7 +253,7 @@ def analyze_wallets(payin_path: str):
             f"  Конверсия: {conv_text}\n"
             f"  Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
             f"  ({percent_filled}%) — {limit_icon}\n"
-            f"  API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
+            f"  Отмен по API: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"  Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
             f"  Последняя операция: {last_op_str}\n"
         )
@@ -310,7 +310,7 @@ def analyze_wallets(payin_path: str):
                 )
             if p["api_bad"]:
                 block += (
-                    f"  API ошибки: {p['api_rate']:.1f}% "
+                    f"  Отмен по API: {p['api_rate']:.1f}% "
                     f"  (> {p['api_threshold']}%) — 🔴\n"
                 )
             if p["limit_bad"]:
