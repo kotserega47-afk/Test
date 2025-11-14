@@ -131,9 +131,10 @@ def analyze_wallets(payin_path: str):
         success = subset["_status_success"].sum()
         conv = (success / total * 100) if total else 0
 
-        # последние 2 часа
-        if len(df_last2h[df_last2h["_partner_norm"] == key_norm]) == 0:
+        # если в окне нет ни одной операции — пропускаем партнёра
+        if total == 0:
             continue
+
 
         # суммы за сутки — только успешные
         today_part = df_today[df_today["_partner_norm"] == key_norm]
