@@ -80,3 +80,4 @@ partners:
     threshold: 0.35
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
+    daily_max_amount: 230_000
