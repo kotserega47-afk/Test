@@ -177,10 +177,19 @@ def analyze_wallets(payin_path: str):
             error_keyword, case=False, na=False
         ).sum()
 
-        api_total = lh_papi
-        api_rate = (lh_papi / lh_total * 100) if lh_total else 0
-        api_bad = api_rate > api_threshold
-        api_icon = "🟢" if not api_bad else "🚨"
+        # === Минимальное количество операций для API ===
+        min_events = cfg["min_events"]
+
+        if lh_total < min_events:
+            api_total = lh_papi
+            api_rate = 0
+            api_bad = False
+            api_icon = "ℹ️"
+        else:
+            api_total = lh_papi
+            api_rate = (lh_papi / lh_total * 100) if lh_total else 0
+            api_bad = api_rate > api_threshold
+            api_icon = "🟢" if not api_bad else "🚨"
 
         # === Нет кошельков ===
         nok_wallets_total = sub_all["_info_norm"].str.contains(
