@@ -248,14 +248,14 @@ def analyze_wallets(payin_path: str):
         # сообщение
         msg = (
             f"{partner_name}\n"
-            f"Всего операций: {total}\n"
-            f"Успешных: {success}\n"
-            f"Конверсия: {conv_text}\n"
-            f"Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
-            f"({percent_filled}%) — {limit_icon}\n"
-            f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
-            f"Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
-            f"Последняя операция: {last_op_str}\n"
+            f"  Всего операций: {total}\n"
+            f"  Успешных: {success}\n"
+            f"  Конверсия: {conv_text}\n"
+            f"  Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
+            f"  ({percent_filled}%) — {limit_icon}\n"
+            f"  API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
+            f"  Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
+            f"  Последняя операция: {last_op_str}\n"
         )
 
         messages.append(msg)
@@ -302,23 +302,23 @@ def analyze_wallets(payin_path: str):
     else:
         lines = ["❗ Обнаружены отклонения:"]
         for p in bad:
-            block = f"\n     {p['name']}\n"
+            block = f"\n{p['name']}\n"
             if p["conv_bad"]:
                 block += (
-                    f"Конверсия: {p['conv']:.1f}% "
-                    f"(< {p['threshold']*100:.1f}%) — 🚨\n"
+                    f"  Конверсия: {p['conv']:.1f}% "
+                    f"  (< {p['threshold']*100:.1f}%) — 🚨\n"
                 )
             if p["api_bad"]:
                 block += (
-                    f"API ошибки: {p['api_rate']:.1f}% "
-                    f"(> {p['api_threshold']}%) — 🚨\n"
+                    f"  API ошибки: {p['api_rate']:.1f}% "
+                    f"  (> {p['api_threshold']}%) — 🚨\n"
                 )
             if p["limit_bad"]:
-                block += "Лимит превышен — 🚨\n"
+                block += "  Лимит превышен — 🚨\n"
             if p["nok_bad"]:
-                block += f"Нет доступных аккаунтов: {p['nok_count']} — 🚨\n"
+                block += f"  Нет доступных аккаунтов: {p['nok_count']} — 🚨\n"
             if p["limit_warn"]:
-                block += f"Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
+                block += f"  Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
 
             lines.append(block)
 
