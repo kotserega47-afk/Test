@@ -248,11 +248,11 @@ def analyze_wallets(payin_path: str):
 
         # сообщение
         msg = (
-            f"📊 *{partner_name}*\n"
+            f"*{partner_name}*\n"
             f"Всего операций: {total}\n"
             f"Успешных: {success}\n"
             f"Конверсия: {conv_text}\n"
-            f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} "
+            f"Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
             f"({percent_filled}%) — {limit_icon}\n"
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
