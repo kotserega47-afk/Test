@@ -294,6 +294,10 @@ def analyze_wallets(payin_path: str):
                     }
                 )
 
+    # если вообще нет сообщений (ни один партнёр не попал в отчёт) — ничего не выводим
+    if not messages:
+        logger.info("[Analyzer] Нет партнёров с операциями в окне — ничего не отправляем")
+        return
     # отправка основного блока
     send_message_sync(
         "📦 Wallet Analyzer\n"
