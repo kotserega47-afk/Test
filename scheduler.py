@@ -63,7 +63,7 @@ def main():
     # Основной downloader (30 мин, 08–24)
     t1 = threading.Thread(
         target=run_every,
-        args=(30, 8, 24, run_download, "MainDownloader"),
+        args=(40, 8, 24, run_download, "MainDownloader"),
         daemon=True
     )
     t1.start()
