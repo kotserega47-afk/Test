@@ -110,7 +110,7 @@ def analyze_wallets(payin_path: str):
     start_time = end_time - timedelta(minutes=window_min)
 
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
-    df_last2h = df[(df["_dt"] >= now - timedelta(hours=2)) & (df["_dt"] <= now)]
+    df_last2h = df[(df["_dt"] >= now - timedelta(hours=1)) & (df["_dt"] <= now)]
     df_today = df[df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
 
     partners_cfg = cfg["partners"]

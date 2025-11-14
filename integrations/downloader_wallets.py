@@ -106,11 +106,7 @@ def run_wallet_cycle():
         browser.close()
 
     analyze_wallets(payin_path)
-    send_file_sync(
-        file_path=payin_path,
-        caption=f"📥 PayIn файл ({ts})",
-        chat_id=CHAT_ID_WALLET
-    )
+
 
 
 
