@@ -151,7 +151,6 @@ def analyze_wallets(payin_path: str):
             conv_icon = "ℹ️"
             conv_text = (
                 f"{conv:.1f}% — ℹ️ Недостаточно данных "
-                f"({total} < {min_events})"
             )
         else:
             conv_bad = conv < threshold * 100
@@ -291,7 +290,7 @@ def analyze_wallets(payin_path: str):
 
     # отправка основного блока
     send_message_sync(
-        "📦 *Wallet Analyzer — статистика*\n"
+        "📦 Wallet Analyzer\n"
         f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
         + "\n\n".join(messages),
         chat_id=CHAT_ID,
@@ -299,11 +298,11 @@ def analyze_wallets(payin_path: str):
 
     # отправка BAD-блока
     if not bad:
-        send_message_sync("🟢 *Все партнёры в норме!*", chat_id=CHAT_ID)
+        send_message_sync("🟢 Все партнёры в норме!", chat_id=CHAT_ID)
     else:
-        lines = ["❗ *Обнаружены отклонения:*"]
+        lines = ["❗ Обнаружены отклонения:"]
         for p in bad:
-            block = f"\n📊 *{p['name']}*\n"
+            block = f"\n     {p['name']}\n"
             if p["conv_bad"]:
                 block += (
                     f"Конверсия: {p['conv']:.1f}% "
