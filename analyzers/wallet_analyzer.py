@@ -154,7 +154,7 @@ def analyze_wallets(payin_path: str):
             )
         else:
             conv_bad = conv < threshold * 100
-            conv_icon = "🟢" if not conv_bad else "🚨"
+            conv_icon = "🟢" if not conv_bad else "🔴"
             conv_text = (
                 f"{conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}"
             )
@@ -188,14 +188,14 @@ def analyze_wallets(payin_path: str):
             api_total = lh_papi
             api_rate = (lh_papi / lh_total * 100) if lh_total else 0
             api_bad = api_rate > api_threshold
-            api_icon = "🟢" if not api_bad else "🚨"
+            api_icon = "🟢" if not api_bad else "🔴"
 
         # === Нет кошельков ===
         nok_wallets_total = sub_all["_info_norm"].str.contains(
             "Нет доступных аккаунтов"
         ).sum()
         nok_bad = nok_wallets_total > 0
-        nok_icon = "🟢" if not nok_bad else "🚨"
+        nok_icon = "🟢" if not nok_bad else "🔴"
 
         # лимиты
         daily_limit = settings.get("daily_max_amount")
@@ -232,7 +232,7 @@ def analyze_wallets(payin_path: str):
         if daily_limit:
             if percent_filled >= 100:
                 limit_bad = True
-                limit_icon = "🚨"
+                limit_icon = "🔴"
             elif percent_filled >= 90:
                 limit_warn = True
                 limit_icon = "🟡"
@@ -306,17 +306,17 @@ def analyze_wallets(payin_path: str):
             if p["conv_bad"]:
                 block += (
                     f"  Конверсия: {p['conv']:.1f}% "
-                    f"  (< {p['threshold']*100:.1f}%) — 🚨\n"
+                    f"  (< {p['threshold']*100:.1f}%) — 🔴\n"
                 )
             if p["api_bad"]:
                 block += (
                     f"  API ошибки: {p['api_rate']:.1f}% "
-                    f"  (> {p['api_threshold']}%) — 🚨\n"
+                    f"  (> {p['api_threshold']}%) — 🔴\n"
                 )
             if p["limit_bad"]:
-                block += "  Лимит превышен — 🚨\n"
+                block += "  Лимит превышен — 🔴\n"
             if p["nok_bad"]:
-                block += f"  Нет доступных аккаунтов: {p['nok_count']} — 🚨\n"
+                block += f"  Нет доступных аккаунтов: {p['nok_count']} — 🔴\n"
             if p["limit_warn"]:
                 block += f"  Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
 
