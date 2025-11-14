@@ -103,7 +103,6 @@ def analyze_wallets(payin_path: str):
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
 
     now = datetime.now(tz)
-    now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
 
     # временные окна
     end_time = now - timedelta(minutes=offset_min)
@@ -143,39 +142,40 @@ def analyze_wallets(payin_path: str):
 
         # пороги
         threshold = settings.get("threshold", 0)
-        api_keyword = settings.get("api_cancel_keyword", "").lower()
         api_threshold = settings.get("api_cancel_threshold", 100)
 
         # === Проверка min_events ===
         min_events = cfg["min_events"]
         if total < min_events:
-            conv_icon = "ℹ️"
             conv_bad = False
-            conv_text = f"{conv:.1f}% — ℹ️ Недостаточно данных ({total} < {min_events})"
+            conv_icon = "ℹ️"
+            conv_text = (
+                f"{conv:.1f}% — ℹ️ Недостаточно данных "
+                f"({total} < {min_events})"
+            )
         else:
             conv_bad = conv < threshold * 100
             conv_icon = "🟢" if not conv_bad else "🚨"
-            conv_text = f"{conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}"
+            conv_text = (
+                f"{conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}"
+            )
 
-        # конверсия
-        conv_bad = conv < threshold * 100
-        conv_icon = "🟢" if not conv_bad else "🚨"
-
-        # API ошибки — считаем только среди countable
+        # === API ошибки (последний час) ===
 
         error_keyword = "отмена по api"
-
         one_hour_ago = now - timedelta(hours=1)
 
-        # операции за последний час — только по этому партнёру
-        last_hour = df[(df["_partner_norm"] == key_norm) & (df["_dt"] >= one_hour_ago)]
+        last_hour = df[
+            (df["_partner_norm"] == key_norm)
+            & (df["_dt"] >= one_hour_ago)
+        ]
 
-        # countable за последний час
         lh_countable = last_hour[last_hour["_status_count"]]
         lh_total = len(lh_countable)
 
-        # PAPI ошибки в countable-операциях за последний час
-        lh_papi = lh_countable["_info_norm"].str.contains(error_keyword, case=False, na=False).sum()
+        lh_papi = lh_countable["_info_norm"].str.contains(
+            error_keyword, case=False, na=False
+        ).sum()
 
         api_total = lh_papi
         api_rate = (lh_papi / lh_total * 100) if lh_total else 0
@@ -183,7 +183,9 @@ def analyze_wallets(payin_path: str):
         api_icon = "🟢" if not api_bad else "🚨"
 
         # === Нет кошельков ===
-        nok_wallets_total = sub_all["_info_norm"].str.contains("Нет доступных аккаунтов").sum()
+        nok_wallets_total = sub_all["_info_norm"].str.contains(
+            "Нет доступных аккаунтов"
+        ).sum()
         nok_bad = nok_wallets_total > 0
         nok_icon = "🟢" if not nok_bad else "🚨"
 
@@ -201,13 +203,19 @@ def analyze_wallets(payin_path: str):
         if group_name:
             group_partners = groups_cfg[group_name]["partners"]
             df_group_today = df_today[
-                df_today["_partner_norm"].isin([normalize_partner_name(p) for p in group_partners])
+                df_today["_partner_norm"].isin(
+                    [normalize_partner_name(p) for p in group_partners]
+                )
             ]
             df_group_success = df_group_today[df_group_today["_status_success"]]
-            group_amount_today = pd.to_numeric(df_group_success[COL_AMOUNT], errors="coerce").sum()
+            group_amount_today = pd.to_numeric(
+                df_group_success[COL_AMOUNT], errors="coerce"
+            ).sum()
             percent_filled = int(group_amount_today / daily_limit * 100)
         else:
-            percent_filled = int(amount_today / daily_limit * 100) if daily_limit else 0
+            percent_filled = (
+                int(amount_today / daily_limit * 100) if daily_limit else 0
+            )
 
         # уровни лимита
         limit_bad = False
@@ -235,51 +243,49 @@ def analyze_wallets(payin_path: str):
             f"Всего операций: {total}\n"
             f"Успешных: {success}\n"
             f"Конверсия: {conv_text}\n"
-            f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} ({percent_filled}%) — {limit_icon}\n"
+            f"Сумма за сутки: {amount_today:,.0f} / лимит {daily_limit:,.0f} "
+            f"({percent_filled}%) — {limit_icon}\n"
             f"API ошибки: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"Нет доступных аккаунтов: {nok_wallets_total} шт — {nok_icon}\n"
             f"Последняя операция: {last_op_str}\n"
-
         )
 
         messages.append(msg)
 
         # классификация BAD
         if total > 0:
-            is_bad = False
-            if conv_bad:
-                is_bad = True
-            if api_bad:
-                is_bad = True
-            if limit_bad:
-                is_bad = True
-            if limit_warn:
-                is_bad = True
-            if nok_bad:
-                is_bad = True
+            is_bad = (
+                conv_bad
+                or api_bad
+                or limit_bad
+                or limit_warn
+                or nok_bad
+            )
 
             if is_bad:
-                bad.append({
-                    "name": partner_name,
-                    "conv": conv,
-                    "threshold": threshold,
-                    "api_rate": api_rate,
-                    "api_threshold": api_threshold,
-                    "limit_bad": limit_bad,
-                    "limit_warn": limit_warn,
-                    "percent": percent_filled,
-                    "conv_bad": conv_bad,
-                    "api_bad": api_bad,
-                    "nok_bad": nok_bad,
-                    "nok_count": nok_wallets_total,
-                })
+                bad.append(
+                    {
+                        "name": partner_name,
+                        "conv": conv,
+                        "threshold": threshold,
+                        "api_rate": api_rate,
+                        "api_threshold": api_threshold,
+                        "limit_bad": limit_bad,
+                        "limit_warn": limit_warn,
+                        "percent": percent_filled,
+                        "conv_bad": conv_bad,
+                        "api_bad": api_bad,
+                        "nok_bad": nok_bad,
+                        "nok_count": nok_wallets_total,
+                    }
+                )
 
     # отправка основного блока
     send_message_sync(
         "📦 *Wallet Analyzer — статистика*\n"
         f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
         + "\n\n".join(messages),
-        chat_id=CHAT_ID
+        chat_id=CHAT_ID,
     )
 
     # отправка BAD-блока
