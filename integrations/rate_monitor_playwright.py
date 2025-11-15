@@ -205,3 +205,7 @@ def check_bakai_rate(chat_id: str = None):
         _save_rate(buy_rate)
 
     # если курс одинаковый — просто молчим
+# --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    check_bakai_rate()
