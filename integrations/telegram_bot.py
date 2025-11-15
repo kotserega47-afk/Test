@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+import threading
 from telegram import Bot, InputFile
 from telegram.request import HTTPXRequest
 from utils.logger import logger
@@ -17,10 +18,10 @@ if not TELEGRAM_TOKEN or not DEFAULT_CHAT_ID:
 
 
 # =====================================================
-#   HTTP-клиент Telegram с УВЕЛИЧЕННЫМ ПУЛОМ
+#   HTTP client
 # =====================================================
 request = HTTPXRequest(
-    connection_pool_size=100,     # раньше 20 → было мало!
+    connection_pool_size=100,
     connect_timeout=20.0,
     read_timeout=40.0,
 )
@@ -29,42 +30,51 @@ bot = Bot(token=TELEGRAM_TOKEN, request=request)
 
 
 # =====================================================
-#   СОЗДАЕМ ЕДИНЫЙ EVENT LOOP
+#   GLOBAL EVENT LOOP + BACKGROUND THREAD
 # =====================================================
-try:
-    loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        raise RuntimeError
-except Exception:
-    loop = asyncio.new_event_loop()
+
+loop = asyncio.new_event_loop()
+queue = asyncio.Queue()
+
+
+def _loop_runner():
+    """Фоновый поток, который крутит event loop постоянно."""
     asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+threading.Thread(target=_loop_runner, daemon=True).start()
 
 
 # =====================================================
-#   ОЧЕРЕДЬ на отправку (ТОЛЬКО ПО ОДНОМУ платежу)
+#   Worker
 # =====================================================
-queue: asyncio.Queue = asyncio.Queue()
-
 
 async def _worker():
-    """
-    Фоновый воркер — берет задачи из очереди и отправляет их
-    строго последовательно, предотвращая Pool timeout.
-    """
     while True:
         func, args = await queue.get()
         try:
             await func(*args)
+
+            # лог успешной отправки
+            if func is _send_message:
+                chat_id, text = args
+                logger.info(f"📤 Отправлено сообщение (chat_id={chat_id}): {text[:80]}")
+            else:
+                chat_id, path, caption = args
+                logger.info(f"📁 Отправлен файл (chat_id={chat_id}): {path}")
+
         except Exception as e:
             logger.error(f"❌ Ошибка async отправки: {e}")
         queue.task_done()
 
-# запускаем воркер
-loop.create_task(_worker())
+
+# запускаем async worker внутри event loop
+loop.call_soon_threadsafe(loop.create_task, _worker())
 
 
 # =====================================================
-#   async-функции отправки
+#   async send funcs
 # =====================================================
 
 async def _send_message(chat_id: str, text: str):
@@ -77,14 +87,13 @@ async def _send_file(chat_id: str, path: str, caption: str | None):
 
 
 # =====================================================
-#   ПУБЛИЧНЫЕ СИНХРОННЫЕ ФУНКЦИИ
+#   PUBLIC sync API
 # =====================================================
 
 def send_message_sync(content: str, chat_id: str | None = None):
     chat_id = chat_id or DEFAULT_CHAT_ID
 
     try:
-        # отправляем в очередь
         loop.call_soon_threadsafe(
             queue.put_nowait,
             (_send_message, (chat_id, content))
@@ -95,15 +104,15 @@ def send_message_sync(content: str, chat_id: str | None = None):
         logger.error(f"❌ Ошибка постановки в очередь send_message: {e}")
 
 
-def send_file_sync(file_path: str, caption: str | None = None, chat_id: str | None = None):
+def send_file_sync(path: str, caption: str | None = None, chat_id: str | None = None):
     chat_id = chat_id or DEFAULT_CHAT_ID
 
     try:
         loop.call_soon_threadsafe(
             queue.put_nowait,
-            (_send_file, (chat_id, file_path, caption))
+            (_send_file, (chat_id, path, caption))
         )
-        logger.info(f"📁 Файл поставлен в очередь на отправку: {file_path}")
+        logger.info(f"📨 Файл поставлен в очередь: {path}")
 
     except Exception as e:
         logger.error(f"❌ Ошибка постановки в очередь send_file: {e}")
