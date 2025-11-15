@@ -17,82 +17,93 @@ if not TELEGRAM_TOKEN or not DEFAULT_CHAT_ID:
 
 
 # =====================================================
-#  Создаём ОДИН bot и ОДИН HTTP-клиент на весь модуль
+#   HTTP-клиент Telegram с УВЕЛИЧЕННЫМ ПУЛОМ
 # =====================================================
 request = HTTPXRequest(
-    connection_pool_size=20,
-    connect_timeout=10.0,
-    read_timeout=30.0,
+    connection_pool_size=100,     # раньше 20 → было мало!
+    connect_timeout=20.0,
+    read_timeout=40.0,
 )
 
 bot = Bot(token=TELEGRAM_TOKEN, request=request)
 
 
 # =====================================================
-#  ВНУТРЕННИЕ async-функции
+#   СОЗДАЕМ ЕДИНЫЙ EVENT LOOP
 # =====================================================
-async def _send_message(text: str, chat_id: str):
-    try:
-        await bot.send_message(chat_id=chat_id, text=text)
-    except Exception as e:
-        logger.error(f"❌ Ошибка async отправки сообщения: {e}")
-
-
-async def _send_file(path: str, caption: str, chat_id: str):
-    try:
-        with open(path, "rb") as f:
-            await bot.send_document(chat_id=chat_id, document=InputFile(f), caption=caption)
-    except Exception as e:
-        logger.error(f"❌ Ошибка async отправки файла: {e}")
+try:
+    loop = asyncio.get_event_loop()
+    if not loop.is_running():
+        raise RuntimeError
+except Exception:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
 
 # =====================================================
-#  Универсальная функция безопасного вызова async
+#   ОЧЕРЕДЬ на отправку (ТОЛЬКО ПО ОДНОМУ платежу)
 # =====================================================
-def _run_async(coro):
+queue: asyncio.Queue = asyncio.Queue()
+
+
+async def _worker():
     """
-    Выполняет корутину в зависимости от состояния event loop.
-    Это гарантирует:
-    - отсутствие ошибок asyncio.run внутри работающего loop
-    - отсутствие блокировок
-    - минимальное потребление ресурсов
+    Фоновый воркер — берет задачи из очереди и отправляет их
+    строго последовательно, предотвращая Pool timeout.
     """
-    try:
-        loop = asyncio.get_event_loop()
+    while True:
+        func, args = await queue.get()
+        try:
+            await func(*args)
+        except Exception as e:
+            logger.error(f"❌ Ошибка async отправки: {e}")
+        queue.task_done()
 
-        if loop.is_running():
-            # Уже есть event loop (Playwright, Scheduler)
-            asyncio.ensure_future(coro)
-        else:
-            # Нет активного event loop — запускаем сами
-            loop.run_until_complete(coro)
-
-    except RuntimeError:
-        # Если нет event loop вообще
-        asyncio.run(coro)
+# запускаем воркер
+loop.create_task(_worker())
 
 
 # =====================================================
-#  ПУБЛИЧНЫЕ функции отправки
+#   async-функции отправки
+# =====================================================
+
+async def _send_message(chat_id: str, text: str):
+    await bot.send_message(chat_id=chat_id, text=text)
+
+
+async def _send_file(chat_id: str, path: str, caption: str | None):
+    with open(path, "rb") as f:
+        await bot.send_document(chat_id=chat_id, document=InputFile(f), caption=caption)
+
+
+# =====================================================
+#   ПУБЛИЧНЫЕ СИНХРОННЫЕ ФУНКЦИИ
 # =====================================================
 
 def send_message_sync(content: str, chat_id: str | None = None):
     chat_id = chat_id or DEFAULT_CHAT_ID
-    if not chat_id:
-        logger.warning("⚠️ CHAT_ID не указан — сообщение не отправлено.")
-        return
 
-    _run_async(_send_message(content, chat_id))
+    try:
+        # отправляем в очередь
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            (_send_message, (chat_id, content))
+        )
+        logger.info(f"📨 Добавлено в очередь сообщение ({chat_id}): {content[:60]}")
 
-    logger.info(f"📨 Сообщение отправлено (chat_id={chat_id}): {content[:80]}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка постановки в очередь send_message: {e}")
 
 
 def send_file_sync(file_path: str, caption: str | None = None, chat_id: str | None = None):
     chat_id = chat_id or DEFAULT_CHAT_ID
-    if not chat_id:
-        logger.warning("⚠️ CHAT_ID не указан — файл не отправлен.")
-        return
 
-    _run_async(_send_file(file_path, caption, chat_id))
+    try:
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            (_send_file, (chat_id, file_path, caption))
+        )
+        logger.info(f"📁 Файл поставлен в очередь на отправку: {file_path}")
 
-    logger.info(f"📁 Файл отправлен: {file_path} (chat_id={chat_id})")
+    except Exception as e:
+        logger.error(f"❌ Ошибка постановки в очередь send_file: {e}")
