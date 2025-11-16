@@ -7,7 +7,7 @@ import pytz
 from utils.logger import logger
 from integrations.downloader import run_download
 from integrations.downloader_wallets import run_wallet_cycle
-from integrations.rate_monitor_playwright import check_bakai_rate
+from integrations.bakai_monitor_playwright import check_bakai_rate
 
 # Московский TZ
 MSK = pytz.timezone("Europe/Moscow")
@@ -63,7 +63,7 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
 def run_rate_monitor():
     """
     Проверяет курс каждые 5 минут в окне 08:55–10:30.
-    Логику отправки сообщений контролирует сам модуль rate_monitor_playwright.py.
+    Логику отправки сообщений контролирует сам модуль bakai_monitor_playwright.py.
     Здесь только расписание.
     """
     logger.info("🟢 Старт планировщика RateMonitor: каждые 5 мин, окно 08:55–10:30 (MSK)")

@@ -1,4 +1,4 @@
-# integrations/rate_monitor_playwright.py
+# integrations/bakai_monitor_playwright.py
 import os
 from datetime import datetime, time
 from playwright.sync_api import sync_playwright
