@@ -74,20 +74,21 @@ def run_hourly_report():
             if "match" in gdata:
                 df_m = df_payin.copy()
                 for m in gdata["match"]:
-                    df_m = df_m[df_m["Партнер"].str.contains(m, case=False, na=False) |
-                                df_m["Описание"].str.contains(m, case=False, na=False, regex=False)
-                                if "Описание" in df_m.columns else False]
+                    # Фильтр по Партнеру
+                    mask_partner = df_m["Партнер"].str.contains(m, case=False, na=False)
+
+                    # Фильтр по Описанию (если есть)
+                    if "Описание" in df_m.columns:
+                        mask_descr = df_m["Описание"].str.contains(
+                            m, case=False, na=False, regex=False
+                        )
+                    else:
+                        mask_descr = False
+
+                    df_m = df_m[mask_partner | mask_descr]
+
                 amount = df_m["Сумма"].sum()
                 payin_lines.append(f" - {gname} - {amount:,.2f}")
-
-            if "combine" in gdata:
-                total = 0
-                for sub in gdata["combine"]:
-                    df_m = df_payin.copy()
-                    for m in groups[sub]["match"]:
-                        df_m = df_m[df_m["Партнер"].str.contains(m, case=False, na=False)]
-                    total += df_m["Сумма"].sum()
-                payin_lines.append(f" - {gname} - {total:,.2f}")
 
         payin_lines.append("")
 
