@@ -1,13 +1,17 @@
 # integrations/scheduler.py
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 from utils.logger import logger
 from integrations.downloader import run_download
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import check_bakai_rate
+
+# === NEW ===
+from integrations.hourly_downloader import run_hourly_cycle
+from analyzers.hourly_report import run_hourly_report
 
 # Московский TZ
 MSK = pytz.timezone("Europe/Moscow")
@@ -20,13 +24,13 @@ def now_msk():
 
 # ------------ ВСПОМОГАЮЩИЕ ФУНКЦИИ -----------------
 
-def wait_until(hour: int) -> None:
+def wait_until_hour(hour: int) -> None:
     """Спит до указанного часа по Москве."""
     while True:
         now = now_msk()
         if now.hour >= hour:
             return
-        time.sleep(60)
+        time.sleep(30)
 
 
 def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str):
@@ -38,13 +42,11 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
     while True:
         now = now_msk()
 
-        # ВНЕ рабочего окна — спим до старта
         if not (start_hour <= now.hour <= end_hour):
             logger.info(f"⏸ {name}: вне окна, ждём {start_hour}:00 (MSK)")
-            wait_until(start_hour)
+            wait_until_hour(start_hour)
             continue
 
-        # В рабочем окне — запускаем задачу
         try:
             logger.info(f"🚀 Запуск {name} (MSK {now.strftime('%H:%M:%S')})")
             func()
@@ -52,20 +54,12 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
         except Exception as e:
             logger.exception(f"❌ Ошибка в {name}: {e}")
 
-        # Спим ровно interval_min минут
-        sleep_seconds = interval_min * 60
-        logger.info(f"😴 {name}: пауза {interval_min} мин")
-        time.sleep(sleep_seconds)
+        time.sleep(interval_min * 60)
 
 
 # ------------ Rate Monitor (курс RUB) -----------------
 
 def run_rate_monitor():
-    """
-    Проверяет курс каждые 5 минут в окне 08:55–10:30.
-    Логику отправки сообщений контролирует сам модуль bakai_monitor_playwright.py.
-    Здесь только расписание.
-    """
     logger.info("🟢 Старт планировщика RateMonitor: каждые 5 мин, окно 08:55–10:30 (MSK)")
 
     while True:
@@ -73,7 +67,6 @@ def run_rate_monitor():
         hour = now.hour
         minute = now.minute
 
-        # ВНЕ окна
         in_window = (
             (hour == 8 and minute >= 55) or
             (9 <= hour < 11) or
@@ -85,7 +78,6 @@ def run_rate_monitor():
             time.sleep(300)
             continue
 
-        # Внутри окна запускаем проверку
         try:
             logger.info(f"🚀 Запуск RateMonitor (MSK {now.strftime('%H:%M:%S')})")
             check_bakai_rate()
@@ -93,8 +85,42 @@ def run_rate_monitor():
         except Exception as e:
             logger.exception(f"❌ Ошибка в RateMonitor: {e}")
 
-        logger.info("😴 RateMonitor: пауза 5 мин")
         time.sleep(5 * 60)
+
+
+# ------------ NEW: Hourly report (09:00–00:00) -----------------
+
+def run_hourly_loop():
+    logger.info("🟢 Старт HourlyReporter: каждый час, окно 09:00–00:00 (MSK)")
+
+    while True:
+        now = now_msk()
+
+        # окно работы: 09–23 + 00
+        in_window = (9 <= now.hour <= 23) or (now.hour == 0)
+
+        if not in_window:
+            logger.info("⏸ HourlyReporter: вне окна, ждём 09:00 (MSK)")
+            wait_until_hour(9)
+            continue
+
+        # запускаем ровно в 00 минут
+        if now.minute == 0:
+            try:
+                logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
+                run_hourly_cycle()
+
+                logger.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
+                run_hourly_report()
+
+                logger.info("✅ HourlyReporter завершён")
+            except Exception as e:
+                logger.exception(f"❌ Ошибка в HourlyReporter: {e}")
+
+            # ждём 60 секунд, чтобы не запустить два раза в одну минуту
+            time.sleep(60)
+
+        time.sleep(5)
 
 
 # ------------ ЗАПУСК ПОТОКОВ -----------------
@@ -116,14 +142,15 @@ def main():
     )
     t2.start()
 
-    # RateMonitor (курс RUB) — каждые 5 мин, 08:55–10:30
-    t3 = threading.Thread(
-        target=run_rate_monitor,
-        daemon=True
-    )
+    # RateMonitor (курс RUB)
+    t3 = threading.Thread(target=run_rate_monitor, daemon=True)
     t3.start()
 
-    # Основной поток просто живёт
+    # NEW — HourlyDownloader + HourlyReport
+    t4 = threading.Thread(target=run_hourly_loop, daemon=True)
+    t4.start()
+
+    # основной поток
     while True:
         time.sleep(3600)
 
