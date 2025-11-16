@@ -4,7 +4,9 @@ import pandas as pd
 from datetime import datetime, time
 from utils.logger import logger
 from integrations.telegram_bot import send_message_sync
+from pytz import timezone
 
+MSK = timezone("Europe/Moscow")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_HOURLY")
 
 BASE_DIR = "/tmp/hourly"
@@ -17,9 +19,11 @@ def load_cfg():
 
 
 def filter_today(df, dt_col):
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    hour_cut = datetime.now().replace(minute=0, second=0, microsecond=0)
+    now = datetime.now(MSK)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    hour_cut = now.replace(minute=0, second=0, microsecond=0)
     df["_dt"] = pd.to_datetime(df[dt_col], dayfirst=True, errors="coerce")
+    df["_dt"] = df["_dt"].dt.tz_localize(MSK, nonexistent="shift_forward")
     return df[(df["_dt"] >= today) & (df["_dt"] < hour_cut)]
 
 
@@ -93,7 +97,7 @@ def run_hourly_report():
         payin_lines.append("")
 
     # ---------- FINAL OUTPUT ----------
-    now = datetime.now()
+    now = datetime.now(MSK)
     header = f"Данные на {now.strftime('%d.%m')} с 00:00 по {now.strftime('%H:00')}"
 
     text = (
