@@ -82,7 +82,7 @@ def run_rate_monitor():
 
         if not in_window:
             logger.info("⏸ RateMonitor: вне окна, ждём 08:55 (MSK)")
-            time.sleep(60)
+            time.sleep(300)
             continue
 
         # Внутри окна запускаем проверку

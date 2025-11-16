@@ -10,7 +10,7 @@ CHAT_ID = "-1003281664794"
 
 LAST_RATE_FILE = "/tmp/bakai_last_buy_rate.txt"
 FLAG_855 = "/tmp/bakai_sent_855.txt"
-FLAG_1100 = "/tmp/bakai_sent_1100.txt"
+FLAG_1030 = "/tmp/bakai_sent_1030.txt"
 FLAG_CHANGED = "/tmp/bakai_changed_today.txt"
 
 UA = (
@@ -195,13 +195,13 @@ def check_bakai_rate(chat_id: str = None):
         _set_flag(FLAG_CHANGED)
         return
 
-    # === 11:00 и курс не менялся
-    if _is_1030_now() and not _flag_today(FLAG_1100):
+    # === 10:30 и курс не менялся
+    if _is_1030_now() and not _flag_today(FLAG_1030):
 
         msg = f"🕚 Мониторинг завершён. Курс покупки RUB не изменился {buy_rate}"
         send_message_sync(msg, chat_id=chat_id)
 
-        _set_flag(FLAG_1100)
+        _set_flag(FLAG_1030)
         _save_rate(buy_rate)
 
     # если курс одинаковый — просто молчим
