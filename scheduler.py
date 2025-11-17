@@ -7,11 +7,13 @@ from zoneinfo import ZoneInfo
 
 from utils.logger import logger
 
-# === правильные импорты ===
-from integrations.downloader import run_download          # ← настоящий Downloader
-from analyzers.hourly_report import run_hourly_report     # ← отчёт
-from integrations.downloader_wallets import run_wallet_cycle
+# === Импорты задач ===
+from integrations.downloader import run_download                 # 40 минут
+from integrations.hourly_downloader import run_hourly_cycle      # каждый час
+from analyzers.hourly_report import run_hourly_report            # отчёт после hourly
+from integrations.downloader_wallets import run_wallet_cycle     # 5 минут
 from integrations.bakai_monitor_playwright import check_bakai_rate
+
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -81,34 +83,43 @@ def run_rate_monitor():
         time.sleep(5 * 60)
 
 
-# ================= HOURLY (Downloader → Report) =================
+# ================= HOURLY (HourlyDownloader → HourlyReport) =================
 
 def run_hourly_loop():
     logger.info("🟢 Старт HourlyReporter: каждый час, окно 09:00–00:00 (MSK)")
 
+    last_run_hour = None
+
     while True:
         now = now_msk()
+        hour = now.hour
+        minute = now.minute
 
-        in_window = (9 <= now.hour <= 23) or (now.hour == 0)
+        in_window = (9 <= hour <= 23) or (hour == 0)
 
         if not in_window:
             logger.info("⏸ HourlyReporter: вне окна, ждём 09:00 (MSK)")
             wait_until_hour(9)
             continue
 
-        if now.minute == 0:     # запуск в начале часа
-            try:
-                logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
-                run_download()          # ← СНАЧАЛА СКАЧИВАЕМ ФАЙЛЫ
+        # Запуск в начале часа, 1 раз
+        if minute == 0 and hour != last_run_hour:
+            last_run_hour = hour
 
+            try:
+                # 1️⃣ HourlyDownloader → скачивает PayIn/Payout в /tmp/hourly/*
+                logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
+                run_hourly_cycle()
+
+                # 2️⃣ HourlyReport → строит отчёт по этим файлам
                 logger.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
-                run_hourly_report()     # ← ПОТОМ СТРОИМ ОТЧЁТ
+                run_hourly_report()
 
                 logger.info("✅ HourlyReporter завершён")
             except Exception as e:
                 logger.exception(f"❌ Ошибка в HourlyReporter: {e}")
 
-            time.sleep(60)
+            time.sleep(60)  # чтобы не запуститься дважды
 
         time.sleep(5)
 
@@ -116,7 +127,7 @@ def run_hourly_loop():
 # ================= START THREADS =================
 
 def main():
-    # Основной downloader — каждые 40 минут
+    # MainDownloader — каждые 40 минут
     threading.Thread(
         target=run_every,
         args=(40, 8, 24, run_download, "MainDownloader"),
@@ -130,10 +141,10 @@ def main():
         daemon=True
     ).start()
 
-    # RateMonitor
+    # RateMonitor — как было
     threading.Thread(target=run_rate_monitor, daemon=True).start()
 
-    # HourlyDownloader + HourlyReport
+    # HourlyDownloader + HourlyReport — каждый час
     threading.Thread(target=run_hourly_loop, daemon=True).start()
 
     while True:
