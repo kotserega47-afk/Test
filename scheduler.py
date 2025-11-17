@@ -2,20 +2,18 @@
 import time
 import threading
 from datetime import datetime
-import pytz
-
+from zoneinfo import ZoneInfo
 from utils.logger import logger
 from integrations.downloader import run_download
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import check_bakai_rate
 
 # === NEW ===
-from integrations.hourly_downloader import run_hourly_cycle
+from integrations.hourly_downloader import run_hourly_report
 from analyzers.hourly_report import run_hourly_report
 
 # Московский TZ
-MSK = pytz.timezone("Europe/Moscow")
-
+MSK = ZoneInfo("Europe/Moscow")
 
 def now_msk():
     """Текущее время по Москве."""
@@ -108,7 +106,7 @@ def run_hourly_loop():
         if now.minute == 0:
             try:
                 logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
-                run_hourly_cycle()
+                run_hourly_report()
 
                 logger.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
                 run_hourly_report()

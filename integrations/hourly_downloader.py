@@ -1,119 +1,231 @@
 import os
-import time
+import yaml
+import pandas as pd
 from datetime import datetime
-from playwright.sync_api import sync_playwright
-import zoneinfo
+from pytz import timezone
 
+from dotenv import load_dotenv
 from utils.logger import logger
+from integrations.telegram_bot import send_message_sync
+from load_data import normalize_partner_name
+
+
+# ============================================================
+#  INIT
+# ============================================================
+
+load_dotenv()
+
+MSK = timezone("Europe/Moscow")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_HOURLY")
 
 BASE_DIR = "/tmp/hourly"
-AUTH_STATE = "/tmp/hourly_auth.json"
-
-os.makedirs(BASE_DIR, exist_ok=True)
-
-LOGIN = os.getenv("ANTARES_LOGIN")
-PASSWORD = os.getenv("ANTARES_PASSWORD")
-HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "1").lower() in {"1", "true"}
-MSK = zoneinfo.ZoneInfo("Europe/Moscow")
+CONFIG_PATH = "config/hourly_report.yaml"
 
 
-def _ensure_logged_in(page, context):
-    """Используем сохранённую сессию или логинимся."""
-    if os.path.exists(AUTH_STATE):
-        return
+# ============================================================
+#  CONFIG LOADER
+# ============================================================
 
-    logger.info("[hourly_dl] Логинимся…")
-    page.goto("https://antares.plus/lkcard/#/login", timeout=60000)
-    page.fill("input[type='text']", LOGIN)
-    page.fill("input[type='password']", PASSWORD)
-    page.click("button:has-text('Войти')")
-    page.wait_for_load_state("networkidle")
-    time.sleep(2)
-    context.storage_state(path=AUTH_STATE)
-    logger.info("[hourly_dl] Сессия сохранена")
+def load_cfg():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
-def _download_payin(page):
-    """PayIn за сегодня."""
-    tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
+# ============================================================
+#  DATE FILTER
+# ============================================================
 
-    logger.info("[hourly_dl] PayIn → выбираем дату…")
+def filter_today(df, date_col):
+    """Фильтруем по сегодняшнему дню с 00:00 до текущего часа."""
+    now = datetime.now(MSK)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    hour_cut = now.replace(minute=0, second=0, microsecond=0)
 
-    page.goto("https://antares.plus/lkcard/#/payin")
-    page.wait_for_load_state("networkidle")
+    dt = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
+    dt = dt.dt.tz_localize(MSK, nonexistent="shift_forward")
 
-    page.click("label.form-control")
-    page.wait_for_selector(".b-calendar")
-
-    try:
-        page.click(f"[data-date='{tz_now}']")
-    except:
-        logger.warning("[hourly_dl] Не удалось выбрать дату")
-
-    page.click("button:has-text('Применить')")
-    page.wait_for_load_state("networkidle")
-    time.sleep(1.3)
-
-    with page.expect_download() as d:
-        page.click("button:has-text('Экспорт')")
-    dl = d.value
-
-    path = os.path.join(BASE_DIR, "payin.xlsx")
-    dl.save_as(path)
-    logger.info(f"[hourly_dl] PayIn сохранён: {path}")
-
-    return path
+    return df[(dt >= day_start) & (dt < hour_cut)]
 
 
-def _download_payout(page):
-    """Payout за сегодня."""
-    tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
+# ============================================================
+#  MAIN REPORT LOGIC
+# ============================================================
 
-    logger.info("[hourly_dl] Payout → выбираем диапазон…")
+def run_hourly_report():
+    cfg = load_cfg()
 
-    page.goto("https://antares.plus/lkcard/#/vyplaty")
-    page.wait_for_load_state("networkidle")
+    # -------------------------------
+    # Load data
+    # -------------------------------
+    payin_path = f"{BASE_DIR}/payin.xlsx"
+    payout_path = f"{BASE_DIR}/payout.xlsx"
 
-    page.click("label.form-control")
-    page.wait_for_selector(".b-calendar")
+    logger.info(f"[DEBUG] Loading hourly XLSX files:")
+    logger.info(f"[DEBUG]  PayIn:  {payin_path}")
+    logger.info(f"[DEBUG]  PayOut: {payout_path}")
 
-    try:
-        page.click(f"[data-date='{tz_now}']")
-        page.click(f"[data-date='{tz_now}']")
-    except:
-        logger.warning("[hourly_dl] Не удалось выбрать диапазон")
+    df_payin = pd.read_excel(payin_path, dtype=str)
+    df_payout = pd.read_excel(payout_path, dtype=str)
 
-    page.click("button:has-text('Применить')")
-    page.wait_for_load_state("networkidle")
-    time.sleep(1.3)
+    logger.info(f"[DEBUG] RAW PayIn rows:  {len(df_payin)}")
+    logger.info(f"[DEBUG] RAW PayOut rows: {len(df_payout)}")
 
-    with page.expect_download() as d:
-        page.click("button:has-text('Экспорт')")
-    dl = d.value
+    # -------------------------------
+    # Normalize partner for comparison
+    # -------------------------------
+    df_payin["partner_norm"] = df_payin["Партнер"].astype(str).apply(normalize_partner_name)
+    df_payout["partner_norm"] = df_payout["Партнер"].astype(str).apply(normalize_partner_name)
 
-    path = os.path.join(BASE_DIR, "payout.xlsx")
-    dl.save_as(path)
-    logger.info(f"[hourly_dl] Payout сохранён: {path}")
+    # -------------------------------
+    # Filter by today's date
+    # -------------------------------
+    df_payin = filter_today(df_payin, "Дата/Время создания")
+    df_payout = filter_today(df_payout, "Дата/Время создания")
 
-    return path
+    # -------------------------------
+    # Convert amount
+    # -------------------------------
+    df_payin["Сумма"] = pd.to_numeric(df_payin["Сумма"], errors="coerce").fillna(0)
+    df_payout["Сумма"] = pd.to_numeric(df_payout["Сумма"], errors="coerce").fillna(0)
+
+    # -------------------------------
+    # Keep only "Оплачен"
+    # -------------------------------
+    df_payin = df_payin[df_payin["Статус"].str.lower() == "оплачен"]
+    df_payout = df_payout[df_payout["Статус"].str.lower() == "оплачен"]
+
+    logger.info(f"[DEBUG] PayIn 'Оплачен':  {len(df_payin)}")
+    logger.info(f"[DEBUG] PayOut 'Оплачен': {len(df_payout)}")
+
+    # ============================================================
+    #  PAYOUT (ВЫПЛАТЫ)
+    # ============================================================
+
+    payout_lines = []
+    payout_cfg = cfg.get("payout")
+
+    for partner_name, methods in payout_cfg.items():
+        payout_lines.append(f"{partner_name}:")
+        p_norm = normalize_partner_name(partner_name)
+
+        # Фильтруем строки PayOut по партнеру
+        df_partner = df_payout[df_payout["partner_norm"] == p_norm]
+
+        for method, mdata in methods.items():
+
+            # Фильтр по enum методу
+            df_method = df_partner[
+                df_partner["enum метод"].astype(str).str.upper() == method.upper()
+            ]
+
+            amount = df_method["Сумма"].sum()
+
+            payout_lines.append(
+                f" - {mdata['title']} - {amount:,.2f} "
+                f"(Лимит {mdata['limit']:,}) ВИЛКА {mdata['vilka']}"
+            )
+
+        payout_lines.append("")  # пустая строка
+
+    # ============================================================
+    #  PAYIN (ПОСТУПЛЕНИЯ)
+    # ============================================================
+
+    payin_lines = []
+    payin_cfg = cfg.get("payin")
+
+    for block_name, groups in payin_cfg.items():
+
+        payin_lines.append(f"{block_name}:")
+
+        for gcode, gdata in groups.items():
+
+            # ---------------------- обычная группа ----------------------
+            if "partners" in gdata:
+
+                partner_norms = [
+                    normalize_partner_name(p) for p in gdata["partners"]
+                ]
+
+                df_m = df_payin[
+                    df_payin["partner_norm"].isin(partner_norms)
+                ]
+
+                amount = df_m["Сумма"].sum()
+
+                limit = gdata.get("limit")
+                vilka = gdata.get("vilka")
+
+                suffix = ""
+                if limit is not None:
+                    suffix += f" (Лимит {limit:,})"
+                if vilka:
+                    suffix += f" ВИЛКА {vilka}"
+
+                payin_lines.append(f" - {gdata['title']} - {amount:,.2f}{suffix}")
+
+            # ---------------------- комбинированная группа ----------------------
+            elif "combine" in gdata:
+
+                total = 0
+                for subcode in gdata["combine"]:
+                    sub = groups[subcode]
+                    partner_norms = [
+                        normalize_partner_name(p) for p in sub["partners"]
+                    ]
+                    df_sub = df_payin[
+                        df_payin["partner_norm"].isin(partner_norms)
+                    ]
+                    total += df_sub["Сумма"].sum()
+
+                limit = gdata.get("limit")
+                vilka = gdata.get("vilka")
+
+                suffix = ""
+                if limit is not None:
+                    suffix += f" (Лимит {limit:,})"
+                if vilka:
+                    suffix += f" ВИЛКА {vilka}"
+
+                payin_lines.append(f" - {gdata['title']} - {total:,.2f}{suffix}")
+
+        payin_lines.append("")
+
+    # ============================================================
+    #  BUILD FINAL MESSAGE
+    # ============================================================
+
+    now = datetime.now(MSK)
+    header = f"Данные на {now.strftime('%d.%m')} с 00:00 по {now.strftime('%H:00')}"
+
+    text = (
+        header + "\n\n"
+        "Выплаты:\n" + "\n".join(payout_lines) +
+        "\nПоступления:\n" + "\n".join(payin_lines)
+    )
+
+    # ============================================================
+    #  SEND
+    # ============================================================
+
+    direct = os.getenv("HOURLY_DIRECT_SEND", "0").lower() == "1"
+
+    if direct:
+        import asyncio
+        from integrations.telegram_bot import bot
+        print(">>> DIRECT SEND ENABLED (LOCAL)")
+        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=text))
+    else:
+        send_message_sync(text, chat_id=CHAT_ID)
+
+    logger.info("[hourly_report] Report sent")
 
 
-def run_hourly_cycle():
-    """Скачивание PayIn + Payout за сегодня."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
-        context = browser.new_context(
-            accept_downloads=True,
-            storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None
-        )
-        page = context.new_page()
+# ============================================================
+#  LOCAL RUN
+# ============================================================
 
-        _ensure_logged_in(page, context)
-
-        payin_path = _download_payin(page)
-        payout_path = _download_payout(page)
-
-        browser.close()
-
-    logger.info("[hourly_dl] Скачивание завершено")
-    return True
+if __name__ == "__main__":
+    print(">>> LOCAL RUN hourly_report.py")
+    run_hourly_report()
