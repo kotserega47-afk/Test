@@ -312,7 +312,7 @@ def main():
     args = parser.parse_args()
 
     run_hourly_report(
-        local_mode=True,
+        local_mode=args.local,
         fake_time=args.fake_time,
         print_mode=args.print,
         debug=args.debug,
