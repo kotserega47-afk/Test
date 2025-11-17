@@ -16,20 +16,21 @@
 payout:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
-    UNI:
-      title: "UNI"
-      limit: 5000000
-      vilka: "ДО 100 К"
-    BST:
-      title: "BST"
-      limit: null
-      vilka: "на стопе КК"
+    title: "Амобайл"
+    methods:
+      UNI:
+        limit: 5000000
+        vilka: "ДО 100 К"
+      BST:
+        limit: null
+        vilka: "на стопе КК"
 
-  "HH (Abhsber IN + Выплаты) Тинь (117)":
-    UNI:
-      title: "UNI"
-      limit: 5000000
-      vilka: "5–100 К"
+    "HH (Abhsber IN + Выплаты) Тинь (117)":
+      title: "АБХСбер"
+      methods:
+        UNI:
+          limit: 5000000
+          vilka: "5–100 К"
 
 
 # -------------------------
@@ -45,47 +46,47 @@ payout:
 payin:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
-    title: "Амобайл 107 терминал Сбер"
+    title: "Амобайл Сбер (107)"
     limit: 2200000
     vilka: null
 
   "HH (А-мобайл Тинь) (113)":
-    title: "Амобайл 113 терминал Тинь"
+    title: "Амобайл Тинь (113)"
     limit: null
     vilka: "на стопе"
 
   "HH (Кибит Сбер) (111)":
-    title: "Кибит"
+    title: "Кибит Сбер (111)"
     limit: 15000000
     vilka: "СТРОГО до 50 К"
 
   "HH (Аврора Сбер) (109)":
-    title: "Аврора 109 терминал Сбер"
+    title: "Аврора Сбер (109)"
     limit: null
     vilka: null
 
   "HH (Аврора Тинь) (108)":
-    title: "Аврора 108 терминал Тинь"
+    title: "Аврора Тинь (108)"
     limit: null
     vilka: null
 
   "HH (Abhsber IN) Сбер (116)":
-    title: "АБХСбер 116 терминал Сбер"
+    title: "АБХСбер Сбер (116)"
     limit: null
     vilka: null
 
   "HH (Abhsber IN + Выплаты) Тинь (117)":
-    title: "АБХСбер 117 терминал Тинь"
+    title: "АБХСбер Тинь (117)"
     limit: null
     vilka: null
 
   "HH (Абхасбер - Сбер СБП) (118)":
-    title: "АБХСбер 118 терминал Сбер"
-    limit: 230000       # 230 К
+    title: "АБХСбер СБП Сбер (118)"
+    limit: 230000
     vilka: null
 
   "HH (Бакай Тинь) (110)":
-    title: "Бакай 110 терминал Тинь"
+    title: "Бакай Тинь (110)"
     limit: 5000000
     vilka: null
 
@@ -106,17 +107,17 @@ payin:
 payin_groups:
 
   abhsber_sum:
-    title: "АБХСбер 116 + 117 суммарно"
+    title: "АБХСбер (116 + 117)"
     combine:
       - "HH (Abhsber IN) Сбер (116)"
       - "HH (Abhsber IN + Выплаты) Тинь (117)"
-    limit: 8000000       # 8 КК
+    limit: 8000000
     vilka: null
 
   aurora_sum:
-    title: "Аврора 109 + 108 суммарно"
+    title: "Аврора (108 + 109)"
     combine:
       - "HH (Аврора Сбер) (109)"
       - "HH (Аврора Тинь) (108)"
-    limit: 5000000       # 5 КК
+    limit: 5000000
     vilka: null

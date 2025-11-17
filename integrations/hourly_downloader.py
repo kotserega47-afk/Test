@@ -69,7 +69,7 @@ def _download_payout(page):
     """Payout за сегодня."""
     tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
 
-    logger.info("[hourly_dl] Payout → выбираем диапазон…")
+    logger.info("[hourly_dl] Payout → выбираем дату…")
 
     page.goto("https://antares.plus/lkcard/#/vyplaty")
     page.wait_for_load_state("networkidle")
@@ -79,9 +79,8 @@ def _download_payout(page):
 
     try:
         page.click(f"[data-date='{tz_now}']")
-        page.click(f"[data-date='{tz_now}']")
     except:
-        logger.warning("[hourly_dl] Не удалось выбрать диапазон")
+        logger.warning("[hourly_dl] Не удалось выбрать дату")
 
     page.click("button:has-text('Применить')")
     page.wait_for_load_state("networkidle")
