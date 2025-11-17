@@ -1,7 +1,6 @@
 # coding: utf-8
 """
-Hourly Report — финальная версия.
-Формирует идеальный отчёт с нужными отступами, группами и форматированием.
+Hourly Report — версия с нумерацией PayIn.
 """
 
 import os
@@ -130,19 +129,25 @@ def run_hourly_report():
     lines.append("")
 
     # ======================================================
-    #                       PAYOUT
+    #                       PAYOUT (нумерация партнёров)
     # ======================================================
     lines.append("Выплаты:")
 
+    payout_counter = 1
+
     for partner_key, partner_data in payout_cfg.items():
+
         title = partner_data.get("title", partner_key)
-        lines.append(title + ":")
+
+        # Заголовок партнёра с номером
+        lines.append(f"{payout_counter}) {title}:")
+        payout_counter += 1
 
         partner_norm = normalize_partner_name(partner_key)
         df_p = df_payout[df_payout["norm"] == partner_norm]
 
+        # Методы — без нумерации
         for method_code, mdata in partner_data.get("methods", {}).items():
-
             df_m = df_p[df_p["enum метод"].astype(str).str.upper() ==
                         method_code.upper()]
 
@@ -153,7 +158,7 @@ def run_hourly_report():
             vilka = mdata.get("vilka")
 
             lim = f" (Лимит {fmt_int(limit)})" if limit is not None else ""
-            vk  = f" ВИЛКА {vilka}" if vilka else ""
+            vk = f" ВИЛКА {vilka}" if vilka else ""
 
             lines.append(f" - {m_title} - {fmt_int(amount)}{lim}{vk}")
 
@@ -164,24 +169,25 @@ def run_hourly_report():
     lines.append("Поступления:")
 
     # ======================================================
-    #                     PAYIN: SINGLE
+    #                 PAYIN (с нумерацией)
     # ======================================================
 
-    # сначала считаем суммы по каждому партнёру
+    # суммы по партнёрам
     payin_amounts = {}
     for partner_key in payin_cfg:
         norm = normalize_partner_name(partner_key)
         df_p = df_payin[df_payin["norm"] == norm]
         payin_amounts[partner_key] = df_p["Сумма"].sum()
 
-    # выводим партнёров
     printed_groups = set()
+    counter = 1   # <<<<<<<<<<<<<< НУМЕРАЦИЯ ТУТ
+
     first = True
 
     for partner_key, pdata in payin_cfg.items():
 
         if not first:
-            lines.append("")   # пустая строка между PARTNERS
+            lines.append("")  # отступ между блоками
         first = False
 
         title = pdata.get("title", partner_key)
@@ -192,10 +198,11 @@ def run_hourly_report():
         lim = f" (Лимит {fmt_int(limit)})" if limit is not None else ""
         vk  = f" ВИЛКА {vilka}" if vilka else ""
 
-        # одиночная строка
-        lines.append(f"{title} - {fmt_int(amount)}{lim}{vk}")
+        # одиночная строка с номером
+        lines.append(f"{counter}) {title} - {fmt_int(amount)}{lim}{vk}")
+        counter += 1
 
-        # теперь суммарные группы
+        # группы
         for gkey, gdata in payin_groups.items():
             if gkey in printed_groups:
                 continue
@@ -214,10 +221,10 @@ def run_hourly_report():
             vk2  = f" ВИЛКА {g_vilka}" if g_vilka else ""
 
             lines.append(
-                f"{g_title} - {fmt_int(total)}{lim2}{vk2}"
+                f"{counter}) {g_title} - {fmt_int(total)}{lim2}{vk2}"
             )
-
             printed_groups.add(gkey)
+            counter += 1
 
     # ======================================================
     # SEND

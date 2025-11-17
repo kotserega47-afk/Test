@@ -25,12 +25,12 @@ payout:
         limit: null
         vilka: "на стопе КК"
 
-    "HH (Abhsber IN + Выплаты) Тинь (117)":
-      title: "АБХСбер"
-      methods:
-        UNI:
-          limit: 5000000
-          vilka: "5–100 К"
+  "HH (Abhsber IN + Выплаты) Тинь (117)":
+    title: "АБХСбер"
+    methods:
+      UNI:
+        limit: 5000000
+        vilka: "5–100 К"
 
 
 # -------------------------
