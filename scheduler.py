@@ -128,8 +128,13 @@ def main():
         daemon=True
     ).start()
 
-    threading.Thread(target=run_rate_monitor, daemon=True).start()
+    threading.Thread(
+        target=run_every,
+        args=(10, 0, 23, run_hourly_cycle, "TenMinuteDownloader"),
+        daemon=True
+    ).start()
 
+    threading.Thread(target=run_rate_monitor, daemon=True).start()
     threading.Thread(target=run_hourly_loop, daemon=True).start()
 
     while True:
