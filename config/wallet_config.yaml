@@ -48,7 +48,7 @@ partners:
 
   "HH (Abhsber IN + Выплаты) Тинь (117)":
     threshold: 0.50
-    api_cancel_threshold: 4
+    api_cancel_threshold: 12
     api_cancel_keyword: "Отмена по API"
 
   "HH (Abhsber IN) Сбер  (116)":
@@ -68,12 +68,12 @@ partners:
 
   "HH (Кибит Сбер) (111)":
     threshold: 0.50
-    api_cancel_threshold: 5
+    api_cancel_threshold: 9
     api_cancel_keyword: "Отмена по API"
 
   "HH (Кибит Тинь) (114)":
     threshold: 0.35
-    api_cancel_threshold: 5
+    api_cancel_threshold: 9
     api_cancel_keyword: "Отмена по API"
 
   "HH (Абхасбер - Сбер СБП) (118)":
