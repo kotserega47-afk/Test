@@ -88,30 +88,30 @@ def run_rate_monitor():
 def run_hourly_loop():
     logger.info("🟢 Старт HourlyReporter: каждый час, окно 09:00–00:00 (MSK)")
 
-    last_run_hour = None
+    # Стартуем с текущего часа, чтобы не стрелять сразу при старте посреди часа
+    last_run_hour = now_msk().hour
 
     while True:
         now = now_msk()
         hour = now.hour
-        minute = now.minute
 
         in_window = (9 <= hour <= 23) or (hour == 0)
 
         if not in_window:
             logger.info("⏸ HourlyReporter: вне окна, ждём 09:00 (MSK)")
             wait_until_hour(9)
+            # После выхода из wait_until_hour снова проверим in_window и hour != last_run_hour
             continue
 
-        # Запуск в начале часа, 1 раз
-        if minute == 0 and hour != last_run_hour:
+        # Запускаем при смене часа (edge: при старте посреди часа не стреляем,
+        # первый запуск будет при переходе на следующий час).
+        if hour != last_run_hour:
             last_run_hour = hour
 
             try:
-                # 1️⃣ HourlyDownloader → скачивает PayIn/Payout в /tmp/hourly/*
                 logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
                 run_hourly_cycle()
 
-                # 2️⃣ HourlyReport → строит отчёт по этим файлам
                 logger.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
                 run_hourly_report()
 
@@ -119,7 +119,8 @@ def run_hourly_loop():
             except Exception as e:
                 logger.exception(f"❌ Ошибка в HourlyReporter: {e}")
 
-            time.sleep(60)  # чтобы не запуститься дважды
+            # Небольшая пауза, чтобы в первый момент часа не отстрелиться несколько раз
+            time.sleep(60)
 
         time.sleep(5)
 

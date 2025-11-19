@@ -16,21 +16,36 @@
 payout:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
-    title: "Амобайл"
+    title: "А-мобайл"
     methods:
       UNI:
-        limit: 5000000
-        vilka: "ДО 100 К"
+        title: "UNI"
+        comment: "ДО 100К"
       BST:
-        limit: null
-        vilka: "на стопе КК"
+        title: "BST"
+        comment: "на стопе"
 
   "HH (Abhsber IN + Выплаты) Тинь (117)":
     title: "АБХСбер"
     methods:
-      UNI:
-        limit: 5000000
-        vilka: "5–100 К"
+      "":
+        title: "UNI"
+        comment: "5кк - круглосуточно , вилка 5-100к"
+
+# --------------------------
+# PAYOUT LAYOUT (ГРУППЫ И ОТСТУПЫ)
+# --------------------------
+# spacing = количество пустых строк после группы
+
+payout_layout:
+
+  - group:
+      - "А-мобайл"
+    spacing: 1
+
+  - group:
+      - "АБХСбер"
+    spacing: 0
 
 
 # -------------------------
@@ -47,48 +62,39 @@ payin:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
     title: "Амобайл Сбер (107)"
-    limit: 2200000
-    vilka: null
+    comment: "(Лимит 2,2  КК)"
 
   "HH (А-мобайл Тинь) (113)":
     title: "Амобайл Тинь (113)"
-    limit: null
-    vilka: "на стопе"
+    comment: "на стопе"
 
   "HH (Кибит Сбер) (111)":
     title: "Кибит Сбер (111)"
-    limit: 15000000
-    vilka: "СТРОГО до 50 К"
+    comment: "(Лимит 15  КК) Вилка СТРОГО до 50 К"
 
   "HH (Аврора Сбер) (109)":
     title: "Аврора Сбер (109)"
-    limit: 6000000
-    vilka: null
+    comment:
 
   "HH (Аврора Тинь) (108)":
     title: "Аврора Тинь (108)"
-    limit: 4000000
-    vilka: null
+    comment:
 
   "HH (Abhsber IN) Сбер (116)":
     title: "АБХСбер Сбер (116)"
-    limit: null
-    vilka: null
+    comment:
 
   "HH (Abhsber IN + Выплаты) Тинь (117)":
     title: "АБХСбер Тинь (117)"
-    limit: null
-    vilka: null
+    comment:
 
   "HH (Абхасбер - Сбер СБП) (118)":
     title: "АБХСбер СБП Сбер (118)"
-    limit: 230000
-    vilka: null
+    comment: "(Лимит 230 К)"
 
   "HH (Бакай Тинь) (110)":
     title: "Бакай Тинь (110)"
-    limit: 5000000
-    vilka: null
+    comment: "(Лимит 5  КК)"
 
 
 # -------------------------
@@ -111,13 +117,47 @@ payin_groups:
     combine:
       - "HH (Abhsber IN) Сбер (116)"
       - "HH (Abhsber IN + Выплаты) Тинь (117)"
-    limit: 8000000
-    vilka: null
+    comment: "(Лимит 8  КК)"
 
   aurora_sum:
     title: "Аврора (108 + 109)"
     combine:
       - "HH (Аврора Сбер) (109)"
       - "HH (Аврора Тинь) (108)"
-    limit: 10800000
-    vilka: null
+    comment: "(Лимит 10,8  КК)"
+
+
+# --------------------------
+# PAYIN LAYOUT
+# --------------------------
+
+payin_layout:
+
+  - group:
+      - "Амобайл Сбер (107)"
+      - "Амобайл Тинь (113)"
+    spacing: 1
+
+  - group:
+      - "Кибит Сбер (111)"
+    spacing: 1
+
+  - group:
+      - "Аврора Сбер (109)"
+      - "Аврора Тинь (108)"
+      - "Аврора (108 + 109)"
+    spacing: 1
+
+  - group:
+      - "АБХСбер Сбер (116)"
+      - "АБХСбер Тинь (117)"
+      - "АБХСбер (116 + 117)"
+    spacing: 1
+
+  - group:
+      - "АБХСбер СБП Сбер (118)"
+    spacing: 1
+
+  - group:
+      - "Бакай Тинь (110)"
+    spacing: 0

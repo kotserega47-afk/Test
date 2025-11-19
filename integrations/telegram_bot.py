@@ -7,7 +7,7 @@ from telegram import Bot, InputFile
 from telegram.request import HTTPXRequest
 from utils.logger import logger
 from dotenv import load_dotenv
-
+import requests
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -116,3 +116,15 @@ def send_file_sync(path: str, caption: str | None = None, chat_id: str | None = 
 
     except Exception as e:
         logger.error(f"❌ Ошибка постановки в очередь send_file: {e}")
+
+def send_message_direct(text: str, chat_id: str | None = None):
+    chat_id = chat_id or DEFAULT_CHAT_ID
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    resp = requests.post(url, json={
+        "chat_id": chat_id,
+        "text": text
+    }, timeout=10)
+
+    resp.raise_for_status()
+    return resp.json()
