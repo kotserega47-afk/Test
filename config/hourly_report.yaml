@@ -62,12 +62,12 @@ payin:
 
   "HH (Аврора Сбер) (109)":
     title: "Аврора Сбер (109)"
-    limit: null
+    limit: 6000000
     vilka: null
 
   "HH (Аврора Тинь) (108)":
     title: "Аврора Тинь (108)"
-    limit: null
+    limit: 4000000
     vilka: null
 
   "HH (Abhsber IN) Сбер (116)":
@@ -119,5 +119,5 @@ payin_groups:
     combine:
       - "HH (Аврора Сбер) (109)"
       - "HH (Аврора Тинь) (108)"
-    limit: 5000000
+    limit: 10800000
     vilka: null
