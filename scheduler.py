@@ -128,6 +128,10 @@ def run_hourly_loop():
 # ================= START THREADS =================
 
 def main():
+    from datetime import datetime
+    print(">>> SYSTEM LOCAL:", datetime.now())
+    print(">>> NOW_MSK:", now_msk())
+
     # MainDownloader — каждые 40 минут
     threading.Thread(
         target=run_every,
