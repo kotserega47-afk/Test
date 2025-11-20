@@ -261,7 +261,7 @@ def format_report(payout_data, payin_data, header_date, end_dt):
 
     # PAYIN
     payin_layout = cfg.get("payin_layout", [])
-    lines.append("_______________________________________________________________")
+    lines.append("_______________________")
     lines.append("")
     format_section_with_layout(lines, "Поступления:", payin_data, payin_layout)
 
