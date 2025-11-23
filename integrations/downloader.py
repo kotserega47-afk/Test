@@ -78,15 +78,36 @@ def _ensure_logged_in(page, context):
 
 def _download_wallet_export(page, timestamp: str) -> str:
     logger.info("⬇️ Wallet → экспорт…")
-    page.goto("https://antares.plus/lkcard/#/wallet")
-    page.wait_for_load_state("networkidle")
-    with page.expect_download() as d1:
-        page.click("button:has-text('Экспорт')")
-    download1 = d1.value
-    local_path = os.path.join(DOWNLOAD_DIR, f"card_{timestamp}.xlsx")
-    download1.save_as(local_path)
-    logger.info(f"✅ Сохранено локально: {local_path}")
-    return local_path
+    try:
+        page.goto("https://antares.plus/lkcard/#/wallet")
+        page.wait_for_load_state("networkidle")
+
+        # ожидаем появления кнопки
+        page.wait_for_selector("button.btn-primary:has-text('Экспорт')", state="visible", timeout=30000)
+        logger.info("✅ Кнопка 'Экспорт' найдена, начинаем загрузку...")
+
+        with page.expect_download(timeout=30000) as d1:
+            page.click("button.btn-primary:has-text('Экспорт')")
+
+        download1 = d1.value
+        local_path = os.path.join(DOWNLOAD_DIR, f"card_{timestamp}.xlsx")
+        download1.save_as(local_path)
+        logger.info(f"✅ Сохранено локально: {local_path}")
+
+        return local_path
+
+    except Exception as e:
+        # при ошибке сохраняем скриншот и HTML для отладки
+        screenshot_path = f"/app/logs/error_export_{timestamp}.png"
+        html_path = f"/app/logs/error_export_{timestamp}.html"
+        try:
+            page.screenshot(path=screenshot_path, full_page=True)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.error(f"❌ Ошибка при экспорте: {e}. Скриншот: {screenshot_path}, HTML: {html_path}")
+        except Exception as inner:
+            logger.error(f"⚠️ Не удалось сохранить скриншот/HTML: {inner}")
+        raise
 
 def _download_payin_export(page, timestamp: str) -> str:
     logger.info("⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…")
