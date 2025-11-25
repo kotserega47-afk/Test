@@ -79,25 +79,24 @@ def _ensure_logged_in(page, context):
 def _download_wallet_export(page, timestamp: str) -> str:
     logger.info("⬇️ Wallet → экспорт…")
     try:
-        page.goto("https://antares.plus/lkcard/#/wallet")
-        page.wait_for_load_state("networkidle")
+        # более гибкая загрузка страницы
+        page.goto("https://antares.plus/lkcard/#/wallet", wait_until="domcontentloaded", timeout=15000)
 
-        # ожидаем появления кнопки
+        # ждём появления кнопки «Экспорт»
         page.wait_for_selector("button.btn-primary:has-text('Экспорт')", state="visible", timeout=30000)
         logger.info("✅ Кнопка 'Экспорт' найдена, начинаем загрузку...")
 
-        with page.expect_download(timeout=30000) as d1:
+        with page.expect_download(timeout=60000) as d1:
             page.click("button.btn-primary:has-text('Экспорт')")
 
         download1 = d1.value
         local_path = os.path.join(DOWNLOAD_DIR, f"card_{timestamp}.xlsx")
         download1.save_as(local_path)
         logger.info(f"✅ Сохранено локально: {local_path}")
-
         return local_path
 
     except Exception as e:
-        # при ошибке сохраняем скриншот и HTML для отладки
+        # сохраняем скриншот и HTML для диагностики
         screenshot_path = f"/app/logs/error_export_{timestamp}.png"
         html_path = f"/app/logs/error_export_{timestamp}.html"
         try:
