@@ -8,7 +8,7 @@ min_events: 20                 # анти-шум
 groups:
 
   abhsber:
-    daily_max_amount: 8_000_000     # общий лимит 8 млн
+    daily_max_amount: 8_500_000     # общий лимит 8 млн
     partners:
       - "HH (Abhsber IN + Выплаты) Тинь (117)"
       - "HH (Abhsber IN) Сбер  (116)"

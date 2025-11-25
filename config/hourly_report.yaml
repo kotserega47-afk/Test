@@ -117,7 +117,7 @@ payin_groups:
     combine:
       - "HH (Abhsber IN) Сбер (116)"
       - "HH (Abhsber IN + Выплаты) Тинь (117)"
-    comment: "(Лимит 8  КК)"
+    comment: "(Лимит 8,5  КК)"
 
   aurora_sum:
     title: "Аврора (108 + 109)"
