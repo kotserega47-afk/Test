@@ -15,8 +15,5 @@ cmds = [
   "python3 -m venv /opt/venv",
   "/opt/venv/bin/python -m pip install --upgrade pip",
   "/opt/venv/bin/pip install -r requirements.txt",
-  "/opt/venv/bin/python -m playwright install chromium",
-  "ln -snf /usr/share/zoneinfo/Europe/Moscow /etc/localtime && echo 'Europe/Moscow' > /etc/timezone"
+  "/opt/venv/bin/python -m playwright install chromium"
 ]
-[environment]
-TZ = "Europe/Moscow"

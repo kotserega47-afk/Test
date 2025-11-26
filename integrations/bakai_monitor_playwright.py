@@ -4,6 +4,7 @@ from datetime import datetime, time
 from playwright.sync_api import sync_playwright
 from utils.logger import logger
 from integrations.telegram_bot import send_message_sync
+from zoneinfo import ZoneInfo
 
 URL = "https://bakai.kg/ru/"
 CHAT_ID = "-1003281664794"
@@ -19,7 +20,7 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-
+MSK = ZoneInfo("Europe/Moscow")
 # ------------------------ вспомогательные функции ------------------------
 
 def _load_rate():
@@ -60,17 +61,16 @@ def _set_flag(path):
 
 
 def _in_time_window():
-    now = datetime.now().time()
+    now = datetime.now(MSK).time()
     return time(8, 55) <= now <= time(10, 30)
 
 
 def _is_855_now():
-    t = datetime.now().time()
+    t = datetime.now(MSK).time()
     return t.hour == 8 and t.minute >= 55
 
-
 def _is_1030_now():
-    t = datetime.now().time()
+    t = datetime.now(MSK).time()
     return t.hour == 10 and t.minute == 30
 
 
