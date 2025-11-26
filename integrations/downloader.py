@@ -86,7 +86,7 @@ def _download_wallet_export(page, timestamp: str) -> str:
         page.wait_for_selector("button.btn-primary:has-text('Экспорт')", state="visible", timeout=30000)
         logger.info("✅ Кнопка 'Экспорт' найдена, начинаем загрузку...")
 
-        with page.expect_download(timeout=60000) as d1:
+        with page.expect_download(timeout=360000) as d1:
             page.click("button.btn-primary:has-text('Экспорт')")
 
         download1 = d1.value
