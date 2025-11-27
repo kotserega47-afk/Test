@@ -2,24 +2,20 @@
 
 PayoutsErrors:
   # пример: фраза из столбца Info и порог подряд идущих ошибок
-  "Unistream_1":
+  "ORA-20001: Sbp Members НЕ найден в базе":
     threshold: 1
-  "Unistream_2":
+  "Ошибка проверки Unistream_2: Unistream API Error: 404 Client Error":
     threshold: 1
-  "ORA-20001":
-    threshold: 2
+  "Ошибка проверки Unistream_1: Unistream API Error: 406 Client Error":
+    threshold: 1
   "ограничения законодательства - уровень идентификации денежных средств недостаточен":
-    threshold: 3
-  "код возврата: i07999. ошибка":
-    threshold: 3
-  "код возврата: i05038. ограничения законодательства - уровень идентификации денежных средств недостаточен":
-    threshold: 3
+    threshold: 7
   "операция отклонена":
-    threshold: 3
+    threshold: 7
   "операция отменена":
-    threshold: 5
+    threshold: 7
   "ошибка внешней системы.: (перевод не может быть осуществлен)":
-    threshold: 5
+    threshold: 7
   "ошибка создания":
     threshold: 5
   "возникла техническая ошибка (-1). обратитесь в контакт-центр 777-77-77.":
