@@ -79,26 +79,25 @@ def _ensure_logged_in(page, context):
 def _download_wallet_export(page, timestamp: str) -> str:
     logger.info("⬇️ Wallet → экспорт…")
     try:
+        # Открываем страницу и ждём полной загрузки DOM
         page.goto("https://antares.plus/lkcard/#/wallet", wait_until="domcontentloaded", timeout=20000)
+
+        # Ждём появления кнопки "Экспорт"
         page.wait_for_selector("button.btn-primary:has-text('Экспорт')", state="visible", timeout=60000)
-        logger.info("✅ Кнопка 'Экспорт' найдена, начинаем загрузку...")
+        logger.info("✅ Кнопка 'Экспорт' найдена, ждём 10 секунд перед кликом...")
 
-        page.click("button.btn-primary:has-text('Экспорт')")
-        logger.info("⌛ Ожидание завершения экспорта (до 5 минут)...")
+        # Даём странице полностью “ожить”
+        page.wait_for_timeout(10000)
 
-        # просто подождать, пока JS завершит формирование файла
-        page.wait_for_timeout(300000)  # 5 минут
+        # Нажимаем экспорт и ждём скачивание
+        with page.expect_download(timeout=360000) as d1:
+            page.click("button.btn-primary:has-text('Экспорт')")
 
-        # проверить, появился ли файл в стандартной директории загрузок
-        downloads = page.context.downloads
-        if downloads:
-            download = downloads[-1]
-            local_path = os.path.join(DOWNLOAD_DIR, f"card_{timestamp}.xlsx")
-            download.save_as(local_path)
-            logger.info(f"✅ Сохранено локально: {local_path}")
-            return local_path
-        else:
-            raise RuntimeError("Файл не зафиксирован Playwright — возможно, экспорт через JS-blob.")
+        download1 = d1.value
+        local_path = os.path.join(DOWNLOAD_DIR, f"card_{timestamp}.xlsx")
+        download1.save_as(local_path)
+        logger.info(f"✅ Сохранено локально: {local_path}")
+        return local_path
 
     except Exception as e:
         screenshot_path = f"/app/logs/error_export_{timestamp}.png"
