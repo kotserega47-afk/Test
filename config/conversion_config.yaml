@@ -45,6 +45,9 @@ partners:
   "HH (Абхасбер - Сбер СБП) (118)":
     threshold: 8
     exclude:
+      - { start: "31.10.2025 19:30:00", end: "31.10.2025 20:30:00" }
+
+
   "HH (Аврора Тинь)":
     threshold: 3
     exclude:
