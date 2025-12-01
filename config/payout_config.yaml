@@ -3,11 +3,11 @@
 PayoutsErrors:
   # пример: фраза из столбца Info и порог подряд идущих ошибок
   "ORA-20001: Sbp Members НЕ найден в базе":
-    threshold: 1
+    threshold: 5
   "Ошибка проверки Unistream_2: Unistream API Error: 404 Client Error":
-    threshold: 1
+    threshold: 5
   "Ошибка проверки Unistream_1: Unistream API Error: 406 Client Error":
-    threshold: 1
+    threshold: 5
   "ограничения законодательства - уровень идентификации денежных средств недостаточен":
     threshold: 7
   "операция отклонена":

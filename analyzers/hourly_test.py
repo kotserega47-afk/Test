@@ -3,7 +3,9 @@ from zoneinfo import ZoneInfo
 from analyzers.hourly_report import run_hourly_report_for_interval
 import time
 MSK = ZoneInfo("Europe/Moscow")
+import os
 
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def test_day(date_str):
     """Тест отчёта за сутки с отправкой в Telegram."""
@@ -11,7 +13,7 @@ def test_day(date_str):
     start = d.replace(hour=0, minute=0, second=0, microsecond=0)
     end = d.replace(hour=23, minute=59, second=59, microsecond=0)
 
-    run_hourly_report_for_interval(start, end, send=True)
+    run_hourly_report_for_interval(start, end, send=True, chat_id=TELEGRAM_CHAT_ID)
 
 
 def test_hour(date_str, hour):
@@ -20,7 +22,7 @@ def test_hour(date_str, hour):
     start = d.replace(hour=hour, minute=0, second=0, microsecond=0)
     end = start.replace(minute=59, second=59)
 
-    run_hourly_report_for_interval(start, end, send=True)
+    run_hourly_report_for_interval(start, end, send=True, chat_id=TELEGRAM_CHAT_ID)
 
 
 def test_last_hour():
@@ -29,7 +31,7 @@ def test_last_hour():
     start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     end = start.replace(minute=59, second=59)
 
-    run_hourly_report_for_interval(start, end, send=True)
+    run_hourly_report_for_interval(start, end, send=True, chat_id=TELEGRAM_CHAT_ID)
     time.sleep(1)
 
 if __name__ == "__main__":
