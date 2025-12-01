@@ -119,7 +119,7 @@ def _download_payin_export(page, timestamp: str) -> str:
     target_date = (datetime.now(tz) - timedelta(days=2)).strftime("%Y-%m-%d")
     logger.info(f"📅 Дата для выбора: {target_date}")
 
-    page.locator("#__BVID__692").click()
+    page.locator("button.btn.h-auto").nth(0).click()
     page.wait_for_selector(".b-calendar", timeout=10000)
     try:
         page.click(f"[data-date='{target_date}']")
