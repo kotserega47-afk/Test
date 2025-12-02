@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import pytz
+import yaml
 
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,38 +43,57 @@ def _ensure_logged_in(page, context):
     context.storage_state(path=AUTH_STATE_FILE)
     logger.info("✅ Сессия сохранена")
 
+def _find_and_pick_date(page, target_date: str):
+    """
+    Выбирает дату target_date (формат YYYY-MM-DD) в календаре Antares.
+    Листает назад, если дата не найдена в текущем месяце.
+    """
+    selector = f"[data-date='{target_date}']"
 
-def _download_payin(page, ts: str) -> str:
-    """Скачивание файла PayIn"""
+    for _ in range(12):     # максимум 12 месяцев назад
+        if page.locator(selector).count() > 0:
+            page.locator(selector).click()
+            logger.info(f"✅ Дата выбрана: {target_date}")
+            return True
+
+        prev_btn = page.locator("button[aria-label='Previous month']")
+        if prev_btn.count() == 0:
+            logger.warning("⚠️ Кнопка 'Previous month' не найдена!")
+            return False
+
+        prev_btn.click()
+        page.wait_for_timeout(300)
+
+    logger.warning(f"⚠️ Дата {target_date} не найдена в пределах 12 месяцев")
+    return False
+
+
+def _download_payin(page, ts: str, days_back: int) -> str:
     logger.info("⬇️ PayIn → экспорт…")
 
     page.goto("https://antares.plus/lkcard/#/payin")
     page.wait_for_load_state("networkidle")
 
-    # дата = сегодня/вчера по МСК
-    use_yesterday = os.getenv("USE_YESTERDAY", "true").lower() == "true"
-    days_back = 1 if use_yesterday else 0
-
     target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    logger.info(f"📅 Устанавливаем дату (МСК): {target_date}")
+    logger.info(f"📅 PayIn дата (МСК): {target_date}")
 
-    # Выбор даты
+    # открываем календарь
     page.click("label.form-control")
     page.wait_for_selector(".b-calendar")
-    try:
-        page.click(f"[data-date='{target_date}']")
-        logger.info(f"✅ Дата выбрана: {target_date}")
-    except:
-        logger.warning("⚠️ Не удалось выбрать дату")
 
-    page.click("button:has-text('Применить')")
+    # выбираем дату
+    _find_and_pick_date(page, target_date)
+
+    # применить
+    page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(1.3)
+    time.sleep(3)
 
-    # Загрузка файла
+    # скачивание
     with page.expect_download(timeout=300000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
+
     path = os.path.join(DOWNLOAD_DIR, f"payin_{ts}.xlsx")
     download.save_as(path)
 
@@ -81,8 +101,42 @@ def _download_payin(page, ts: str) -> str:
     return path
 
 
+
+def _download_payout(page, ts: str, days_back: int) -> str:
+    """Скачивание файла Payout: только одна дата, как в PayIn."""
+    logger.info("⬇️ Payout → экспорт…")
+
+    page.goto("https://antares.plus/lkcard/#/vyplaty")
+    page.wait_for_load_state("networkidle")
+
+    target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    logger.info(f"📅 Payout дата (МСК): {target_date}")
+
+    # Открываем календарь
+    page.click("label.form-control")
+    page.wait_for_selector(".b-calendar")
+
+    # Выбираем дату (навигация назад если надо)
+    _find_and_pick_date(page, target_date)
+
+    # Применяем
+    page.locator("button:has-text('Применить')").click()
+    page.wait_for_load_state("networkidle")
+    time.sleep(3)
+
+    # Скачивание
+    with page.expect_download(timeout=300000) as d:
+        page.locator("button:has-text('Экспорт')").click()
+    download = d.value
+
+    path = os.path.join(DOWNLOAD_DIR, f"payout_{ts}.xlsx")
+    download.save_as(path)
+
+    logger.info(f"✅ Payout сохранён: {path}")
+    return path
+
+
 def run_wallet_cycle():
-    """Основной цикл – скачивает PayIn и запускает анализ"""
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
 
@@ -91,6 +145,13 @@ def run_wallet_cycle():
     ts = datetime.now(MSK_TZ).strftime("%H.%M")
     logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
 
+    # Загружаем конфиг для таймингов и периодов выгрузки
+    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "wallet_config.yaml")
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    payin_days = cfg.get("download_periods", {}).get("payin_days_back", 2)
+    payout_days = cfg.get("download_periods", {}).get("payout_days_back", 7)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
@@ -102,10 +163,12 @@ def run_wallet_cycle():
         page = context.new_page()
         _ensure_logged_in(page, context)
 
-        payin_path = _download_payin(page, ts)
+        payin_path = _download_payin(page, ts, payin_days)
+        payout_path = _download_payout(page, ts, payout_days)
+
         browser.close()
 
-    analyze_wallets(payin_path)
+    analyze_wallets(payin_path, payout_path)
 
 
 
