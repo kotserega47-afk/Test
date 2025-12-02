@@ -8,18 +8,20 @@ from telegram.request import HTTPXRequest
 from utils.logger import logger
 from dotenv import load_dotenv
 import requests
+
+# Загружаем .env (для CLI и прямых запусков)
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-DEFAULT_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not TELEGRAM_TOKEN or not DEFAULT_CHAT_ID:
-    raise ValueError("Не задан TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID")
+if not TELEGRAM_TOKEN:
+    raise ValueError("Не задан TELEGRAM_BOT_TOKEN")
 
 
 # =====================================================
 #   HTTP client
 # =====================================================
+
 request = HTTPXRequest(
     connection_pool_size=100,
     connect_timeout=20.0,
@@ -66,10 +68,10 @@ async def _worker():
 
         except Exception as e:
             logger.error(f"❌ Ошибка async отправки: {e}")
+
         queue.task_done()
 
 
-# запускаем async worker внутри event loop
 loop.call_soon_threadsafe(loop.create_task, _worker())
 
 
@@ -87,38 +89,58 @@ async def _send_file(chat_id: str, path: str, caption: str | None):
 
 
 # =====================================================
-#   PUBLIC sync API
+#   PUBLIC sync API — chat_id ОБЯЗАТЕЛЕН
 # =====================================================
 
-def send_message_sync(content: str, chat_id: str | None = None):
-    chat_id = chat_id or DEFAULT_CHAT_ID
+def send_message_sync(text: str, chat_id: str):
+    """
+    Отправка текста в очередь.
+    chat_id должен передаваться ЯВНО!
+    """
+    if not chat_id:
+        raise ValueError("chat_id обязателен для send_message_sync")
 
     try:
         loop.call_soon_threadsafe(
             queue.put_nowait,
-            (_send_message, (chat_id, content))
+            (_send_message, (chat_id, text))
         )
-        logger.info(f"📨 Добавлено в очередь сообщение ({chat_id}): {content[:60]}")
+        logger.info(f"📨 Добавлено в очередь сообщение ({chat_id}): {text[:60]}")
 
     except Exception as e:
         logger.error(f"❌ Ошибка постановки в очередь send_message: {e}")
 
 
-def send_file_sync(path: str, caption: str | None = None, chat_id: str | None = None):
-    chat_id = chat_id or DEFAULT_CHAT_ID
+def send_file_sync(path: str, caption: str | None, chat_id: str):
+    """
+    Отправка файла в очередь.
+    chat_id должен передаваться ЯВНО!
+    """
+    if not chat_id:
+        raise ValueError("chat_id обязателен для send_file_sync")
 
     try:
         loop.call_soon_threadsafe(
             queue.put_nowait,
             (_send_file, (chat_id, path, caption))
         )
-        logger.info(f"📨 Файл поставлен в очередь: {path}")
+        logger.info(f"📨 Файл поставлен в очередь ({chat_id}): {path}")
 
     except Exception as e:
         logger.error(f"❌ Ошибка постановки в очередь send_file: {e}")
 
-def send_message_direct(text: str, chat_id: str | None = None):
-    chat_id = chat_id or DEFAULT_CHAT_ID
+
+# =====================================================
+#   DIRECT SEND (используется только тестами)
+# =====================================================
+
+def send_message_direct(text: str, chat_id: str):
+    """
+    Прямая отправка без очереди — chat_id обязателен.
+    """
+    if not chat_id:
+        raise ValueError("chat_id обязателен для send_message_direct")
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     resp = requests.post(url, json={
