@@ -4,6 +4,16 @@ offset_minutes: 0              # смещение окна
 success_window_minutes: 0      # окно подсчёта успехов
 min_events: 20                 # анти-шум
 
+# Минуты для выставления окна по зависшим операциям
+# Дни для выставления периода скачивания файлов
+pending_thresholds:
+  payin_minutes: 10       # Поступления — более 10 минут
+  payout_minutes: 180     # Выплаты — более 3 часов
+
+download_periods:
+  payin_days_back: 2      # сегодня − 2
+  payout_days_back: 7     # выплаты за неделю
+
 # === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
 groups:
 
