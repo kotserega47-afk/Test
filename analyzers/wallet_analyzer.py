@@ -1,7 +1,6 @@
 import os
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 import pandas as pd
 import yaml
 import pytz
@@ -12,8 +11,13 @@ from integrations.telegram_bot import send_message_sync
 from utils.logger import logger
 from load_data import normalize_partner_name
 
+# ————————————————————————————————————————————————
+# ДИНАМИЧЕСКОЕ ОПРЕДЕЛЕНИЕ TELEGRAM CHAT ID
+# ————————————————————————————————————————————————
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_WALLET")
 
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -29,14 +33,11 @@ def _normalize_status(s: str) -> str:
 
 
 def _status_success(s: str) -> bool:
-    """Успешный статус — только 'Оплачен'"""
     return _normalize_status(s) == "оплачен"
 
 
 def _status_countable(s: str) -> bool:
-    """Статусы, которые считаются в конверсии"""
-    s = _normalize_status(s)
-    return s in {"оплачен", "ошибка"}
+    return _normalize_status(s) in {"оплачен", "ошибка"}
 
 
 # === Конфиг =================================================================
@@ -59,12 +60,16 @@ def _load_cfg():
 
 # === Основной анализатор =====================================================
 
-def analyze_wallets(payin_path: str):
+def analyze_wallets(payin_path: str, payout_path: str):
     cfg = _load_cfg()
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
 
+    tz = pytz.timezone("Europe/Moscow")
+
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
+
+    # === Чтение PayIn ==========================================================
 
     try:
         df = pd.read_excel(payin_path)
@@ -76,21 +81,14 @@ def analyze_wallets(payin_path: str):
         logger.info("[Analyzer] PayIn пуст — выходим")
         return
 
-    # колонки
     COL_DT = "Дата/Время создания"
     COL_PARTNER = "Партнер"
     COL_STATUS = "Статус"
     COL_INFO = "Инфо"
     COL_AMOUNT = "Сумма"
 
-    tz = pytz.timezone("Europe/Moscow")
-
-    # нормализация дат
-    df[COL_DT] = (
-        df[COL_DT].astype(str)
-        .str.replace(r"\s+", " ", regex=True)
-        .str.strip()
-    )
+    # нормализация PayIn дат
+    df[COL_DT] = df[COL_DT].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
 
     df["_dt"] = pd.to_datetime(df[COL_DT], dayfirst=True, errors="coerce")
     if df["_dt"].dt.tz is None:
@@ -109,7 +107,6 @@ def analyze_wallets(payin_path: str):
     start_time = end_time - timedelta(minutes=window_min)
 
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
-    df_last2h = df[(df["_dt"] >= now - timedelta(hours=1)) & (df["_dt"] <= now)]
     df_today = df[df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
 
     partners_cfg = cfg["partners"]
@@ -118,50 +115,42 @@ def analyze_wallets(payin_path: str):
     messages = []
     bad = []
 
-    # === цикл по партнёрам ==================================================
+    # === Анализ по каждому партнёру ===========================================
 
     for partner_name, settings in partners_cfg.items():
         key_norm = normalize_partner_name(partner_name)
 
-        # окно конверсии: только считаемые статусы
         sub_all = df_window[df_window["_partner_norm"] == key_norm]
         subset = sub_all[sub_all["_status_count"]]
 
         total = len(subset)
-        success = subset["_status_success"].sum()
-        conv = (success / total * 100) if total else 0
-
-        # если в окне нет ни одной операции — пропускаем партнёра
         if total == 0:
             continue
 
+        success = subset["_status_success"].sum()
+        conv = (success / total * 100) if total else 0
 
-        # суммы за сутки — только успешные
         today_part = df_today[df_today["_partner_norm"] == key_norm]
         today_success = today_part[today_part["_status_success"]]
         amount_today = pd.to_numeric(today_success[COL_AMOUNT], errors="coerce").sum()
 
-        # пороги
         threshold = settings.get("threshold", 0)
         api_threshold = settings.get("api_cancel_threshold", 100)
 
-        # === Проверка min_events ===
         min_events = cfg["min_events"]
+
+        # Конверсия
         if total < min_events:
             conv_bad = False
-            conv_icon = "ℹ️"
-            conv_text = (
-                f"{conv:.1f}% — ℹ️ Недостаточно данных "
-            )
+            conv_text = f"{conv:.1f}% — ℹ️ Недостаточно данных"
         else:
             conv_bad = conv < threshold * 100
-            conv_icon = "🟢" if not conv_bad else "🔴"
             conv_text = (
-                f"{conv:.1f}% (< {threshold * 100:.1f}%) — {conv_icon}"
+                f"{conv:.1f}% (< {threshold * 100:.1f}%) — "
+                + ("🔴" if conv_bad else "🟢")
             )
 
-        # === API ошибки (последний час) ===
-
+        # API ошибки за час
         error_keyword = "отмена по api"
         one_hour_ago = now - timedelta(hours=1)
 
@@ -172,33 +161,24 @@ def analyze_wallets(payin_path: str):
 
         lh_countable = last_hour[last_hour["_status_count"]]
         lh_total = len(lh_countable)
-
-        lh_papi = lh_countable["_info_norm"].str.contains(
-            error_keyword, case=False, na=False
-        ).sum()
-
-        # === Минимальное количество операций для API ===
-        min_events = cfg["min_events"]
+        lh_papi = lh_countable["_info_norm"].str.contains(error_keyword, case=False, na=False).sum()
 
         if lh_total < min_events:
-            api_total = lh_papi
             api_rate = 0
             api_bad = False
+            api_total = lh_papi
             api_icon = "ℹ️"
         else:
-            api_total = lh_papi
             api_rate = (lh_papi / lh_total * 100) if lh_total else 0
+            api_total = lh_papi
             api_bad = api_rate > api_threshold
-            api_icon = "🟢" if not api_bad else "🔴"
+            api_icon = "🔴" if api_bad else "🟢"
 
-        # === Нет кошельков ===
-        nok_wallets_total = sub_all["_info_norm"].str.contains(
-            "Нет доступных аккаунтов"
-        ).sum()
+        # Нет доступных аккаунтов
+        nok_wallets_total = sub_all["_info_norm"].str.contains("нет доступных аккаунтов").sum()
         nok_bad = nok_wallets_total > 0
-        nok_icon = "🟢" if not nok_bad else "🔴"
 
-        # лимиты
+        # Лимиты
         daily_limit = settings.get("daily_max_amount")
         group_name = None
 
@@ -208,50 +188,45 @@ def analyze_wallets(payin_path: str):
                 daily_limit = gdata["daily_max_amount"]
                 break
 
-        # процент лимита
         if group_name:
             group_partners = groups_cfg[group_name]["partners"]
-            df_group_today = df_today[
-                df_today["_partner_norm"].isin(
-                    [normalize_partner_name(p) for p in group_partners]
-                )
-            ]
+            df_group_today = df_today[df_today["_partner_norm"].isin(
+                [normalize_partner_name(p) for p in group_partners]
+            )]
             df_group_success = df_group_today[df_group_today["_status_success"]]
-            group_amount_today = pd.to_numeric(
-                df_group_success[COL_AMOUNT], errors="coerce"
-            ).sum()
+            group_amount_today = pd.to_numeric(df_group_success[COL_AMOUNT], errors="coerce").sum()
             percent_filled = int(group_amount_today / daily_limit * 100)
         else:
-            percent_filled = (
-                int(amount_today / daily_limit * 100) if daily_limit else 0
-            )
+            percent_filled = int(amount_today / daily_limit * 100) if daily_limit else 0
 
-        # уровни лимита
-        limit_bad = False
-        limit_warn = False
-
-        if daily_limit:
+        # лимит статус
+        if not daily_limit:
+            limit_icon = "🟢"
+            limit_bad = False
+            limit_warn = False
+        else:
             if percent_filled >= 100:
                 limit_bad = True
+                limit_warn = False
                 limit_icon = "🔴"
             elif percent_filled >= 90:
+                limit_bad = False
                 limit_warn = True
                 limit_icon = "🟡"
             else:
+                limit_bad = False
+                limit_warn = False
                 limit_icon = "🟢"
-        else:
-            limit_icon = "🟢"
 
-        # последняя операция
         last_op_time = df[df["_partner_norm"] == key_norm]["_dt"].max()
         last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
 
-        if nok_wallets_total > 0:
-            nok_line = f"  Нет доступных аккаунтов: {nok_wallets_total} — 🔴\n"
-        else:
-            nok_line = ""
+        nok_line = (
+            f"  Нет доступных аккаунтов: {nok_wallets_total} — 🔴\n"
+            if nok_wallets_total > 0
+            else ""
+        )
 
-        # сообщение
         msg = (
             f"{partner_name}\n"
             f"  Всего операций: {total}\n"
@@ -266,70 +241,110 @@ def analyze_wallets(payin_path: str):
 
         messages.append(msg)
 
-        # классификация BAD
-        if total > 0:
-            is_bad = (
-                conv_bad
-                or api_bad
-                or limit_bad
-                or limit_warn
-                or nok_bad
-            )
+        if conv_bad or api_bad or limit_bad or limit_warn or nok_bad:
+            bad.append({
+                "name": partner_name,
+                "conv_bad": conv_bad,
+                "api_bad": api_bad,
+                "limit_bad": limit_bad,
+                "limit_warn": limit_warn,
+                "nok_bad": nok_bad,
+                "api_rate": api_rate,
+                "api_threshold": api_threshold,
+                "percent": percent_filled,
+                "nok_count": nok_wallets_total,
+            })
 
-            if is_bad:
-                bad.append(
-                    {
-                        "name": partner_name,
-                        "conv": conv,
-                        "threshold": threshold,
-                        "api_rate": api_rate,
-                        "api_threshold": api_threshold,
-                        "limit_bad": limit_bad,
-                        "limit_warn": limit_warn,
-                        "percent": percent_filled,
-                        "conv_bad": conv_bad,
-                        "api_bad": api_bad,
-                        "nok_bad": nok_bad,
-                        "nok_count": nok_wallets_total,
-                    }
-                )
+    # === Если нет сообщений — выход =================================================
 
-    # если вообще нет сообщений (ни один партнёр не попал в отчёт) — ничего не выводим
     if not messages:
-        logger.info("[Analyzer] Нет партнёров с операциями в окне — ничего не отправляем")
+        logger.info("[Analyzer] Нет партнёров с операциями — ничего не отправляем")
         return
-    # отправка основного блока
+
+    # === Зависшие операции ==========================================================
+
+    pending_cfg = cfg.get("pending_thresholds", {})
+    payin_limit = pending_cfg.get("payin_minutes", 10)
+    payout_limit = pending_cfg.get("payout_minutes", 180)
+
+    # PayIn зависшие
+    df_pending_payin = df[
+        (df["_status_raw"].str.lower() == "ожидает оплаты")
+        & ((now - df["_dt"]) > timedelta(minutes=payin_limit))
+    ]
+    pending_payin_count = len(df_pending_payin)
+
+    # Payout зависшие
+    pending_payout_count = 0
+
+    try:
+        dfp = pd.read_excel(payout_path)
+
+        COL_DT_P = "Дата/Время создания"
+        COL_STATUS_P = "Статус"
+
+        dfp[COL_DT_P] = dfp[COL_DT_P].astype(str)\
+            .str.replace(r"\s+", " ", regex=True)\
+            .str.strip()
+
+        dfp["_dt"] = pd.to_datetime(dfp[COL_DT_P], dayfirst=True, errors="coerce")
+
+        if dfp["_dt"].dt.tz is None:
+            dfp["_dt"] = dfp["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
+
+        dfp["_status_raw"] = dfp[COL_STATUS_P].astype(str)
+
+        df_pending_payout = dfp[
+            (dfp["_status_raw"].str.lower() == "ожидает оплаты")
+            & ((now - dfp["_dt"]) > timedelta(minutes=payout_limit))
+        ]
+
+        pending_payout_count = len(df_pending_payout)
+
+    except Exception as e:
+        logger.error(f"[Analyzer] Ошибка payout: {e}")
+
+    # Формируем блок зависших
+    pending_block = (
+        "⏳ Зависшие:\n"
+        f"• Поступления: {pending_payin_count} шт\n"
+        f"• Выплаты: {pending_payout_count} шт\n\n"
+    )
+
+    # === Отправляем основной отчёт ===============================================
+
     send_message_sync(
-        "📦 Wallet Analyzer\n"
-        f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
+        pending_block
+        + "📦 Wallet Analyzer\n"
+        + f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
         + "\n\n".join(messages),
         chat_id=CHAT_ID,
     )
 
-    # отправка BAD-блока
+    # === BAD блок ===============================================================
+
     if not bad:
         send_message_sync("🟢 Все партнёры в норме!", chat_id=CHAT_ID)
-    else:
-        lines = ["❗ Обнаружены отклонения:"]
-        for p in bad:
-            block = f"\n{p['name']}\n"
-            if p["conv_bad"]:
-                block += (
-                    f"  Конверсия: {p['conv']:.1f}% "
-                    f"  (< {p['threshold']*100:.1f}%) — 🔴\n"
-                )
-            if p["api_bad"]:
-                block += (
-                    f"  Отмен по API: {p['api_rate']:.1f}% "
-                    f"  (> {p['api_threshold']}%) — 🔴\n"
-                )
-            if p["limit_bad"]:
-                block += "  Лимит превышен — 🔴\n"
-            if p["nok_bad"]:
-                block += f"  Нет доступных аккаунтов: {p['nok_count']} — 🔴\n"
-            if p["limit_warn"]:
-                block += f"  Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
+        return
 
-            lines.append(block)
+    lines = ["❗ Обнаружены отклонения:"]
 
-        send_message_sync("\n".join(lines), chat_id=CHAT_ID)
+    for p in bad:
+        block = f"\n{p['name']}\n"
+
+        if p["conv_bad"]:
+            block += "  Конверсия ниже порога — 🔴\n"
+        if p["api_bad"]:
+            block += (
+                f"  Отмен по API: {p['api_rate']:.1f}% (> {p['api_threshold']}%) — 🔴\n"
+            )
+        if p["limit_bad"]:
+            block += "  Лимит превышен — 🔴\n"
+        if p["limit_warn"]:
+            block += f"  Лимит почти исчерпан ({p['percent']}%) — 🟡\n"
+        if p["nok_bad"]:
+            block += f"  Нет доступных аккаунтов: {p['nok_count']} — 🔴\n"
+
+        lines.append(block)
+
+    send_message_sync("\n".join(lines), chat_id=CHAT_ID)

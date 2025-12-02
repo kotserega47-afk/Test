@@ -21,10 +21,9 @@ MSK = ZoneInfo("Europe/Moscow")
 BASE_DIR = "/tmp/hourly"
 CONFIG_PATH = "config/hourly_report.yaml"
 
-CHAT_ID = (
-    os.getenv("TELEGRAM_CHAT_ID_HOURLY")
-    or os.getenv("TELEGRAM_CHAT_ID")
-)
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_HOURLY")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_HOURLY")
 
 
 # ---------------------------------------
