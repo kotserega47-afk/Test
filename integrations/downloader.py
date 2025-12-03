@@ -17,6 +17,10 @@ import zoneinfo  # встроено в Python 3.9+
 os.environ["TZ"] = "Europe/Moscow"
 time.tzset()
 
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_ANALIZ")
+
 # Добавляем корень проекта в PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -194,7 +198,7 @@ def run_download():
 
     timestamp = _ts()
     logger.info(f"🕒 downloader стартовал, ts={timestamp}")
-    send_message_sync(f"🕒 Запущен выгрузчик данных (ts={timestamp})")
+    send_message_sync(f"🕒 Запущен выгрузчик данных (ts={timestamp})", chat_id=CHAT_ID)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -205,12 +209,12 @@ def run_download():
             page = context.new_page()
             _ensure_logged_in(page, context)
             card_local = _download_wallet_export(page, timestamp)
-            send_message_sync(f"✅ Скачан card_{timestamp}.xlsx")
+            send_message_sync(f"✅ Скачан card_{timestamp}.xlsx", chat_id=CHAT_ID)
             conversion_local = _download_payin_export(page, timestamp)
-            send_message_sync(f"✅ Скачан conversion_{timestamp}.xlsx")
+            send_message_sync(f"✅ Скачан conversion_{timestamp}.xlsx", chat_id=CHAT_ID)
             extra_locals = _download_extra_files(page, timestamp)
             for pth in extra_locals:
-                send_message_sync(f"✅ Скачан {os.path.basename(pth)}")
+                send_message_sync(f"✅ Скачан {os.path.basename(pth)}", chat_id=CHAT_ID)
         except Exception as e:
             msg = f"❌ Ошибка во время скачивания: {e}"
             logger.exception(msg)
@@ -229,27 +233,27 @@ def run_download():
             base = os.path.basename(path)
             _upload_local_to_dropbox(path, base)
             uploaded_extra.append(base)
-        send_message_sync("📤 Все файлы успешно загружены в Dropbox.")
+        send_message_sync("📤 Все файлы успешно загружены в Dropbox.", chat_id=CHAT_ID)
         if not acquire_lock(timeout=600):
             logger.info("⏳ Анализ уже идёт, пропускаем мгновенный запуск.")
-            send_message_sync("⏳ Анализ уже выполняется — выгрузчик ждёт следующего часа.")
+            send_message_sync("⏳ Анализ уже выполняется — выгрузчик ждёт следующего часа.", chat_id=CHAT_ID)
             return
         try:
             logger.info(f"🚀 process_file(conversion): {conv_name} + aux={card_name}")
             process_file(conv_name, aux_filename=card_name)
-            send_message_sync(f"🚀 Запущен анализ Conversion ({conv_name})")
+            send_message_sync(f"🚀 Запущен анализ Conversion ({conv_name})", chat_id=CHAT_ID)
             if any(s.startswith("cd_") for s in uploaded_extra) and any(s.startswith("payout_") for s in uploaded_extra):
                 cd_name = next(s for s in uploaded_extra if s.startswith("cd_"))
                 payout_name = next(s for s in uploaded_extra if s.startswith("payout_"))
                 logger.info(f"🚀 process_file(payout): {payout_name} + aux={cd_name}")
                 process_file(payout_name, aux_filename=cd_name)
-                send_message_sync(f"🚀 Запущен анализ Payout ({payout_name})")
+                send_message_sync(f"🚀 Запущен анализ Payout ({payout_name})", chat_id=CHAT_ID)
             else:
                 logger.info("ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.")
-                send_message_sync("ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.")
+                send_message_sync("ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.", chat_id=CHAT_ID)
         finally:
             release_lock()
-            send_message_sync("✅ Downloader завершил цикл успешно.")
+            send_message_sync("✅ Downloader завершил цикл успешно.", chat_id=CHAT_ID)
     except Exception as e:
         msg = f"❌ Ошибка при загрузке или анализе: {e}"
         logger.exception(msg)
@@ -259,7 +263,7 @@ def run_download():
 if __name__ == "__main__":
     try:
         logger.info("🚀 Запуск run_download() из контейнера Railway")
-        send_message_sync("🚀 Downloader запущен вручную на Railway")
+        send_message_sync("🚀 Downloader запущен вручную на Railway", chat_id=CHAT_ID)
         run_download()
     except Exception as e:
         msg = f"❌ Downloader завершился с ошибкой: {e}"
