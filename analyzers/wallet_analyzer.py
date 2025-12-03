@@ -348,3 +348,4 @@ def analyze_wallets(payin_path: str, payout_path: str):
         lines.append(block)
 
     send_message_sync("\n".join(lines), chat_id=CHAT_ID)
+
