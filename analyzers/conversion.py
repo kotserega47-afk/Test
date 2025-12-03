@@ -26,6 +26,9 @@ COLUMNS = CONFIG.get("columns", {})  # ожидаемые имена колон�
 VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
 POOLS = CONFIG.get("pools", {})
 
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_ANALIZ")
 
 # -----------------------------
 # Вспомогательные функции (используем уже существующую нормализацию)
@@ -125,7 +128,7 @@ def _send_problem_cards_to_telegram(problem_df: pd.DataFrame) -> None:
 
     cols_ok = all(c in problem_df.columns for c in ["card", "partner", "max_consecutive_errors"])
     if not cols_ok:
-        send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.")
+        send_message_sync("⚠️ Пропущено формирование списка: отсутствуют нужные колонки.", chat_id=CHAT_ID)
         return
 
     msg_lines = [
@@ -147,7 +150,7 @@ def _send_problem_cards_to_telegram(problem_df: pd.DataFrame) -> None:
     BATCH_SIZE = 500
     for i in range(0, total, BATCH_SIZE):
         chunk = msg_lines[i:i + BATCH_SIZE]
-        send_message_sync("🚫 Карты на отключение:\n" + "\n".join(chunk))
+        send_message_sync("🚫 Карты на отключение:\n" + "\n".join(chunk), chat_id=CHAT_ID)
     logger.info(f"[telegram] Отправлен список {total} карт на отключение.")
 
 
@@ -253,22 +256,22 @@ def run(
                         stats = "\n".join([f"• {p}: {int(c)}" for p, c in counts.items()])
                         send_message_sync(
                             f"📊 Добавленные special-карты за {today.strftime('%d.%m.%Y')}:\n{stats}"
-                        )
+                        , chat_id=CHAT_ID)
                         logger.info(f"[run] 📊 Найдено {len(today_special)} новых special-карт.")
                     else:
-                        send_message_sync(f"ℹ️ За {today.strftime('%d.%m.%Y')} новых special-карт не добавлено.")
+                        send_message_sync(f"ℹ️ За {today.strftime('%d.%m.%Y')} новых special-карт не добавлено.", chat_id=CHAT_ID)
         else:
             logger.warning("[run] ⚠️ Не удалось скачать special_cards.xlsx из Dropbox.")
             if send_telegram:
                 send_message_sync(
                     "⚠️ Файл special_cards.xlsx не найден в Dropbox.\nАнализ выполнен без ограничений для специальных карт."
-                )
+                , chat_id=CHAT_ID)
     except Exception as e:
         logger.warning(f"[run] ⚠️ Ошибка при загрузке/чтении special_cards.xlsx: {e}")
         if send_telegram:
             send_message_sync(
                 "⚠️ Ошибка при загрузке special_cards.xlsx из Dropbox.\nАнализ выполнен без ограничений для специальных карт."
-            )
+            , chat_id=CHAT_ID)
 
     # Сообщаем последнюю дату (или что дат нет)
     if send_telegram:
@@ -276,9 +279,9 @@ def run(
             if pd.notna(latest_special_date):
                 send_message_sync(
                     f"📅 Последняя дата в special_cards.xlsx: {latest_special_date.strftime('%d.%m.%Y')}"
-                )
+                , chat_id=CHAT_ID)
             else:
-                send_message_sync("ℹ️ В special_cards.xlsx нет валидных дат.")
+                send_message_sync("ℹ️ В special_cards.xlsx нет валидных дат.", chat_id=CHAT_ID)
         # если не загрузили — сообщения уже отправили выше
 
     # 2) Загрузка conversion-файла
@@ -500,7 +503,7 @@ def run(
         if not problem.empty:
             _send_problem_cards_to_telegram(problem)
         else:
-            send_message_sync("ℹ️ Нет карт, превысивших порог ошибок.")
+            send_message_sync("ℹ️ Нет карт, превысивших порог ошибок.", chat_id=CHAT_ID)
 
         # summary
         try:
