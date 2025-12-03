@@ -14,7 +14,7 @@ from load_data import normalize_partner_name
 # ————————————————————————————————————————————————
 # ДИНАМИЧЕСКОЕ ОПРЕДЕЛЕНИЕ TELEGRAM CHAT ID
 # ————————————————————————————————————————————————
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_WALLET")
 if not CHAT_ID:
     raise RuntimeError("Не задан TELEGRAM_CHAT_ID_WALLET")
 
