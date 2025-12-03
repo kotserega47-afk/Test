@@ -218,7 +218,7 @@ def run_download():
         except Exception as e:
             msg = f"❌ Ошибка во время скачивания: {e}"
             logger.exception(msg)
-            send_message_sync(msg)
+            send_message_sync(msg, chat_id=CHAT_ID)
             raise
         finally:
             browser.close()
@@ -257,7 +257,7 @@ def run_download():
     except Exception as e:
         msg = f"❌ Ошибка при загрузке или анализе: {e}"
         logger.exception(msg)
-        send_message_sync(msg)
+        send_message_sync(msg, chat_id=CHAT_ID)
         raise
 
 if __name__ == "__main__":
@@ -268,5 +268,5 @@ if __name__ == "__main__":
     except Exception as e:
         msg = f"❌ Downloader завершился с ошибкой: {e}"
         logger.exception(msg)
-        send_message_sync(msg)
+        send_message_sync(msg, chat_id=CHAT_ID)
         raise

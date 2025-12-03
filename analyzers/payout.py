@@ -7,6 +7,10 @@ from utils.excel_utils import style_worksheet, write_df_to_sheet
 from openpyxl import Workbook
 from datetime import datetime
 
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_ANALIZ")
+
 # путь к конфигу
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "payout_config.yaml")
@@ -247,7 +251,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                 f"Карт на перевод в in: {len(df_problem)}\n"
                 f"Карт на проверку: {len(df_check)}"
             )
-            send_file_sync(tmp_path, caption=caption)
+            send_file_sync(tmp_path, caption=caption, chat_id=CHAT_ID)
             logger.info(f"[payout] 📤 Отчёт отправлен в Telegram: {tmp_path}")
 
         # 2️⃣ Перемещаем исходный payout-файл в /processed с добавлением даты

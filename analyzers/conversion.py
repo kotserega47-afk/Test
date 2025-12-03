@@ -255,8 +255,7 @@ def run(
                         counts = today_special["partner_norm"].value_counts()
                         stats = "\n".join([f"• {p}: {int(c)}" for p, c in counts.items()])
                         send_message_sync(
-                            f"📊 Добавленные special-карты за {today.strftime('%d.%m.%Y')}:\n{stats}"
-                        , chat_id=CHAT_ID)
+                            f"📊 Добавленные special-карты за {today.strftime('%d.%m.%Y')}:\n{stats}", chat_id=CHAT_ID)
                         logger.info(f"[run] 📊 Найдено {len(today_special)} новых special-карт.")
                     else:
                         send_message_sync(f"ℹ️ За {today.strftime('%d.%m.%Y')} новых special-карт не добавлено.", chat_id=CHAT_ID)
@@ -264,14 +263,12 @@ def run(
             logger.warning("[run] ⚠️ Не удалось скачать special_cards.xlsx из Dropbox.")
             if send_telegram:
                 send_message_sync(
-                    "⚠️ Файл special_cards.xlsx не найден в Dropbox.\nАнализ выполнен без ограничений для специальных карт."
-                , chat_id=CHAT_ID)
+                    "⚠️ Файл special_cards.xlsx не найден в Dropbox.\nАнализ выполнен без ограничений для специальных карт.", chat_id=CHAT_ID)
     except Exception as e:
         logger.warning(f"[run] ⚠️ Ошибка при загрузке/чтении special_cards.xlsx: {e}")
         if send_telegram:
             send_message_sync(
-                "⚠️ Ошибка при загрузке special_cards.xlsx из Dropbox.\nАнализ выполнен без ограничений для специальных карт."
-            , chat_id=CHAT_ID)
+                "⚠️ Ошибка при загрузке special_cards.xlsx из Dropbox.\nАнализ выполнен без ограничений для специальных карт.", chat_id=CHAT_ID)
 
     # Сообщаем последнюю дату (или что дат нет)
     if send_telegram:
