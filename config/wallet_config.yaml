@@ -97,7 +97,7 @@ partners:
     threshold: 0.35
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
-    daily_max_amount: 650_000
+    daily_max_amount: 1_000_000
 
   "HH Вассл (Сбер сбп)":
     threshold: 0.5
