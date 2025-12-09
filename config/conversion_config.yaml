@@ -102,15 +102,12 @@ partners:
 
   "HH Вассл (Сбер сбп) (119)":
     threshold: 10
-    exclude:
 
   "HH Вассл (Тинь номер карты и сбп) (120)":
     threshold: 10
-    exclude:
 
   "HH Вассл (ВТБ сбп) (121)":
     threshold: 10
-    exclude:
 
 pools:
   aurora: "SMS"
