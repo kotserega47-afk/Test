@@ -100,12 +100,25 @@ partners:
       - { start: "26.09.2025 18:00:00", end: "26.09.2025 19:00:00" }
       - { start: "31.10.2025 19:30:00", end: "31.10.2025 20:30:00" }
 
+  "HH Вассл (Сбер сбп) (119)":
+    threshold: 10
+    exclude:
+
+  "HH Вассл (Тинь номер карты и сбп) (120)":
+    threshold: 10
+    exclude:
+
+  "HH Вассл (ВТБ сбп) (121)":
+    threshold: 10
+    exclude:
+
 pools:
   aurora: "SMS"
   a-mobile: "А-Мобайл"
   abhsber: "Abhsber"
   cibit: "Cibit"
   bakai: "BakAi"
+  Vassl: "Вассл"
 
 columns:
   card: "Карта"
