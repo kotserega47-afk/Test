@@ -25,7 +25,7 @@ groups:
       - "HH (Abhsber IN) Сбер  (116)"
 
   aurora:
-    daily_max_amount: 5_000_000     # общий лимит 5 млн
+    daily_max_amount: 10_800_000     # общий лимит 5 млн
     partners:
       - "HH (Аврора Тинь) (108)"
       - "HH (Аврора Сбер) (109)"
