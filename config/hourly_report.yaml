@@ -133,6 +133,9 @@ payin_groups:
 # --------------------------
 # PAYIN LAYOUT
 # --------------------------
+# Формат подписей, как в title:
+# payin:
+# payin_groups:
 
 payin_layout:
 
