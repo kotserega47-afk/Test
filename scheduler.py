@@ -57,20 +57,17 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
 # ================= Rate Monitor =================
 
 def run_rate_monitor():
-    logger.info("🟢 Старт RateMonitor: каждые 5 мин, окно 08:55–10:30 (MSK)")
+    logger.info("🟢 Старт RateMonitor: каждые 10 мин, окно 08:00–23:55 (MSK)")
 
     while True:
         now = now_msk()
         h, m = now.hour, now.minute
 
-        in_window = (
-            (h == 8 and m >= 55) or
-            (9 <= h < 11) or
-            (h == 10 and m == 30)
-        )
+        in_window = (h > 8 or (h == 8 and m >= 0)) and (h < 23 or (h == 23 and m <= 55))
 
         if not in_window:
-            time.sleep(300)
+            logger.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
+            time.sleep(60)
             continue
 
         try:
@@ -80,7 +77,7 @@ def run_rate_monitor():
         except Exception as e:
             logger.exception(f"❌ Ошибка в RateMonitor: {e}")
 
-        time.sleep(5 * 60)
+        time.sleep(10 * 60)
 
 
 # ================= HOURLY (HourlyDownloader → HourlyReport) =================
