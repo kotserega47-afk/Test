@@ -10,6 +10,10 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not CHAT_ID:
     raise RuntimeError("Не задан TELEGRAM_CHAT_ID")
 
+BAKAI_CHAT_ID = os.getenv("BAKAI_CHAT_ID")
+if not BAKAI_CHAT_ID:
+    raise RuntimeError("Не задан BAKAI_CHAT_ID")
+
 URL = "https://bakai.kg/ru/"
 LAST_RATE_FILE = "/tmp/bakai_last_buy_rate.txt"
 
@@ -134,7 +138,9 @@ def check_bakai_rate(chat_id: str = None):
             f"⚡ *Внимание!* Новый курс покупки RUB: {buy_rate}\n"
             f"{arrow} Было: {last} (Δ {diff:+.3f})"
         )
-        send_message_sync(msg, chat_id=chat_id)
+        # 👇 отправляем в ALERT чат, если задан
+        target_chat = BAKAI_CHAT_ID or chat_id
+        send_message_sync(msg, chat_id=target_chat)
         _save_rate(buy_rate)
     else:
         msg = f"💤 Курс без изменений: {buy_rate}"
