@@ -3,7 +3,7 @@ import os
 from datetime import datetime, time
 from playwright.sync_api import sync_playwright
 from utils.logger import logger
-from integrations.telegram_bot import send_message_sync
+from integrations.telegram_bot import send_message_sync, send_photo_sync
 from zoneinfo import ZoneInfo
 
 # Текущий курс
@@ -120,7 +120,26 @@ def check_bakai_rate(chat_id: str = None):
 
     except Exception as e:
         logger.error(f"[rate_monitor] Ошибка мониторинга: {e}")
-        send_message_sync(f"⚠️ Ошибка мониторинга курса: {e}", chat_id=chat_id)
+
+        # --- создание и отправка скриншота при ошибке ---
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"/tmp/bakai_error_{ts}.png"
+
+            if 'page' in locals():
+                page.screenshot(path=screenshot_path, full_page=True)
+                send_photo_sync(
+                    screenshot_path,
+                    f"⚠️ Ошибка мониторинга курса:\n`{e}`",
+                    chat_id=chat_id
+                )
+            else:
+                send_message_sync(f"⚠️ Ошибка мониторинга курса: {e}", chat_id=chat_id)
+
+        except Exception as s_err:
+            logger.error(f"[rate_monitor] Ошибка при создании скриншота: {s_err}")
+            send_message_sync(f"⚠️ Ошибка мониторинга (без скриншота): {e}", chat_id=chat_id)
+
         return
 
     # ---------------- обработка результата ----------------
