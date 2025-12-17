@@ -3,8 +3,10 @@ import os
 from datetime import datetime, time
 from playwright.sync_api import sync_playwright
 from utils.logger import logger
-from integrations.telegram_bot import send_message_sync, send_photo_sync
+from integrations.telegram_bot import send_message_sync
 from zoneinfo import ZoneInfo
+import time
+import random
 
 # Текущий курс
 CHAT_ID = os.getenv("CURRENT_RATE_BAKAI_CHAT_ID")
@@ -29,6 +31,10 @@ MSK = ZoneInfo("Europe/Moscow")
 
 
 # ------------------------ вспомогательные ------------------------
+class RateMonitorError(Exception):
+    def __init__(self, message, screenshot_path=None):
+        super().__init__(message)
+        self.screenshot_path = screenshot_path
 
 def _load_rate():
     """Загружает последний сохранённый курс"""
@@ -117,30 +123,19 @@ def check_bakai_rate(chat_id: str = None):
             buy_rate = float(buy_text.replace(",", "."))
 
             browser.close()
-
     except Exception as e:
         logger.error(f"[rate_monitor] Ошибка мониторинга: {e}")
 
-        # --- создание и отправка скриншота при ошибке ---
+        screenshot_path = None
         try:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = f"/tmp/bakai_error_{ts}.png"
-
-            if 'page' in locals():
+            if 'page' in locals() and not page.is_closed():
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"/tmp/bakai_error_{ts}.png"
                 page.screenshot(path=screenshot_path, full_page=True)
-                send_photo_sync(
-                    screenshot_path,
-                    f"⚠️ Ошибка мониторинга курса:\n`{e}`",
-                    chat_id=chat_id
-                )
-            else:
-                send_message_sync(f"⚠️ Ошибка мониторинга курса: {e}", chat_id=chat_id)
+        except Exception:
+            screenshot_path = None
 
-        except Exception as s_err:
-            logger.error(f"[rate_monitor] Ошибка при создании скриншота: {s_err}")
-            send_message_sync(f"⚠️ Ошибка мониторинга (без скриншота): {e}", chat_id=chat_id)
-
-        return
+        raise RateMonitorError(str(e), screenshot_path=screenshot_path)
 
     # ---------------- обработка результата ----------------
 
@@ -168,7 +163,46 @@ def check_bakai_rate(chat_id: str = None):
         send_message_sync(msg, chat_id=chat_id)
         logger.info(f"[rate_monitor] Курс без изменений ({buy_rate}).")
 
+def run_rate_monitor_safe():
+    attempts = 3
+    delays = (5, 15, 30)
 
+    for i in range(attempts):
+        try:
+            logger.info(f"[rate_monitor] Попытка {i + 1}/{attempts}")
+            check_bakai_rate()
+            logger.info("[rate_monitor] ✅ Проверка завершена успешно")
+            return
+
+        except RateMonitorError as e:
+            # если это не последняя попытка — ждём и пробуем снова
+            if i < attempts - 1:
+                delay = delays[i] + random.uniform(0, 3)
+                logger.warning(
+                    f"[rate_monitor] Ошибка: {e}. Повтор через {delay:.1f} сек"
+                )
+                time.sleep(delay)
+                continue
+
+            # ===== ПОСЛЕДНЯЯ ПОПЫТКА =====
+            logger.error("[rate_monitor] ❌ Все попытки исчерпаны")
+
+            # одно сообщение в Telegram
+            send_message_sync(
+                f"⚠️ RateMonitor недоступен после {attempts} попыток.\nОшибка: {e}",
+                chat_id=CHAT_ID
+            )
+
+            # отправляем скриншот, если он был сделан
+            if e.screenshot_path and os.path.exists(e.screenshot_path):
+                from integrations.telegram_bot import send_file_sync
+                send_file_sync(
+                    e.screenshot_path,
+                    caption="📸 Скриншот ошибки RateMonitor",
+                    chat_id=CHAT_ID
+                )
+
+            return
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
