@@ -12,7 +12,7 @@ from integrations.downloader import run_download                 # 40 минут
 from integrations.hourly_downloader import run_hourly_cycle      # каждый час
 from analyzers.hourly_report import run_hourly_report            # отчёт после hourly
 from integrations.downloader_wallets import run_wallet_cycle     # 5 минут
-from integrations.bakai_monitor_playwright import check_bakai_rate
+from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -66,13 +66,15 @@ def run_rate_monitor():
         in_window = (h > 8 or (h == 8 and m >= 0)) and (h < 23 or (h == 23 and m <= 55))
 
         if not in_window:
-            logger.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
+            # логируем только раз в 10 минут, чтобы не шуметь
+            if now.minute % 10 == 0:
+                logger.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
             time.sleep(60)
             continue
 
         try:
             logger.info(f"🚀 RateMonitor (MSK {now.strftime('%H:%M:%S')})")
-            check_bakai_rate()
+            run_rate_monitor_safe()
             logger.info("✅ RateMonitor завершён")
         except Exception as e:
             logger.exception(f"❌ Ошибка в RateMonitor: {e}")
