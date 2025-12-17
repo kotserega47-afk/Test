@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 from utils.logger import logger
 from integrations.telegram_bot import send_message_sync
 from zoneinfo import ZoneInfo
-import time
+import time as time_module
 import random
 
 # Текущий курс
@@ -181,7 +181,7 @@ def run_rate_monitor_safe():
                 logger.warning(
                     f"[rate_monitor] Ошибка: {e}. Повтор через {delay:.1f} сек"
                 )
-                time.sleep(delay)
+                time_module.sleep(delay)
                 continue
 
             # ===== ПОСЛЕДНЯЯ ПОПЫТКА =====
