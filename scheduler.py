@@ -138,10 +138,10 @@ def main():
         daemon=True
     ).start()
 
-    # WalletDownloader — каждые 5 минут
+    # WalletDownloader — каждые 3 минут
     threading.Thread(
         target=run_every,
-        args=(5, 8, 24, run_wallet_cycle, "WalletDownloader"),
+        args=(3, 8, 24, run_wallet_cycle, "WalletDownloader"),
         daemon=True
     ).start()
 
