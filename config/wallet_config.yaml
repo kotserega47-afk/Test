@@ -12,8 +12,8 @@ pending_thresholds:
   payout_minutes: 180     # Выплаты — более 3 часов
 
 download_periods:
-  payin_days_back: 2      # сегодня − 2
-  payout_days_back: 7     # выплаты за неделю
+  payin_days_back: 0      # сегодня − 2
+  payout_days_back: 0     # выплаты за неделю
 
 # === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
 groups:
