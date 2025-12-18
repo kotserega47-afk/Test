@@ -1,11 +1,15 @@
 # analyzers/payout.py
 import os
 import yaml
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 import pandas as pd
 from utils.excel_utils import style_worksheet, write_df_to_sheet
 from openpyxl import Workbook
 from datetime import datetime
+
+icon, name = LOG_PROFILES["PAYOUT"]
+logger = get_logger(name, icon)
 
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
 if not CHAT_ID:

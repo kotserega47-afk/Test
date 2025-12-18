@@ -8,10 +8,14 @@ import pandas as pd
 
 from openpyxl import Workbook
 from datetime import datetime
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
+
+icon, name = LOG_PROFILES["CONVERT"]
+logger = get_logger(name, icon)
 
 # -----------------------------
 # Загрузка конфигурации

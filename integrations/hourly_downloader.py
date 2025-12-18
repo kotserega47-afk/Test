@@ -4,7 +4,11 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 import zoneinfo
 
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
+
+icon, name = LOG_PROFILES["HOURLY"]
+logger = get_logger(name, icon)
 
 BASE_DIR = "/tmp/hourly"
 AUTH_STATE = "/tmp/hourly_auth.json"

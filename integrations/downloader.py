@@ -5,13 +5,17 @@ from datetime import datetime, timedelta
 # === Добавляем корень проекта в PYTHONPATH ===
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 from playwright.sync_api import sync_playwright
 from integrations.dropbox_watcher import upload_file
 from main import process_file
 from run_once_guard import acquire_lock, release_lock
 from integrations.telegram_bot import send_message_sync
 import zoneinfo  # встроено в Python 3.9+
+
+icon, name = LOG_PROFILES["DOWNLOADER"]
+logger = get_logger(name, icon)
 
 # === Устанавливаем системную таймзону для всех логов и времени ===
 os.environ["TZ"] = "Europe/Moscow"

@@ -2,11 +2,15 @@
 import os
 from datetime import datetime, time
 from playwright.sync_api import sync_playwright
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync
 from zoneinfo import ZoneInfo
 import time as time_module
 import random
+
+icon, name = LOG_PROFILES["RATE"]
+logger = get_logger(name, icon)
 
 # Текущий курс
 CHAT_ID = os.getenv("CURRENT_RATE_BAKAI_CHAT_ID")

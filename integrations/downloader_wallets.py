@@ -11,9 +11,12 @@ import yaml
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync, send_file_sync
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 from analyzers.wallet_analyzer import analyze_wallets
 
+icon, name = LOG_PROFILES["WALLET"]
+logger = get_logger(name, icon)
 
 LOGIN = os.getenv("ANTARES_LOGIN")
 PASSWORD = os.getenv("ANTARES_PASSWORD")

@@ -5,7 +5,8 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 
 # === Импорты задач ===
 from integrations.downloader import run_download                 # 40 минут
@@ -14,6 +15,14 @@ from analyzers.hourly_report import run_hourly_report            # отчёт п
 from integrations.downloader_wallets import run_wallet_cycle     # 5 минут
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 
+def _mk(profile_key: str):
+    icon, name = LOG_PROFILES[profile_key]
+    return get_logger(name, icon)
+
+log_main = _mk("MAIN")
+log_wallet = _mk("WALLET")
+log_hourly = _mk("HOURLY")
+log_rate = _mk("RATE")
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -31,8 +40,8 @@ def wait_until_hour(hour: int):
         time.sleep(30)
 
 
-def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str):
-    logger.info(
+def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str, log):
+    log.info(
         f"🟢 Старт планировщика {name}: интервал {interval_min} мин, окно {start_hour}:00–{end_hour}:00 (MSK)"
     )
 
@@ -40,16 +49,16 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
         now = now_msk()
 
         if not (start_hour <= now.hour <= end_hour):
-            logger.info(f"⏸ {name}: вне окна, ждём {start_hour}:00 (MSK)")
+            log.info(f"⏸ {name}: вне окна, ждём {start_hour}:00 (MSK)")
             wait_until_hour(start_hour)
             continue
 
         try:
-            logger.info(f"🚀 Запуск {name} (MSK {now.strftime('%H:%M:%S')})")
+            log.info(f"🚀 Запуск {name} (MSK {now.strftime('%H:%M:%S')})")
             func()
-            logger.info(f"✅ {name} завершён")
+            log.info(f"✅ {name} завершён")
         except Exception as e:
-            logger.exception(f"❌ Ошибка в {name}: {e}")
+            log.exception(f"❌ Ошибка в {name}: {e}")
 
         time.sleep(interval_min * 60)
 
@@ -57,7 +66,7 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
 # ================= Rate Monitor =================
 
 def run_rate_monitor():
-    logger.info("🟢 Старт RateMonitor: каждые 10 мин, окно 08:00–23:55 (MSK)")
+    log_rate.info("🟢 Старт RateMonitor: каждые 10 мин, окно 08:00–23:55 (MSK)")
 
     while True:
         now = now_msk()
@@ -68,16 +77,16 @@ def run_rate_monitor():
         if not in_window:
             # логируем только раз в 10 минут, чтобы не шуметь
             if now.minute % 10 == 0:
-                logger.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
+                log_rate.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
             time.sleep(60)
             continue
 
         try:
-            logger.info(f"🚀 RateMonitor (MSK {now.strftime('%H:%M:%S')})")
+            log_rate.info(f"🚀 RateMonitor (MSK {now.strftime('%H:%M:%S')})")
             run_rate_monitor_safe()
-            logger.info("✅ RateMonitor завершён")
+            log_rate.info("✅ RateMonitor завершён")
         except Exception as e:
-            logger.exception(f"❌ Ошибка в RateMonitor: {e}")
+            log_rate.exception(f"❌ Ошибка в RateMonitor: {e}")
 
         time.sleep(10 * 60)
 
@@ -85,7 +94,7 @@ def run_rate_monitor():
 # ================= HOURLY (HourlyDownloader → HourlyReport) =================
 
 def run_hourly_loop():
-    logger.info("🟢 Старт HourlyReporter: каждый час, окно 09:00–00:00 (MSK)")
+    log_hourly.info("🟢 Старт HourlyReporter: каждый час, окно 09:00–00:00 (MSK)")
 
     # Стартуем с текущего часа, чтобы не стрелять сразу при старте посреди часа
     last_run_hour = now_msk().hour
@@ -97,7 +106,7 @@ def run_hourly_loop():
         in_window = (9 <= hour <= 23) or (hour == 0)
 
         if not in_window:
-            logger.info("⏸ HourlyReporter: вне окна, ждём 09:00 (MSK)")
+            log_hourly.info("⏸ HourlyReporter: вне окна, ждём 09:00 (MSK)")
             wait_until_hour(9)
             # После выхода из wait_until_hour снова проверим in_window и hour != last_run_hour
             continue
@@ -108,15 +117,15 @@ def run_hourly_loop():
             last_run_hour = hour
 
             try:
-                logger.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
+                log_hourly.info(f"🚀 HourlyDownloader (MSK {now.strftime('%H:%M:%S')})")
                 run_hourly_cycle()
 
-                logger.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
+                log_hourly.info(f"🚀 HourlyReport (MSK {now.strftime('%H:%M:%S')})")
                 run_hourly_report()
 
-                logger.info("✅ HourlyReporter завершён")
+                log_hourly.info("✅ HourlyReporter завершён")
             except Exception as e:
-                logger.exception(f"❌ Ошибка в HourlyReporter: {e}")
+                log_hourly.exception(f"❌ Ошибка в HourlyReporter: {e}")
 
             # Небольшая пауза, чтобы в первый момент часа не отстрелиться несколько раз
             time.sleep(60)
@@ -134,14 +143,14 @@ def main():
     # MainDownloader — каждые 40 минут
     threading.Thread(
         target=run_every,
-        args=(40, 8, 24, run_download, "MainDownloader"),
+        args=(40, 8, 24, run_download, "MainDownloader", log_main),
         daemon=True
     ).start()
 
     # WalletDownloader — каждые 3 минут
     threading.Thread(
         target=run_every,
-        args=(3, 8, 24, run_wallet_cycle, "WalletDownloader"),
+        args=(3, 8, 24, run_wallet_cycle, "WalletDownloader", log_wallet),
         daemon=True
     ).start()
 
