@@ -62,7 +62,7 @@ def _find_and_pick_date(page, target_date: str):
             return False
 
         prev_btn.click()
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(180)
 
     logger.warning(f"⚠️ Дата {target_date} не найдена в пределах 12 месяцев")
     return False
@@ -87,10 +87,10 @@ def _download_payin(page, ts: str, days_back: int) -> str:
     # применить
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    time.sleep(2)
 
     # скачивание
-    with page.expect_download(timeout=300000) as d:
+    with page.expect_download(timeout=180000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
 
@@ -122,10 +122,10 @@ def _download_payout(page, ts: str, days_back: int) -> str:
     # Применяем
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    time.sleep(2)
 
     # Скачивание
-    with page.expect_download(timeout=300000) as d:
+    with page.expect_download(timeout=180000) as d:
         page.locator("button:has-text('Экспорт')").click()
     download = d.value
 
