@@ -1,4 +1,4 @@
-Р#config/analysis_map.yaml
+#config/analysis_map.yaml
 
 conversion:
   file_pattern: "conversion"
