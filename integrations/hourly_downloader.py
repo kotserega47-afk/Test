@@ -27,7 +27,7 @@ def _ensure_logged_in(page, context):
         return
 
     logger.info("[hourly_dl] Логинимся…")
-    page.goto("https://antares.plus/lkcard/#/login", timeout=60000)
+    page.goto("https://antares.plus/lkcard/#/login", timeout=5000)
     page.fill("input[type='text']", LOGIN)
     page.fill("input[type='password']", PASSWORD)
     page.click("button:has-text('Войти')")
@@ -58,7 +58,7 @@ def _download_payin(page):
     page.wait_for_load_state("networkidle")
     time.sleep(1.3)
 
-    with page.expect_download() as d:
+    with page.expect_download(timeout=90_000) as d:
         page.click("button:has-text('Экспорт')")
     dl = d.value
 
@@ -90,7 +90,7 @@ def _download_payout(page):
     page.wait_for_load_state("networkidle")
     time.sleep(1.3)
 
-    with page.expect_download() as d:
+    with page.expect_download(timeout=90_000) as d:
         page.click("button:has-text('Экспорт')")
     dl = d.value
 
