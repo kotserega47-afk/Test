@@ -1,8 +1,11 @@
 # integrations/dropbox_watcher.py
 import os
 import dropbox
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 
+icon, name = LOG_PROFILES["DROPBOX"]
+logger = get_logger(name, icon)
 
 # Получаем токены и ключи из env
 ACCESS_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN")

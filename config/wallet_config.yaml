@@ -1,4 +1,5 @@
-# === ОБЩИЕ НАСТРОЙКИ ОКНА ===
+#  Бот-Аналитика
+#=== ОБЩИЕ НАСТРОЙКИ ОКНА ===
 window_minutes: 15              # ширина окна анализа
 offset_minutes: 0              # смещение окна
 success_window_minutes: 0      # окно подсчёта успехов
@@ -11,8 +12,8 @@ pending_thresholds:
   payout_minutes: 180     # Выплаты — более 3 часов
 
 download_periods:
-  payin_days_back: 2      # сегодня − 2
-  payout_days_back: 7     # выплаты за неделю
+  payin_days_back: 0      # сегодня − 2
+  payout_days_back: 0     # выплаты за неделю
 
 # === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
 groups:
@@ -24,7 +25,7 @@ groups:
       - "HH (Abhsber IN) Сбер  (116)"
 
   aurora:
-    daily_max_amount: 5_000_000     # общий лимит 5 млн
+    daily_max_amount: 10_800_000     # общий лимит 5 млн
     partners:
       - "HH (Аврора Тинь) (108)"
       - "HH (Аврора Сбер) (109)"

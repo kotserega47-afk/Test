@@ -17,6 +17,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_TOKEN:
     raise ValueError("Не задан TELEGRAM_BOT_TOKEN")
 
+BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # =====================================================
 #   HTTP client
@@ -109,6 +110,21 @@ def send_message_sync(text: str, chat_id: str):
 
     except Exception as e:
         logger.error(f"❌ Ошибка постановки в очередь send_message: {e}")
+
+def send_photo_sync(photo_path: str, caption: str, chat_id: str):
+    """Отправляет фото (например, скриншот) с подписью"""
+    try:
+        with open(photo_path, "rb") as photo:
+            requests.post(
+                f"{BASE_URL}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"},
+                files={"photo": photo},
+                timeout=30
+            )
+    except Exception as e:
+        print(f"[telegram] Ошибка отправки фото: {e}")
+        # резервный вариант — если файл не открылся
+        send_message_sync(f"⚠️ Ошибка при отправке скриншота: {e}", chat_id)
 
 
 def send_file_sync(path: str, caption: str | None, chat_id: str):

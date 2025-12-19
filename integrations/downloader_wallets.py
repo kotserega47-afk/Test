@@ -11,9 +11,12 @@ import yaml
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync, send_file_sync
-from utils.logger import logger
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 from analyzers.wallet_analyzer import analyze_wallets
 
+icon, name = LOG_PROFILES["WALLET"]
+logger = get_logger(name, icon)
 
 LOGIN = os.getenv("ANTARES_LOGIN")
 PASSWORD = os.getenv("ANTARES_PASSWORD")
@@ -62,7 +65,7 @@ def _find_and_pick_date(page, target_date: str):
             return False
 
         prev_btn.click()
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(180)
 
     logger.warning(f"⚠️ Дата {target_date} не найдена в пределах 12 месяцев")
     return False
@@ -87,10 +90,10 @@ def _download_payin(page, ts: str, days_back: int) -> str:
     # применить
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    time.sleep(2)
 
     # скачивание
-    with page.expect_download(timeout=300000) as d:
+    with page.expect_download(timeout=180000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
 
@@ -122,10 +125,10 @@ def _download_payout(page, ts: str, days_back: int) -> str:
     # Применяем
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    time.sleep(2)
 
     # Скачивание
-    with page.expect_download(timeout=300000) as d:
+    with page.expect_download(timeout=180000) as d:
         page.locator("button:has-text('Экспорт')").click()
     download = d.value
 
