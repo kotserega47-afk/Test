@@ -66,18 +66,18 @@ def run_every(interval_min: int, start_hour: int, end_hour: int, func, name: str
 # ================= Rate Monitor =================
 
 def run_rate_monitor():
-    log_rate.info("🟢 Старт RateMonitor: каждые 10 мин, окно 08:00–23:55 (MSK)")
+    log_rate.info("🟢 Старт RateMonitor: каждые 10 мин, окно 06:00–23:55 (MSK)")
 
     while True:
         now = now_msk()
         h, m = now.hour, now.minute
 
-        in_window = (h > 8 or (h == 8 and m >= 0)) and (h < 23 or (h == 23 and m <= 55))
+        in_window = (h > 6 or (h == 6 and m >= 0)) and (h < 23 or (h == 23 and m <= 55))
 
         if not in_window:
             # логируем только раз в 10 минут, чтобы не шуметь
             if now.minute % 10 == 0:
-                log_rate.info("⏸ RateMonitor: вне окна 08:00–23:55 (MSK)")
+                log_rate.info("⏸ RateMonitor: вне окна 06:00–23:55 (MSK)")
             time.sleep(60)
             continue
 
