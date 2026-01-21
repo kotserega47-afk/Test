@@ -48,7 +48,7 @@ partners:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
     threshold: 0.50
-    daily_max_amount: 400_000
+    daily_max_amount: 4_000_000
     api_cancel_threshold: 9         # проценты
     api_cancel_keyword: "Отмена по API"
 
