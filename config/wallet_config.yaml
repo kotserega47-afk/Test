@@ -19,10 +19,10 @@ download_periods:
 groups:
 
   abhsber:
-    daily_max_amount: 8_500_000     # общий лимит 8,5 млн
+    daily_max_amount: 8_500_000
     partners:
-      - "HH (Abhsber IN + Выплаты) Тинь (117)"
-      - "HH (Abhsber IN) Сбер  (116)"
+      - "HH (Abhsber IN + Выплаты) Тинь карты (117)"
+      - "HH (Abhsber IN) Сбер карты (116)"
 
   aurora:
     daily_max_amount: 25_000_000
@@ -31,7 +31,7 @@ groups:
       - "HH (Аврора Сбер) (109)"
 
   kibit:
-    daily_max_amount: 15_000_000     # общий лимит 15 млн
+    daily_max_amount: 15_000_000
     partners:
       - "HH (Кибит Сбер) (111)"
       - "HH (Кибит Тинь) (114)"
@@ -64,13 +64,13 @@ partners:
     api_cancel_threshold: 20
     api_cancel_keyword: "Отмена по API"
 
-  "HH (Abhsber IN + Выплаты) Тинь (117)":
+  "HH (Abhsber IN + Выплаты) Тинь карты (117)":
     threshold: 0.50
     daily_max_amount: 2_500_000
     api_cancel_threshold: 12
     api_cancel_keyword: "Отмена по API"
 
-  "HH (Abhsber IN) Сбер  (116)":
+  "HH (Abhsber IN) Сбер карты (116)":
     threshold: 0.50
     api_cancel_threshold: 4
     api_cancel_keyword: "Отмена по API"
@@ -94,6 +94,7 @@ partners:
     threshold: 0.35
     api_cancel_threshold: 9
     api_cancel_keyword: "Отмена по API"
+
 
   "HH (Абхасбер - Сбер СБП) (118)":
     threshold: 0.35
