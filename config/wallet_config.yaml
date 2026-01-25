@@ -18,11 +18,6 @@ download_periods:
 # === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
 groups:
 
-  abhsber:
-    partners:
-      - "HH (Abhsber IN + Выплаты) Тинь карты (117)"
-      - "HH (Abhsber IN) Сбер карты (116)"
-
   aurora:
     daily_max_amount: 25_000_000
     partners:
