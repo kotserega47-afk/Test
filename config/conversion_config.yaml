@@ -141,6 +141,8 @@ partners:
   "HH (Абхасбер - Тбанк СБП) (123)":
     threshold: 3
 
+  "HH Вассл (Тбанк сбп) (124)":
+    threshold: 3
 
 
 pools:
