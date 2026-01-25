@@ -19,7 +19,6 @@ download_periods:
 groups:
 
   abhsber:
-    daily_max_amount: 8_500_000
     partners:
       - "HH (Abhsber IN + Выплаты) Тинь карты (117)"
       - "HH (Abhsber IN) Сбер карты (116)"
@@ -66,11 +65,13 @@ partners:
 
   "HH (Abhsber IN + Выплаты) Тинь карты (117)":
     threshold: 0.50
+    daily_max_amount: 2_500_000
     api_cancel_threshold: 12
     api_cancel_keyword: "Отмена по API"
 
   "HH (Abhsber IN) Сбер карты (116)":
     threshold: 0.50
+    daily_max_amount: 10_000_000
     api_cancel_threshold: 4
     api_cancel_keyword: "Отмена по API"
 
