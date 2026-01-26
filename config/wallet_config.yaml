@@ -97,25 +97,25 @@ partners:
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 1_000_000
 
-  "HH Вассл (Сбер сбп)":
+  "HH Вассл (Сбер сбп) (119)":
     threshold: 0.5
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 1_000_000
 
-  "HH Вассл (ВТБ сбп)":
+  "HH Вассл (ВТБ сбп) (121)":
     threshold: 0.5
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 1_000_000
 
-  "HH Вассл (Тинь номер карты и сбп)":
+  "HH Вассл (Тинь карты) (120)":
     threshold: 0.5
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 2_000_000
 
-  "HH Вассл (Тбанк сбп)":
+  "HH Вассл (Тбанк сбп) (124)":
     threshold: 0.5
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
