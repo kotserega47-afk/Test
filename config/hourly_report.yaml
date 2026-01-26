@@ -20,7 +20,7 @@ payout:
     methods:
       UNI:
         title: "UNI"
-        comment: "(Лимит 4кк - круглосуточно , вилка до 100к)"
+        comment: "(Лимит 1кк - круглосуточно , вилка до 100к)"
       BST:
         title: "BST"
         comment: "(на стопе)"
