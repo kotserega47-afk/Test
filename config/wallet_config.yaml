@@ -121,11 +121,23 @@ partners:
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 1_000_000
 
-payout:
+payout_analytics:
 
-  "HH (А-мобайл Сбер + Выплаты) (107)":
-    title: "А-мобайл"
-    methods:
-      UNI:
-        title: "UNI"
-        comment: "(Лимит 1кк - круглосуточно , вилка до 100к)"
+  enabled: true
+  window_minutes: 30
+  min_events: 10
+
+  partners:
+
+    "HH (А-мобайл Сбер + Выплаты) (107)":
+      methods:
+        UNI:
+          title: "UNI"
+          comment: "(Лимит 1кк - круглосуточно , вилка до 100к)"
+
+    "HH (Abhsber IN) Сбер карты (116)":
+      title: "АБХСбер (116)"
+      methods:
+        UNI:
+          title: "UNI"
+          comment: "(Лимит 8кк - круглосуточно , вилка 5-100к)"
