@@ -125,7 +125,9 @@ payout_analytics:
 
   enabled: true
   window_minutes: 30
-  min_events: 10
+  min_events:
+  always_report: true
+  report_if_empty: true
 
   partners:
 
