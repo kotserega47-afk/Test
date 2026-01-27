@@ -120,3 +120,12 @@ partners:
     api_cancel_threshold: 5
     api_cancel_keyword: "Отмена по API"
     daily_max_amount: 1_000_000
+
+payout:
+
+  "HH (А-мобайл Сбер + Выплаты) (107)":
+    title: "А-мобайл"
+    methods:
+      UNI:
+        title: "UNI"
+        comment: "(Лимит 1кк - круглосуточно , вилка до 100к)"
