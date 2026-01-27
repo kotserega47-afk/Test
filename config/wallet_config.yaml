@@ -129,6 +129,9 @@ payout_analytics:
   always_report: true
   report_if_empty: true
 
+  alert_channels:
+    - bot
+
   partners:
 
     "HH (А-мобайл Сбер + Выплаты) (107)":
