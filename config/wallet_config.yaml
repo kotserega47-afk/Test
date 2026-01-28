@@ -64,7 +64,7 @@ partners:
     api_cancel_threshold: 12
     api_cancel_keyword: "Отмена по API"
 
-  "HH (Abhsber IN) Сбер карты (116)":
+  "HH (Abhsber IN) Сбер карты + выплаты (116)":
     threshold: 0.50
     daily_max_amount: 10_000_000
     api_cancel_threshold: 4
@@ -141,7 +141,7 @@ payout_analytics:
           title: "UNI"
           comment: "(Лимит 1кк - круглосуточно, вилка до 100к)"
 
-    "HH (Abhsber IN) Сбер карты (116)":
+    "HH (Abhsber IN) Сбер карты + выплаты (116)":
       title: "АБХСбер (116)"
       methods:
         UNI:

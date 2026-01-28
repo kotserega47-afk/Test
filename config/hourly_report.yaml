@@ -25,7 +25,7 @@ payout:
         title: "BST"
         comment: "(на стопе)"
 
-  "HH (Abhsber IN) Сбер карты (116)":
+  "HH (Abhsber IN) Сбер карты + выплаты (116)":
     title: "АБХСбер (116)"
     methods:
       "":
@@ -80,7 +80,7 @@ payin:
     title: "Аврора Тинь (108)"
     comment:
 
-  "HH (Abhsber IN) Сбер карты (116)":
+  "HH (Abhsber IN) Сбер карты + выплаты (116)":
     title: "АБХСбер Сбер (116)"
     comment: "(Лимит 10 КК)"
 
@@ -125,7 +125,7 @@ payin_groups:
   abhsber_sum:
     title: "АБХСбер (116 + 117)"
     combine:
-      - "HH (Abhsber IN) Сбер карты (116)"
+      - "HH (Abhsber IN) Сбер карты + выплаты (116)"
       - "HH (Abhsber IN) Тинь карты (117)"
     comment:
 
