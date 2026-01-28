@@ -58,7 +58,7 @@ partners:
     api_cancel_threshold: 20
     api_cancel_keyword: "Отмена по API"
 
-  "HH (Abhsber IN + Выплаты) Тинь карты (117)":
+  "HH (Abhsber IN) Тинь карты (117)":
     threshold: 0.50
     daily_max_amount: 2_500_000
     api_cancel_threshold: 12

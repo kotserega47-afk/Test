@@ -84,7 +84,7 @@ payin:
     title: "АБХСбер Сбер (116)"
     comment: "(Лимит 10 КК)"
 
-  "HH (Abhsber IN + Выплаты) Тинь карты (117)":
+  "HH (Abhsber IN) Тинь карты (117)":
     title: "АБХСбер Тинь (117)"
     comment: "(Лимит 2,5 КК)"
 
@@ -126,7 +126,7 @@ payin_groups:
     title: "АБХСбер (116 + 117)"
     combine:
       - "HH (Abhsber IN) Сбер карты (116)"
-      - "HH (Abhsber IN + Выплаты) Тинь карты (117)"
+      - "HH (Abhsber IN) Тинь карты (117)"
     comment:
 
   aurora_sum:
