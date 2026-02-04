@@ -130,19 +130,19 @@ partners:
       - { start: "31.10.2025 19:30:00", end: "31.10.2025 20:30:00" }
 
   "HH Вассл (Сбер сбп) (119)":
-    threshold: 10
+    threshold: 20
 
   "HH Вассл (Тинь номер карты и сбп) (120)":
-    threshold: 10
+    threshold: 20
 
   "HH Вассл (ВТБ сбп) (121)":
-    threshold: 10
+    threshold: 20
 
   "HH (Абхасбер - Тбанк СБП) (123)":
-    threshold: 3
+    threshold: 20
 
   "HH Вассл (Тбанк сбп) (124)":
-    threshold: 3
+    threshold: 20
 
 
 pools:
