@@ -11,6 +11,7 @@ from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from load_data import normalize_partner_name
+from core.config_manager import get_exclude_time_df
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -103,6 +104,54 @@ def analyze_wallets(payin_path: str, payout_path: str):
     df["_status_success"] = df["_status_raw"].apply(_status_success)
     df["_status_count"] = df["_status_raw"].apply(_status_countable)
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
+
+    # === APPLY exclude_time (единые окна) =====================================
+
+    try:
+        ANALYZER_KEY = "wallet"
+
+        exclude_df = get_exclude_time_df(
+            rules_xlsx_path=os.getenv("RULES_XLSX_PATH"),
+            notify=send_message_sync,
+            chat_id=CHAT_ID,
+        )
+
+        # только активные окна, применимые к wallet
+        ex = exclude_df[
+            (exclude_df["enabled"] == 1) &
+            (exclude_df["_analyzers_list"].map(lambda lst: ANALYZER_KEY in lst))
+            ].copy()
+
+        if not ex.empty:
+            # нормализуем партнёра в rules так же, как в данных
+            ex["_partner_norm"] = ex["partner"].apply(normalize_partner_name)
+
+            # берём только ошибки (то, что влияет на конверсию)
+            err_mask = df["_status_raw"].str.lower() == "ошибка"
+            df_err = df.loc[err_mask, ["_dt", "_partner_norm"]]
+
+            if not df_err.empty:
+                # join по партнёру
+                m = df_err.merge(
+                    ex[["_partner_norm", "start_dt", "end_dt"]],
+                    on="_partner_norm",
+                    how="left",
+                )
+
+                # ошибка попала в любое исключённое окно
+                in_window = (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
+                excluded_idx = m.index[in_window.fillna(False)]
+
+                # ВАЖНО: выключаем участие в расчётах
+                df.loc[excluded_idx, "_status_count"] = False
+
+    except Exception as e:
+        send_message_sync(
+            f"❌ rules exclude_time остановил WalletAnalyzer: {e}",
+            chat_id=CHAT_ID,
+        )
+        return
+
 
     now = datetime.now(tz)
 
