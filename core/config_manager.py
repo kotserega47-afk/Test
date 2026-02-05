@@ -210,7 +210,7 @@ def _norm_str(x: Any) -> str:
 _REQUIRED_EXCLUDE_COLS = [
     "id",
     "enabled",
-    "analyzer",
+    "analyzers",
     "partner",
     "start_dt",
     "end_dt",
@@ -232,7 +232,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
         - dates not parseable (start_dt/end_dt/created_at)
         - start_dt >= end_dt
       Warning:
-        - overlaps for same analyzer+partner (enabled=1)
+        - overlaps per analyzer per partner (enabled=1)
         - gaps in id numbering
     Returns:
       ValidationResult(ok, errors, warnings, df_norm)
@@ -249,8 +249,22 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
         return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
 
     # normalize text columns
-    for c in ["id", "analyzer", "partner", "reason", "created_by"]:
+    for c in ["id", "analyzers", "partner", "reason", "created_by"]:
         df[c] = df[c].map(_norm_str)
+
+    def _parse_analyzers(s: str) -> list[str]:
+        parts = [p.strip().lower() for p in (s or "").split(",")]
+        return sorted(set(p for p in parts if p))
+
+    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers)
+
+    bad = df["_analyzers_list"].map(len) == 0
+    if bad.any():
+        bad_ids = df.loc[bad, "id"].tolist()
+        errors.append(
+            "exclude_time: analyzers empty/unparseable; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
 
     # enabled: strict 0/1
     def _parse_enabled(v: Any) -> Optional[int]:
@@ -315,22 +329,29 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
             + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
         )
 
-    # Warning: overlaps per analyzer+partner among enabled=1
+    # Warning: overlaps per analyzer per partner (enabled=1)
     active = df[(df["enabled"] == 1) & df["start_dt"].notna() & df["end_dt"].notna()].copy()
+
     if not active.empty:
-        for (analyzer, partner), g in active.groupby(["analyzer", "partner"], dropna=False):
-            g = g.sort_values("start_dt")
-            prev_end = None
-            prev_id = None
-            for _, row in g.iterrows():
-                if prev_end is not None and row["start_dt"] < prev_end:
-                    warnings.append(
-                        f"exclude_time overlap (WARNING): analyzer={analyzer}, partner={partner}: "
-                        f"{prev_id} overlaps {row['id']}"
-                    )
-                if prev_end is None or row["end_dt"] > prev_end:
-                    prev_end = row["end_dt"]
-                    prev_id = row["id"]
+        # перебираем каждый analyzer отдельно
+        for analyzer_key in sorted({a for lst in active["_analyzers_list"] for a in lst}):
+            sub = active[active["_analyzers_list"].map(lambda lst: analyzer_key in lst)]
+
+            for partner, g in sub.groupby("partner", dropna=False):
+                g = g.sort_values("start_dt")
+                prev_end = None
+                prev_id = None
+
+                for _, row in g.iterrows():
+                    if prev_end is not None and row["start_dt"] < prev_end:
+                        warnings.append(
+                            f"exclude_time overlap (WARNING): analyzer={analyzer_key}, partner={partner}: "
+                            f"{prev_id} overlaps {row['id']}"
+                        )
+
+                    if prev_end is None or row["end_dt"] > prev_end:
+                        prev_end = row["end_dt"]
+                        prev_id = row["id"]
 
     # Warning: gaps in id numbering
     try:

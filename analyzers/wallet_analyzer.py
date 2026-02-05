@@ -145,6 +145,14 @@ def analyze_wallets(payin_path: str, payout_path: str):
                 # ВАЖНО: выключаем участие в расчётах
                 df.loc[excluded_idx, "_status_count"] = False
 
+                # DEBUG: сколько ошибок исключено exclude_time
+                excluded_cnt = (
+                        (df["_status_raw"].str.lower() == "ошибка")
+                        & (df["_status_count"] == False)
+                ).sum()
+
+                logger.info(f"[DEBUG exclude_time] excluded_errors={excluded_cnt}")
+
     except Exception as e:
         send_message_sync(
             f"❌ rules exclude_time остановил WalletAnalyzer: {e}",
@@ -152,6 +160,10 @@ def analyze_wallets(payin_path: str, payout_path: str):
         )
         return
 
+    logger.info(
+        f"[DEBUG counts] countable_total={df['_status_count'].sum()}, "
+        f"success_total={df['_status_success'].sum()}"
+    )
 
     now = datetime.now(tz)
 
