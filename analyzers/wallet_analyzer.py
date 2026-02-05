@@ -3,7 +3,7 @@ import sys
 from datetime import datetime, timedelta
 import pandas as pd
 import yaml
-import pytz
+from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -70,7 +70,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
 
-    tz = pytz.timezone("Europe/Moscow")
+    tz = ZoneInfo("Europe/Moscow")
 
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
 
