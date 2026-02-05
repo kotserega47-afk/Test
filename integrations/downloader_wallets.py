@@ -4,7 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
-import pytz
+from zoneinfo import ZoneInfo
 import yaml
 
 # Добавляем корень проекта в пути
@@ -27,7 +27,7 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-MSK_TZ = pytz.timezone("Europe/Moscow")
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _ensure_logged_in(page, context):
