@@ -77,6 +77,10 @@ def _help_text() -> str:
     return (
         "Команды:\n"
         "/run <job>\n"
+        "/run hourly\n"
+        "/run wallet\n"
+        "/run conversion\n"
+        "/run rate\n"
         "/status\n"
         "/help\n\n"
         f"Доступные job: {jobs_list}\n"
