@@ -42,7 +42,7 @@ _started_at: Optional[datetime] = None
 
 
 # === JOBS: одна команда -> одна функция -> один запуск ===
-def job_main():
+def job_conversion():
     run_download()
 
 
@@ -60,7 +60,7 @@ def job_hourly():
 
 
 JOBS: Dict[str, Callable[[], None]] = {
-    "main": job_main,
+    "conversion": job_conversion,
     "wallet": job_wallet,
     "rate": job_rate,
     "hourly": job_hourly,
