@@ -14,6 +14,8 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from load_data import normalize_partner_name
 from core.config_manager import get_exclude_time_df
+from integrations.dropbox_watcher import download_file
+import tempfile
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -87,10 +89,34 @@ def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
     Важно: если rules.xlsx недоступен или повреждён — НЕ стопаем анализатор.
     Просто логируем/уведомляем и продолжаем без exclude_time.
     """
-    rules_path = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+    # 1) Сначала пробуем Dropbox (как special_cards.xlsx)
+    dropbox_rules_folder = os.getenv("DROPBOX_RULES_PATH", "/Ostin/platform/config/rules")
+    dropbox_rules_file = os.path.join(dropbox_rules_folder, "rules.xlsx")
+    local_rules_path = os.path.join(tempfile.gettempdir(), "rules.xlsx")
 
-    if not rules_path or not os.path.exists(rules_path):
-        msg = f"⚠️ rules.xlsx не найден: {rules_path!r} — пропускаю exclude_time"
+    rules_path = None
+    if download_file(dropbox_rules_file, local_rules_path):
+        rules_path = local_rules_path
+        logger.info(f"[exclude_time] 📥 rules.xlsx загружен из Dropbox: {dropbox_rules_file} → {local_rules_path}")
+    else:
+        # 2) Фолбэк: локальный путь (если ты всё-таки примонтировал файл)
+        candidate = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+
+        # если дали папку — ожидаем внутри rules.xlsx
+        if candidate and os.path.isdir(candidate):
+            candidate = os.path.join(candidate, "rules.xlsx")
+
+        if candidate and os.path.exists(candidate):
+            rules_path = candidate
+
+    # 3) Если не нашли нигде — пропускаем exclude_time
+    if not rules_path:
+        msg = (
+            f"⚠️ rules.xlsx не найден.\n"
+            f"Dropbox: {dropbox_rules_file}\n"
+            f"Local: {os.getenv('RULES_XLSX_PATH', DEFAULT_RULES_XLSX_PATH)!r}\n"
+            f"— пропускаю exclude_time"
+        )
         logger.warning(msg)
         send_message_sync(msg, chat_id=chat_id)
         return df
