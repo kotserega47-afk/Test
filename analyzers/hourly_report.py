@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync
-from load_data import normalize_partner_name
+from utils.normalization import normalize_partner_name
 
 icon, name = LOG_PROFILES["HOURLY"]
 logger = get_logger(name, icon)
