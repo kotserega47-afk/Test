@@ -1,12 +1,10 @@
 import os
 import sys
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-
 import pandas as pd
 import yaml
+from zoneinfo import ZoneInfo
 
-# Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync
@@ -14,31 +12,26 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from utils.normalization import normalize_partner_name
 from core.config_manager import get_exclude_time_df
-from integrations.dropbox_watcher import download_file
-import tempfile
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
 
 # ————————————————————————————————————————————————
-# TELEGRAM CHAT ID
+# ДИНАМИЧЕСКОЕ ОПРЕДЕЛЕНИЕ TELEGRAM CHAT ID
 # ————————————————————————————————————————————————
-def _get_chat_id() -> str:
-    chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET")
-    if not chat_id:
-        raise RuntimeError("Не задан TELEGRAM_CHAT_ID_WALLET")
-    return chat_id
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_WALLET")
+if not CHAT_ID:
+    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_WALLET")
 
-# ————————————————————————————————————————————————
-# PATHS / DEFAULTS
-# ————————————————————————————————————————————————
-PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
-CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "wallet_config.yaml")
-DEFAULT_RULES_XLSX_PATH = "/tmp/rules/rules.xlsx"
-ANALYZER_KEY = "wallet"
+
+CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "config",
+    "wallet_config.yaml"
+)
+
 
 # === Статусы ===============================================================
-
 
 def _normalize_status(s: str) -> str:
     return str(s).strip().lower()
@@ -54,358 +47,158 @@ def _status_countable(s: str) -> bool:
 
 # === Конфиг =================================================================
 
-
-def _load_cfg() -> dict:
+def _load_cfg():
     if not os.path.exists(CONFIG_PATH):
         raise RuntimeError("wallet_config.yaml не найден")
 
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
-    # defaults
     cfg.setdefault("window_minutes", 8)
     cfg.setdefault("offset_minutes", 8)
     cfg.setdefault("min_events", 10)
     cfg.setdefault("partners", {})
     cfg.setdefault("groups", {})
-    cfg.setdefault("pending_thresholds", {"payin_minutes": 10, "payout_minutes": 180})
-
-    # optional (можно будет перенести в rules позже)
-    cfg.setdefault("api_cancel_keyword", "отмена по api")
 
     return cfg
 
 
-# === exclude_time ===========================================================
+# === rules.xlsx (thresholds_partner) ========================================
 
+DEFAULT_RULES_XLSX_PATH = "/tmp/rules/rules.xlsx"
+ANALYZER_KEY = "wallet"
 
-def _apply_exclude_time(df: pd.DataFrame, chat_id: str, rules_xlsx_path: str | None) -> pd.DataFrame:
+def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
     """
-    Применяет exclude_time к PayIn:
-      - ищет окна exclude_time для ANALYZER_KEY
-      - выключает участие строк "ошибка" в расчётах (_status_count=False),
-        если они попали в исключённые интервалы.
+    Применяет пороги из rules.xlsx (лист thresholds_partner) для wallet.
 
-    Важно: если rules.xlsx недоступен или повреждён — НЕ стопаем анализатор.
-    Просто логируем/уведомляем и продолжаем без exclude_time.
+    Канон v2:
+      - metric=conversion_rate  -> threshold_min (% 0..100) -> cfg['partners'][*]['threshold']
+      - metric=api_cancel_rate  -> threshold_max (% 0..100) -> cfg['partners'][*]['api_cancel_threshold'] (backward compat)
+
+    Поддерживаем миграцию:
+      - metric=threshold               -> трактуем как conversion_rate
+      - metric=api_cancel_threshold    -> трактуем как api_cancel_rate
+      - колонка threshold              -> deprecated fallback, если min/max не заполнены
     """
-    rules_path = rules_xlsx_path
+    rules_path = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+    if rules_path and os.path.isdir(rules_path):
+        rules_path = os.path.join(rules_path, "rules.xlsx")
+
     if not rules_path or not os.path.exists(rules_path):
-        logger.warning("⚠️ rules.xlsx недоступен — пропускаю exclude_time")
-        return df
+        return cfg
 
     try:
-        exclude_df = get_exclude_time_df(
-            rules_xlsx_path=rules_path,
-            notify=send_message_sync,
-            chat_id=chat_id,
-        )
+        df = pd.read_excel(rules_path, sheet_name="thresholds_partner")
     except Exception as e:
-        msg = f"⚠️ rules exclude_time недоступен ({rules_path}): {e} — продолжаю без exclude_time"
-        logger.exception(msg)
-        send_message_sync(msg, chat_id=chat_id)
-        return df
+        logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({rules_path}): {e}")
+        return cfg
 
-    # только активные окна, применимые к wallet
-    try:
-        ex = exclude_df[
-            (exclude_df.get("enabled") == 1)
-            & (exclude_df["_analyzers_list"].map(lambda lst: ANALYZER_KEY in lst))
-        ].copy()
-    except Exception:
-        msg = "⚠️ exclude_time: неожиданный формат правил — продолжаю без exclude_time"
-        logger.exception(msg)
-        send_message_sync(msg, chat_id=chat_id)
-        return df
+    if df.empty:
+        return cfg
 
-    if ex.empty:
-        return df
+    df = df.copy()
+    df["enabled"] = pd.to_numeric(df.get("enabled"), errors="coerce").fillna(0).astype(int)
+    df["analyzer"] = df.get("analyzer").astype(str).str.strip().str.lower()
+    df["partner"] = df.get("partner").astype(str).str.strip()
+    df["metric"] = df.get("metric").astype(str).str.strip().str.lower()
 
-    # приводим start_dt/end_dt к той же TZ, что и df["_dt"], иначе сравнение упадёт
-    df_tz = df["_dt"].dt.tz  # tzinfo (например Europe/Moscow)
+    # columns (v2 + deprecated)
+    df["threshold"] = pd.to_numeric(df.get("threshold"), errors="coerce")
+    df["threshold_min"] = pd.to_numeric(df.get("threshold_min"), errors="coerce")
+    df["threshold_max"] = pd.to_numeric(df.get("threshold_max"), errors="coerce")
 
-    for col in ("start_dt", "end_dt"):
-        if col not in ex.columns:
+    df = df[(df["enabled"] == 1) & (df["analyzer"] == ANALYZER_KEY)]
+    if df.empty:
+        return cfg
+
+    cfg.setdefault("partners", {})
+    partners = cfg.get("partners") or {}
+
+    applied = 0
+
+    # map normalized partner -> cfg key
+    norm_map = {normalize_partner_name(k): k for k in partners.keys()}
+
+    for _, r in df.iterrows():
+        metric = str(r["metric"] or "").strip().lower()
+        # migrate metric names
+        if metric == "threshold":
+            metric = "conversion_rate"
+        if metric == "api_cancel_threshold":
+            metric = "api_cancel_rate"
+
+        p_raw = str(r["partner"] or "").strip()
+        if not p_raw:
             continue
+        p_norm = normalize_partner_name(p_raw)
+        cfg_key = norm_map.get(p_norm)
+        if not cfg_key:
+            # не молчим: создаём партнёра, чтобы правило применилось
+            cfg_key = p_raw
+            partners.setdefault(cfg_key, {})
+            norm_map[p_norm] = cfg_key
 
-        ex[col] = pd.to_datetime(ex[col], errors="coerce")
+        if metric == "conversion_rate":
+            v = r["threshold_min"]
+            if pd.isna(v):
+                v = r["threshold"]  # deprecated
+            if pd.isna(v):
+                continue
+            partners[cfg_key]["threshold"] = float(v)  # %
+            applied += 1
 
-        # если правила без TZ -> локализуем в TZ данных
-        if getattr(ex[col].dtype, "tz", None) is None:
-            ex[col] = ex[col].dt.tz_localize(df_tz, nonexistent="shift_forward", ambiguous="NaT")
-        else:
-            ex[col] = ex[col].dt.tz_convert(df_tz)
+        elif metric == "api_cancel_rate":
+            v = r["threshold_max"]
+            if pd.isna(v):
+                v = r["threshold"]  # deprecated
+            if pd.isna(v):
+                continue
+            partners[cfg_key]["api_cancel_threshold"] = float(v)  # % (old key used in code ниже)
+            applied += 1
 
-    # нормализуем партнёра в rules так же, как в данных
-    ex["partner"] = ex.get("partner").fillna("").astype(str)
-    ex["_partner_norm"] = ex["partner"].apply(normalize_partner_name)
+    if applied:
+        logger.info(f"[thresholds_partner] applied={applied} from rules.xlsx")
 
-    # берём только ошибки (то, что влияет на конверсию)
-    err_mask = df["_status_raw"].astype(str).str.lower() == "ошибка"
-    df_err = df.loc[err_mask, ["_dt", "_partner_norm"]].copy()
-    if df_err.empty:
-        return df
-
-    # сохраняем исходный индекс, чтобы не ошибиться после merge
-    df_err["_src_idx"] = df_err.index
-
-    # join по партнёру
-    m = df_err.merge(
-        ex[["_partner_norm", "start_dt", "end_dt"]],
-        on="_partner_norm",
-        how="left",
-    )
-
-    # ошибка попала в любое исключённое окно
-    valid_rule = m["start_dt"].notna() & m["end_dt"].notna()
-    in_window = valid_rule & (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
-    excluded_src_idx = m.loc[in_window, "_src_idx"].dropna().unique()
-
-    if len(excluded_src_idx) > 0:
-        df.loc[excluded_src_idx, "_status_count"] = False
-
-        excluded_cnt = (
-            (df["_status_raw"].astype(str).str.lower() == "ошибка") & (~df["_status_count"].astype(bool))
-        ).sum()
-        logger.info(f"[exclude_time] excluded_errors={excluded_cnt}")
-
-    return df
-
+    cfg["partners"] = partners
+    return cfg
 
 # === Основной анализатор =====================================================
 
-def _apply_wallet_limits_from_rules(cfg: dict, rules_xlsx_path: str | None, chat_id: str) -> dict:
-    """
-    Обновляет daily_max_amount из rules.xlsx (лист wallet_limits).
-    Приоритет: rules.xlsx > wallet_config.yaml.
-    """
-    if not rules_xlsx_path or not os.path.exists(rules_xlsx_path):
-        return cfg
-
-    try:
-        df_lim = pd.read_excel(rules_xlsx_path, sheet_name="wallet_limits")
-    except Exception as e:
-        msg = f"⚠️ wallet_limits: не удалось прочитать лист wallet_limits из rules.xlsx: {e}"
-        logger.exception(msg)
-        send_message_sync(msg, chat_id=chat_id)
-        return cfg
-
-    if df_lim.empty:
-        return cfg
-
-    # фильтруем только активные daily_max_amount
-    df_lim = df_lim.copy()
-    df_lim["enabled"] = pd.to_numeric(df_lim.get("enabled"), errors="coerce").fillna(0).astype(int)
-    df_lim["limit_type"] = df_lim.get("limit_type").astype(str).str.strip().str.lower()
-    df_lim["scope"] = df_lim.get("scope").astype(str).str.strip().str.lower()
-    df_lim["scope_value"] = df_lim.get("scope_value").astype(str).str.strip()
-
-    df_lim = df_lim[(df_lim["enabled"] == 1) & (df_lim["limit_type"] == "daily_max_amount")]
-    if df_lim.empty:
-        return cfg
-
-    # подготовим словари в cfg
-    cfg.setdefault("partners", {})
-    cfg.setdefault("groups", {})
-
-    applied = 0
-
-    # group limits
-    df_g = df_lim[df_lim["scope"] == "group"]
-    for _, r in df_g.iterrows():
-        group_key = str(r["scope_value"]).strip()
-        val = pd.to_numeric(r.get("limit_value"), errors="coerce")
-        if not group_key or pd.isna(val):
-            continue
-
-        cfg["groups"].setdefault(group_key, {})
-        cfg["groups"][group_key]["daily_max_amount"] = float(val)
-        applied += 1
-
-    # partner limits (ключи в cfg — display name, поэтому матчим по normalize_partner_name)
-    df_p = df_lim[df_lim["scope"] == "partner"]
-    # карта: norm_partner -> original_key_in_cfg
-    cfg_partner_norm_map = {
-        normalize_partner_name(k): k
-        for k in (cfg.get("partners") or {}).keys()
-    }
-
-    for _, r in df_p.iterrows():
-        raw_partner = str(r["scope_value"]).strip()
-        val = pd.to_numeric(r.get("limit_value"), errors="coerce")
-        if not raw_partner or pd.isna(val):
-            continue
-
-        p_norm = normalize_partner_name(raw_partner)
-        cfg_key = cfg_partner_norm_map.get(p_norm)
-
-        # если партнёра нет в yaml — создаём, чтобы лимит всё равно применился
-        if not cfg_key:
-            cfg_key = raw_partner
-            cfg["partners"].setdefault(cfg_key, {})
-            cfg_partner_norm_map[p_norm] = cfg_key
-
-        cfg["partners"][cfg_key]["daily_max_amount"] = float(val)
-        applied += 1
-
-    if applied:
-        logger.info(f"[wallet_limits] applied={applied} from rules.xlsx")
-
-    return cfg
-def _resolve_rules_xlsx_path(chat_id: str) -> str | None:
-    """
-    Возвращает локальный путь к rules.xlsx:
-    1) пробуем скачать из Dropbox в /tmp
-    2) fallback на RULES_XLSX_PATH / DEFAULT_RULES_XLSX_PATH
-    """
-    dropbox_rules_folder = os.getenv("DROPBOX_RULES_PATH", "/Ostin/platform/config/rules")
-    dropbox_rules_file = os.path.join(dropbox_rules_folder, "rules.xlsx")
-    local_rules_path = os.path.join(tempfile.gettempdir(), "rules.xlsx")
-
-    # гарантируем обновление (не используем старый /tmp)
-    try:
-        if os.path.exists(local_rules_path):
-            os.remove(local_rules_path)
-    except Exception:
-        pass
-
-    if download_file(dropbox_rules_file, local_rules_path):
-        logger.info(f"[rules] 📥 rules.xlsx загружен из Dropbox: {dropbox_rules_file} → {local_rules_path}")
-        return local_rules_path
-
-    candidate = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
-    if candidate and os.path.isdir(candidate):
-        candidate = os.path.join(candidate, "rules.xlsx")
-
-    if candidate and os.path.exists(candidate):
-        return candidate
-
-    msg = (
-        f"⚠️ rules.xlsx не найден.\n"
-        f"Dropbox: {dropbox_rules_file}\n"
-        f"Local: {os.getenv('RULES_XLSX_PATH', DEFAULT_RULES_XLSX_PATH)!r}"
-    )
-    logger.warning(msg)
-    send_message_sync(msg, chat_id=chat_id)
-    return None
-
-def _apply_partner_thresholds_from_rules(cfg: dict, rules_xlsx_path: str | None, chat_id: str) -> dict:
-    """
-    Перетирает часто меняющиеся пороги для партнеров из rules.xlsx (лист thresholds_partner).
-    Архитектуру (какие партнеры существуют) НЕ расширяем: обновляем только тех, кто есть в YAML cfg["partners"].
-
-    Поддерживаемый metric:
-      - api_cancel_threshold  (проценты, 0..100)
-    """
-    if not rules_xlsx_path or not os.path.exists(rules_xlsx_path):
-        return cfg
-
-    try:
-        df_thr = pd.read_excel(rules_xlsx_path, sheet_name="thresholds_partner")
-    except Exception as e:
-        msg = f"⚠️ thresholds_partner: не удалось прочитать лист thresholds_partner: {e}"
-        logger.exception(msg)
-        send_message_sync(msg, chat_id=chat_id)
-        return cfg
-
-    if df_thr.empty:
-        return cfg
-
-    # нормализуем
-    df_thr = df_thr.copy()
-    df_thr["enabled"] = pd.to_numeric(df_thr.get("enabled"), errors="coerce").fillna(0).astype(int)
-    df_thr["analyzer"] = df_thr.get("analyzer").astype(str).str.strip().str.lower()
-    df_thr["partner"] = df_thr.get("partner").astype(str).str.strip()
-    df_thr["metric"] = df_thr.get("metric").astype(str).str.strip().str.lower()
-    df_thr["threshold"] = pd.to_numeric(df_thr.get("threshold"), errors="coerce")
-
-    # берём только активные правила для wallet analyzer и нужную метрику
-    df_thr = df_thr[
-        (df_thr["enabled"] == 1)
-        & (df_thr["analyzer"] == "wallet")
-        & (df_thr["metric"] == "api_cancel_threshold")
-    ].copy()
-
-    if df_thr.empty:
-        return cfg
-
-    partners_cfg: dict = cfg.get("partners") or {}
-
-    # карта: norm_partner -> ключ из YAML (строго по YAML, не добавляем новых)
-    norm_to_cfg_key = {normalize_partner_name(k): k for k in partners_cfg.keys()}
-
-    applied = 0
-    for _, r in df_thr.iterrows():
-        val = r["threshold"]
-        if pd.isna(val):
-            continue
-
-        p_norm = normalize_partner_name(r["partner"])
-        cfg_key = norm_to_cfg_key.get(p_norm)
-        if not cfg_key:
-            continue  # архитектура из YAML: если партнера нет — игнорируем
-
-        partners_cfg[cfg_key]["api_cancel_threshold"] = float(val)
-        applied += 1
-
-    cfg["partners"] = partners_cfg
-    if applied:
-        logger.info(f"[thresholds_partner] applied api_cancel_threshold rules: {applied}")
-
-    return cfg
-
 def analyze_wallets(payin_path: str, payout_path: str):
-    chat_id = _get_chat_id()
     cfg = _load_cfg()
-    rules_xlsx_path = _resolve_rules_xlsx_path(chat_id=chat_id)
-    cfg = _apply_wallet_limits_from_rules(cfg, rules_xlsx_path=rules_xlsx_path, chat_id=chat_id)
-    cfg = _apply_partner_thresholds_from_rules(cfg, rules_xlsx_path=rules_xlsx_path, chat_id=chat_id)
-
-    window_min = int(cfg["window_minutes"])
-    offset_min = int(cfg["offset_minutes"])
-    min_events = int(cfg["min_events"])
-    api_keyword = str(cfg.get("api_cancel_keyword", "отмена по api")).lower()
+    cfg = _apply_partner_thresholds_from_rules(cfg)
+    window_min = cfg["window_minutes"]
+    offset_min = cfg["offset_minutes"]
 
     tz = ZoneInfo("Europe/Moscow")
 
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
 
     # === Чтение PayIn ==========================================================
+
     try:
         df = pd.read_excel(payin_path)
     except Exception as e:
-        send_message_sync(f"⚠️ Не удалось прочитать PayIn: {e}", chat_id=chat_id)
+        send_message_sync(f"⚠️ Не удалось прочитать PayIn: {e}", chat_id=CHAT_ID)
         return
 
     if df.empty:
         logger.info("[Analyzer] PayIn пуст — выходим")
         return
 
-    # Колонки PayIn (как в выгрузке Antares)
     COL_DT = "Дата/Время создания"
     COL_PARTNER = "Партнер"
     COL_STATUS = "Статус"
     COL_INFO = "Инфо"
     COL_AMOUNT = "Сумма"
 
-    missing = [c for c in [COL_DT, COL_PARTNER, COL_STATUS, COL_INFO, COL_AMOUNT] if c not in df.columns]
-    if missing:
-        send_message_sync(f"⚠️ PayIn: отсутствуют колонки: {missing}", chat_id=chat_id)
-        return
-
     # нормализация PayIn дат
     df[COL_DT] = df[COL_DT].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
 
     df["_dt"] = pd.to_datetime(df[COL_DT], dayfirst=True, errors="coerce")
-    if df["_dt"].isna().all():
-        send_message_sync("⚠️ PayIn: не удалось распарсить даты", chat_id=chat_id)
-        return
-
-    # timezone: делаем все даты tz-aware в Europe/Moscow
-    if getattr(df["_dt"].dtype, "tz", None) is None:
+    if df["_dt"].dt.tz is None:
         df["_dt"] = df["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
-    else:
-        df["_dt"] = df["_dt"].dt.tz_convert(tz)
 
     df["_partner_norm"] = df[COL_PARTNER].astype(str).apply(normalize_partner_name)
     df["_status_raw"] = df[COL_STATUS].astype(str)
@@ -413,12 +206,64 @@ def analyze_wallets(payin_path: str, payout_path: str):
     df["_status_count"] = df["_status_raw"].apply(_status_countable)
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
 
-    # === APPLY exclude_time ====================================================
-    df = _apply_exclude_time(df, chat_id=chat_id, rules_xlsx_path=rules_xlsx_path)
+    # === APPLY exclude_time (единые окна) =====================================
+
+    try:
+        ANALYZER_KEY = "wallet"
+
+        exclude_df = get_exclude_time_df(
+            rules_xlsx_path=os.getenv("RULES_XLSX_PATH"),
+            notify=send_message_sync,
+            chat_id=CHAT_ID,
+        )
+
+        # только активные окна, применимые к wallet
+        ex = exclude_df[
+            (exclude_df["enabled"] == 1) &
+            (exclude_df["_analyzers_list"].map(lambda lst: ANALYZER_KEY in lst))
+            ].copy()
+
+        if not ex.empty:
+            # нормализуем партнёра в rules так же, как в данных
+            ex["_partner_norm"] = ex["partner"].apply(normalize_partner_name)
+
+            # берём только ошибки (то, что влияет на конверсию)
+            err_mask = df["_status_raw"].str.lower() == "ошибка"
+            df_err = df.loc[err_mask, ["_dt", "_partner_norm"]]
+
+            if not df_err.empty:
+                # join по партнёру
+                m = df_err.merge(
+                    ex[["_partner_norm", "start_dt", "end_dt"]],
+                    on="_partner_norm",
+                    how="left",
+                )
+
+                # ошибка попала в любое исключённое окно
+                in_window = (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
+                excluded_idx = m.index[in_window.fillna(False)]
+
+                # ВАЖНО: выключаем участие в расчётах
+                df.loc[excluded_idx, "_status_count"] = False
+
+                # DEBUG: сколько ошибок исключено exclude_time
+                excluded_cnt = (
+                        (df["_status_raw"].str.lower() == "ошибка")
+                        & (df["_status_count"] == False)
+                ).sum()
+
+                logger.info(f"[DEBUG exclude_time] excluded_errors={excluded_cnt}")
+
+    except Exception as e:
+        send_message_sync(
+            f"❌ rules exclude_time остановил WalletAnalyzer: {e}",
+            chat_id=CHAT_ID,
+        )
+        return
 
     logger.info(
-        f"[DEBUG counts] countable_total={int(df['_status_count'].sum())}, "
-        f"success_total={int(df['_status_success'].sum())}"
+        f"[DEBUG counts] countable_total={df['_status_count'].sum()}, "
+        f"success_total={df['_status_success'].sum()}"
     )
 
     now = datetime.now(tz)
@@ -430,13 +275,14 @@ def analyze_wallets(payin_path: str, payout_path: str):
     df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
     df_today = df[df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
 
-    partners_cfg: dict = cfg["partners"] or {}
-    groups_cfg: dict = cfg["groups"] or {}
+    partners_cfg = cfg["partners"]
+    groups_cfg = cfg["groups"]
 
     messages = []
     bad = []
 
     # === Анализ по каждому партнёру ===========================================
+
     for partner_name, settings in partners_cfg.items():
         key_norm = normalize_partner_name(partner_name)
 
@@ -447,80 +293,80 @@ def analyze_wallets(payin_path: str, payout_path: str):
         if total == 0:
             continue
 
-        success = int(subset["_status_success"].sum())
-        conv = (success / total * 100) if total else 0.0
+        success = subset["_status_success"].sum()
+        conv = (success / total * 100) if total else 0
 
         today_part = df_today[df_today["_partner_norm"] == key_norm]
         today_success = today_part[today_part["_status_success"]]
-        amount_today = float(pd.to_numeric(today_success[COL_AMOUNT], errors="coerce").fillna(0).sum())
+        amount_today = pd.to_numeric(today_success[COL_AMOUNT], errors="coerce").sum()
 
-        threshold = float(settings.get("threshold", 0) or 0)  # доля (0..1)
-        api_threshold = float(settings.get("api_cancel_threshold", 100) or 100)  # проценты (0..100)
+        threshold = settings.get("threshold", 0)
+        api_threshold = settings.get("api_cancel_threshold", 100)
+
+        min_events = cfg["min_events"]
 
         # Конверсия
         if total < min_events:
             conv_bad = False
             conv_text = f"{conv:.1f}% — ℹ️ Недостаточно данных"
         else:
-            conv_bad = conv < threshold * 100
+            conv_bad = conv < threshold
             conv_text = (
-                f"{conv:.1f}% (< {threshold * 100:.1f}%) — "
+                f"{conv:.1f}% (< {threshold:.1f}%) — "
                 + ("🔴" if conv_bad else "🟢")
             )
 
         # API ошибки за час
+        error_keyword = "отмена по api"
         one_hour_ago = now - timedelta(hours=1)
-        last_hour = df[(df["_partner_norm"] == key_norm) & (df["_dt"] >= one_hour_ago)]
+
+        last_hour = df[
+            (df["_partner_norm"] == key_norm)
+            & (df["_dt"] >= one_hour_ago)
+        ]
 
         lh_countable = last_hour[last_hour["_status_count"]]
         lh_total = len(lh_countable)
-        lh_papi = int(lh_countable["_info_norm"].str.contains(api_keyword, na=False).sum())
+        lh_papi = lh_countable["_info_norm"].str.contains(error_keyword, case=False, na=False).sum()
 
         if lh_total < min_events:
-            api_rate = 0.0
+            api_rate = 0
             api_bad = False
             api_total = lh_papi
             api_icon = "ℹ️"
         else:
-            api_rate = (lh_papi / lh_total * 100) if lh_total else 0.0
+            api_rate = (lh_papi / lh_total * 100) if lh_total else 0
             api_total = lh_papi
             api_bad = api_rate > api_threshold
             api_icon = "🔴" if api_bad else "🟢"
 
         # Нет доступных аккаунтов
-        nok_wallets_total = int(sub_all["_info_norm"].str.contains("нет доступных аккаунтов").sum())
+        nok_wallets_total = sub_all["_info_norm"].str.contains("нет доступных аккаунтов").sum()
         nok_bad = nok_wallets_total > 0
 
-        # Лимиты (старый механизм: partner/group из yaml; позже можно переехать в rules.xlsx)
+        # Лимиты
         daily_limit = settings.get("daily_max_amount")
         group_name = None
 
-        # group override
         for gname, gdata in groups_cfg.items():
-            try:
-                if partner_name in (gdata.get("partners") or []):
-                    group_name = gname
-                    daily_limit = gdata.get("daily_max_amount")
-                    break
-            except Exception:
-                continue
+            if partner_name in gdata["partners"]:
+                group_name = gname
+                daily_limit = gdata["daily_max_amount"]
+                break
 
-        daily_limit_num = float(daily_limit) if daily_limit not in (None, "", 0) else None
-
-        if group_name and daily_limit_num:
-            group_partners = groups_cfg[group_name].get("partners") or []
-            norm_list = [normalize_partner_name(p) for p in group_partners]
-            df_group_today = df_today[df_today["_partner_norm"].isin(norm_list)]
+        if group_name:
+            group_partners = groups_cfg[group_name]["partners"]
+            df_group_today = df_today[df_today["_partner_norm"].isin(
+                [normalize_partner_name(p) for p in group_partners]
+            )]
             df_group_success = df_group_today[df_group_today["_status_success"]]
-            group_amount_today = float(pd.to_numeric(df_group_success[COL_AMOUNT], errors="coerce").fillna(0).sum())
-            percent_filled = int((group_amount_today / daily_limit_num) * 100) if daily_limit_num else 0
-        elif daily_limit_num:
-            percent_filled = int((amount_today / daily_limit_num) * 100) if daily_limit_num else 0
+            group_amount_today = pd.to_numeric(df_group_success[COL_AMOUNT], errors="coerce").sum()
+            percent_filled = int(group_amount_today / daily_limit * 100)
         else:
-            percent_filled = 0
+            percent_filled = int(amount_today / daily_limit * 100) if daily_limit else 0
 
         # лимит статус
-        if not daily_limit_num:
+        if not daily_limit:
             limit_icon = "🟢"
             limit_bad = False
             limit_warn = False
@@ -539,7 +385,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
                 limit_icon = "🟢"
 
         last_op_time = df[df["_partner_norm"] == key_norm]["_dt"].max()
-        last_op_str = last_op_time.strftime("%d.%m %H:%M:%S") if pd.notna(last_op_time) else "-"
+        last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
 
         nok_line = (
             f"  Нет доступных аккаунтов: {nok_wallets_total} — 🔴\n"
@@ -547,15 +393,12 @@ def analyze_wallets(payin_path: str, payout_path: str):
             else ""
         )
 
-        # форматирование лимита (чтобы не падать на None)
-        daily_limit_str = f"{daily_limit_num:,.0f}" if daily_limit_num else "—"
-
         msg = (
             f"{partner_name}\n"
             f"  Всего операций: {total}\n"
             f"  Успешных: {success}\n"
             f"  Конверсия: {conv_text}\n"
-            f"  Поступления: {amount_today:,.0f} / {daily_limit_str} "
+            f"  Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
             f"({percent_filled}%) — {limit_icon}\n"
             f"  Отмен по API: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"{nok_line}"
@@ -565,34 +408,34 @@ def analyze_wallets(payin_path: str, payout_path: str):
         messages.append(msg)
 
         if conv_bad or api_bad or limit_bad or limit_warn or nok_bad:
-            bad.append(
-                {
-                    "name": partner_name,
-                    "conv_bad": conv_bad,
-                    "api_bad": api_bad,
-                    "limit_bad": limit_bad,
-                    "limit_warn": limit_warn,
-                    "nok_bad": nok_bad,
-                    "api_rate": api_rate,
-                    "api_threshold": api_threshold,
-                    "percent": percent_filled,
-                    "nok_count": nok_wallets_total,
-                }
-            )
+            bad.append({
+                "name": partner_name,
+                "conv_bad": conv_bad,
+                "api_bad": api_bad,
+                "limit_bad": limit_bad,
+                "limit_warn": limit_warn,
+                "nok_bad": nok_bad,
+                "api_rate": api_rate,
+                "api_threshold": api_threshold,
+                "percent": percent_filled,
+                "nok_count": nok_wallets_total,
+            })
 
-    # === Если нет сообщений — выход ===========================================
+    # === Если нет сообщений — выход =================================================
+
     if not messages:
         logger.info("[Analyzer] Нет партнёров с операциями — ничего не отправляем")
         return
 
-    # === Зависшие операции =====================================================
-    pending_cfg = cfg.get("pending_thresholds", {}) or {}
-    payin_limit = int(pending_cfg.get("payin_minutes", 10) or 10)
-    payout_limit = int(pending_cfg.get("payout_minutes", 180) or 180)
+    # === Зависшие операции ==========================================================
+
+    pending_cfg = cfg.get("pending_thresholds", {})
+    payin_limit = pending_cfg.get("payin_minutes", 10)
+    payout_limit = pending_cfg.get("payout_minutes", 180)
 
     # PayIn зависшие
     df_pending_payin = df[
-        (df["_status_raw"].astype(str).str.lower() == "ожидает оплаты")
+        (df["_status_raw"].str.lower() == "ожидает оплаты")
         & ((now - df["_dt"]) > timedelta(minutes=payin_limit))
     ]
     pending_payin_count = len(df_pending_payin)
@@ -606,48 +449,48 @@ def analyze_wallets(payin_path: str, payout_path: str):
         COL_DT_P = "Дата/Время создания"
         COL_STATUS_P = "Статус"
 
-        missing_p = [c for c in [COL_DT_P, COL_STATUS_P] if c not in dfp.columns]
-        if not missing_p:
-            dfp[COL_DT_P] = (
-                dfp[COL_DT_P].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
-            )
-            dfp["_dt"] = pd.to_datetime(dfp[COL_DT_P], dayfirst=True, errors="coerce")
-            if getattr(dfp["_dt"].dtype, "tz", None) is None:
-                dfp["_dt"] = dfp["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
-            else:
-                dfp["_dt"] = dfp["_dt"].dt.tz_convert(tz)
+        dfp[COL_DT_P] = dfp[COL_DT_P].astype(str)\
+            .str.replace(r"\s+", " ", regex=True)\
+            .str.strip()
 
-            dfp["_status_raw"] = dfp[COL_STATUS_P].astype(str)
+        dfp["_dt"] = pd.to_datetime(dfp[COL_DT_P], dayfirst=True, errors="coerce")
 
-            df_pending_payout = dfp[
-                (dfp["_status_raw"].astype(str).str.lower() == "ожидает оплаты")
-                & ((now - dfp["_dt"]) > timedelta(minutes=payout_limit))
-            ]
-            pending_payout_count = len(df_pending_payout)
-        else:
-            logger.warning(f"[Analyzer] Payout: отсутствуют колонки: {missing_p}")
+        if dfp["_dt"].dt.tz is None:
+            dfp["_dt"] = dfp["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
+
+        dfp["_status_raw"] = dfp[COL_STATUS_P].astype(str)
+
+        df_pending_payout = dfp[
+            (dfp["_status_raw"].str.lower() == "ожидает оплаты")
+            & ((now - dfp["_dt"]) > timedelta(minutes=payout_limit))
+        ]
+
+        pending_payout_count = len(df_pending_payout)
 
     except Exception as e:
         logger.error(f"[Analyzer] Ошибка payout: {e}")
 
+    # Формируем блок зависших
     pending_block = (
         "⏳ Зависшие:\n"
         f"• Поступления: {pending_payin_count} шт\n"
         f"• Выплаты: {pending_payout_count} шт\n\n"
     )
 
-    # === Отправляем основной отчёт ============================================
+    # === Отправляем основной отчёт ===============================================
+
     send_message_sync(
         pending_block
         + "📦 Wallet Analyzer\n"
         + f"🕒 Окно: {window_min} мин (смещение {offset_min})\n\n"
         + "\n\n".join(messages),
-        chat_id=chat_id,
+        chat_id=CHAT_ID,
     )
 
-    # === BAD блок ==============================================================
+    # === BAD блок ===============================================================
+
     if not bad:
-        send_message_sync("🟢 Все партнёры в норме!", chat_id=chat_id)
+        send_message_sync("🟢 Все партнёры в норме!", chat_id=CHAT_ID)
         return
 
     lines = ["❗ Обнаружены отклонения:"]
@@ -658,7 +501,9 @@ def analyze_wallets(payin_path: str, payout_path: str):
         if p["conv_bad"]:
             block += "  Конверсия ниже порога — 🔴\n"
         if p["api_bad"]:
-            block += f"  Отмен по API: {p['api_rate']:.1f}% (> {p['api_threshold']}%) — 🔴\n"
+            block += (
+                f"  Отмен по API: {p['api_rate']:.1f}% (> {p['api_threshold']}%) — 🔴\n"
+            )
         if p["limit_bad"]:
             block += "  Лимит превышен — 🔴\n"
         if p["limit_warn"]:
@@ -668,4 +513,5 @@ def analyze_wallets(payin_path: str, payout_path: str):
 
         lines.append(block)
 
-    send_message_sync("\n".join(lines), chat_id=chat_id)
+    send_message_sync("\n".join(lines), chat_id=CHAT_ID)
+
