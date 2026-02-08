@@ -79,7 +79,7 @@ def _load_cfg() -> dict:
 # === exclude_time ===========================================================
 
 
-def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
+def _apply_exclude_time(df: pd.DataFrame, chat_id: str, rules_xlsx_path: str | None) -> pd.DataFrame:
     """
     Применяет exclude_time к PayIn:
       - ищет окна exclude_time для ANALYZER_KEY
@@ -89,36 +89,9 @@ def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
     Важно: если rules.xlsx недоступен или повреждён — НЕ стопаем анализатор.
     Просто логируем/уведомляем и продолжаем без exclude_time.
     """
-    # 1) Сначала пробуем Dropbox (как special_cards.xlsx)
-    dropbox_rules_folder = os.getenv("DROPBOX_RULES_PATH", "/Ostin/platform/config/rules")
-    dropbox_rules_file = os.path.join(dropbox_rules_folder, "rules.xlsx")
-    local_rules_path = os.path.join(tempfile.gettempdir(), "rules.xlsx")
-
-    rules_path = None
-    if download_file(dropbox_rules_file, local_rules_path):
-        rules_path = local_rules_path
-        logger.info(f"[exclude_time] 📥 rules.xlsx загружен из Dropbox: {dropbox_rules_file} → {local_rules_path}")
-    else:
-        # 2) Фолбэк: локальный путь (если ты всё-таки примонтировал файл)
-        candidate = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
-
-        # если дали папку — ожидаем внутри rules.xlsx
-        if candidate and os.path.isdir(candidate):
-            candidate = os.path.join(candidate, "rules.xlsx")
-
-        if candidate and os.path.exists(candidate):
-            rules_path = candidate
-
-    # 3) Если не нашли нигде — пропускаем exclude_time
-    if not rules_path:
-        msg = (
-            f"⚠️ rules.xlsx не найден.\n"
-            f"Dropbox: {dropbox_rules_file}\n"
-            f"Local: {os.getenv('RULES_XLSX_PATH', DEFAULT_RULES_XLSX_PATH)!r}\n"
-            f"— пропускаю exclude_time"
-        )
-        logger.warning(msg)
-        send_message_sync(msg, chat_id=chat_id)
+    rules_path = rules_xlsx_path
+    if not rules_path or not os.path.exists(rules_path):
+        logger.warning("⚠️ rules.xlsx недоступен — пропускаю exclude_time")
         return df
 
     try:
@@ -201,10 +174,193 @@ def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
 
 # === Основной анализатор =====================================================
 
+def _apply_wallet_limits_from_rules(cfg: dict, rules_xlsx_path: str | None, chat_id: str) -> dict:
+    """
+    Обновляет daily_max_amount из rules.xlsx (лист wallet_limits).
+    Приоритет: rules.xlsx > wallet_config.yaml.
+    """
+    if not rules_xlsx_path or not os.path.exists(rules_xlsx_path):
+        return cfg
+
+    try:
+        df_lim = pd.read_excel(rules_xlsx_path, sheet_name="wallet_limits")
+    except Exception as e:
+        msg = f"⚠️ wallet_limits: не удалось прочитать лист wallet_limits из rules.xlsx: {e}"
+        logger.exception(msg)
+        send_message_sync(msg, chat_id=chat_id)
+        return cfg
+
+    if df_lim.empty:
+        return cfg
+
+    # фильтруем только активные daily_max_amount
+    df_lim = df_lim.copy()
+    df_lim["enabled"] = pd.to_numeric(df_lim.get("enabled"), errors="coerce").fillna(0).astype(int)
+    df_lim["limit_type"] = df_lim.get("limit_type").astype(str).str.strip().str.lower()
+    df_lim["scope"] = df_lim.get("scope").astype(str).str.strip().str.lower()
+    df_lim["scope_value"] = df_lim.get("scope_value").astype(str).str.strip()
+
+    df_lim = df_lim[(df_lim["enabled"] == 1) & (df_lim["limit_type"] == "daily_max_amount")]
+    if df_lim.empty:
+        return cfg
+
+    # подготовим словари в cfg
+    cfg.setdefault("partners", {})
+    cfg.setdefault("groups", {})
+
+    applied = 0
+
+    # group limits
+    df_g = df_lim[df_lim["scope"] == "group"]
+    for _, r in df_g.iterrows():
+        group_key = str(r["scope_value"]).strip()
+        val = pd.to_numeric(r.get("limit_value"), errors="coerce")
+        if not group_key or pd.isna(val):
+            continue
+
+        cfg["groups"].setdefault(group_key, {})
+        cfg["groups"][group_key]["daily_max_amount"] = float(val)
+        applied += 1
+
+    # partner limits (ключи в cfg — display name, поэтому матчим по normalize_partner_name)
+    df_p = df_lim[df_lim["scope"] == "partner"]
+    # карта: norm_partner -> original_key_in_cfg
+    cfg_partner_norm_map = {
+        normalize_partner_name(k): k
+        for k in (cfg.get("partners") or {}).keys()
+    }
+
+    for _, r in df_p.iterrows():
+        raw_partner = str(r["scope_value"]).strip()
+        val = pd.to_numeric(r.get("limit_value"), errors="coerce")
+        if not raw_partner or pd.isna(val):
+            continue
+
+        p_norm = normalize_partner_name(raw_partner)
+        cfg_key = cfg_partner_norm_map.get(p_norm)
+
+        # если партнёра нет в yaml — создаём, чтобы лимит всё равно применился
+        if not cfg_key:
+            cfg_key = raw_partner
+            cfg["partners"].setdefault(cfg_key, {})
+            cfg_partner_norm_map[p_norm] = cfg_key
+
+        cfg["partners"][cfg_key]["daily_max_amount"] = float(val)
+        applied += 1
+
+    if applied:
+        logger.info(f"[wallet_limits] applied={applied} from rules.xlsx")
+
+    return cfg
+def _resolve_rules_xlsx_path(chat_id: str) -> str | None:
+    """
+    Возвращает локальный путь к rules.xlsx:
+    1) пробуем скачать из Dropbox в /tmp
+    2) fallback на RULES_XLSX_PATH / DEFAULT_RULES_XLSX_PATH
+    """
+    dropbox_rules_folder = os.getenv("DROPBOX_RULES_PATH", "/Ostin/platform/config/rules")
+    dropbox_rules_file = os.path.join(dropbox_rules_folder, "rules.xlsx")
+    local_rules_path = os.path.join(tempfile.gettempdir(), "rules.xlsx")
+
+    # гарантируем обновление (не используем старый /tmp)
+    try:
+        if os.path.exists(local_rules_path):
+            os.remove(local_rules_path)
+    except Exception:
+        pass
+
+    if download_file(dropbox_rules_file, local_rules_path):
+        logger.info(f"[rules] 📥 rules.xlsx загружен из Dropbox: {dropbox_rules_file} → {local_rules_path}")
+        return local_rules_path
+
+    candidate = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+    if candidate and os.path.isdir(candidate):
+        candidate = os.path.join(candidate, "rules.xlsx")
+
+    if candidate and os.path.exists(candidate):
+        return candidate
+
+    msg = (
+        f"⚠️ rules.xlsx не найден.\n"
+        f"Dropbox: {dropbox_rules_file}\n"
+        f"Local: {os.getenv('RULES_XLSX_PATH', DEFAULT_RULES_XLSX_PATH)!r}"
+    )
+    logger.warning(msg)
+    send_message_sync(msg, chat_id=chat_id)
+    return None
+
+def _apply_partner_thresholds_from_rules(cfg: dict, rules_xlsx_path: str | None, chat_id: str) -> dict:
+    """
+    Перетирает часто меняющиеся пороги для партнеров из rules.xlsx (лист thresholds_partner).
+    Архитектуру (какие партнеры существуют) НЕ расширяем: обновляем только тех, кто есть в YAML cfg["partners"].
+
+    Поддерживаемый metric:
+      - api_cancel_threshold  (проценты, 0..100)
+    """
+    if not rules_xlsx_path or not os.path.exists(rules_xlsx_path):
+        return cfg
+
+    try:
+        df_thr = pd.read_excel(rules_xlsx_path, sheet_name="thresholds_partner")
+    except Exception as e:
+        msg = f"⚠️ thresholds_partner: не удалось прочитать лист thresholds_partner: {e}"
+        logger.exception(msg)
+        send_message_sync(msg, chat_id=chat_id)
+        return cfg
+
+    if df_thr.empty:
+        return cfg
+
+    # нормализуем
+    df_thr = df_thr.copy()
+    df_thr["enabled"] = pd.to_numeric(df_thr.get("enabled"), errors="coerce").fillna(0).astype(int)
+    df_thr["analyzer"] = df_thr.get("analyzer").astype(str).str.strip().str.lower()
+    df_thr["partner"] = df_thr.get("partner").astype(str).str.strip()
+    df_thr["metric"] = df_thr.get("metric").astype(str).str.strip().str.lower()
+    df_thr["threshold"] = pd.to_numeric(df_thr.get("threshold"), errors="coerce")
+
+    # берём только активные правила для wallet analyzer и нужную метрику
+    df_thr = df_thr[
+        (df_thr["enabled"] == 1)
+        & (df_thr["analyzer"] == "wallet")
+        & (df_thr["metric"] == "api_cancel_threshold")
+    ].copy()
+
+    if df_thr.empty:
+        return cfg
+
+    partners_cfg: dict = cfg.get("partners") or {}
+
+    # карта: norm_partner -> ключ из YAML (строго по YAML, не добавляем новых)
+    norm_to_cfg_key = {normalize_partner_name(k): k for k in partners_cfg.keys()}
+
+    applied = 0
+    for _, r in df_thr.iterrows():
+        val = r["threshold"]
+        if pd.isna(val):
+            continue
+
+        p_norm = normalize_partner_name(r["partner"])
+        cfg_key = norm_to_cfg_key.get(p_norm)
+        if not cfg_key:
+            continue  # архитектура из YAML: если партнера нет — игнорируем
+
+        partners_cfg[cfg_key]["api_cancel_threshold"] = float(val)
+        applied += 1
+
+    cfg["partners"] = partners_cfg
+    if applied:
+        logger.info(f"[thresholds_partner] applied api_cancel_threshold rules: {applied}")
+
+    return cfg
 
 def analyze_wallets(payin_path: str, payout_path: str):
     chat_id = _get_chat_id()
     cfg = _load_cfg()
+    rules_xlsx_path = _resolve_rules_xlsx_path(chat_id=chat_id)
+    cfg = _apply_wallet_limits_from_rules(cfg, rules_xlsx_path=rules_xlsx_path, chat_id=chat_id)
+    cfg = _apply_partner_thresholds_from_rules(cfg, rules_xlsx_path=rules_xlsx_path, chat_id=chat_id)
+
     window_min = int(cfg["window_minutes"])
     offset_min = int(cfg["offset_minutes"])
     min_events = int(cfg["min_events"])
@@ -258,7 +414,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
 
     # === APPLY exclude_time ====================================================
-    df = _apply_exclude_time(df, chat_id=chat_id)
+    df = _apply_exclude_time(df, chat_id=chat_id, rules_xlsx_path=rules_xlsx_path)
 
     logger.info(
         f"[DEBUG counts] countable_total={int(df['_status_count'].sum())}, "
