@@ -148,6 +148,21 @@ def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
     if ex.empty:
         return df
 
+    # приводим start_dt/end_dt к той же TZ, что и df["_dt"], иначе сравнение упадёт
+    df_tz = df["_dt"].dt.tz  # tzinfo (например Europe/Moscow)
+
+    for col in ("start_dt", "end_dt"):
+        if col not in ex.columns:
+            continue
+
+        ex[col] = pd.to_datetime(ex[col], errors="coerce")
+
+        # если правила без TZ -> локализуем в TZ данных
+        if getattr(ex[col].dtype, "tz", None) is None:
+            ex[col] = ex[col].dt.tz_localize(df_tz, nonexistent="shift_forward", ambiguous="NaT")
+        else:
+            ex[col] = ex[col].dt.tz_convert(df_tz)
+
     # нормализуем партнёра в rules так же, как в данных
     ex["partner"] = ex.get("partner").fillna("").astype(str)
     ex["_partner_norm"] = ex["partner"].apply(normalize_partner_name)
@@ -169,8 +184,9 @@ def _apply_exclude_time(df: pd.DataFrame, chat_id: str) -> pd.DataFrame:
     )
 
     # ошибка попала в любое исключённое окно
-    in_window = (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
-    excluded_src_idx = m.loc[in_window.fillna(False), "_src_idx"].dropna().unique()
+    valid_rule = m["start_dt"].notna() & m["end_dt"].notna()
+    in_window = valid_rule & (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
+    excluded_src_idx = m.loc[in_window, "_src_idx"].dropna().unique()
 
     if len(excluded_src_idx) > 0:
         df.loc[excluded_src_idx, "_status_count"] = False
