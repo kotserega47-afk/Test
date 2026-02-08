@@ -68,3 +68,22 @@ def move_file(src_path: str, dest_path: str):
     except Exception as e:
         logger.error(f"Ошибка move_file({src_path} → {dest_path}): {e}")
         return False
+# --- Rules delivery contract (runtime) ---
+RULES_DROPBOX_PATH = os.getenv("DROPBOX_RULES_PATH", "/rules.xlsx")
+RULES_LOCAL_PATH = os.getenv("RULES_LOCAL_PATH", "/tmp/rules/rules.xlsx")
+
+
+def download_rules_xlsx() -> str:
+    """
+    Скачивает rules.xlsx из Dropbox в канонический локальный путь.
+    Возвращает локальный путь.
+    Бросает исключение, если скачать не удалось.
+    """
+    os.makedirs(os.path.dirname(RULES_LOCAL_PATH), exist_ok=True)
+
+    ok = download_file(RULES_DROPBOX_PATH, RULES_LOCAL_PATH)
+    if not ok:
+        raise RuntimeError(f"Failed to download rules.xlsx from Dropbox: {RULES_DROPBOX_PATH}")
+
+    logger.info(f"✅ rules.xlsx downloaded: {RULES_DROPBOX_PATH} → {RULES_LOCAL_PATH}")
+    return RULES_LOCAL_PATH
