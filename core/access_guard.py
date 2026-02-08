@@ -35,7 +35,13 @@ def check_access(rules: AccessRules, ctx: AccessContext, command: str) -> Tuple[
 
     try:
         snap = rules.get_snapshot()
+    except ValueError as e:
+        # rules.xlsx скачался, но нарушен контракт (колонки/значения)
+        msg = str(e)
+        logger.warning(f"🔐 guard: rules_invalid command={cmd} chat={ctx.chat_id} user={ctx.user_id} err={msg}")
+        return False, "rules_invalid", {**details, "err": msg}
     except Exception as e:
+        # инфраструктура (Dropbox/скачивание/битый файл)
         logger.warning(f"🔐 guard: rules_not_ready command={cmd} chat={ctx.chat_id} user={ctx.user_id} err={e}")
         return False, "rules_not_ready", details
 
@@ -84,4 +90,10 @@ def deny_message(reason: str, details: Dict[str, Any]) -> str:
         return f"❌ Недостаточно прав (level {details.get('level', 0)} < {details.get('required', 999)})."
     if reason == "rules_not_ready":
         return "❌ Правила доступа временно недоступны (rules.xlsx обновляется/недоступен)."
+    if reason == "rules_invalid":
+        err = details.get("err", "")
+        # не спамим огромным текстом, но даём суть
+        short = err if len(err) <= 220 else (err[:220] + "…")
+        return f"❌ rules.xlsx сломан: {short}"
     return "❌ Нет доступа."
+

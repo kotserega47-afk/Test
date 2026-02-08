@@ -115,19 +115,24 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # сначала guard по команде (правило commands)
     if not await _guard_or_deny(update, "whoami"):
         return
 
     chat = update.effective_chat
     user = update.effective_user
 
-    # уровень из rules (если записи нет — будет 0)
+    # потом — политика "только access": level >= 1
     try:
         snap = RULES.get_snapshot()
         chat_key = "private" if chat.type == "private" else int(chat.id)
-        level = snap.access_map.get((chat_key, int(user.id)), 0)
+        level = int(snap.access_map.get((chat_key, int(user.id)), 0))
     except Exception:
         level = 0
+
+    if level < 1:
+        await update.message.reply_text("❌ Нет доступа (ты не добавлен в access).")
+        return
 
     await update.message.reply_text(
         "🧾 whoami\n"

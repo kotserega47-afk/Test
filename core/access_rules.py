@@ -104,6 +104,20 @@ def _wait_file_stable(path: Path, checks: int = 2, interval_sec: float = 0.2, ti
 
         time.sleep(interval_sec)
 
+def _validate_access_df(df: pd.DataFrame) -> None:
+    bad = df[~df["chat_id"].apply(
+        lambda v: str(v).strip().lower() == "private"
+        or str(v).strip().lstrip("-").replace(".", "", 1).isdigit()
+    )]
+    if not bad.empty:
+        raise ValueError(f"[access] invalid chat_id values (examples): {bad['chat_id'].head(5).tolist()}")
+
+
+def _validate_commands_df(df: pd.DataFrame) -> None:
+    for c in ("allow_private", "allow_groups"):
+        vals = set(df[c].dropna().astype(int).unique().tolist())
+        if not vals.issubset({0, 1}):
+            raise ValueError(f"[commands] {c} must be 0/1, got {sorted(vals)}")
 
 class AccessRules:
     """
@@ -149,48 +163,71 @@ class AccessRules:
         return dropbox_path
 
     def get_snapshot(self, force_sync: bool = False) -> Snapshot:
-        src = self._maybe_sync_from_dropbox(force=force_sync)
+        # 1) Пытаемся синкнуться с Dropbox. Если не получилось — работаем по последнему валидному snapshot.
+        try:
+            src = self._maybe_sync_from_dropbox(force=force_sync)
+        except Exception as e:
+            if self._snap is not None:
+                logger.warning(f"🔐 AccessRules: using stale snapshot; sync failed: {e}")
+                return self._snap
+            raise
 
+        # 2) Если локальный cache-файл не изменился — возвращаем кэш, не перечитывая Excel.
         key = _stat_key(self.cache_path)
         if self._snap is not None and self._snap.stat_key == key:
             return self._snap
 
+        # 3) Читаем Excel
         df_access = pd.read_excel(self.cache_path, sheet_name="access")
         df_cmds = pd.read_excel(self.cache_path, sheet_name="commands")
 
+        # 4) Проверяем схему (колонки)
         _require_cols(df_access, "access", ("chat_id", "user_id", "level"))
         _require_cols(df_cmds, "commands", ("command", "required_level", "allow_private", "allow_groups"))
 
+        # 5) Валидируем значения
+        _validate_access_df(df_access)
+        _validate_commands_df(df_cmds)
+
+        # 6) enabled по умолчанию = 1
         if "enabled" not in df_access.columns:
             df_access["enabled"] = 1
         if "enabled" not in df_cmds.columns:
             df_cmds["enabled"] = 1
 
+        # 7) Собираем access_map
         access_map: Dict[Tuple[Any, int], int] = {}
         for _, r in df_access.iterrows():
             if not _as_bool01(r.get("enabled", 1)):
                 continue
+
             chat_key = _norm_chat_id(r.get("chat_id"))
             if chat_key is None:
                 continue
+
             try:
                 user_id = int(float(r.get("user_id")))
                 level = int(float(r.get("level")))
             except Exception:
                 continue
+
             access_map[(chat_key, user_id)] = level
 
+        # 8) Собираем commands_map
         commands_map: Dict[str, CommandRule] = {}
         for _, r in df_cmds.iterrows():
             if not _as_bool01(r.get("enabled", 1)):
                 continue
+
             cmd = _norm_command(r.get("command"))
             if not cmd:
                 continue
+
             try:
                 required_level = int(float(r.get("required_level")))
             except Exception:
-                required_level = 999
+                required_level = 999  # fail-safe
+
             commands_map[cmd] = CommandRule(
                 required_level=required_level,
                 allow_private=_as_bool01(r.get("allow_private", 0)),
@@ -198,6 +235,7 @@ class AccessRules:
                 enabled=True,
             )
 
+        # 9) Сохраняем snapshot (atomically)
         snap = Snapshot(
             access_map=access_map,
             commands_map=commands_map,
@@ -206,5 +244,9 @@ class AccessRules:
             source=src,
         )
         self._snap = snap
-        logger.info(f"🔐 AccessRules loaded: access={len(access_map)} commands={len(commands_map)} src={src} stat={key}")
+
+        logger.info(
+            f"🔐 AccessRules loaded: access={len(access_map)} commands={len(commands_map)} src={src} stat={key}"
+        )
         return snap
+
