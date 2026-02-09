@@ -6,7 +6,7 @@ from utils.log_profiles import LOG_PROFILES
 
 from telegram.ext import Application
 
-from integrations.tg_commands import get_handlers
+from integrations.tg_commands import get_handlers, RULES
 
 
 def _mk(profile_key: str):
@@ -26,6 +26,8 @@ def main():
 
     for h in get_handlers():
         app.add_handler(h)
+
+    RULES.get_snapshot(force_sync=True)
 
     log.info("🟢 Telegram scheduler (manual-only) started (polling)")
     app.run_polling(close_loop=False)

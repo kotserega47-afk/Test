@@ -65,14 +65,8 @@ def _load_cfg():
 
 # === rules.xlsx (thresholds_partner) ========================================
 
-DEFAULT_RULES_XLSX_PATH = "/tmp/rules/rules.xlsx"
+RULES_LOCAL_PATH = os.getenv("RULES_LOCAL_PATH", "/tmp/rules/rules.xlsx")
 ANALYZER_KEY = "wallet"
-
-def _resolve_rules_path() -> str | None:
-    p = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
-    if p and os.path.isdir(p):
-        p = os.path.join(p, "rules.xlsx")
-    return p if p and os.path.exists(p) else None
 
 def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     """
@@ -87,14 +81,13 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
       - partner сопоставляем по normalize_partner_name (как и пороги).
       - group: scope_value должен совпадать с ключом группы в cfg['groups'].
     """
-    rules_path = _resolve_rules_path()
-    if not rules_path:
+    if not os.path.isfile(RULES_LOCAL_PATH):
         return cfg
 
     try:
-        df = pd.read_excel(rules_path, sheet_name="wallet_limits")
+        df = pd.read_excel(RULES_LOCAL_PATH, sheet_name="wallet_limits")
     except Exception as e:
-        logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({rules_path}): {e}")
+        logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
         return cfg
 
     if df.empty:
@@ -170,17 +163,13 @@ def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
       - metric=api_cancel_threshold    -> трактуем как api_cancel_rate
       - колонка threshold              -> deprecated fallback, если min/max не заполнены
     """
-    rules_path = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
-    if rules_path and os.path.isdir(rules_path):
-        rules_path = os.path.join(rules_path, "rules.xlsx")
-
-    if not rules_path or not os.path.exists(rules_path):
+    if not os.path.isfile(RULES_LOCAL_PATH):
         return cfg
 
     try:
-        df = pd.read_excel(rules_path, sheet_name="thresholds_partner")
+        df = pd.read_excel(RULES_LOCAL_PATH, sheet_name="thresholds_partner")
     except Exception as e:
-        logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({rules_path}): {e}")
+        logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
         return cfg
 
     if df.empty:
@@ -301,24 +290,13 @@ def analyze_wallets(payin_path: str, payout_path: str):
     try:
         ANALYZER_KEY = "wallet"
 
-        env_val = os.getenv("RULES_XLSX_PATH")
-        default_val = DEFAULT_RULES_XLSX_PATH
-        rules_path = _resolve_rules_path()
+        logger.info(f"[DEBUG rules] RULES_LOCAL_PATH={RULES_LOCAL_PATH!r}")
 
-        logger.info(f"[DEBUG rules] RULES_XLSX_PATH={env_val!r}, DEFAULT={default_val!r}, resolved={rules_path!r}")
-
-        # дополнительная диагностика: если env указывает на папку — покажем её содержимое
-        if env_val and os.path.isdir(env_val):
-            try:
-                logger.info(f"[DEBUG rules] dir list: {os.listdir(env_val)}")
-            except Exception as e:
-                logger.info(f"[DEBUG rules] dir list failed: {e}")
-
-        if not rules_path:
-            raise FileNotFoundError("rules.xlsx not found (check RULES_XLSX_PATH)")
+        if not os.path.isfile(RULES_LOCAL_PATH):
+            raise FileNotFoundError(f"rules.xlsx not found: {RULES_LOCAL_PATH}")
 
         exclude_df = get_exclude_time_df(
-            rules_xlsx_path=rules_path,
+            rules_xlsx_path=RULES_LOCAL_PATH,
             notify=send_message_sync,
             chat_id=CHAT_ID,
         )
