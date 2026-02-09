@@ -301,6 +301,24 @@ def analyze_wallets(payin_path: str, payout_path: str):
             chat_id=CHAT_ID,
         )
 
+        # 1) гарантируем datetime
+        exclude_df["start_dt"] = pd.to_datetime(exclude_df["start_dt"], dayfirst=True, errors="coerce")
+        exclude_df["end_dt"] = pd.to_datetime(exclude_df["end_dt"], dayfirst=True, errors="coerce")
+
+        # 2) приводим таймзону к Europe/Moscow (как у df["_dt"])
+        tz = df["_dt"].dt.tz  # Europe/Moscow
+
+        if getattr(exclude_df["start_dt"].dt, "tz", None) is None:
+            exclude_df["start_dt"] = exclude_df["start_dt"].dt.tz_localize(tz, nonexistent="shift_forward",
+                                                                           ambiguous="NaT")
+        else:
+            exclude_df["start_dt"] = exclude_df["start_dt"].dt.tz_convert(tz)
+
+        if getattr(exclude_df["end_dt"].dt, "tz", None) is None:
+            exclude_df["end_dt"] = exclude_df["end_dt"].dt.tz_localize(tz, nonexistent="shift_forward", ambiguous="NaT")
+        else:
+            exclude_df["end_dt"] = exclude_df["end_dt"].dt.tz_convert(tz)
+
         # только активные окна, применимые к wallet
         ex = exclude_df[
             (exclude_df["enabled"] == 1) &
