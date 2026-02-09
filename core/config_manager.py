@@ -450,3 +450,26 @@ def clear_rules_caches() -> None:
     _EXCLUDE_TIME_CACHE.clear()
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
+
+def resolve_rules_xlsx_path(
+    env_key: str = "RULES_XLSX_PATH",
+) -> str:
+    """
+    Единая точка правды для rules.xlsx.
+    Разруливает кейсы:
+      - env пуст -> default
+      - env указывает на папку -> добавляем rules.xlsx
+      - env указывает на файл -> ок
+    """
+    raw = os.getenv(env_key)
+    p = Path(raw)
+
+    # Если дали директорию — считаем, что внутри rules.xlsx
+    if p.exists() and p.is_dir():
+        p = p / "rules.xlsx"
+
+    # Если не существует, но похоже на директорию (нет суффикса .xlsx) — тоже дополним
+    if p.suffix.lower() != ".xlsx":
+        p = Path(str(p)) / "rules.xlsx"
+
+    return str(p)

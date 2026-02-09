@@ -11,7 +11,7 @@ from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from utils.normalization import normalize_partner_name
-from core.config_manager import get_exclude_time_df
+from core.config_manager import get_exclude_time_df, resolve_rules_xlsx_path
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -81,11 +81,12 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
       - partner сопоставляем по normalize_partner_name (как и пороги).
       - group: scope_value должен совпадать с ключом группы в cfg['groups'].
     """
-    if not os.path.isfile(RULES_LOCAL_PATH):
+    rules_path = resolve_rules_xlsx_path()
+    if not os.path.isfile(rules_path):
         return cfg
 
     try:
-        df = pd.read_excel(RULES_LOCAL_PATH, sheet_name="wallet_limits")
+        df = pd.read_excel(rules_path, sheet_name="wallet_limits")
     except Exception as e:
         logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
         return cfg
@@ -163,11 +164,12 @@ def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
       - metric=api_cancel_threshold    -> трактуем как api_cancel_rate
       - колонка threshold              -> deprecated fallback, если min/max не заполнены
     """
-    if not os.path.isfile(RULES_LOCAL_PATH):
+    rules_path = resolve_rules_xlsx_path()
+    if not os.path.isfile(rules_path):
         return cfg
 
     try:
-        df = pd.read_excel(RULES_LOCAL_PATH, sheet_name="thresholds_partner")
+        df = pd.read_excel(rules_path, sheet_name="thresholds_partner")
     except Exception as e:
         logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
         return cfg
@@ -290,13 +292,11 @@ def analyze_wallets(payin_path: str, payout_path: str):
     try:
         ANALYZER_KEY = "wallet"
 
-        logger.info(f"[DEBUG rules] RULES_LOCAL_PATH={RULES_LOCAL_PATH!r}")
-
-        if not os.path.isfile(RULES_LOCAL_PATH):
-            raise FileNotFoundError(f"rules.xlsx not found: {RULES_LOCAL_PATH}")
+        rules_path = resolve_rules_xlsx_path()
+        logger.info(f"[DEBUG rules] RULES_XLSX_PATH(resolved)={rules_path!r}")
 
         exclude_df = get_exclude_time_df(
-            rules_xlsx_path=RULES_LOCAL_PATH,
+            rules_xlsx_path=rules_path,
             notify=send_message_sync,
             chat_id=CHAT_ID,
         )
