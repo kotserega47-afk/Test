@@ -68,6 +68,95 @@ def _load_cfg():
 DEFAULT_RULES_XLSX_PATH = "/tmp/rules/rules.xlsx"
 ANALYZER_KEY = "wallet"
 
+def _resolve_rules_path() -> str | None:
+    p = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+    if p and os.path.isdir(p):
+        p = os.path.join(p, "rules.xlsx")
+    return p if p and os.path.exists(p) else None
+
+def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
+    """
+    Применяет лимиты из rules.xlsx (лист wallet_limits).
+
+    Правила:
+      - limit_type=daily_max_amount
+      - scope=partner -> cfg['partners'][partner]['daily_max_amount']
+      - scope=group   -> cfg['groups'][group]['daily_max_amount']
+
+    Примечание:
+      - partner сопоставляем по normalize_partner_name (как и пороги).
+      - group: scope_value должен совпадать с ключом группы в cfg['groups'].
+    """
+    rules_path = _resolve_rules_path()
+    if not rules_path:
+        return cfg
+
+    try:
+        df = pd.read_excel(rules_path, sheet_name="wallet_limits")
+    except Exception as e:
+        logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({rules_path}): {e}")
+        return cfg
+
+    if df.empty:
+        return cfg
+
+    df = df.copy()
+    df["enabled"] = pd.to_numeric(df.get("enabled"), errors="coerce").fillna(0).astype(int)
+    df["scope"] = df.get("scope").astype(str).str.strip().str.lower()
+    df["scope_value"] = df.get("scope_value").astype(str).str.strip()
+    df["limit_type"] = df.get("limit_type").astype(str).str.strip().str.lower()
+    df["limit_value"] = pd.to_numeric(df.get("limit_value"), errors="coerce")
+
+    df = df[(df["enabled"] == 1) & (df["limit_type"] == "daily_max_amount")]
+    if df.empty:
+        return cfg
+
+    cfg.setdefault("partners", {})
+    cfg.setdefault("groups", {})
+
+    partners = cfg.get("partners") or {}
+    groups = cfg.get("groups") or {}
+
+    # нормализованная карта партнёров из cfg
+    p_norm_map = {normalize_partner_name(k): k for k in partners.keys()}
+
+    applied_p = 0
+    applied_g = 0
+
+    for _, r in df.iterrows():
+        scope = str(r.get("scope") or "").strip().lower()
+        scope_value = str(r.get("scope_value") or "").strip()
+        val = r.get("limit_value")
+
+        if not scope_value or pd.isna(val):
+            continue
+
+        if scope == "partner":
+            p_norm = normalize_partner_name(scope_value)
+            cfg_key = p_norm_map.get(p_norm)
+
+            if not cfg_key:
+                # создаём партнёра, чтобы лимит применился (не молчим)
+                cfg_key = scope_value
+                partners.setdefault(cfg_key, {})
+                p_norm_map[p_norm] = cfg_key
+
+            partners[cfg_key]["daily_max_amount"] = float(val)
+            applied_p += 1
+
+        elif scope == "group":
+            gname = scope_value
+            groups.setdefault(gname, {})
+            groups[gname]["daily_max_amount"] = float(val)
+            applied_g += 1
+
+    if applied_p or applied_g:
+        logger.info(f"[wallet_limits] applied partners={applied_p}, groups={applied_g} from rules.xlsx")
+
+    cfg["partners"] = partners
+    cfg["groups"] = groups
+    return cfg
+
 def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
     """
     Применяет пороги из rules.xlsx (лист thresholds_partner) для wallet.
@@ -164,16 +253,11 @@ def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
     return cfg
 
 # === Основной анализатор =====================================================
-def _resolve_rules_path() -> str | None:
-    p = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
-    if p and os.path.isdir(p):
-        p = os.path.join(p, "rules.xlsx")
-    return p if p and os.path.exists(p) else None
-
 
 def analyze_wallets(payin_path: str, payout_path: str):
     cfg = _load_cfg()
     cfg = _apply_partner_thresholds_from_rules(cfg)
+    cfg = _apply_wallet_limits_from_rules(cfg)
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
 
@@ -359,9 +443,9 @@ def analyze_wallets(payin_path: str, payout_path: str):
         group_name = None
 
         for gname, gdata in groups_cfg.items():
-            if partner_name in gdata["partners"]:
+            if partner_name in (gdata.get("partners") or []):
                 group_name = gname
-                daily_limit = gdata["daily_max_amount"]
+                daily_limit = gdata.get("daily_max_amount")
                 break
 
         if group_name:
@@ -394,6 +478,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
                 limit_warn = False
                 limit_icon = "🟢"
 
+        daily_limit = float(daily_limit) if daily_limit else 0.0
         last_op_time = df[df["_partner_norm"] == key_norm]["_dt"].max()
         last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
 
@@ -408,7 +493,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
             f"  Всего операций: {total}\n"
             f"  Успешных: {success}\n"
             f"  Конверсия: {conv_text}\n"
-            f"  Поступления: {amount_today:,.0f} / {daily_limit:,.0f} "
+            f"  Поступления: {amount_today:,.0f} / {float(daily_limit or 0):,.0f} "
             f"({percent_filled}%) — {limit_icon}\n"
             f"  Отмен по API: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"{nok_line}"
