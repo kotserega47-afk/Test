@@ -65,7 +65,7 @@ def _load_cfg():
 
 # === rules.xlsx (thresholds_partner) ========================================
 
-RULES_LOCAL_PATH = os.getenv("RULES_LOCAL_PATH", "/tmp/rules/rules.xlsx")
+RULES_LOCAL_PATH = "/tmp/rules_cache/rules.xlsx"
 ANALYZER_KEY = "wallet"
 
 def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
