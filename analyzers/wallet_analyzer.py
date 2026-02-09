@@ -164,6 +164,12 @@ def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
     return cfg
 
 # === Основной анализатор =====================================================
+def _resolve_rules_path() -> str | None:
+    p = os.getenv("RULES_XLSX_PATH", DEFAULT_RULES_XLSX_PATH)
+    if p and os.path.isdir(p):
+        p = os.path.join(p, "rules.xlsx")
+    return p if p and os.path.exists(p) else None
+
 
 def analyze_wallets(payin_path: str, payout_path: str):
     cfg = _load_cfg()
@@ -211,8 +217,12 @@ def analyze_wallets(payin_path: str, payout_path: str):
     try:
         ANALYZER_KEY = "wallet"
 
+        rules_path = _resolve_rules_path()
+        if not rules_path:
+            raise FileNotFoundError("rules.xlsx not found (check RULES_XLSX_PATH)")
+
         exclude_df = get_exclude_time_df(
-            rules_xlsx_path=os.getenv("RULES_XLSX_PATH"),
+            rules_xlsx_path=rules_path,
             notify=send_message_sync,
             chat_id=CHAT_ID,
         )
