@@ -301,7 +301,19 @@ def analyze_wallets(payin_path: str, payout_path: str):
     try:
         ANALYZER_KEY = "wallet"
 
+        env_val = os.getenv("RULES_XLSX_PATH")
+        default_val = DEFAULT_RULES_XLSX_PATH
         rules_path = _resolve_rules_path()
+
+        logger.info(f"[DEBUG rules] RULES_XLSX_PATH={env_val!r}, DEFAULT={default_val!r}, resolved={rules_path!r}")
+
+        # дополнительная диагностика: если env указывает на папку — покажем её содержимое
+        if env_val and os.path.isdir(env_val):
+            try:
+                logger.info(f"[DEBUG rules] dir list: {os.listdir(env_val)}")
+            except Exception as e:
+                logger.info(f"[DEBUG rules] dir list failed: {e}")
+
         if not rules_path:
             raise FileNotFoundError("rules.xlsx not found (check RULES_XLSX_PATH)")
 
