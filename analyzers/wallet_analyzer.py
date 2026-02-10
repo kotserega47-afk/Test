@@ -5,13 +5,15 @@ import pandas as pd
 import yaml
 from zoneinfo import ZoneInfo
 
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from utils.normalization import normalize_partner_name
-from core.config_manager import get_exclude_time_df, resolve_rules_xlsx_path
+from core.rules_provider import get_rules_snapshot
+from core.config_manager import get_exclude_time_df
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -65,7 +67,6 @@ def _load_cfg():
 
 # === rules.xlsx (thresholds_partner) ========================================
 
-RULES_LOCAL_PATH = os.getenv("RULES_LOCAL_PATH", "/tmp/rules_cache/rules.xlsx")
 ANALYZER_KEY = "wallet"
 
 def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
@@ -81,14 +82,13 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
       - partner сопоставляем по normalize_partner_name (как и пороги).
       - group: scope_value должен совпадать с ключом группы в cfg['groups'].
     """
-    rules_path = resolve_rules_xlsx_path()
-    if not os.path.isfile(rules_path):
-        return cfg
+
+    rules_path = get_rules_snapshot().local_path
 
     try:
         df = pd.read_excel(rules_path, sheet_name="wallet_limits")
     except Exception as e:
-        logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
+        logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({rules_path}): {e}")
         return cfg
 
     if df.empty:
@@ -164,14 +164,13 @@ def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
       - metric=api_cancel_threshold    -> трактуем как api_cancel_rate
       - колонка threshold              -> deprecated fallback, если min/max не заполнены
     """
-    rules_path = resolve_rules_xlsx_path()
-    if not os.path.isfile(rules_path):
-        return cfg
+
+    rules_path = get_rules_snapshot().local_path
 
     try:
         df = pd.read_excel(rules_path, sheet_name="thresholds_partner")
     except Exception as e:
-        logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({RULES_LOCAL_PATH}): {e}")
+        logger.warning(f"⚠️ thresholds_partner: не удалось прочитать rules.xlsx ({rules_path}): {e}")
         return cfg
 
     if df.empty:
@@ -292,11 +291,8 @@ def analyze_wallets(payin_path: str, payout_path: str):
     try:
         ANALYZER_KEY = "wallet"
 
-        rules_path = resolve_rules_xlsx_path()
-        logger.info(f"[DEBUG rules] RULES_XLSX_PATH(resolved)={rules_path!r}")
-
         exclude_df = get_exclude_time_df(
-            rules_xlsx_path=rules_path,
+            rules_xlsx_path=os.getenv("RULES_XLSX_PATH"),
             notify=send_message_sync,
             chat_id=CHAT_ID,
         )
@@ -331,7 +327,8 @@ def analyze_wallets(payin_path: str, payout_path: str):
 
             # берём только ошибки (то, что влияет на конверсию)
             err_mask = df["_status_raw"].str.lower() == "ошибка"
-            df_err = df.loc[err_mask, ["_dt", "_partner_norm"]]
+            df_err = df.loc[err_mask, ["_dt", "_partner_norm"]].copy()
+            df_err["_src_idx"] = df_err.index
 
             if not df_err.empty:
                 # join по партнёру
@@ -343,10 +340,10 @@ def analyze_wallets(payin_path: str, payout_path: str):
 
                 # ошибка попала в любое исключённое окно
                 in_window = (m["_dt"] >= m["start_dt"]) & (m["_dt"] < m["end_dt"])
-                excluded_idx = m.index[in_window.fillna(False)]
+                excluded_src_idx = m.loc[in_window.fillna(False), "_src_idx"].unique()
 
                 # ВАЖНО: выключаем участие в расчётах
-                df.loc[excluded_idx, "_status_count"] = False
+                df.loc[excluded_src_idx, "_status_count"] = False
 
                 # DEBUG: сколько ошибок исключено exclude_time
                 excluded_cnt = (
@@ -463,7 +460,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
             )]
             df_group_success = df_group_today[df_group_today["_status_success"]]
             group_amount_today = pd.to_numeric(df_group_success[COL_AMOUNT], errors="coerce").sum()
-            percent_filled = int(group_amount_today / daily_limit * 100)
+            percent_filled = int(group_amount_today / daily_limit * 100) if daily_limit else 0
         else:
             percent_filled = int(amount_today / daily_limit * 100) if daily_limit else 0
 

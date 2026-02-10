@@ -1,17 +1,14 @@
 # core/access_rules.py
 from __future__ import annotations
 
-import os
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
-
 import pandas as pd
+import time
 
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
-from integrations.dropbox_watcher import download_file
+from core.rules_provider import get_rules_snapshot
 
 icon, name = LOG_PROFILES["MAIN"]
 logger = get_logger(name, icon)
@@ -72,38 +69,6 @@ def _require_cols(df: pd.DataFrame, sheet: str, cols: Tuple[str, ...]) -> None:
     if missing:
         raise ValueError(f"[{sheet}] missing columns: {missing}")
 
-
-def _stat_key(path: Path) -> Tuple[float, int]:
-    st = path.stat()
-    return (st.st_mtime, st.st_size)
-
-
-def _wait_file_stable(path: Path, checks: int = 2, interval_sec: float = 0.2, timeout_sec: float = 6.0) -> None:
-    """
-    Ждём стабильность локального кеш-файла (после скачивания из Dropbox).
-    """
-    start = time.time()
-    last: Optional[Tuple[int, float]] = None
-    stable = 0
-
-    while True:
-        st = path.stat()
-        cur = (st.st_size, st.st_mtime)
-
-        if cur == last:
-            stable += 1
-        else:
-            stable = 0
-            last = cur
-
-        if stable >= checks:
-            return
-
-        if time.time() - start > timeout_sec:
-            raise TimeoutError(f"rules cache not stable: {path}")
-
-        time.sleep(interval_sec)
-
 def _validate_access_df(df: pd.DataFrame) -> None:
     bad = df[~df["chat_id"].apply(
         lambda v: str(v).strip().lower() == "private"
@@ -120,66 +85,25 @@ def _validate_commands_df(df: pd.DataFrame) -> None:
             raise ValueError(f"[commands] {c} must be 0/1, got {sorted(vals)}")
 
 class AccessRules:
-    """
-    SOURCE: env RULES_XLSX_PATH
-      - если заканчивается на .xlsx -> считаем это dropbox_path к файлу
-      - иначе считаем это dropbox-папка, файл = <dir>/rules.xlsx
-    CACHE: /tmp/rules_cache/rules.xlsx
-    """
-
-    def __init__(self, rules_env_path: str):
-        self.rules_env_path = (rules_env_path or "").strip()
-        self.cache_path = Path("/tmp/rules_cache/rules.xlsx")
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-
+    def __init__(self):
         self._snap: Optional[Snapshot] = None
-        self._last_sync_ts: float = 0.0
-        self._min_sync_interval_sec: float = float(os.getenv("RULES_SYNC_MIN_INTERVAL_SEC", "15"))
 
     def invalidate(self) -> None:
         self._snap = None
-        self._last_sync_ts = 0.0
-
-    def _dropbox_rules_file_path(self) -> str:
-        p = self.rules_env_path
-        if not p:
-            raise RuntimeError("RULES_XLSX_PATH пуст — ожидаю dropbox папку или путь к rules.xlsx")
-        if p.lower().endswith(".xlsx"):
-            return p
-        return p.rstrip("/") + "/rules.xlsx"
-
-    def _maybe_sync_from_dropbox(self, force: bool = False) -> str:
-        now = time.time()
-        if (not force) and (now - self._last_sync_ts) < self._min_sync_interval_sec and self.cache_path.exists():
-            return self._dropbox_rules_file_path()
-
-        dropbox_path = self._dropbox_rules_file_path()
-        ok = download_file(dropbox_path, str(self.cache_path))
-        if not ok:
-            raise RuntimeError(f"Не удалось скачать rules.xlsx из Dropbox: {dropbox_path}")
-
-        _wait_file_stable(self.cache_path)
-        self._last_sync_ts = now
-        return dropbox_path
 
     def get_snapshot(self, force_sync: bool = False) -> Snapshot:
-        # 1) Пытаемся синкнуться с Dropbox. Если не получилось — работаем по последнему валидному snapshot.
-        try:
-            src = self._maybe_sync_from_dropbox(force=force_sync)
-        except Exception as e:
-            if self._snap is not None:
-                logger.warning(f"🔐 AccessRules: using stale snapshot; sync failed: {e}")
-                return self._snap
-            raise
+        # 1) Получаем общий snapshot rules.xlsx (Dropbox -> /tmp/rules_cache/rules.xlsx)
+        #    Fail-safe уже внутри RulesProvider.
+        rs = get_rules_snapshot(force_sync=force_sync)
 
         # 2) Если локальный cache-файл не изменился — возвращаем кэш, не перечитывая Excel.
-        key = _stat_key(self.cache_path)
+        key = rs.stat_key
         if self._snap is not None and self._snap.stat_key == key:
             return self._snap
 
-        # 3) Читаем Excel
-        df_access = pd.read_excel(self.cache_path, sheet_name="access")
-        df_cmds = pd.read_excel(self.cache_path, sheet_name="commands")
+        # 3) Читаем Excel из локального cache-файла
+        df_access = pd.read_excel(rs.local_path, sheet_name="access")
+        df_cmds = pd.read_excel(rs.local_path, sheet_name="commands")
 
         # 4) Проверяем схему (колонки)
         _require_cols(df_access, "access", ("chat_id", "user_id", "level"))
@@ -241,12 +165,12 @@ class AccessRules:
             commands_map=commands_map,
             stat_key=key,
             loaded_at_ts=time.time(),
-            source=src,
+            source=rs.source,
         )
         self._snap = snap
 
         logger.info(
-            f"🔐 AccessRules loaded: access={len(access_map)} commands={len(commands_map)} src={src} stat={key}"
+            f"🔐 AccessRules loaded: access={len(access_map)} commands={len(commands_map)} src={rs.source} stat={key}"
         )
         return snap
 

@@ -1,17 +1,17 @@
 # core/config_manager.py
 from __future__ import annotations
-
+import pandas as pd
 import os
 import re
 import time
-import json
+
 import hashlib
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Dict, List
-
-import pandas as pd
+from core.rules_provider import get_rules_snapshot
 
 
 # =============================================================================
@@ -143,54 +143,6 @@ def _maybe_notify(
 
     state.last_hash = msg_hash
     state.last_sent_ts = now
-
-
-def _wait_file_stable(
-    path: Path,
-    *,
-    checks: int = 3,
-    interval_sec: float = 0.25,
-    timeout_sec: float = 8.0,
-) -> None:
-    """
-    Dropbox can be mid-sync (size/mtime changing). We wait until stable N checks.
-    """
-    start = time.time()
-    last: Optional[Tuple[int, float]] = None
-    stable = 0
-
-    while True:
-        try:
-            st = path.stat()
-            cur = (st.st_size, st.st_mtime)
-        except FileNotFoundError:
-            cur = None
-
-        if cur is not None and cur == last:
-            stable += 1
-        else:
-            stable = 0
-            last = cur
-
-        if cur is not None and stable >= (checks - 1):
-            return
-
-        if time.time() - start > timeout_sec:
-            raise TimeoutError(f"File not stable: {path}")
-
-        time.sleep(interval_sec)
-
-
-def _detect_dropbox_conflicts(folder: Path, base_name: str) -> List[str]:
-    """
-    If Dropbox created "conflicted copy" Excel files, refuse to proceed.
-    """
-    # Examples: "rules (conflicted copy 2026-01-29).xlsx"
-    conflicts = []
-    for p in folder.glob(f"{base_name}*conflicted copy*.xlsx"):
-        conflicts.append(p.name)
-    return conflicts
-
 
 def _norm_str(x: Any) -> str:
     if x is None:
@@ -391,14 +343,11 @@ def get_exclude_time_df(
     if not rules_xlsx_path:
         raise RuntimeError("rules_xlsx_path is empty")
 
-    path = Path(rules_xlsx_path)
+    # RULES_XLSX_PATH приходит как dropbox path. Берём локальный snapshot rules.xlsx.
+    rs = get_rules_snapshot(force_sync=False)
+    rules_xlsx_path = rs.local_path
 
-    # Guard: Dropbox conflicted copies
-    conflicts = _detect_dropbox_conflicts(path.parent, base_name=path.stem)
-    if conflicts:
-        msg = "❌ Dropbox conflict detected рядом с rules.xlsx:\n" + "\n".join(f"- {x}" for x in conflicts)
-        _safe_notify(notify, chat_id, msg)
-        raise RuntimeError(msg)
+    path = Path(rules_xlsx_path)
 
     # stat key for cache
     st = path.stat()
@@ -410,7 +359,6 @@ def get_exclude_time_df(
     if cache.stat_key == stat_key and cache.result is not None:
         res = cache.result
     else:
-        _wait_file_stable(path)
         df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
         res = validate_exclude_time(df)
         cache.stat_key = stat_key
@@ -451,25 +399,3 @@ def clear_rules_caches() -> None:
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
 
-def resolve_rules_xlsx_path(
-    env_key: str = "RULES_XLSX_PATH",
-) -> str:
-    """
-    Единая точка правды для rules.xlsx.
-    Разруливает кейсы:
-      - env пуст -> default
-      - env указывает на папку -> добавляем rules.xlsx
-      - env указывает на файл -> ок
-    """
-    raw = os.getenv(env_key)
-    p = Path(raw)
-
-    # Если дали директорию — считаем, что внутри rules.xlsx
-    if p.exists() and p.is_dir():
-        p = p / "rules.xlsx"
-
-    # Если не существует, но похоже на директорию (нет суффикса .xlsx) — тоже дополним
-    if p.suffix.lower() != ".xlsx":
-        p = Path(str(p)) / "rules.xlsx"
-
-    return str(p)
