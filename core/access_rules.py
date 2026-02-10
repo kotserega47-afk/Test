@@ -85,7 +85,7 @@ def _validate_commands_df(df: pd.DataFrame) -> None:
             raise ValueError(f"[commands] {c} must be 0/1, got {sorted(vals)}")
 
 class AccessRules:
-    def __init__(self):
+    def __init__(self, rules_env_path: str | None = None):
         self._snap: Optional[Snapshot] = None
 
     def invalidate(self) -> None:
