@@ -17,7 +17,8 @@ from core.access_guard import AccessContext, check_access, deny_message
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.raccoon_wallet_downloader import run_raccoon_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
-
+from integrations.raccoon_hourly_downloader import run_hourly_raccoon_cycle
+from analyzers.raccoon_hourly_report import run_hourly_report
 
 def _mk(profile_key: str):
     icon, name = LOG_PROFILES[profile_key]
@@ -57,6 +58,7 @@ def _help_text() -> str:
         "/run_wallet\n"
         "/run_rate\n"
         "/run_raccoon\n"
+        "/run_hourly_raccoon\n"
         "/help"
 
     )
@@ -168,6 +170,13 @@ async def cmd_run_raccoon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "run_raccoon"):
         return
     await _run_job(update, "raccoon_wallet", run_raccoon_wallet_cycle)
+def run_hourly_raccoon_job():
+    run_hourly_raccoon_cycle()
+    run_hourly_report()
+async def cmd_run_hourly_raccoon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard_or_deny(update, "run_hourly_raccoon"):
+        return
+    await _run_job(update, "hourly_raccoon", run_hourly_raccoon_job)
 
 async def cmd_run_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "run_rate"):
@@ -185,4 +194,5 @@ def get_handlers():
         CommandHandler("run_wallet", cmd_run_wallet),
         CommandHandler("run_rate", cmd_run_rate),
         CommandHandler("run_raccoon", cmd_run_raccoon),
+        CommandHandler("run_hourly_raccoon", cmd_run_hourly_raccoon),
     ]
