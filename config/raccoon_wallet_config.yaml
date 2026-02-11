@@ -1,6 +1,6 @@
 #  Бот-Аналитика
 #=== ОБЩИЕ НАСТРОЙКИ ОКНА ===
-window_minutes: 15              # ширина окна анализа
+window_minutes: 180             # ширина окна анализа
 offset_minutes: 0             # смещение окна
 success_window_minutes: 0      # окно подсчёта успехов
 min_events: 20                 # анти-шум
