@@ -222,8 +222,16 @@ def analyze_wallets(payin_path: str, payout_path: str):
                 limit_warn = False
                 limit_icon = "🟢"
 
-        last_op_time = df[df["_partner_norm"] == key_norm]["_dt"].max()
-        last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
+        last_success = df[
+            (df["_partner_norm"] == key_norm) &
+            (df["_status_success"])
+            ]
+
+        if not last_success.empty:
+            last_op_time = last_success["_dt"].max()
+            last_op_str = last_op_time.strftime("%d.%m %H:%M:%S")
+        else:
+            last_op_str = "—"
 
         nok_line = (
             f"  Нет доступных аккаунтов: {nok_wallets_total} — 🔴\n"
@@ -240,7 +248,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
             f"({percent_filled}%) — {limit_icon}\n"
             f"  Отмен по API: {api_total} шт ({api_rate:.1f}%) — {api_icon}\n"
             f"{nok_line}"
-            f"  Последняя операция: {last_op_str}\n"
+            f"  Последняя успешная операция: {last_op_str}\n"
         )
 
         messages.append(msg)
