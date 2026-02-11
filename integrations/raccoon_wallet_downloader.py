@@ -38,7 +38,7 @@ def _ensure_logged_in(page, context):
 
     logger.info("🔑 Логинимся в Raccoon…")
     page.goto("https://raccoon.it.com/partner/#/login")
-    page.fill("input[type='text']", LOGIN)
+    page.fill("input[type='email']", LOGIN)
     page.fill("input[type='password']", PASSWORD)
     page.click("button:has-text('Войти')")
     page.wait_for_load_state("networkidle")
