@@ -15,6 +15,7 @@ from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 
 from integrations.downloader_wallets import run_wallet_cycle
+from integrations.raccoon_wallet_downloader import run_raccoon_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 
 
@@ -161,6 +162,10 @@ async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await _run_job(update, "wallet", run_wallet_cycle)
 
+async def cmd_run_raccoon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard_or_deny(update, "run_raccoon"):
+        return
+    await _run_job(update, "raccoon_wallet", run_raccoon_wallet_cycle)
 
 async def cmd_run_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "run_rate"):
@@ -177,4 +182,5 @@ def get_handlers():
         CommandHandler("reload_rules", cmd_reload_rules),
         CommandHandler("run_wallet", cmd_run_wallet),
         CommandHandler("run_rate", cmd_run_rate),
+        CommandHandler("run_raccoon", cmd_run_raccoon),
     ]
