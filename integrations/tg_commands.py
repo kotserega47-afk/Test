@@ -56,7 +56,9 @@ def _help_text() -> str:
         "/reload_rules\n"
         "/run_wallet\n"
         "/run_rate\n"
+        "/run_raccoon\n"
         "/help"
+
     )
 
 
