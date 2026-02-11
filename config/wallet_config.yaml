@@ -43,53 +43,40 @@ groups:
 partners:
 
   "HH (А-мобайл Сбер + Выплаты) (107)":
-    threshold: 0.50
     api_cancel_keyword: "Отмена по API"
 
   "HH (Амобайл Тинькофф) (113)":
-    threshold: 0.45
     api_cancel_keyword: "Отмена по API"
 
   "HH (Бакай Тинь) (110)":
-    threshold: 0.20
     api_cancel_keyword: "Отмена по API"
 
   "HH (Abhsber IN + Выплаты) Тинь (117)":
-    threshold: 0.50
     api_cancel_keyword: "Отмена по API"
 
   "HH (Abhsber IN) Сбер  (116)":
-    threshold: 0.50
     api_cancel_keyword: "Отмена по API"
 
   "HH (Аврора Тинь) (108)":
-    threshold: 0.30
     api_cancel_keyword: "Отмена по API"
 
   "HH (Аврора Сбер) (109)":
-    threshold: 0.50
     api_cancel_keyword: "Отмена по API"
 
   "HH (Кибит Сбер) (111)":
-    threshold: 0.50
     api_cancel_keyword: "Отмена по API"
 
   "HH (Кибит Тинь) (114)":
-    threshold: 0.35
     api_cancel_keyword: "Отмена по API"
 
   "HH (Абхасбер - Сбер СБП) (118)":
-    threshold: 0.35
     api_cancel_keyword: "Отмена по API"
 
   "HH Вассл (Сбер сбп)":
-    threshold: 0.5
     api_cancel_keyword: "Отмена по API"
 
   "HH Вассл (ВТБ сбп)":
-    threshold: 0.5
     api_cancel_keyword: "Отмена по API"
 
   "HH Вассл (Тинь номер карты и сбп)":
-    threshold: 0.5
     api_cancel_keyword: "Отмена по API"
