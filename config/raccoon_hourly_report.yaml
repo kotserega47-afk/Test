@@ -1,51 +1,4 @@
 # Трафик-Мониторинг
-# HOURLY REPORT CONFIG
-# ===========================================================
-
-# -------------------------
-# PAYOUT (Выплаты)
-# -------------------------
-# Структура:
-# payout:
-#   "<оригинальное имя партнёра из PayOut>":
-#       <метод>:
-#           title: "<как писать в отчёте>"
-#           limit: <число или null>
-#           vilka: "<текст вилки или null>"
-
-payout:
-
-  "HH (А-мобайл Сбер + Выплаты) (107)":
-    title: "А-мобайл"
-    methods:
-      UNI:
-        title: "UNI"
-        comment: "(Лимит 4кк - круглосуточно , вилка до 100к)"
-      BST:
-        title: "BST"
-        comment: "(на стопе)"
-
-  "HH (Abhsber IN) Сбер  (116)":
-    title: "АБХСбер (116)"
-    methods:
-      "":
-        title: "UNI"
-        comment: "(Лимит 8кк - круглосуточно , вилка 5-100к)"
-
-# --------------------------
-# PAYOUT LAYOUT (ГРУППЫ И ОТСТУПЫ)
-# --------------------------
-# spacing = количество пустых строк после группы
-
-payout_layout:
-
-  - group:
-      - "А-мобайл"
-    spacing: 1
-
-  - group:
-      - "АБХСбер (116)"
-    spacing: 0
 
 
 # -------------------------
@@ -60,45 +13,45 @@ payout_layout:
 
 payin:
 
-  "HH (А-мобайл Сбер + Выплаты) (107)":
-    title: "Амобайл Сбер (107)"
-    comment: "(Лимит 4 КК)"
+  "Cat.Casino (207)":
+    title: "Cat.Casino (207)"
+    comment: "(Лимит ?)"
 
-  "HH (А-мобайл Тинь) (113)":
-    title: "Амобайл Тинь (113)"
-    comment: "(на стопе)"
+  "R7.Casino (212)":
+    title: "R7.Casino (212)"
+    comment: "(Лимит ?)"
 
-  "HH (Кибит Сбер) (111)":
-    title: "Кибит Сбер (111)"
-    comment: "(Лимит 25  КК Вилка СТРОГО до 50 К)"
+  "Arkada.Casino (214)":
+    title: "Arkada.Casino (214)"
+    comment: "(Лимит ?)"
 
-  "HH (Аврора Сбер) (109)":
-    title: "Аврора Сбер (109)"
-    comment:
+  "Gama.Casino (208)":
+    title: "Gama.Casino (208)"
+    comment: "(Лимит ?)"
 
-  "HH (Аврора Тинь) (108)":
-    title: "Аврора Тинь (108)"
-    comment:
+  "Atom (216)":
+    title: "Atom (216)"
+    comment: "(Лимит ?)"
 
-  "HH (Abhsber IN) Сбер (116)":
-    title: "АБХСбер Сбер (116)"
-    comment:
+  "Kent.Casino (210)":
+    title: "Kent.Casino (210)"
+    comment: "(Лимит ?)"
 
-  "HH (Abhsber IN + Выплаты) Тинь (117)":
-    title: "АБХСбер Тинь (117)"
-    comment:
+  "Kometa.Casino (213)":
+    title: "Kometa.Casino (213)"
+    comment: "(Лимит ?)"
 
-  "HH (Абхасбер - Сбер СБП) (118)":
-    title: "АБХСбер Сбер СБП (118)"
-    comment:  "(Лимит 1кк 8:00-00:00)" #  2 пробела
+  "Daddy.Casino (209)":
+    title: "Daddy.Casino (209)"
+    comment: "(Лимит ?)"
 
-  "HH (Бакай Тинь) (110)":
-    title: "Бакай Тинь (110)"
-    comment: "(Лимит 5  КК)"
+  "Mers.Casino (211)":
+    title: "Mers.Casino (211)"
+    comment: "(Лимит ?)"
 
-  "HH Вассл (Тинь номер карты и сбп) (120)":
-    title: "Вассл Тинь номер карты и сбп (120)"
-    comment: "(Лимит 2 KК - круглосуточно)"
+  "Motor (215)":
+    title: "Motor (215)"
+    comment: "(Лимит ?)"
 
 # -------------------------
 # PAYIN GROUPS (суммарные)
@@ -113,22 +66,6 @@ payin:
 #       limit: <число или null>
 #       vilka: "<текст или null>"
 
-payin_groups:
-
-  abhsber_sum:
-    title: "АБХСбер (116 + 117)"
-    combine:
-      - "HH (Abhsber IN) Сбер (116)"
-      - "HH (Abhsber IN + Выплаты) Тинь (117)"
-    comment: "(Лимит 8,5  КК)"
-
-  aurora_sum:
-    title: "Аврора (108 + 109)"
-    combine:
-      - "HH (Аврора Сбер) (109)"
-      - "HH (Аврора Тинь) (108)"
-    comment: "(Лимит 25 КК)"
-
 
 # --------------------------
 # PAYIN LAYOUT
@@ -140,37 +77,44 @@ payin_groups:
 payin_layout:
 
   - group:
-      - "Амобайл Сбер (107)"
-      - "Амобайл Тинь (113)"
+      - "Cat.Casino (207)"
     spacing: 1
 
   - group:
-      - "Кибит Сбер (111)"
+      - "R7.Casino (212)"
     spacing: 1
 
   - group:
-      - "Аврора Сбер (109)"
-      - "Аврора Тинь (108)"
-      - "Аврора (108 + 109)"
+      - "Arkada.Casino (214)"
     spacing: 1
 
   - group:
-      - "АБХСбер Сбер (116)"
-      - "АБХСбер Тинь (117)"
-      - "АБХСбер (116 + 117)"
+      - "Gama.Casino (208)"
     spacing: 1
 
   - group:
-      - "АБХСбер Сбер СБП (118)"
+      - "Atom (216)"
     spacing: 1
 
   - group:
-      - "Бакай Тинь (110)"
+      - "Kent.Casino (210)"
     spacing: 1
 
   - group:
-      - "Вассл Тинь номер карты и сбп (120)"
-    spacing: 0
+      - "Kometa.Casino (213)"
+    spacing: 1
+
+  - group:
+      - "Daddy.Casino (209)"
+    spacing: 1
+
+  - group:
+      - "Mers.Casino (211)"
+    spacing: 1
+
+  - group:
+      - "Motor (215)"
+    spacing: 1
 
 
     columns:
