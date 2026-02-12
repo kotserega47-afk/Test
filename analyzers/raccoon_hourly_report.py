@@ -208,9 +208,12 @@ def format_section_with_layout(lines, title, data, layout):
         for _ in range(spacing):
             lines.append("")
 
-def format_report(payin_data, header_date, end_dt):
+def format_report(payin_data, header_date, end_dt, total_payin):
     cfg = load_cfg()
     lines = []
+    lines.append(f"Итого поступления: {fmt_int(total_payin)}")
+    lines.append("")
+
     lines.append(f"Данные на {header_date.strftime('%d.%m')} с 00:00 по {end_dt.strftime('%H:%M')}")
     lines.append("")
 
@@ -239,8 +242,12 @@ def run_hourly_report():
     # 2) агрегация
     payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
 
+    total_payin = df_payin["Сумма"].sum()
+
     # 3) форматирование
-    txt = format_report( payin_data, header_date, end_dt)
+    txt = format_report( payin_data, header_date, end_dt, total_payin)
+
+
 
     # 4) отправка
     send_message_sync(txt, chat_id=CHAT_ID)
