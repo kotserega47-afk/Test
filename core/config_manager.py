@@ -279,7 +279,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
 
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
-    missing = [c for c in _REQUIRED_WALLET_LIMITS_COLS if c not in df.columns]
+    missing = [c for c in _REQUIRED_EXCLUDE_COLS if c not in df.columns]
 
     if missing:
         errors.append(f"exclude_time: missing columns: {missing}")
