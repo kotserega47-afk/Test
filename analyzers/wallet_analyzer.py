@@ -14,6 +14,7 @@ from utils.log_profiles import LOG_PROFILES
 from utils.normalization import normalize_partner_name
 from core.rules_provider import get_rules_snapshot
 from core.config_manager import get_exclude_time_df
+from core.config_manager import get_wallet_limits_df
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -69,24 +70,30 @@ def _load_cfg():
 
 ANALYZER_KEY = "wallet"
 
+def _parse_analyzers_csv(val: str) -> list[str]:
+    return sorted(set(
+        p.strip().lower()
+        for p in str(val or "").split(",")
+        if p.strip()
+    ))
+
+
 def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     """
-    Применяет лимиты из rules.xlsx (лист wallet_limits).
+    CONTRACT v4
 
-    Правила:
-      - limit_type=daily_max_amount
-      - scope=partner -> cfg['partners'][partner]['daily_max_amount']
-      - scope=group   -> cfg['groups'][group]['daily_max_amount']
-
-    Примечание:
-      - partner сопоставляем по normalize_partner_name (как и пороги).
-      - group: scope_value должен совпадать с ключом группы в cfg['groups'].
+    wallet_limits:
+      - analyzers: required (CSV)
+      - limit_type: daily_max_amount
+      - scope: partner|group
+      - uniqueness key:
+          (analyzers, scope, scope_value, limit_type)
     """
 
     rules_path = get_rules_snapshot().local_path
 
     try:
-        df = pd.read_excel(rules_path, sheet_name="wallet_limits")
+        df = get_wallet_limits_df(rules_xlsx_path=os.getenv("RULES_XLSX_PATH"))
     except Exception as e:
         logger.warning(f"⚠️ wallet_limits: не удалось прочитать rules.xlsx ({rules_path}): {e}")
         return cfg
@@ -94,16 +101,55 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     if df.empty:
         return cfg
 
+    # --- REQUIRED COLUMN ---
+    if "analyzers" not in df.columns:
+        raise ValueError("wallet_limits: missing required column 'analyzers' (contract v4)")
+
     df = df.copy()
+
     df["enabled"] = pd.to_numeric(df.get("enabled"), errors="coerce").fillna(0).astype(int)
+    df["analyzers"] = df["analyzers"].astype(str).str.strip()
+    df["_analyzers_list"] = df["analyzers"].apply(_parse_analyzers_csv)
+
+    # fail-closed: enabled=1 -> analyzers must be non-empty
+    bad_an = df[df["enabled"].eq(1) & df["_analyzers_list"].map(len).eq(0)]
+    if not bad_an.empty:
+        raise ValueError("wallet_limits: analyzers cannot be empty for enabled=1 (contract v4)")
+
     df["scope"] = df.get("scope").astype(str).str.strip().str.lower()
     df["scope_value"] = df.get("scope_value").astype(str).str.strip()
     df["limit_type"] = df.get("limit_type").astype(str).str.strip().str.lower()
     df["limit_value"] = pd.to_numeric(df.get("limit_value"), errors="coerce")
 
-    df = df[(df["enabled"] == 1) & (df["limit_type"] == "daily_max_amount")]
+    # фильтрация по ANALYZER_KEY
+    df = df[
+        (df["enabled"] == 1) &
+        (df["limit_type"] == "daily_max_amount") &
+        (df["_analyzers_list"].map(lambda lst: ANALYZER_KEY in lst))
+    ]
+
     if df.empty:
         return cfg
+
+    # --- VALIDATE scope ---
+    valid_scopes = {"partner", "group"}
+    bad_scope = df[~df["scope"].isin(valid_scopes)]
+    if not bad_scope.empty:
+        bad_vals = sorted(set(bad_scope["scope"].tolist()))
+        raise ValueError(f"wallet_limits: invalid scope value(s) {bad_vals} (allowed: partner, group)")
+
+    # --- limit_value required ---
+    if df["limit_value"].isna().any():
+        raise ValueError("wallet_limits: limit_value cannot be empty/non-numeric (contract v4)")
+
+    # --- uniqueness check ---
+    dup = (
+        df.groupby(["analyzers", "scope", "scope_value", "limit_type"])
+          .size()
+          .reset_index(name="cnt")
+    )
+    if (dup["cnt"] > 1).any():
+        raise ValueError("wallet_limits: duplicate active rules for same key (contract v4)")
 
     cfg.setdefault("partners", {})
     cfg.setdefault("groups", {})
@@ -111,37 +157,35 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     partners = cfg.get("partners") or {}
     groups = cfg.get("groups") or {}
 
-    # нормализованная карта партнёров из cfg
     p_norm_map = {normalize_partner_name(k): k for k in partners.keys()}
 
     applied_p = 0
     applied_g = 0
 
     for _, r in df.iterrows():
-        scope = str(r.get("scope") or "").strip().lower()
-        scope_value = str(r.get("scope_value") or "").strip()
-        val = r.get("limit_value")
+        scope = r["scope"]
+        scope_value = r["scope_value"]
+        val = float(r["limit_value"])
 
-        if not scope_value or pd.isna(val):
-            continue
+        if not scope_value:
+            raise ValueError("wallet_limits: scope_value cannot be empty (contract v4)")
 
         if scope == "partner":
             p_norm = normalize_partner_name(scope_value)
             cfg_key = p_norm_map.get(p_norm)
 
             if not cfg_key:
-                # создаём партнёра, чтобы лимит применился (не молчим)
                 cfg_key = scope_value
                 partners.setdefault(cfg_key, {})
                 p_norm_map[p_norm] = cfg_key
 
-            partners[cfg_key]["daily_max_amount"] = float(val)
+            partners[cfg_key]["daily_max_amount"] = val
             applied_p += 1
 
         elif scope == "group":
             gname = scope_value
             groups.setdefault(gname, {})
-            groups[gname]["daily_max_amount"] = float(val)
+            groups[gname]["daily_max_amount"] = val
             applied_g += 1
 
     if applied_p or applied_g:
@@ -150,6 +194,7 @@ def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     cfg["partners"] = partners
     cfg["groups"] = groups
     return cfg
+
 
 def _apply_partner_thresholds_from_rules(cfg: dict) -> dict:
     """

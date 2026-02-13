@@ -173,6 +173,91 @@ _REQUIRED_EXCLUDE_COLS = [
 
 _ID_RE = re.compile(r"^EXC-\d{5}$")
 
+_REQUIRED_WALLET_LIMITS_COLS = [
+    "id",
+    "enabled",
+    "analyzers",
+    "scope",
+    "scope_value",
+    "limit_type",
+    "limit_value",
+    "reason",
+]
+
+def validate_wallet_limits(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    missing = [c for c in _REQUIRED_WALLET_LIMITS_COLS if c not in df.columns]
+    if missing:
+        errors.append(f"wallet_limits: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    # normalize
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
+    df["analyzers"] = df["analyzers"].astype(str).str.strip()
+    df["scope"] = df["scope"].astype(str).str.strip().str.lower()
+    df["scope_value"] = df["scope_value"].astype(str).str.strip()
+    df["limit_type"] = df["limit_type"].astype(str).str.strip().str.lower()
+    df["limit_value"] = pd.to_numeric(df["limit_value"], errors="coerce")
+
+    # analyzers parse
+    def _parse_analyzers(s: str) -> list[str]:
+        parts = [p.strip().lower() for p in (s or "").split(",")]
+        return sorted(set(p for p in parts if p))
+
+    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers)
+
+    bad_an = df[(df["enabled"] == 1) & (df["_analyzers_list"].map(len) == 0)]
+    if not bad_an.empty:
+        errors.append("wallet_limits: analyzers empty for enabled=1")
+
+    # scope validation
+    valid_scopes = {"partner", "group"}
+    bad_scope = df[~df["scope"].isin(valid_scopes)]
+    if not bad_scope.empty:
+        errors.append("wallet_limits: invalid scope (allowed: partner, group)")
+
+    # limit_value required
+    bad_val = df[(df["enabled"] == 1) & df["limit_value"].isna()]
+    if not bad_val.empty:
+        errors.append("wallet_limits: limit_value empty/non-numeric")
+
+    # uniqueness check
+    active = df[df["enabled"] == 1].copy()
+    if not active.empty:
+        ex = active.explode("_analyzers_list").rename(columns={"_analyzers_list": "analyzer"})
+        dup = (
+            ex.groupby(["analyzer", "scope", "scope_value", "limit_type"])
+            .size()
+            .reset_index(name="cnt")
+        )
+        if (dup["cnt"] > 1).any():
+            errors.append("wallet_limits: duplicate active rules for same key (per analyzer)")
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+def get_wallet_limits_df(
+    *,
+    rules_xlsx_path: str,
+    sheet_name: str = "wallet_limits",
+) -> pd.DataFrame:
+
+    rs = get_rules_snapshot(force_sync=False)
+    rules_xlsx_path = rs.local_path
+    path = Path(rules_xlsx_path)
+
+    df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+    res = validate_wallet_limits(df)
+
+    if res.errors:
+        raise RuntimeError("rules.xlsx validation fatal errors (wallet_limits)")
+
+    return res.df_norm
 
 def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
     """
@@ -193,9 +278,9 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
     warnings: List[str] = []
 
     df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    missing = [c for c in _REQUIRED_WALLET_LIMITS_COLS if c not in df.columns]
 
-    missing = [c for c in _REQUIRED_EXCLUDE_COLS if c not in df.columns]
     if missing:
         errors.append(f"exclude_time: missing columns: {missing}")
         return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
