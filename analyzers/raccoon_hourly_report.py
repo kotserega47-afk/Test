@@ -239,6 +239,20 @@ def run_hourly_report():
     # 1) подготовка
     df_payin = prepare_data(start_dt, end_dt)
 
+    # --- Guard: не отправляем, если за последний час нет операций ---
+    # end_dt у тебя либо "сегодня HH:00", либо "вчера 23:59" (в случае now.hour==0)
+    last_end = end_dt
+    last_start = (end_dt.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1))
+
+    df_last_hour = filter_dt(df_payin, "Дата/Время создания", last_start, last_end)
+
+    # только оплачено (как в prepare_data)
+    df_last_hour = df_last_hour[df_last_hour["Статус"].str.lower() == "оплачен"]
+
+    if df_last_hour.empty:
+        logger.info(f"[hourly_report] last hour empty ({last_start:%d.%m %H:%M}–{last_end:%H:%M}) -> skip send")
+        return None
+
     # 2) агрегация
     payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
 
