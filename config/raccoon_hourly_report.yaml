@@ -53,6 +53,10 @@ payin:
     title: "Motor (215)"
     comment:
 
+  "Billion_pay (206)":
+    title: "Billion_pay (206)"
+    comment:
+
 # -------------------------
 # PAYIN GROUPS (суммарные)
 # ---------------------------
@@ -114,6 +118,10 @@ payin_layout:
 
   - group:
       - "Motor (215)"
+    spacing: 1
+
+  - group:
+      - "Billion_pay (206)"
     spacing: 1
 
 

@@ -50,6 +50,9 @@ partners:
   "Motor (215)":
     api_cancel_keyword: "Отмена по API"
 
+  "Billion_pay (206)":
+    api_cancel_keyword: "Отмена по API"
+
 
 columns:
   payin:
