@@ -172,7 +172,7 @@ def run_raccoon_wallet_cycle():
             size = os.path.getsize(payin_path)
             send_file_sync(
                 payin_path,
-                chat_id=-3515012556,
+                chat_id=-1003515012556,
                 caption=f"📎 PayIn выгрузка за {target_date} (ts={ts}), size={size} bytes"
             )
         #payout_path = _download_payout(page, ts, payout_days)
