@@ -77,6 +77,11 @@ def _require_mapping(mapping: dict, required: list[str], kind: str):
     missing = [k for k in required if not mapping.get(k)]
     if missing:
         raise RuntimeError(f"{kind}: в config нет mapping для ключей: {missing}")
+def _in_window(hour: int, start: int, end: int) -> bool:
+    # start=9 end=0 => 09:00..23:59 и 00:00
+    if start <= end:
+        return start <= hour <= end
+    return (hour >= start) or (hour <= end)
 
 def _load_cfg():
     if not os.path.exists(CONFIG_PATH):
