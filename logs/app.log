@@ -1406,3 +1406,15 @@ HH (А-мобайл Сбер
 2025-12-02 17:50:15,339 [INFO] ✅ Дата выбрана: 2025-11-25
 2025-12-02 17:50:23,051 [INFO] ✅ Payout сохранён: /tmp\wallet_handler\payout_17.48.xlsx
 2025-12-02 17:50:23,118 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_17.48.xlsx
+2026-02-15 02:06:53,120 [INFO] 💼 [WalletDownloader] 🕒 WalletHandler стартовал (ts=02.06)
+2026-02-15 02:06:56,637 [INFO] 💼 [WalletDownloader] 🔑 Логинимся в Raccoon…
+2026-02-15 02:07:01,144 [INFO] 💼 [WalletDownloader] ✅ Сессия сохранена
+2026-02-15 02:07:01,144 [INFO] 💼 [WalletDownloader] ⬇️ PayIn → экспорт…
+2026-02-15 02:07:01,158 [INFO] 💼 [WalletDownloader] 📅 PayIn дата (МСК): 2026-02-15
+2026-02-15 02:07:01,470 [INFO] 💼 [WalletDownloader] ✅ Дата выбрана: 2026-02-15
+2026-02-15 02:07:05,190 [INFO] 💼 [WalletDownloader] ✅ PayIn сохранён: /tmp\raccoon_wallet\payin_02.06.xlsx
+2026-02-15 02:07:05,191 [INFO] 📨 Файл поставлен в очередь (-1003515012556): /tmp\raccoon_wallet\payin_02.06.xlsx
+2026-02-15 02:07:06,023 [INFO] HTTP Request: POST https://api.telegram.org/bot8577652724:AAGw61uJ6AbX3rXgkSWAbDBudeXQN2qM0I4/sendDocument "HTTP/1.1 200 OK"
+2026-02-15 02:07:06,026 [INFO] 📁 Отправлен файл (chat_id=-1003515012556): /tmp\raccoon_wallet\payin_02.06.xlsx
+2026-02-15 02:07:06,354 [INFO] Request to files/download
+2026-02-15 02:07:07,540 [ERROR] ☁️ [Dropbox] Ошибка download_file(/Ostin/platform/config/rules/rules.xlsx): AuthError('87ff93cb67b2488fa23ebe486991001b', AuthError('invalid_access_token', None))

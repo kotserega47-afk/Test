@@ -90,7 +90,7 @@ def _download_payin(page, ts: str, days_back: int) -> str:
     # применить
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
-    time.sleep(2)
+    time.sleep(5)
 
     # скачивание
     with page.expect_download(timeout=180000) as d:
@@ -167,14 +167,6 @@ def run_raccoon_wallet_cycle():
         _ensure_logged_in(page, context)
 
         payin_path = _download_payin(page, ts, payin_days)
-        if CHAT_ID_WALLET:
-            target_date = (datetime.now(MSK_TZ) - timedelta(days=payin_days)).strftime("%Y-%m-%d")
-            size = os.path.getsize(payin_path)
-            send_file_sync(
-                payin_path,
-                chat_id=-1003515012556,
-                caption=f"📎 PayIn выгрузка за {target_date} (ts={ts}), size={size} bytes"
-            )
         #payout_path = _download_payout(page, ts, payout_days)
 
         browser.close()
