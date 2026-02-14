@@ -3,9 +3,8 @@ import os
 import threading
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
-import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from telegram.ext import Application
@@ -21,6 +20,70 @@ def _mk(profile_key: str):
 
 MSK = ZoneInfo("Europe/Moscow")
 
+import sys
+
+# --- Restart control ---
+RESTART_HOURS = [10, 13, 16, 19, 22, 1]  # MSK
+RESTART_GRACE_MIN = int(os.getenv("RESTART_GRACE_MIN", "10"))
+
+_active_jobs = 0
+_active_lock = threading.Lock()
+
+
+def job_start():
+    global _active_jobs
+    with _active_lock:
+        _active_jobs += 1
+
+
+def job_end():
+    global _active_jobs
+    with _active_lock:
+        _active_jobs -= 1
+
+
+def active_jobs():
+    with _active_lock:
+        return _active_jobs
+
+
+def next_restart_time():
+    now = datetime.now(MSK)
+    today = now.date()
+
+    candidates = []
+    for h in RESTART_HOURS:
+        target = datetime(today.year, today.month, today.day, h, 0, tzinfo=MSK)
+        if target <= now:
+            target += timedelta(days=1)
+        candidates.append(target)
+
+    return min(candidates)
+
+
+def restart_worker():
+    log.info(f"🔁 Restart scheduler active. Hours={RESTART_HOURS} (MSK)")
+
+    while True:
+        target = next_restart_time()
+        sleep_sec = (target - datetime.now(MSK)).total_seconds()
+
+        log.info(f"⏳ Next restart at {target.strftime('%d.%m %H:%M:%S')} MSK")
+        time.sleep(max(1, sleep_sec))
+
+        log.info("♻️ Restart window reached")
+
+        # ждём завершения задач
+        waited = 0
+        while active_jobs() > 0 and waited < RESTART_GRACE_MIN * 60:
+            log.info(f"⏸ Waiting for jobs to finish... active={active_jobs()}")
+            time.sleep(5)
+            waited += 5
+
+        log.warning("🛑 Restarting process now")
+        os._exit(1)  # Railway перезапустит контейнер
+
+
 def _sleep(seconds: float):
     time.sleep(seconds)
 
@@ -28,32 +91,32 @@ def run_every_minutes(fn, minutes: int, name: str):
     log.info(f"⏱️ schedule: {name} every {minutes} min")
     while True:
         try:
+            job_start()
             fn()
         except Exception as e:
             log.exception(f"❌ scheduled {name} failed: {e}")
+        finally:
+            job_end()
+
         _sleep(minutes * 60)
 
 def run_hourly_at_minute(fn, minute: int, name: str):
     log.info(f"🕒 schedule: {name} every hour at :{minute:02d}")
     while True:
         now = datetime.now(MSK)
-        # следующий запуск: текущий час + minute
         target = now.replace(minute=minute, second=5, microsecond=0)
         if target <= now:
-            # следующий час
-            target = target.replace(hour=(now.hour + 1) % 24)
-            if target.date() != now.date() and now.hour == 23:
-                target = target  # datetime сам дату не сменит при hour=0, поэтому проще:
-                # безопаснее пересчитать:
-                target = (now.replace(minute=minute, second=5, microsecond=0) + timedelta(hours=1))
+            target = target + timedelta(hours=1)
 
-        sleep_sec = (target - now).total_seconds()
-        _sleep(max(1, sleep_sec))
+        _sleep(max(1, (target - now).total_seconds()))
 
         try:
+            job_start()
             fn()
         except Exception as e:
             log.exception(f"❌ scheduled {name} failed: {e}")
+        finally:
+            job_end()
 
 log = _mk("MAIN")
 BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
@@ -92,7 +155,13 @@ def main():
         daemon=True
     ).start()
 
-    log.info("🟢 Telegram scheduler (manual-only) started (polling)")
+    # --- restart scheduler ---
+    threading.Thread(
+        target=restart_worker,
+        daemon=True
+    ).start()
+
+    log.info("🟢 Telegram scheduler started (polling + schedules)")
     app.run_polling(close_loop=False)
 
 

@@ -268,28 +268,3 @@ def run_hourly_report():
     logger.info("[hourly_report] Отчёт отправлен")
 
     return txt
-
-def run_hourly_report_for_interval(start_dt, end_dt, send=False, chat_id=CHAT_ID, cfg_path=CONFIG_PATH):
-    """
-    Тестовый запуск отчёта за произвольный интервал.
-    Позволяет прогонять отчёт за любой день/час/минуту.
-    По желанию отправляет результат в Telegram.
-    """
-    from integrations.telegram_bot import send_message_direct
-    # 1) Загружаем конфиг (можно подменить путь для тестов)
-    cfg = load_cfg()
-
-    # 2) Подготавливаем данные
-    df_payin = prepare_data(start_dt, end_dt)
-
-    # 3) Агрегация
-    payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
-
-    # 4) Формирование текста
-    txt = format_report(payin_data, start_dt.date(), end_dt)
-
-    # 5) Отправка (опционально)
-    if send:
-        send_message_direct(txt, chat_id=chat_id)
-
-    return txt
