@@ -158,10 +158,17 @@ def run_raccoon_wallet_cycle():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
-        context = browser.new_context(accept_downloads=True)
+        context = browser.new_context(
+            accept_downloads=True,
+            timezone_id="Europe/Moscow"
+        )
 
         if os.path.exists(AUTH_STATE_FILE):
-            context = browser.new_context(storage_state=AUTH_STATE_FILE, accept_downloads=True)
+            context = browser.new_context(
+                storage_state=AUTH_STATE_FILE,
+                accept_downloads=True,
+                timezone_id="Europe/Moscow"
+            )
 
         page = context.new_page()
         _ensure_logged_in(page, context)
