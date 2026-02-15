@@ -75,7 +75,8 @@ def run_hourly_raccoon_cycle():
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
         context = browser.new_context(
             accept_downloads=True,
-            storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None
+            storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None,
+            timezone_id = "Europe/Moscow"
         )
         page = context.new_page()
 
