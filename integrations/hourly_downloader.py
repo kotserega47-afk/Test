@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import zoneinfo
 
@@ -36,10 +36,16 @@ def _ensure_logged_in(page, context):
     context.storage_state(path=AUTH_STATE)
     logger.info("[hourly_dl] Сессия сохранена")
 
+def _target_date_str():
+    now = datetime.now(MSK)
+    # в 00:xx выгружаем предыдущий день
+    if now.hour == 0:
+        now = now - timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
 
 def _download_payin(page):
     """PayIn за сегодня."""
-    tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
+    target_date = _target_date_str()
 
     logger.info("[hourly_dl] PayIn → выбираем дату…")
 
@@ -50,7 +56,7 @@ def _download_payin(page):
     page.wait_for_selector(".b-calendar")
 
     try:
-        page.click(f"[data-date='{tz_now}']")
+        page.click(f"[data-date='{target_date}']")
     except:
         logger.warning("[hourly_dl] Не удалось выбрать дату")
 
@@ -71,7 +77,7 @@ def _download_payin(page):
 
 def _download_payout(page):
     """Payout за сегодня."""
-    tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
+    target_date = _target_date_str()
 
     logger.info("[hourly_dl] Payout → выбираем дату…")
 
@@ -82,7 +88,7 @@ def _download_payout(page):
     page.wait_for_selector(".b-calendar")
 
     try:
-        page.click(f"[data-date='{tz_now}']")
+        page.click(f"[data-date='{target_date}']")
     except:
         logger.warning("[hourly_dl] Не удалось выбрать дату")
 
