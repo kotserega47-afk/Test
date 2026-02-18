@@ -146,13 +146,17 @@ def get_time_window():
     if now.hour == 0:
         day = today - timedelta(days=1)
         start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
-        end = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK)
+        end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=MSK)
         header_date = day
     else:
         day = today
         start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
-        end = datetime(day.year, day.month, day.day, now.hour, 0, tzinfo=MSK)
+
+        # сохраняем минуты, обрезаем только секунды
+        end = now.replace(second=0, microsecond=0)
+
         header_date = day
+
 
     return start, end, header_date
 
@@ -262,7 +266,7 @@ def format_report(payin_data, header_date, end_dt, total_payin):
     lines.append(f"Итого поступления: {fmt_int(total_payin)}")
     lines.append("")
 
-    lines.append(f"Данные на {header_date.strftime('%d.%m')} с 00:00 по {end_dt.strftime('%H:%M')}")
+    lines.append(f"📊 {header_date.strftime('%d.%m')} | 00:00–{end_dt.strftime('%H:%M')} (накопительно)")
     lines.append("")
 
 
