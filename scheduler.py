@@ -141,17 +141,15 @@ def main():
         daemon=True
     ).start()
 
-    # run_hourly: скачали hourly payin + отправили hourly report каждый час
-    # минуту выбираешь env-ом, по умолчанию :02
-    hourly_minute = int(os.getenv("RACCOON_HOURLY_MINUTE", "2"))
-
     def _hourly_job():
         run_hourly_raccoon_cycle()
         run_hourly_report()
 
+    # run_hourly_raccoon: каждые N минут (замена hourly)
+    raccoon_hourly_every_min = int(os.getenv("RACCOON_HOURLY_EVERY_MIN", "5"))
     threading.Thread(
-        target=run_hourly_at_minute,
-        args=(_hourly_job, hourly_minute, "run_hourly_raccoon"),
+        target=run_every_minutes,
+        args=(_hourly_job, raccoon_hourly_every_min, "run_hourly_raccoon"),
         daemon=True
     ).start()
 
