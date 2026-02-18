@@ -254,49 +254,54 @@ def parse_restart_times(value: str) -> list[tuple[int, int]]:
 
 
 def auto_restart_loop():
-    """
-    Рестарт процесса строго по времени MSK (по умолчанию 12:00 и 01:00).
-    Перед рестартом делаем FULL-clean /tmp (с сохранением auth_state по умолчанию).
-    """
     enabled = env_bool("AUTO_RESTART_ENABLED", True)
     if not enabled:
-        log_main.info("🔕 AutoRestart выключен (AUTO_RESTART_ENABLED=0)")
+        log_main.info("🔕 AutoRestart выключен")
         return
 
     times = parse_restart_times(env_str("AUTO_RESTART_TIMES", "12:00,01:00"))
     if not times:
-        log_main.info("🔕 AutoRestart выключен (нет валидных AUTO_RESTART_TIMES)")
+        log_main.info("🔕 AutoRestart выключен (нет времён)")
         return
 
     keep_auth_state = env_bool("KEEP_AUTH_STATE", True)
     dirs_override = parse_csv_dirs(env_str("TMP_CLEAN_DIRS", ""))
     dirs = dirs_override or DEFAULT_TMP_DIRS
 
-    log_main.info(f"♻️ AutoRestart: times(MSK)={times}, keep_auth_state={keep_auth_state}, dirs={dirs}")
+    marker_file = Path("/tmp/last_restart_marker.txt")
 
-    last_trigger_key = None  # чтобы не триггериться несколько раз в одной минуте
+    log_main.info(f"♻️ AutoRestart: times(MSK)={times}")
 
     while True:
         now = now_msk()
-        key = (now.year, now.month, now.day, now.hour, now.minute)
+        today_key = now.strftime("%Y-%m-%d")
 
         for h, m in times:
             if now.hour == h and now.minute == m:
-                if last_trigger_key == key:
+                last_marker = None
+                if marker_file.exists():
+                    last_marker = marker_file.read_text().strip()
+
+                # если уже рестартились сегодня в этот слот — пропускаем
+                marker_value = f"{today_key}-{h:02d}:{m:02d}"
+                if last_marker == marker_value:
                     break
 
-                last_trigger_key = key
                 try:
                     log_main.info("♻️ AutoRestart: FULL-clean перед рестартом…")
                     cleanup_tmp_full(dirs=dirs, keep_auth_state=keep_auth_state, log=log_main)
+
+                    marker_file.write_text(marker_value)
+
                 except Exception as e:
                     log_main.exception(f"❌ AutoRestart cleanup: {e}")
 
-                log_main.info("♻️ AutoRestart: выходим из процесса (Railway поднимет заново)…")
+                log_main.info("♻️ AutoRestart: выходим из процесса…")
                 time.sleep(2)
                 os._exit(99)
 
         time.sleep(10)
+
 
 
 # ================= GENERIC JOB RUNNER =================
