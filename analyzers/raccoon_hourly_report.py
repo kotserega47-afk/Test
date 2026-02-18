@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 import yaml
 from zoneinfo import ZoneInfo
+import json
+import hashlib
+from pathlib import Path
 
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -22,6 +25,7 @@ logger = get_logger(name, icon)
 # ---------------------------------------
 MSK = ZoneInfo("Europe/Moscow")
 BASE_DIR = "/tmp/hourly_raccoon"
+STATE_PATH = os.path.join(BASE_DIR, "last_sent.json")
 CONFIG_PATH = "config/raccoon_hourly_report.yaml"
 
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_HOURLY_RACCOON")
@@ -53,27 +57,74 @@ def load_cfg():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+def _safe_dt_iso(x) -> str:
+    try:
+        if x is None or pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    try:
+        return x.isoformat()
+    except Exception:
+        return str(x)
+
+def _calc_fingerprint(
+    df_payin: pd.DataFrame,
+    df_payout: pd.DataFrame | None,
+    start_dt,
+    end_dt
+) -> dict:
+    def block(df: pd.DataFrame | None) -> dict:
+        if df is None or df.empty:
+            return {"rows": 0, "total": 0.0, "max_dt": ""}
+        max_dt = df["Дата/Время создания"].max() if "Дата/Время создания" in df.columns else None
+        total = float(df["Сумма"].sum()) if "Сумма" in df.columns else 0.0
+        return {
+            "rows": int(len(df)),
+            "total": round(total, 2),
+            "max_dt": _safe_dt_iso(max_dt),
+        }
+
+    payload = {
+        "start": _safe_dt_iso(start_dt),
+        "end": _safe_dt_iso(end_dt),
+        "payin": block(df_payin),
+        "payout": block(df_payout),
+    }
+
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload["hash"] = hashlib.sha256(raw).hexdigest()
+    return payload
+
+def _load_last_state() -> dict:
+    try:
+        if not os.path.exists(STATE_PATH):
+            return {}
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+def _save_last_state(state: dict) -> None:
+    try:
+        Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"[hourly_report] failed to save state: {e}")
 
 def filter_dt(df, col, start_dt, end_dt):
-    """
-    Фильтрация по интервалу с приведением к MSK.
-    - naive datetime → считаем, что это MSK и локализуем
-    - tz-aware → конвертим в MSK
-    """
     df = df.copy()
     s = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
-    # Если столбец naive → локализуем в MSK
-    if s.dt.tz is None:
+    # если tz-naive → локализуем; если tz-aware → конвертим
+    if getattr(s.dt, "tz", None) is None:
         s = s.dt.tz_localize(MSK)
     else:
-        # Если уже tz-aware → конвертим в MSK
         s = s.dt.tz_convert(MSK)
 
     df[col] = s
-
-    mask = (df[col] >= start_dt) & (df[col] <= end_dt)
-    return df[mask]
+    return df[(df[col] >= start_dt) & (df[col] <= end_dt)]
 
 
 def load_hourly_files():
@@ -116,9 +167,6 @@ def prepare_data(start_dt, end_dt):  # NEW
 
     # нормализация партнёров
     df_payin["norm"] = df_payin["Партнер"].astype(str).apply(normalize_partner_name)
-
-    # нормализация метода
-    df_payin["method_norm"] = None
 
     # фильтрация по дате
     df_payin = filter_dt(df_payin, "Дата/Время создания", start_dt, end_dt)
@@ -239,19 +287,22 @@ def run_hourly_report():
     # 1) подготовка
     df_payin = prepare_data(start_dt, end_dt)
 
-    # --- Guard: не отправляем, если за последний час нет операций ---
-    # end_dt у тебя либо "сегодня HH:00", либо "вчера 23:59" (в случае now.hour==0)
-    last_end = end_dt
-    last_start = (end_dt.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1))
-
-    df_last_hour = filter_dt(df_payin, "Дата/Время создания", last_start, last_end)
-
-    # только оплачено (как в prepare_data)
-    df_last_hour = df_last_hour[df_last_hour["Статус"].str.lower() == "оплачен"]
-
-    if df_last_hour.empty:
-        logger.info(f"[hourly_report] last hour empty ({last_start:%d.%m %H:%M}–{last_end:%H:%M}) -> skip send")
+    # --- Guard №1: если за интервал нет операций вообще — не отправляем ---
+    if df_payin.empty:
+        logger.info(f"[hourly_report] interval empty ({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) -> skip send")
         return None
+
+    # --- Guard №2: если отчёт за этот интервал уже отправляли и данные не изменились — не отправляем ---
+    cur_state = _calc_fingerprint(df_payin, None, start_dt, end_dt)  # пока payout нет
+    last_state = _load_last_state()
+
+    if last_state.get("hash") == cur_state.get("hash"):
+        logger.info(
+            f"[hourly_report] no changes since last send "
+            f"({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) hash={cur_state.get('hash', '')[:8]} -> skip"
+        )
+        return None
+
 
     # 2) агрегация
     payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
@@ -266,5 +317,6 @@ def run_hourly_report():
     # 4) отправка
     send_message_sync(txt, chat_id=CHAT_ID)
     logger.info("[hourly_report] Отчёт отправлен")
+    _save_last_state(cur_state)
 
     return txt

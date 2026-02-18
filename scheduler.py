@@ -20,8 +20,6 @@ def _mk(profile_key: str):
 
 MSK = ZoneInfo("Europe/Moscow")
 
-import sys
-
 # --- Restart control ---
 RESTART_HOURS = [10, 13, 16, 19, 22, 1]  # MSK
 RESTART_GRACE_MIN = int(os.getenv("RESTART_GRACE_MIN", "10"))
@@ -133,11 +131,9 @@ def main():
 
     RULES.get_snapshot(force_sync=True)
 
-    # run_raccoon: каждые N минут
-    raccoon_every_min = int(os.getenv("RACCOON_EVERY_MIN", "5"))
     threading.Thread(
-        target=run_every_minutes,
-        args=(run_raccoon_wallet_cycle, raccoon_every_min, "run_raccoon_wallet"),
+        target=run_hourly_at_minute,
+        args=(run_raccoon_wallet_cycle, 0, "run_raccoon_wallet"),
         daemon=True
     ).start()
 
