@@ -68,12 +68,7 @@ def _safe_dt_iso(x) -> str:
     except Exception:
         return str(x)
 
-def _calc_fingerprint(
-    df_payin: pd.DataFrame,
-    df_payout: pd.DataFrame | None,
-    start_dt,
-    end_dt
-) -> dict:
+def _calc_fingerprint(df_payin: pd.DataFrame, df_payout: pd.DataFrame | None, header_date) -> dict:
     def block(df: pd.DataFrame | None) -> dict:
         if df is None or df.empty:
             return {"rows": 0, "total": 0.0, "max_dt": ""}
@@ -86,8 +81,7 @@ def _calc_fingerprint(
         }
 
     payload = {
-        "start": _safe_dt_iso(start_dt),
-        "end": _safe_dt_iso(end_dt),
+        "day": str(header_date),        # фиксируем сутки
         "payin": block(df_payin),
         "payout": block(df_payout),
     }
@@ -297,7 +291,7 @@ def run_hourly_report():
         return None
 
     # --- Guard №2: если отчёт за этот интервал уже отправляли и данные не изменились — не отправляем ---
-    cur_state = _calc_fingerprint(df_payin, None, start_dt, end_dt)  # пока payout нет
+    cur_state = _calc_fingerprint(df_payin, None, header_date)
     last_state = _load_last_state()
 
     if last_state.get("hash") == cur_state.get("hash"):
