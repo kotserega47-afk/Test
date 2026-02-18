@@ -13,6 +13,7 @@ from integrations.tg_commands import get_handlers, RULES
 from integrations.raccoon_wallet_downloader import run_raccoon_wallet_cycle
 from integrations.raccoon_hourly_downloader import run_hourly_raccoon_cycle
 from analyzers.raccoon_hourly_report import run_hourly_report
+from analyzers.raccoon_daily_conversion import run_daily_conversion_report
 
 def _mk(profile_key: str):
     icon, name = LOG_PROFILES[profile_key]
@@ -119,6 +120,16 @@ def run_hourly_at_minute(fn, minute: int, name: str):
 log = _mk("MAIN")
 BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
 
+def run_daily_conversion_loop():
+    last_date = None
+    while True:
+        now = datetime.now(MSK)
+        if now.hour == 0 and now.minute <= 2:
+            if last_date != now.date():
+                last_date = now.date()
+                run_daily_conversion_report("/tmp/hourly_raccoon/payin.xlsx")
+            time.sleep(180)
+        time.sleep(10)
 
 def main():
     if not BOT_TOKEN:
@@ -146,6 +157,11 @@ def main():
     threading.Thread(
         target=run_every_minutes,
         args=(_hourly_job, raccoon_hourly_every_min, "run_hourly_raccoon"),
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=run_daily_conversion_loop,
         daemon=True
     ).start()
 
