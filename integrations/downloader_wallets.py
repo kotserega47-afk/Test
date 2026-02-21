@@ -10,7 +10,7 @@ import yaml
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from integrations.telegram_bot import send_message_sync, send_file_sync
+from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from analyzers.wallet_analyzer import analyze_wallets

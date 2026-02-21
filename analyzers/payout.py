@@ -4,7 +4,7 @@ import yaml
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 import pandas as pd
-from utils.excel_utils import style_worksheet, write_df_to_sheet
+from utils.excel_utils import write_df_to_sheet
 from openpyxl import Workbook
 from datetime import datetime
 
@@ -244,7 +244,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     logger.info(f"[payout] 📁 Отчёт сохранён: {tmp_path}")
 
     # === 🔟 Отправляем файл в Telegram и перемещаем ===
-    from integrations.telegram_bot import send_message_sync, send_file_sync
+    from integrations.telegram_bot import send_file_sync
     from integrations.dropbox_watcher import move_file
 
     try:
