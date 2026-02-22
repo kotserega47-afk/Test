@@ -133,23 +133,22 @@ def load_hourly_files():
     return df1
 
 
-def get_time_window(now: datetime):
+def get_time_window(now=None):
+    now = now or datetime.now(MSK)
     today = now.date()
 
-    # Окно "финал за вчера": 00:00–00:02
-    if now.hour == 0 and now.minute <= 2:
+    if now.hour == 0:
         day = today - timedelta(days=1)
         start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
-        end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=MSK)
+        end   = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK)
         header_date = day
-        return day, start, end, header_date
+    else:
+        day = today
+        start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
+        end   = datetime(day.year, day.month, day.day, now.hour, 0, tzinfo=MSK)
+        header_date = day
 
-    # Обычный режим: накопительно за сегодня до текущего времени
-    day = today
-    start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
-    end = now.replace(second=0, microsecond=0)  # минуты реальные
-    header_date = day
-    return day, start, end, header_date
+    return start, end, header_date
 
 
 # ======================================================
