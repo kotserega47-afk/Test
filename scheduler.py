@@ -22,7 +22,14 @@ def _mk(profile_key: str):
 MSK = ZoneInfo("Europe/Moscow")
 
 # --- Restart control ---
-RESTART_HOURS = [10, 13, 16, 19, 22, 1]  # MSK
+RESTART_TIMES = [
+    (10, 30),
+    (13, 30),
+    (16, 30),
+    (19, 30),
+    (22, 30),
+    (1, 30),
+]
 RESTART_GRACE_MIN = int(os.getenv("RESTART_GRACE_MIN", "10"))
 
 _active_jobs = 0
@@ -51,17 +58,27 @@ def next_restart_time():
     today = now.date()
 
     candidates = []
-    for h in RESTART_HOURS:
-        target = datetime(today.year, today.month, today.day, h, 0, tzinfo=MSK)
+
+    for hour, minute in RESTART_TIMES:
+        target = datetime(
+            today.year,
+            today.month,
+            today.day,
+            hour,
+            minute,
+            tzinfo=MSK
+        )
+
         if target <= now:
             target += timedelta(days=1)
+
         candidates.append(target)
 
     return min(candidates)
 
 
 def restart_worker():
-    log.info(f"🔁 Restart scheduler active. Hours={RESTART_HOURS} (MSK)")
+    log.info(f"🔁 Restart scheduler active. Times={RESTART_TIMES} (MSK)")
 
     while True:
         target = next_restart_time()
