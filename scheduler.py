@@ -23,7 +23,7 @@ def _mk(profile_key: str):
 
 
 log = _mk("MAIN")
-BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 
 def _parse_cron_min_hour(expr: str):
@@ -140,7 +140,7 @@ def schedule_loop():
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("Не задан TG_BOT_TOKEN")
+        raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
