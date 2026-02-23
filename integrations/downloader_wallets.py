@@ -2,18 +2,24 @@
 import os
 import sys
 import time
+import json
+import hashlib
 from datetime import datetime, timedelta
+from pathlib import Path
 from playwright.sync_api import sync_playwright
-import pytz
+from zoneinfo import ZoneInfo
 import yaml
 
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from integrations.telegram_bot import send_message_sync
+from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from analyzers.wallet_analyzer import analyze_wallets
+
+from core.job_state import get_last_fingerprint, set_last_fingerprint
+from core.event_log import append_event
 
 icon, name = LOG_PROFILES["WALLET"]
 logger = get_logger(name, icon)
@@ -27,7 +33,7 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-MSK_TZ = pytz.timezone("Europe/Moscow")
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _ensure_logged_in(page, context):
@@ -46,14 +52,11 @@ def _ensure_logged_in(page, context):
     context.storage_state(path=AUTH_STATE_FILE)
     logger.info("✅ Сессия сохранена")
 
+
 def _find_and_pick_date(page, target_date: str):
-    """
-    Выбирает дату target_date (формат YYYY-MM-DD) в календаре Antares.
-    Листает назад, если дата не найдена в текущем месяце.
-    """
     selector = f"[data-date='{target_date}']"
 
-    for _ in range(12):     # максимум 12 месяцев назад
+    for _ in range(12):
         if page.locator(selector).count() > 0:
             page.locator(selector).click()
             logger.info(f"✅ Дата выбрана: {target_date}")
@@ -80,19 +83,15 @@ def _download_payin(page, ts: str, days_back: int) -> str:
     target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
     logger.info(f"📅 PayIn дата (МСК): {target_date}")
 
-    # открываем календарь
     page.click("label.form-control")
     page.wait_for_selector(".b-calendar")
 
-    # выбираем дату
     _find_and_pick_date(page, target_date)
 
-    # применить
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
     time.sleep(2)
 
-    # скачивание
     with page.expect_download(timeout=180000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
@@ -104,9 +103,7 @@ def _download_payin(page, ts: str, days_back: int) -> str:
     return path
 
 
-
 def _download_payout(page, ts: str, days_back: int) -> str:
-    """Скачивание файла Payout: только одна дата, как в PayIn."""
     logger.info("⬇️ Payout → экспорт…")
 
     page.goto("https://antares.plus/lkcard/#/vyplaty")
@@ -115,19 +112,15 @@ def _download_payout(page, ts: str, days_back: int) -> str:
     target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
     logger.info(f"📅 Payout дата (МСК): {target_date}")
 
-    # Открываем календарь
     page.click("label.form-control")
     page.wait_for_selector(".b-calendar")
 
-    # Выбираем дату (навигация назад если надо)
     _find_and_pick_date(page, target_date)
 
-    # Применяем
     page.locator("button:has-text('Применить')").click()
     page.wait_for_load_state("networkidle")
     time.sleep(2)
 
-    # Скачивание
     with page.expect_download(timeout=180000) as d:
         page.locator("button:has-text('Экспорт')").click()
     download = d.value
@@ -139,16 +132,25 @@ def _download_payout(page, ts: str, days_back: int) -> str:
     return path
 
 
+def _file_meta(p: str) -> dict:
+    pp = Path(p)
+    st = pp.stat()
+    return {"path": p, "size": st.st_size, "mtime": st.st_mtime}
+
+
+def _calc_wallet_fingerprint(payin_path: str, payout_path: str) -> str:
+    payload = {"payin": _file_meta(payin_path), "payout": _file_meta(payout_path)}
+    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def run_wallet_cycle():
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
 
-    CHAT_ID_WALLET = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
-
     ts = datetime.now(MSK_TZ).strftime("%H.%M")
     logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
 
-    # Загружаем конфиг для таймингов и периодов выгрузки
     cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "wallet_config.yaml")
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
@@ -171,9 +173,19 @@ def run_wallet_cycle():
 
         browser.close()
 
+    # --- skip after download (если файлы не изменились) ---
+    fp = _calc_wallet_fingerprint(payin_path, payout_path)
+    last = get_last_fingerprint("wallet")
+
+    if last == fp:
+        logger.info("🟨 [wallet] no changes -> skip analyzer")
+        append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
+        return
+
     analyze_wallets(payin_path, payout_path)
 
-
+    # записываем fingerprint только после успешного анализа
+    set_last_fingerprint("wallet", fp)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
-from load_data import normalize_partner_name
+from utils.normalization import normalize_partner_name
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
