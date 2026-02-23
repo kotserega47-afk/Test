@@ -196,6 +196,12 @@ def validate_wallet_limits(df: pd.DataFrame) -> ValidationResult:
         errors.append(f"wallet_limits: missing columns: {missing}")
         return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
 
+    # Optional columns
+    if "method" not in df.columns:
+        df["method"] = ""
+    if "comment" not in df.columns:
+        df["comment"] = ""
+
     # normalize
     df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
     df["analyzers"] = df["analyzers"].astype(str).str.strip()
@@ -203,6 +209,11 @@ def validate_wallet_limits(df: pd.DataFrame) -> ValidationResult:
     df["scope_value"] = df["scope_value"].astype(str).str.strip()
     df["limit_type"] = df["limit_type"].astype(str).str.strip().str.lower()
     df["limit_value"] = pd.to_numeric(df["limit_value"], errors="coerce")
+
+    # method/comment normalize (wildcard supported)
+    df["method"] = df["method"].astype(str).fillna("").str.strip().str.upper()
+    df["method"] = df["method"].replace({"*": ""})  # treat '*' as wildcard == empty
+    df["comment"] = df["comment"].astype(str).fillna("").str.strip()
 
     # analyzers parse
     def _parse_analyzers(s: str) -> list[str]:
@@ -226,17 +237,29 @@ def validate_wallet_limits(df: pd.DataFrame) -> ValidationResult:
     if not bad_val.empty:
         errors.append("wallet_limits: limit_value empty/non-numeric")
 
-    # uniqueness check
+    # ---- uniqueness check (FIXED: includes method) ----
     active = df[df["enabled"] == 1].copy()
     if not active.empty:
         ex = active.explode("_analyzers_list").rename(columns={"_analyzers_list": "analyzer"})
+
+        # normalize scope_value differently for partner vs group:
+        # partner must match your normalize_partner_name (same as hourly)
+        ex["scope_value_key"] = ex["scope_value"]
+        is_partner = ex["scope"] == "partner"
+        ex.loc[is_partner, "scope_value_key"] = ex.loc[is_partner, "scope_value"].map(normalize_partner_name)
+        # group should be stable code
+        ex.loc[~is_partner, "scope_value_key"] = ex.loc[~is_partner, "scope_value"].astype(str).str.strip().str.lower()
+
+        # method already upper; empty is wildcard
         dup = (
-            ex.groupby(["analyzer", "scope", "scope_value", "limit_type"])
-            .size()
-            .reset_index(name="cnt")
+            ex.groupby(["analyzer", "scope", "scope_value_key", "limit_type", "method"])
+              .size()
+              .reset_index(name="cnt")
         )
         if (dup["cnt"] > 1).any():
-            errors.append("wallet_limits: duplicate active rules for same key (per analyzer)")
+            errors.append("wallet_limits: duplicate active rules for same key (per analyzer/scope/method)")
+
+        # Optional extra guard: prevent both wildcard and specific duplicates? (оставим как future)
 
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
@@ -279,7 +302,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
 
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
-    missing = [c for c in _REQUIRED_WALLET_LIMITS_COLS if c not in df.columns]
+    missing = [c for c in _REQUIRED_EXCLUDE_COLS if c not in df.columns]
 
     if missing:
         errors.append(f"exclude_time: missing columns: {missing}")

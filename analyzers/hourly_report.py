@@ -13,6 +13,7 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync
 from utils.normalization import normalize_partner_name
+from core.config_manager import get_wallet_limits_df
 
 icon, name = LOG_PROFILES["HOURLY"]
 logger = get_logger(name, icon)
@@ -75,6 +76,45 @@ def filter_dt(df, col, start_dt, end_dt):
     mask = (df[col] >= start_dt) & (df[col] <= end_dt)
     return df[mask]
 
+def _build_hourly_comments():
+    df = get_wallet_limits_df(rules_xlsx_path=os.getenv("RULES_XLSX_PATH", "").strip())
+
+    # только активные правила, где analyzer содержит wallet
+    df = df[df["enabled"] == 1].copy()
+    df = df[df["_analyzers_list"].apply(lambda xs: "wallet" in xs)]
+
+    # нормализуем method
+    df["method"] = df["method"].astype(str).str.strip().str.upper().replace({"*": ""})
+    df["comment"] = df["comment"].astype(str).fillna("").str.strip()
+
+    # partner comments
+    partner = df[df["scope"] == "partner"].copy()
+    partner["scope_norm"] = partner["scope_value"].apply(normalize_partner_name)
+
+    payin_comment = {}
+    payout_comment = {}
+
+    # payin: method пустой
+    for _, r in partner.iterrows():
+        if not r["comment"]:
+            continue
+        m = r["method"] or ""
+        key = (r["scope_norm"], m)
+        # если это method-specific -> кладём в payout_comment
+        if m:
+            payout_comment[key] = r["comment"]
+        else:
+            payin_comment[r["scope_norm"]] = r["comment"]
+            payout_comment[(r["scope_norm"], "")] = r["comment"]
+
+    # group comments (ключ = scope_value, как код aurora/abhsber)
+    group = df[df["scope"] == "group"].copy()
+    group_comment = {}
+    for _, r in group.iterrows():
+        if r["comment"]:
+            group_comment[str(r["scope_value"]).strip().lower()] = r["comment"]
+
+    return payin_comment, payout_comment, group_comment
 
 def load_hourly_files():
     payin_p = os.path.join(BASE_DIR, "payin.xlsx")
@@ -145,24 +185,29 @@ def prepare_data(start_dt, end_dt):  # NEW
 #                 АГРЕГАЦИЯ PAYOUT (NEW)
 # ======================================================
 
-def aggregate_payout(df_payout, payout_cfg):
+def aggregate_payout(df_payout, payout_cfg, payout_comment: dict[tuple[str, str], str]):
     result = []
 
     for partner_key, partner_data in payout_cfg.items():
-
         partner_norm = normalize_partner_name(partner_key)
         df_p = df_payout[df_payout["norm"] == partner_norm]
 
         methods_result = []
         for method_code, mdata in partner_data.get("methods", {}).items():
-
             code = str(method_code).strip().upper()
             amount = df_p[df_p["method_norm"] == code]["Сумма"].sum()
+
+            # comment from rules (method-specific -> fallback wildcard)
+            comment = (
+                payout_comment.get((partner_norm, code))
+                or payout_comment.get((partner_norm, ""))
+                or ""
+            )
 
             methods_result.append({
                 "title": mdata.get("title", method_code),
                 "amount": amount,
-                "comment": mdata.get("comment"),  # ← фикс
+                "comment": comment,
             })
 
         result.append({
@@ -177,9 +222,16 @@ def aggregate_payout(df_payout, payout_cfg):
 #                 АГРЕГАЦИЯ PAYIN (NEW)
 # ======================================================
 
-def aggregate_payin(df_payin, payin_cfg, payin_groups):
+def aggregate_payin(
+    df_payin,
+    payin_cfg,
+    payin_groups,
+    payin_comment: dict[str, str],
+    group_comment: dict[str, str],
+):
     result = []
 
+    # --- считаем суммы по партнёрам ---
     payin_amounts = {}
     for partner_key in payin_cfg:
         norm = normalize_partner_name(partner_key)
@@ -188,14 +240,20 @@ def aggregate_payin(df_payin, payin_cfg, payin_groups):
 
     printed_groups = set()
 
+    # --- партнёры ---
     for partner_key, pdata in payin_cfg.items():
+        norm = normalize_partner_name(partner_key)
+
+        comment = payin_comment.get(norm, "")
+
         result.append({
             "title": pdata.get("title", partner_key),
             "amount": payin_amounts.get(partner_key, 0),
-            "comment": pdata.get("comment"),
+            "comment": comment,
             "is_group": False,
         })
 
+        # --- группы ---
         for gkey, gdata in payin_groups.items():
             if gkey in printed_groups:
                 continue
@@ -205,10 +263,13 @@ def aggregate_payin(df_payin, payin_cfg, payin_groups):
 
             total = sum(payin_amounts.get(x, 0) for x in gdata["combine"])
 
+            gkey_norm = str(gkey).strip().lower()
+            g_comment = group_comment.get(gkey_norm, "")
+
             result.append({
                 "title": gdata.get("title", gkey),
                 "amount": total,
-                "comment": gdata.get("comment"),  # ← фикс
+                "comment": g_comment,
                 "is_group": True,
             })
 
@@ -238,11 +299,10 @@ def format_section_with_layout(lines, title, data, layout):
             if "methods" in item:  # PAYOUT
                 lines.append(f"{counter}) {item['title']}:")
                 for m in item["methods"]:
-                    # комментарий метода
-                    comment = f" {m['comment']}" if m.get("comment") else ""
+                    comment = f"; {m['comment']}" if m.get("comment") else ""
                     lines.append(f" - {m['title']} – {fmt_int(m['amount'])}{comment}")
-            else:  # PAYIN или группа
-                comment = f" {item['comment']}" if item.get("comment") else ""
+            else:
+                comment = f"; {item['comment']}" if item.get("comment") else ""
                 lines.append(f"{counter}) {item['title']} – {fmt_int(item['amount'])}{comment}")
 
             counter += 1
@@ -275,47 +335,48 @@ def format_report(payout_data, payin_data, header_date, end_dt):
 # ======================================================
 
 def run_hourly_report():
-
     cfg = load_cfg()
     start_dt, end_dt, header_date = get_time_window()
 
-    # 1) подготовка
     df_payin, df_payout = prepare_data(start_dt, end_dt)
 
-    # 2) агрегация
-    payout_data = aggregate_payout(df_payout, cfg.get("payout", {}))
-    payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
+    payin_comment, payout_comment, group_comment = _build_hourly_comments()
 
-    # 3) форматирование
+    payout_data = aggregate_payout(df_payout, cfg.get("payout", {}), payout_comment)
+    payin_data = aggregate_payin(
+        df_payin,
+        cfg.get("payin", {}),
+        cfg.get("payin_groups", {}),
+        payin_comment,
+        group_comment,
+    )
+
     txt = format_report(payout_data, payin_data, header_date, end_dt)
 
-    # 4) отправка
     send_message_sync(txt, chat_id=CHAT_ID)
     logger.info("[hourly_report] Отчёт отправлен")
-
     return txt
 
 def run_hourly_report_for_interval(start_dt, end_dt, send=False, chat_id=CHAT_ID, cfg_path=CONFIG_PATH):
-    """
-    Тестовый запуск отчёта за произвольный интервал.
-    Позволяет прогонять отчёт за любой день/час/минуту.
-    По желанию отправляет результат в Telegram.
-    """
     from integrations.telegram_bot import send_message_direct
-    # 1) Загружаем конфиг (можно подменить путь для тестов)
+
     cfg = load_cfg()
 
-    # 2) Подготавливаем данные
     df_payin, df_payout = prepare_data(start_dt, end_dt)
 
-    # 3) Агрегация
-    payout_data = aggregate_payout(df_payout, cfg.get("payout", {}))
-    payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
+    payin_comment, payout_comment, group_comment = _build_hourly_comments()
 
-    # 4) Формирование текста
+    payout_data = aggregate_payout(df_payout, cfg.get("payout", {}), payout_comment)
+    payin_data = aggregate_payin(
+        df_payin,
+        cfg.get("payin", {}),
+        cfg.get("payin_groups", {}),
+        payin_comment,
+        group_comment,
+    )
+
     txt = format_report(payout_data, payin_data, start_dt.date(), end_dt)
 
-    # 5) Отправка (опционально)
     if send:
         send_message_direct(txt, chat_id=chat_id)
 

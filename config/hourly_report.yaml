@@ -122,14 +122,14 @@ payin:
 
 payin_groups:
 
-  abhsber_sum:
+  abhsber:
     title: "АБХСбер (116 + 117)"
     combine:
       - "HH (Abhsber IN) Сбер карты + выплаты (116)"
       - "HH (Abhsber IN) Тинь карты (117)"
     comment:
 
-  aurora_sum:
+  aurora:
     title: "Аврора (108 + 109)"
     combine:
       - "HH (Аврора Сбер) (109)"
