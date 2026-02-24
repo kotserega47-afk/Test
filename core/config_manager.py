@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
-
+from utils.normalization import parse_dt_series_msk
 import pandas as pd
 
 from core.rules_provider import get_rules_snapshot
@@ -40,6 +40,7 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, type]] = {
     },
 }
 
+THRESHOLD_METRICS = {"conversion_rate", "api_cancel_rate", "api_cancel_count"}
 
 # =============================================================================
 # Result models
@@ -72,6 +73,7 @@ class _NotifyState:
 _EXCLUDE_TIME_CACHE: Dict[str, _RulesCache] = {}
 _WALLET_LIMITS_CACHE: Dict[str, _RulesCache] = {}
 _JOB_PARAMS_CACHE: Dict[str, _RulesCache] = {}
+_THRESHOLDS_PARTNER_CACHE: Dict[str, _RulesCache] = {}
 
 _NOTIFY_STATES: Dict[str, _NotifyState] = {
     "exclude.fatal": _NotifyState(),
@@ -532,29 +534,32 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
 
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
+
     missing = [c for c in _REQUIRED_EXCLUDE_COLS if c not in df.columns]
     if missing:
         errors.append(f"exclude_time: missing columns: {missing}")
         return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
 
+    # --- normalize basic strings ---
     for c in ["id", "analyzers", "partner", "reason", "created_by"]:
         df[c] = df[c].map(_norm_str)
 
+    # --- analyzers parse ---
     def _parse_analyzers(s: str) -> List[str]:
         parts = [p.strip().lower() for p in (s or "").split(",")]
         return sorted(set(p for p in parts if p))
 
     df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers)
 
-    bad = df["_analyzers_list"].map(len) == 0
-    if bad.any():
-        bad_ids = df.loc[bad, "id"].tolist()
+    bad_an = df["_analyzers_list"].map(len) == 0
+    if bad_an.any():
+        bad_ids = df.loc[bad_an, "id"].tolist()
         errors.append(
             "exclude_time: analyzers empty/unparseable; ids: "
             + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
         )
 
-    # enabled strict 0/1
+    # --- enabled strict 0/1 ---
     def _parse_enabled(v: Any) -> Optional[int]:
         if v is None:
             return None
@@ -564,7 +569,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
         except Exception:
             pass
         try:
-            return int(v)
+            return int(float(v))
         except Exception:
             return None
 
@@ -577,7 +582,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
             + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
         )
 
-    # id format + uniqueness
+    # --- id format + uniqueness ---
     bad_fmt = ~df["id"].map(lambda s: bool(_ID_RE.match(s)))
     if bad_fmt.any():
         bad_ids = df.loc[bad_fmt, "id"].tolist()
@@ -589,11 +594,14 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
     dup = df["id"].duplicated(keep=False)
     if dup.any():
         dups = sorted(set(df.loc[dup, "id"].tolist()))
-        errors.append("exclude_time: duplicate id(s): " + (", ".join(dups[:30]) + (" …" if len(dups) > 30 else "")))
+        errors.append(
+            "exclude_time: duplicate id(s): "
+            + (", ".join(dups[:30]) + (" …" if len(dups) > 30 else ""))
+        )
 
-    # dates parsing
+    # --- dates parsing (canonical: tz-aware MSK) ---
     for c in ["start_dt", "end_dt", "created_at"]:
-        df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+        df[c] = parse_dt_series_msk(df[c])
 
     for c in ["start_dt", "end_dt", "created_at"]:
         bad_dt = df[c].isna()
@@ -613,10 +621,11 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
             + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
         )
 
-    # warnings: overlaps
+    # --- warnings: overlaps (only enabled + valid dates) ---
     active = df[(df["enabled"] == 1) & df["start_dt"].notna() & df["end_dt"].notna()].copy()
     if not active.empty:
-        for analyzer_key in sorted({a for lst in active["_analyzers_list"] for a in lst}):
+        analyzer_keys = sorted({a for lst in active["_analyzers_list"] for a in lst})
+        for analyzer_key in analyzer_keys:
             sub = active[active["_analyzers_list"].map(lambda lst: analyzer_key in lst)]
             for partner, g in sub.groupby("partner", dropna=False):
                 g = g.sort_values("start_dt")
@@ -632,20 +641,21 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
                         prev_end = row["end_dt"]
                         prev_id = row["id"]
 
-    # warnings: gaps
+    # --- warnings: gaps in id sequence ---
     try:
         nums = sorted(int(x.split("-")[1]) for x in df["id"] if _ID_RE.match(x))
         if nums:
             expected = set(range(nums[0], nums[-1] + 1))
             missing_nums = sorted(expected - set(nums))
             if missing_nums:
-                warnings.append(f"exclude_time id sequence gaps (WARNING): count={len(missing_nums)}, e.g. {missing_nums[:10]}")
+                warnings.append(
+                    f"exclude_time id sequence gaps (WARNING): count={len(missing_nums)}, e.g. {missing_nums[:10]}"
+                )
     except Exception:
         pass
 
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
-
 
 def get_exclude_time_df(
     *,
@@ -698,5 +708,180 @@ def clear_rules_caches() -> None:
     _EXCLUDE_TIME_CACHE.clear()
     _WALLET_LIMITS_CACHE.clear()
     _JOB_PARAMS_CACHE.clear()
+    _THRESHOLDS_PARTNER_CACHE.clear()
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
+
+_REQUIRED_THRESHOLDS_PARTNER_COLS = {
+  "id","enabled","analyzer","partner","metric",
+  "threshold_min","threshold_max","min_events",
+  "reason","updated_by","updated_at"
+}
+
+_ID_RE_THR = re.compile(r"^THR-\d{5}$")
+def validate_thresholds_partner(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    missing = [c for c in _REQUIRED_THRESHOLDS_PARTNER_COLS if c not in df.columns]
+    if missing:
+        errors.append(f"thresholds_partner: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    # --- normalize strings ---
+    for c in ["id", "analyzer", "partner", "metric", "reason", "updated_by"]:
+        df[c] = df[c].map(_norm_str)
+
+    # --- enabled strict 0/1 ---
+    def _parse_enabled(v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        try:
+            return int(float(v))
+        except Exception:
+            return None
+
+    df["enabled"] = df["enabled"].map(_parse_enabled)
+    bad_enabled = df["enabled"].isna() | ~df["enabled"].isin([0, 1])
+    if bad_enabled.any():
+        bad_ids = df.loc[bad_enabled, "id"].tolist()
+        errors.append(
+            "thresholds_partner: enabled must be 0/1; bad ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # --- id format + uniqueness ---
+    bad_fmt = ~df["id"].map(lambda s: bool(_ID_RE_THR.match(s)))
+    if bad_fmt.any():
+        bad_ids = df.loc[bad_fmt, "id"].tolist()
+        errors.append(
+            "thresholds_partner: bad id format (expected THR-00000); bad ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    dup = df["id"].duplicated(keep=False)
+    if dup.any():
+        dups = sorted(set(df.loc[dup, "id"].tolist()))
+        errors.append(
+            "thresholds_partner: duplicate id(s): "
+            + (", ".join(dups[:30]) + (" …" if len(dups) > 30 else ""))
+        )
+
+    # --- analyzers parse (CSV) ---
+    def _parse_analyzers(s: str) -> List[str]:
+        parts = [p.strip().lower() for p in (s or "").split(",")]
+        return sorted(set(p for p in parts if p))
+
+    df["_analyzers_list"] = df["analyzer"].map(_parse_analyzers)
+
+    bad_an = (df["enabled"] == 1) & (df["_analyzers_list"].map(len) == 0)
+    if bad_an.any():
+        bad_ids = df.loc[bad_an, "id"].tolist()
+        errors.append(
+            "thresholds_partner: analyzer empty/unparseable; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # --- metric whitelist ---
+    # TODO: если хочешь расширить — добавим позже
+
+    bad_metric = (df["enabled"] == 1) & (~df["metric"].isin(THRESHOLD_METRICS))
+    if bad_metric.any():
+        bad_ids = df.loc[bad_metric, "id"].tolist()
+        errors.append(
+            "thresholds_partner: metric not allowed; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+            + f"; allowed={sorted(THRESHOLD_METRICS)}"
+        )
+
+    # --- numeric thresholds ---
+    for c in ["threshold_min", "threshold_max", "min_events"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    bad_partner = (df["enabled"] == 1) & (df["partner"].astype(str).str.strip() == "")
+    if bad_partner.any():
+        bad_ids = df.loc[bad_partner, "id"].tolist()
+        errors.append(
+            "thresholds_partner: partner empty; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # min_events: default 0 if empty
+    df["min_events"] = df["min_events"].fillna(0)
+    bad_min_events = (df["enabled"] == 1) & (df["min_events"] < 0)
+    if bad_min_events.any():
+        bad_ids = df.loc[bad_min_events, "id"].tolist()
+        errors.append(
+            "thresholds_partner: min_events must be >= 0; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # at least one of min/max must be present for active rows
+    active = df[df["enabled"] == 1].copy()
+    both_missing = active["threshold_min"].isna() & active["threshold_max"].isna()
+    if both_missing.any():
+        bad_ids = active.loc[both_missing, "id"].tolist()
+        errors.append(
+            "thresholds_partner: both threshold_min and threshold_max are empty; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # --- updated_at parse (canonical MSK) ---
+    df["updated_at"] = parse_dt_series_msk(df["updated_at"])
+    bad_updated = (df["enabled"] == 1) & (df["updated_at"].isna())
+    if bad_updated.any():
+        bad_ids = df.loc[bad_updated, "id"].tolist()
+        errors.append(
+            "thresholds_partner: updated_at not parseable; ids: "
+            + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+        )
+
+    # --- partner normalization (for uniqueness checks) ---
+    df["partner_norm"] = df["partner"].map(normalize_partner_name)
+
+    # --- uniqueness among active by (analyzer_key, partner_norm, metric) ---
+    if not active.empty:
+        rows = []
+        for _, r in active.iterrows():
+            for a in r["_analyzers_list"]:
+                rows.append((a, r["partner_norm"], r["metric"], r["id"]))
+        exp = pd.DataFrame(rows, columns=["analyzer_key", "partner_norm", "metric", "id"])
+
+        dupk = exp.duplicated(subset=["analyzer_key", "partner_norm", "metric"], keep=False)
+        if dupk.any():
+            bad_ids = sorted(set(exp.loc[dupk, "id"].tolist()))
+            errors.append(
+                "thresholds_partner: duplicate active rule for (analyzer, partner, metric); ids: "
+                + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+            )
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+def get_thresholds_partner_df(
+    *,
+    rules_xlsx_path: str = "",
+    sheet_name: str = "thresholds_partner",
+    force_sync: bool = False,
+) -> pd.DataFrame:
+    path = _get_local_rules_path(force_sync=force_sync)
+
+    res = _read_sheet_cached(
+        cache=_THRESHOLDS_PARTNER_CACHE,
+        path=path,
+        sheet_name=sheet_name,
+        validator=validate_thresholds_partner,
+    )
+
+    if res.errors:
+        raise RuntimeError("rules.xlsx validation fatal errors (thresholds_partner)")
+
+    return res.df_norm

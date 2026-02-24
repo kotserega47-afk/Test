@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 import pandas as pd
+from zoneinfo import ZoneInfo
 
-
+MSK = ZoneInfo("Europe/Moscow")
 # -----------------------------
 # Партнёры
 # -----------------------------
@@ -44,17 +45,74 @@ def normalize_card_number(value) -> Optional[str]:
 # -----------------------------
 # Даты
 # -----------------------------
-def parse_datetime(value) -> Optional[datetime]:
-    if value is None or pd.isna(value):
+def parse_datetime(value: Any) -> Optional[datetime]:
+    """
+    Канонический парсер для проекта:
+    - вход: строка dd.mm.yyyy HH:MM[:SS], Excel datetime, Timestamp, datetime
+    - выход: tz-aware datetime в MSK
+    """
+
+    if value is None:
         return None
 
-    parsed = pd.to_datetime(
-        value,
-        format="%d.%m.%Y %H:%M:%S",
-        errors="coerce"
-    )
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    # Уже datetime
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=MSK)
+        return value.astimezone(MSK)
+
+    # Попытка строгого формата (быстрее)
+    try:
+        parsed = pd.to_datetime(
+            value,
+            format="%d.%m.%Y %H:%M:%S",
+            errors="raise"
+        )
+    except Exception:
+        # fallback — без жёсткого формата
+        parsed = pd.to_datetime(
+            value,
+            dayfirst=True,
+            errors="coerce"
+        )
 
     if pd.isna(parsed):
         return None
 
-    return parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
+    dt = parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=MSK)
+
+    return dt.astimezone(MSK)
+
+def parse_dt_series_msk(series: pd.Series) -> pd.Series:
+    """
+    Каноническое приведение столбца к tz-aware MSK.
+
+    Поддерживает:
+    - строки "26.09.2025 18:00:00"
+    - строки без секунд
+    - Excel datetime
+    - pandas Timestamp
+    - уже tz-aware значения
+
+    Возвращает Series с dtype datetime64[ns, Europe/Moscow]
+    Некорректные значения → NaT
+    """
+
+    # Векторизованный парсинг
+    dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
+
+    # Если tz-naive → локализуем как MSK
+    if dt.dt.tz is None:
+        return dt.dt.tz_localize(MSK)
+
+    # Если уже tz-aware → конвертируем в MSK
+    return dt.dt.tz_convert(MSK)

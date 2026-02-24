@@ -3,14 +3,14 @@ import sys
 from datetime import datetime, timedelta
 import pandas as pd
 import yaml
-import pytz
+from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
-from utils.normalization import normalize_partner_name
+from utils.normalization import normalize_partner_name, parse_dt_series_msk
 
 icon, name = LOG_PROFILES["ANALYZER"]
 logger = get_logger(name, icon)
@@ -22,6 +22,9 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_WALLET")
 if not CHAT_ID:
     raise RuntimeError("Не задан TELEGRAM_CHAT_ID_WALLET")
 
+MSK = ZoneInfo("Europe/Moscow")
+
+now = datetime.now(MSK)
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -69,8 +72,6 @@ def analyze_wallets(payin_path: str, payout_path: str):
     window_min = cfg["window_minutes"]
     offset_min = cfg["offset_minutes"]
 
-    tz = pytz.timezone("Europe/Moscow")
-
     logger.info(f"[Analyzer] Загружаю PayIn: {payin_path}")
 
     # === Чтение PayIn ==========================================================
@@ -92,11 +93,8 @@ def analyze_wallets(payin_path: str, payout_path: str):
     COL_AMOUNT = "Сумма"
 
     # нормализация PayIn дат
-    df[COL_DT] = df[COL_DT].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
-
-    df["_dt"] = pd.to_datetime(df[COL_DT], dayfirst=True, errors="coerce")
-    if df["_dt"].dt.tz is None:
-        df["_dt"] = df["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
+    s_raw = df[COL_DT]
+    df["_dt"] = parse_dt_series_msk(s_raw)
 
     df["_partner_norm"] = df[COL_PARTNER].astype(str).apply(normalize_partner_name)
     df["_status_raw"] = df[COL_STATUS].astype(str)
@@ -104,13 +102,11 @@ def analyze_wallets(payin_path: str, payout_path: str):
     df["_status_count"] = df["_status_raw"].apply(_status_countable)
     df["_info_norm"] = df[COL_INFO].astype(str).str.lower()
 
-    now = datetime.now(tz)
-
     # временные окна
     end_time = now - timedelta(minutes=offset_min)
     start_time = end_time - timedelta(minutes=window_min)
 
-    df_window = df[(df["_dt"] >= start_time) & (df["_dt"] < end_time)]
+    df_window = df[df["_dt"].notna() & (df["_dt"] >= start_time) & (df["_dt"] < end_time)]
     df_today = df[df["_dt"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
 
     partners_cfg = cfg["partners"]
@@ -299,10 +295,7 @@ def analyze_wallets(payin_path: str, payout_path: str):
             .str.replace(r"\s+", " ", regex=True)\
             .str.strip()
 
-        dfp["_dt"] = pd.to_datetime(dfp[COL_DT_P], dayfirst=True, errors="coerce")
-
-        if dfp["_dt"].dt.tz is None:
-            dfp["_dt"] = dfp["_dt"].dt.tz_localize(tz, nonexistent="shift_forward")
+        dfp["_dt"] = parse_dt_series_msk(df[COL_DT_P])
 
         dfp["_status_raw"] = dfp[COL_STATUS_P].astype(str)
 

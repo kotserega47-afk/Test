@@ -12,9 +12,8 @@ from zoneinfo import ZoneInfo
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync
-from utils.normalization import normalize_partner_name
 from core.config_manager import get_wallet_limits_df
-
+from utils.normalization import normalize_partner_name, parse_dt_series_msk
 icon, name = LOG_PROFILES["HOURLY"]
 logger = get_logger(name, icon)
 
@@ -57,23 +56,15 @@ def load_cfg():
 
 def filter_dt(df, col, start_dt, end_dt):
     """
-    Фильтрация по интервалу с приведением к MSK.
-    - naive datetime → считаем, что это MSK и локализуем
-    - tz-aware → конвертим в MSK
+    Фильтрация по интервалу (канон: tz-aware MSK).
     """
     df = df.copy()
-    s = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
-    # Если столбец naive → локализуем в MSK
-    if s.dt.tz is None:
-        s = s.dt.tz_localize(MSK)
-    else:
-        # Если уже tz-aware → конвертим в MSK
-        s = s.dt.tz_convert(MSK)
+    s = parse_dt_series_msk(df[col])
+
+    mask = s.notna() & (s >= start_dt) & (s <= end_dt)
 
     df[col] = s
-
-    mask = (df[col] >= start_dt) & (df[col] <= end_dt)
     return df[mask]
 
 def _build_hourly_comments():
