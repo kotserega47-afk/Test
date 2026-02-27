@@ -1,4 +1,6 @@
 # integrations/tg_commands.py
+from __future__ import annotations
+
 import os
 import asyncio
 import traceback
@@ -16,14 +18,17 @@ from utils.log_profiles import LOG_PROFILES
 
 from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
-
 from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
-from core.state_provider import get_job_value, set_job_value
 from core.event_log import append_event
+from core.job_state import get_last_fingerprint, set_last_fingerprint
 
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
-from analyzers.hourly_report import run_hourly_report
+
+from integrations.hourly_downloader import run_hourly_cycle
+from analyzers.hourly_analyzer import build_hourly_dto_from_files
+from reporters.hourly_reporter import render_hourly
+from transport.telegram_transport import send_text
 
 
 def _mk(profile_key: str):
@@ -36,15 +41,22 @@ log = _mk("MAIN")
 RULES = AccessRules(os.getenv("RULES_XLSX_PATH", "").strip())
 
 
-# ---------- hourly wrapper: skip if no changes ----------
+# =============================================================================
+# hourly wrapper: skip if no changes (state.json, not /tmp)
+# =============================================================================
 
-def _fp_hourly_files(payin="/tmp/hourly/payin.xlsx", payout="/tmp/hourly/payout.xlsx") -> Optional[str]:
-    def f(p):
+_HOURLY_DIR = "/tmp/hourly"
+_HOURLY_PAYIN = f"{_HOURLY_DIR}/payin.xlsx"
+_HOURLY_PAYOUT = f"{_HOURLY_DIR}/payout.xlsx"
+
+
+def _fp_hourly_files(payin: str = _HOURLY_PAYIN, payout: str = _HOURLY_PAYOUT) -> Optional[str]:
+    def f(p: str):
         pp = Path(p)
         if not pp.exists():
             return None
         st = pp.stat()
-        return {"path": p, "size": st.st_size, "mtime": st.st_mtime}
+        return {"path": str(pp), "size": st.st_size, "mtime": st.st_mtime}
 
     a = f(payin)
     b = f(payout)
@@ -55,33 +67,71 @@ def _fp_hourly_files(payin="/tmp/hourly/payin.xlsx", payout="/tmp/hourly/payout.
     return hashlib.sha256(raw).hexdigest()
 
 
-def run_hourly_job():
+def run_hourly_job() -> None:
+    """
+    Rule-driven contract:
+      - downloader creates /tmp/hourly files
+      - fingerprint stored in /config/state/state.json (job_state)
+      - skip/no-changes => only event_log, no Telegram
+      - analyzer produces DTO; reporter renders text; transport sends
+    """
+    # 1) Download latest hourly files (today; at 00:xx downloads yesterday per downloader contract)
+    run_hourly_cycle()
+
     fp = _fp_hourly_files()
     if not fp:
         append_event(type="job_skipped_missing_inputs", job_type="hourly")
         return
 
-    last = get_job_value("hourly", "last_fingerprint", default=None, force_sync=False)
+    last = get_last_fingerprint("hourly")
     if last == fp:
         append_event(type="job_skipped_no_changes", job_type="hourly", payload={"fingerprint": fp[:10]})
         return
 
-    run_hourly_report()
+    # 2) Build DTO (NO Telegram)
+    now = datetime.now()
+    start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_dt = now
+    header_date = start_dt
 
-    # фиксируем только после успешного выполнения
-    set_job_value("hourly", "last_fingerprint", fp)
+    dto = build_hourly_dto_from_files(
+        payin_path=_HOURLY_PAYIN,
+        payout_path=_HOURLY_PAYOUT,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        header_date=header_date,
+    )
+
+    # 3) Render text (rules-driven layout via job_params inside reporter)
+    rendered = render_hourly(dto, job="hourly")
+
+    # 4) Transport (TG) — outside analyzer
+    chat_id = os.getenv("TELEGRAM_CHAT_ID_HOURLY", "").strip()
+    if not chat_id:
+        raise RuntimeError("TELEGRAM_CHAT_ID_HOURLY is not set")
+
+    send_text(text=rendered.text, chat_id=chat_id)
+
+    # 5) Persist fingerprint ONLY after successful send
+    set_last_fingerprint("hourly", fp)
 
 
-# ---------- job registry (единственная точка привязки) ----------
+# =============================================================================
+# job registry (единственная точка привязки)
+# =============================================================================
 
-JOB_REGISTRY.update({
-    "wallet": run_wallet_cycle,
-    "hourly": run_hourly_job,
-    "rate": run_rate_monitor_safe,
-})
+JOB_REGISTRY.update(
+    {
+        "wallet": run_wallet_cycle,
+        "hourly": run_hourly_job,
+        "rate": run_rate_monitor_safe,
+    }
+)
 
 
-# ---------- access helpers ----------
+# =============================================================================
+# access helpers
+# =============================================================================
 
 def _ctx(update: Update) -> AccessContext:
     chat = update.effective_chat
@@ -122,16 +172,18 @@ async def _run_job_async(update: Update, job_type: str):
     except Exception:
         err = traceback.format_exc()
         log.exception(f"❌ TG job error: {job_type}")
-        await update.message.reply_text("❌ Ошибка при выполнении. Хвост трейса:")
+        await update.message.reply_text("❌ Ошибка при выполнении.\nХвост трейса:")
         await update.message.reply_text(err[-3500:])
 
 
-# ---------- commands ----------
+# =============================================================================
+# commands
+# =============================================================================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "start"):
         return
-    await update.message.reply_text("Ок. Я готов.\n\n" + _help_text())
+    await update.message.reply_text("Ок.\nЯ готов.\n\n" + _help_text())
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,13 +195,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "status"):
         return
-
     st = get_status()
     if not st:
         await update.message.reply_text("🟢 Сейчас ничего не выполняется.")
         return
 
-    lines = ["🟡 Сейчас выполняется:"]
+    lines = ["🟠 Сейчас выполняется:"]
     for jt, info in st.items():
         started = datetime.fromtimestamp(info["started_ts"]).strftime("%Y-%m-%d %H:%M:%S")
         lines.append(f"- {jt}: job_id={info['job_id']} runtime={info['runtime_sec']}s старт={started}")
@@ -162,7 +213,6 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat = update.effective_chat
     user = update.effective_user
-
     try:
         snap = RULES.get_snapshot()
         chat_key = "private" if chat.type == "private" else int(chat.id)
@@ -175,7 +225,7 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🧾 whoami\n"
+        "👤 whoami\n"
         f"chat_type: {chat.type}\n"
         f"chat_id: {chat.id}\n"
         f"user_id: {user.id}\n"
@@ -187,7 +237,6 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard_or_deny(update, "reload_rules"):
         return
-
     RULES.invalidate()
     try:
         snap = RULES.get_snapshot(force_sync=True)
