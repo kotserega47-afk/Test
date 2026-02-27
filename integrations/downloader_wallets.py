@@ -20,7 +20,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
-from analyzers.wallet_analyzer import analyze_wallets
+from analyzers.wallet_analyzer import build_wallet_dto_from_payout_xlsx
+from reporters.wallet_reporter import render_wallet
+from transport.telegram_transport import send_text
 from core.event_log import append_event
 from core.config_manager import get_job_params_overrides, get_job_param
 from core.job_state import get_last_fingerprint, set_last_fingerprint
@@ -218,9 +220,26 @@ def run_wallet_cycle() -> None:
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
         return
 
-    analyze_wallets(payin_path, payout_path)
+    # 1) analyzer -> DTO (NO TG here)
+    dto = build_wallet_dto_from_payout_xlsx(
+        payout_path=payout_path,
+        analyzer="wallet",
+        rules_force_sync=False,
+    )
 
-    # NOTE: if later wallet will have transport (TG/UI), move fp commit there (after successful send)
+    # 2) reporter -> text (NO TG here)
+    rendered = render_wallet(dto, job="wallet")
+    text = (rendered.text or "").strip()
+    if not text:
+        raise RuntimeError("wallet: rendered report is empty")
+
+    # 3) transport
+    chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
+    if not chat_id:
+        raise RuntimeError("TELEGRAM_CHAT_ID_WALLET is not set")
+    send_text(text=text, chat_id=chat_id)
+
+    # 4) fp commit ONLY after successful send
     set_last_fingerprint("wallet", fp)
 
 
