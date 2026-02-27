@@ -4,15 +4,43 @@ from __future__ import annotations
 import json
 import os
 import time
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-_EVENTS_DIR = Path("/tmp/events")
-_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# -----------------------------------------------------------------------------
+# Dropbox-backed runtime storage
+# -----------------------------------------------------------------------------
+# Contract:
+#   - events are append-only JSONL in <STATE_DIR>/events/events_YYYY-MM-DD.jsonl
+#   - no /tmp usage
+#
+# STATE_DIR defaults to /config/state (Railway persistent volume / Dropbox-synced)
+# -----------------------------------------------------------------------------
+
+_DEFAULT_STATE_DIR = "/config/state"
+_STATE_DIR_ENV_KEYS = ("STATE_DIR", "CONFIG_STATE_DIR", "DROPBOX_STATE_DIR")
+
+_lock = threading.Lock()
+
+
+def _state_dir() -> Path:
+    for k in _STATE_DIR_ENV_KEYS:
+        v = os.getenv(k, "").strip()
+        if v:
+            return Path(v)
+    return Path(_DEFAULT_STATE_DIR)
+
+
+def _events_dir() -> Path:
+    d = _state_dir() / "events"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _events_path(day_ymd: str) -> Path:
-    return _EVENTS_DIR / f"events_{day_ymd}.jsonl"
+    return _events_dir() / f"events_{day_ymd}.jsonl"
 
 
 def append_event(
@@ -25,6 +53,11 @@ def append_event(
     rules_source: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """
+    Append one event record to daily JSONL.
+    Never raises on write errors (best effort), but callers should still treat
+    rule validation errors etc. as fatal elsewhere.
+    """
     ts = time.time()
     day = time.strftime("%Y-%m-%d", time.gmtime(ts))
     rec = {
@@ -39,5 +72,13 @@ def append_event(
         "pid": os.getpid(),
     }
     p = _events_path(day)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    line = json.dumps(rec, ensure_ascii=False) + "\n"
+
+    # in-process lock to avoid interleaving lines
+    try:
+        with _lock:
+            with p.open("a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        # best-effort; event log must not crash the platform
+        return
