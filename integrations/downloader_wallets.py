@@ -14,7 +14,7 @@ from typing import Tuple
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
 
-# Добавляем корень проекта в пути (как у тебя было)
+# keep as in your project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.loggers import get_logger
@@ -31,11 +31,10 @@ logger = get_logger(name, icon)
 
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
-LOGIN = os.getenv("ANTARES_LOGIN", "").strip()
-PASSWORD = os.getenv("ANTARES_PASSWORD", "").strip()
-HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "1").lower() in {"1", "true", "yes", "y"}
+LOGIN = (os.getenv("ANTARES_LOGIN") or "").strip()
+PASSWORD = (os.getenv("ANTARES_PASSWORD") or "").strip()
+HEADLESS = (os.getenv("PLAYWRIGHT_HEADLESS", "1").strip().lower() in {"1", "true", "yes", "y"})
 
-# tmp допустим только как рабочая директория файлов выгрузок / сессии браузера
 BASE_DIR = "/tmp"
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
@@ -51,32 +50,29 @@ class WalletJobParams:
 def _load_wallet_params() -> WalletJobParams:
     """
     Source of truth: rules.xlsx -> job_params (job=wallet).
-    Никаких YAML fallback (контракт).
+    No YAML fallback (contract).
     """
     overrides = get_job_params_overrides(force_sync=False)
     payin_days = get_job_param(overrides, job="wallet", key="payin_days_back", default=2)
     payout_days = get_job_param(overrides, job="wallet", key="payout_days_back", default=7)
 
-    # guardrails
     try:
         payin_days = int(payin_days)
     except Exception:
         payin_days = 2
+
     try:
         payout_days = int(payout_days)
     except Exception:
         payout_days = 7
 
-    if payin_days < 0:
-        payin_days = 0
-    if payout_days < 0:
-        payout_days = 0
+    payin_days = max(0, payin_days)
+    payout_days = max(0, payout_days)
 
     return WalletJobParams(payin_days_back=payin_days, payout_days_back=payout_days)
 
 
 def _ensure_logged_in(page, context) -> None:
-    """Авторизация в Antares UI. Если есть storage_state — используем его."""
     if os.path.exists(AUTH_STATE_FILE):
         logger.info("🔑 Используем сохранённую сессию")
         return
@@ -94,7 +90,6 @@ def _ensure_logged_in(page, context) -> None:
 
 
 def _find_and_pick_date(page, target_date: str) -> bool:
-    """target_date: YYYY-MM-DD (как в data-date)"""
     selector = f"[data-date='{target_date}']"
     for _ in range(12):
         if page.locator(selector).count() > 0:
@@ -198,12 +193,12 @@ def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
 
 def run_wallet_cycle() -> None:
     """
-    Wallet cycle (rule-driven):
-      1) download payin/payout
-      2) fp = sha256(meta(files))
-      3) if fp == last_fp (state.json) -> skip + event_log
-      4) else analyze_wallets()
-      5) persist fp only after successful analyze
+    Wallet cycle (rules-only):
+      - download
+      - fp compare in state.json (job_state)
+      - skip -> event_log only
+      - analyze
+      - fp commit after successful analyze
     """
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
@@ -223,10 +218,9 @@ def run_wallet_cycle() -> None:
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
         return
 
-    # анализ (если упадёт — fp НЕ сохранится)
     analyze_wallets(payin_path, payout_path)
 
-    # fp фиксируем только после успешного анализа
+    # NOTE: if later wallet will have transport (TG/UI), move fp commit there (after successful send)
     set_last_fingerprint("wallet", fp)
 
 

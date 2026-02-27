@@ -30,11 +30,7 @@ class Actor:
 # Registry
 # =============================================================================
 
-# job_type -> callable() (no args; it can read rules/state itself)
 JOB_REGISTRY: Dict[str, Callable[[], Any]] = {}
-
-# runtime state (in-memory)
-# job_type -> (job_id, started_ts, actor_dict)
 _RUNNING: Dict[str, Tuple[str, float, Dict[str, Any]]] = {}
 
 
@@ -77,12 +73,6 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _try_lock(job_type: str) -> bool:
-    """
-    Simple cross-process lock:
-      - lock file contains pid
-      - if pid is alive -> busy
-      - if stale -> remove and acquire
-    """
     p = _lock_path(job_type)
 
     if p.exists():
@@ -91,7 +81,6 @@ def _try_lock(job_type: str) -> bool:
             if pid > 0 and _pid_alive(pid):
                 return False
         except Exception:
-            # unreadable -> treat as stale
             pass
         try:
             p.unlink(missing_ok=True)
@@ -134,20 +123,10 @@ def get_status() -> Dict[str, Any]:
 
 
 def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
-    """
-    Execution plane entrypoint.
-
-    Contracts:
-      - Always logs: job_requested + (job_started/job_finished/job_failed/job_rejected_busy)
-      - Rules snapshot is captured once per request (rules_version/rules_source attached to all events)
-      - No Telegram here (transport is outside analyzers)
-      - No /tmp locks
-    """
     jt = (job_type or "").strip()
     job_id = uuid.uuid4().hex[:12]
     actor_d = actor.to_dict()
 
-    # 1) Capture rules snapshot (this is your execution determinism anchor)
     rs = get_rules_snapshot(force_sync=force_rules_sync)
 
     append_event(
@@ -196,9 +175,7 @@ def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) 
     )
 
     try:
-        # job itself may append job_skipped_* events (no Telegram!)
         fn()
-
         append_event(
             type="job_finished",
             job_id=job_id,
