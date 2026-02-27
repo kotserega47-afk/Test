@@ -1,8 +1,12 @@
 # scheduler.py
+from __future__ import annotations
+
 import os
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from telegram.ext import Application
@@ -10,8 +14,9 @@ from telegram.ext import Application
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
-from core.schedules import load_schedules
+from core.schedules import load_schedules, Schedule
 from core.job_runner import request_job, Actor
+from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -26,27 +31,35 @@ log = _mk("MAIN")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 
-def _parse_cron_min_hour(expr: str):
+# =============================================================================
+# Cron (минимальный, но надёжный)
+# =============================================================================
+
+def _parse_cron_min_hour(expr: str) -> Tuple[int, Optional[int]]:
     """
-    Поддержка минимальная: "M H * * *" где M=0..59, H=0..23 или '*'
-    Для твоего кейса "0 * * * *" хватает.
+    Поддержка:
+      - "M H * * *" где M=0..59, H=0..23 или '*'
+    Пример:
+      - "0 * * * *"  -> каждый час в :00
+      - "5 2 * * *"  -> каждый день в 02:05
     """
     parts = (expr or "").strip().split()
     if len(parts) != 5:
-        raise ValueError("cron must have 5 parts")
+        raise ValueError("cron must have 5 parts: 'M H * * *'")
+
     m_s, h_s, _, _, _ = parts
 
     if m_s == "*":
-        raise ValueError("minute '*' not supported (use explicit minute)")
+        raise ValueError("cron minute '*' not supported; use explicit minute 0..59")
     minute = int(m_s)
 
     hour_any = (h_s == "*")
     hour = None if hour_any else int(h_s)
 
     if not (0 <= minute <= 59):
-        raise ValueError("cron minute out of range")
+        raise ValueError("cron minute out of range 0..59")
     if hour is not None and not (0 <= hour <= 23):
-        raise ValueError("cron hour out of range")
+        raise ValueError("cron hour out of range 0..23")
 
     return minute, hour  # hour=None means '*'
 
@@ -68,53 +81,139 @@ def _next_cron_run(now: datetime, cron_expr: str) -> datetime:
     return target
 
 
-def schedule_loop():
+# =============================================================================
+# Hourly gating via job_params (control plane)
+# =============================================================================
+
+def _parse_hhmm(s: str) -> Optional[Tuple[int, int]]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    if ":" not in s:
+        return None
+    hh_s, mm_s = s.split(":", 1)
+    try:
+        hh = int(hh_s)
+        mm = int(mm_s)
+    except Exception:
+        return None
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh, mm
+
+
+@dataclass
+class HourlyGate:
     """
-    Каждые ~5-10 сек:
+    Два триггера:
+      - intraday: каждые N минут
+      - final: один раз в сутки в final_daily_time
+    Дедуп делаем по "ключам запуска" на уровне scheduler,
+    чтобы не спамить request_job если schedules тикают часто.
+    """
+    last_intraday_key: Optional[str] = None  # YYYYMMDD-HHMM bucket
+    last_final_key: Optional[str] = None     # YYYYMMDD final date key
+
+
+def _hourly_should_fire(now: datetime, gate: HourlyGate) -> bool:
+    params = get_job_params(job="hourly")
+
+    intraday_min = int(params.get("intraday_interval_minutes") or 0)
+    final_time = _parse_hhmm(str(params.get("final_daily_time") or ""))
+
+    fired = False
+
+    # intraday every N minutes: bucket by floor(minute/N)
+    if intraday_min > 0:
+        bucket = (now.hour * 60 + now.minute) // intraday_min
+        key = f"{now:%Y%m%d}-{bucket:04d}"
+        if gate.last_intraday_key != key:
+            # только на границе интервала
+            # чтобы не запускать на каждом тике schedule_loop
+            if (now.minute % intraday_min) == 0:
+                gate.last_intraday_key = key
+                fired = True
+
+    # final daily at HH:MM (once per day)
+    if final_time is not None:
+        hh, mm = final_time
+        if now.hour == hh and now.minute == mm:
+            key = f"{now:%Y%m%d}"
+            if gate.last_final_key != key:
+                gate.last_final_key = key
+                fired = True
+
+    return fired
+
+
+# =============================================================================
+# Scheduler loop
+# =============================================================================
+
+def schedule_loop() -> None:
+    """
+    Каждые ~5 сек:
       - читаем schedules из rules.xlsx
       - вычисляем "пора ли"
       - триггерим request_job(job_type, actor="scheduler")
-    """
-    next_every = {}  # job_type -> ts
-    next_cron = {}   # job_type -> datetime
 
-    log.info("🕒 schedule loop started (rules.xlsx:schedules)")
+    Особенность:
+      - Для job_type == "hourly" дополнительно применяем gate из job_params:
+        intraday_interval_minutes / final_daily_time.
+    """
+    next_every: Dict[str, float] = {}     # job_type -> ts_next
+    next_cron: Dict[str, datetime] = {}   # job_type -> dt_next
+    hourly_gate = HourlyGate()
+
+    log.info("🕒 schedule loop started (rules.xlsx:schedules + job_params gating)")
 
     while True:
         try:
             schedules = load_schedules(force_sync=False)
-            active = {s.job_type for s in schedules}
-            for k in list(next_every.keys()):
-                if k not in active: next_every.pop(k, None)
-            for k in list(next_cron.keys()):
-                if k not in active: next_cron.pop(k, None)
         except Exception as e:
             log.warning(f"⚠️ schedules load failed: {e}")
             time.sleep(10)
             continue
+
+        active = {s.job_type for s in schedules}
+        for k in list(next_every.keys()):
+            if k not in active:
+                next_every.pop(k, None)
+        for k in list(next_cron.keys()):
+            if k not in active:
+                next_cron.pop(k, None)
 
         now = datetime.now(MSK)
 
         for s in schedules:
             jt = s.job_type
 
-            # every_seconds
+            # === every_seconds ===
             if s.schedule_type == "every_seconds":
                 ts_now = time.time()
                 ts_next = next_every.get(jt)
+
                 if ts_next is None:
-                    next_every[jt] = ts_now + s.every_seconds
+                    next_every[jt] = ts_now + max(1, int(s.every_seconds))
                     continue
 
                 if ts_now >= ts_next:
+                    # hourly is gated by job_params
+                    if jt == "hourly":
+                        if not _hourly_should_fire(now, hourly_gate):
+                            next_every[jt] = ts_now + max(1, int(s.every_seconds))
+                            continue
+
                     actor = Actor(kind="scheduler")
                     try:
                         request_job(jt, actor)
                     except Exception as e:
+                        # request_job already appends job_failed; here only log
                         log.exception(f"❌ scheduled job failed: {jt}: {e}")
-                    next_every[jt] = ts_now + s.every_seconds
 
-            # cron
+                    next_every[jt] = ts_now + max(1, int(s.every_seconds))
+
+            # === cron ===
             elif s.schedule_type == "cron":
                 dt_next = next_cron.get(jt)
                 if dt_next is None:
@@ -125,11 +224,21 @@ def schedule_loop():
                     continue
 
                 if now >= dt_next:
+                    # hourly still gated (cron может быть "каждый час", но intraday=5)
+                    if jt == "hourly":
+                        if not _hourly_should_fire(now, hourly_gate):
+                            try:
+                                next_cron[jt] = _next_cron_run(datetime.now(MSK), s.cron)
+                            except Exception:
+                                next_cron.pop(jt, None)
+                            continue
+
                     actor = Actor(kind="scheduler")
                     try:
                         request_job(jt, actor)
                     except Exception as e:
                         log.exception(f"❌ scheduled job failed: {jt}: {e}")
+
                     try:
                         next_cron[jt] = _next_cron_run(datetime.now(MSK), s.cron)
                     except Exception:
@@ -138,7 +247,11 @@ def schedule_loop():
         time.sleep(5)
 
 
-def main():
+# =============================================================================
+# Entry point
+# =============================================================================
+
+def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN")
 
@@ -147,7 +260,7 @@ def main():
     for h in get_handlers():
         app.add_handler(h)
 
-    # прогреваем rules (fail-fast)
+    # прогреваем rules (fail-fast): если rules битые — лучше упасть сразу
     RULES.get_snapshot(force_sync=True)
 
     threading.Thread(target=schedule_loop, daemon=True).start()

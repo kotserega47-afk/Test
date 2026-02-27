@@ -39,7 +39,129 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, type]] = {
         "interval_minutes": int,
     },
 }
+_JOB_PARAMS_CACHE = {}  # или твой Cache object, если он уже есть
 
+
+def validate_job_params(df: pd.DataFrame) -> List[str]:
+    """
+    Fail-fast валидатор job_params.
+    Ожидаемые колонки:
+      id, enabled, job, scope, scope_value, key, value_type, value
+    value_type: str|int|float|bool|json
+    """
+    errors: List[str] = []
+
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    required = ["id", "enabled", "job", "scope", "scope_value", "key", "value_type", "value"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return [f"job_params: missing columns: {', '.join(missing)}"]
+
+    # enabled
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
+    bad_enabled = ~df["enabled"].isin([0, 1])
+    if bad_enabled.any():
+        bad_ids = df.loc[bad_enabled, "id"].astype(str).tolist()
+        errors.append("job_params: enabled must be 0/1; bad ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+
+    # required strings
+    for c in ["id", "job", "scope", "key", "value_type"]:
+        bad = df[c].astype(str).str.strip() == ""
+        if bad.any():
+            bad_ids = df.loc[bad, "id"].astype(str).tolist()
+            errors.append(f"job_params: {c} empty; ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+
+    # value_type whitelist
+    vt = df["value_type"].astype(str).str.strip().str.lower()
+    ok = vt.isin(["str", "int", "float", "bool", "json"])
+    if (~ok).any():
+        bad_ids = df.loc[~ok, "id"].astype(str).tolist()
+        errors.append("job_params: bad value_type; ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
+
+    return errors
+
+
+def _cast_job_param(value_type: str, value: Any, *, row_id: str) -> Any:
+    vt = (value_type or "").strip().lower()
+    if vt == "str":
+        return "" if value is None else str(value)
+    if vt == "int":
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            raise RuntimeError(f"job_params: int value is empty; id={row_id}")
+        return int(float(value))
+    if vt == "float":
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            raise RuntimeError(f"job_params: float value is empty; id={row_id}")
+        return float(value)
+    if vt == "bool":
+        s = str(value).strip().lower()
+        if s in ["1", "true", "yes", "y", "on"]:
+            return True
+        if s in ["0", "false", "no", "n", "off", ""]:
+            return False
+        raise RuntimeError(f"job_params: bad bool '{value}'; id={row_id}")
+    if vt == "json":
+        # value может быть уже dict (если excel reader/engine так вернул) или строка
+        if value is None or (isinstance(value, float) and pd.isna(value)) or str(value).strip() == "":
+            return {}
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(str(value))
+        except Exception as e:
+            raise RuntimeError(f"job_params: bad json; id={row_id}; err={e}")
+    raise RuntimeError(f"job_params: unsupported value_type={value_type}; id={row_id}")
+
+
+def get_job_params(
+    *,
+    rules_xlsx_path: str = "",
+    sheet_name: str = "job_params",
+    job: str,
+    force_sync: bool = False,
+) -> Dict[str, Any]:
+    """
+    Возвращает параметры для конкретного job.
+    Приоритет (если понадобится позже):
+      scope=job (scope_value=job) > scope=global
+    Сейчас у тебя scope=global, scope_value пустой — тоже ок.
+    """
+    path = _get_local_rules_path(force_sync=force_sync)
+
+    res = _read_sheet_cached(
+        cache=_JOB_PARAMS_CACHE,
+        path=path,
+        sheet_name=sheet_name,
+        validator=validate_job_params,
+    )
+    if res.errors:
+        raise RuntimeError("rules.xlsx validation fatal errors (job_params)")
+
+    df = res.df_norm.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    df = df[df["enabled"] == 1].copy()
+    df["job"] = df["job"].astype(str).str.strip().str.lower()
+    df["scope"] = df["scope"].astype(str).str.strip().str.lower()
+    df["scope_value"] = df["scope_value"].astype(str).fillna("").str.strip().str.lower()
+    df["key"] = df["key"].astype(str).str.strip()
+    df["value_type"] = df["value_type"].astype(str).str.strip().str.lower()
+
+    job_l = job.strip().lower()
+
+    # scope priority: job-specific > global
+    df_job = df[(df["scope"] == "job") & (df["scope_value"] == job_l) & (df["job"] == job_l)]
+    df_glb = df[(df["scope"] == "global") & (df["job"] == job_l)]
+
+    # если job-scope пустой — используем global
+    use = df_job if len(df_job) else df_glb
+
+    out: Dict[str, Any] = {}
+    for _, r in use.iterrows():
+        k = str(r["key"])
+        out[k] = _cast_job_param(r["value_type"], r["value"], row_id=str(r["id"]))
+
+    return out
 
 # =============================================================================
 # Result models
