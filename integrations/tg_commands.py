@@ -20,16 +20,11 @@ from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
 from core.event_log import append_event
-from core.job_state import get_last_fingerprint, set_last_fingerprint
-
+from core.job_state import set_last_fingerprint
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
-
-from integrations.hourly_downloader import run_hourly_cycle
-from analyzers.hourly_analyzer import build_hourly_dto_from_files
-from reporters.hourly_reporter import render_hourly
+from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
-
 
 def _mk(profile_key: str):
     icon, name = LOG_PROFILES[profile_key]
@@ -68,52 +63,22 @@ def _fp_hourly_files(payin: str = _HOURLY_PAYIN, payout: str = _HOURLY_PAYOUT) -
 
 
 def run_hourly_job() -> None:
-    """
-    Rule-driven contract:
-      - downloader creates /tmp/hourly files
-      - fingerprint stored in /config/state/state.json (job_state)
-      - skip/no-changes => only event_log, no Telegram
-      - analyzer produces DTO; reporter renders text; transport sends
-    """
-    # 1) Download latest hourly files (today; at 00:xx downloads yesterday per downloader contract)
-    run_hourly_cycle()
+    res = run_hourly_report(job="hourly")
 
-    fp = _fp_hourly_files()
-    if not fp:
-        append_event(type="job_skipped_missing_inputs", job_type="hourly")
+    # skip/no-changes уже в event_log; TG не шлём
+    if res.skipped_no_changes or not res.text:
         return
 
-    last = get_last_fingerprint("hourly")
-    if last == fp:
-        append_event(type="job_skipped_no_changes", job_type="hourly", payload={"fingerprint": fp[:10]})
-        return
-
-    # 2) Build DTO (NO Telegram)
-    now = datetime.now()
-    start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_dt = now
-    header_date = start_dt
-
-    dto = build_hourly_dto_from_files(
-        payin_path=_HOURLY_PAYIN,
-        payout_path=_HOURLY_PAYOUT,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        header_date=header_date,
-    )
-
-    # 3) Render text (rules-driven layout via job_params inside reporter)
-    rendered = render_hourly(dto, job="hourly")
-
-    # 4) Transport (TG) — outside analyzer
     chat_id = os.getenv("TELEGRAM_CHAT_ID_HOURLY", "").strip()
     if not chat_id:
         raise RuntimeError("TELEGRAM_CHAT_ID_HOURLY is not set")
 
-    send_text(text=rendered.text, chat_id=chat_id)
+    # 1) transport
+    send_text(text=res.text, chat_id=chat_id)
 
-    # 5) Persist fingerprint ONLY after successful send
-    set_last_fingerprint("hourly", fp)
+    # 2) fp commit only after successful send
+    if res.fingerprint:
+        set_last_fingerprint("hourly", res.fingerprint)
 
 
 # =============================================================================
