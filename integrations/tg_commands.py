@@ -18,7 +18,7 @@ from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 
 from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
-from core.job_state import get_last_fingerprint, set_last_fingerprint
+from core.state_provider import get_job_value, set_job_value
 from core.event_log import append_event
 
 from integrations.downloader_wallets import run_wallet_cycle
@@ -60,12 +60,16 @@ def run_hourly_job():
     if not fp:
         append_event(type="job_skipped_missing_inputs", job_type="hourly")
         return
-    last = get_last_fingerprint("hourly")
+
+    last = get_job_value("hourly", "last_fingerprint", default=None, force_sync=False)
     if last == fp:
         append_event(type="job_skipped_no_changes", job_type="hourly", payload={"fingerprint": fp[:10]})
         return
+
     run_hourly_report()
-    set_last_fingerprint("hourly", fp)
+
+    # фиксируем только после успешного выполнения
+    set_job_value("hourly", "last_fingerprint", fp)
 
 
 # ---------- job registry (единственная точка привязки) ----------

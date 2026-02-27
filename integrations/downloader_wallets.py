@@ -1,28 +1,35 @@
 # integrations/downloader_wallets.py
+from __future__ import annotations
+
 import os
 import sys
 import time
 import json
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Tuple
+
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
-import yaml
 
-# Добавляем корень проекта в пути
+# Добавляем корень проекта в пути (как у тебя было)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+
 from analyzers.wallet_analyzer import analyze_wallets
 
-from core.job_state import get_last_fingerprint, set_last_fingerprint
 from core.event_log import append_event
+from core.config_manager import get_job_params_overrides, get_job_param
+from core.state_provider import get_job_value, set_job_value
 
 icon, name = LOG_PROFILES["WALLET"]
 logger = get_logger(name, icon)
+
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 LOGIN = os.getenv("ANTARES_LOGIN")
 PASSWORD = os.getenv("ANTARES_PASSWORD")
@@ -33,11 +40,60 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-MSK_TZ = ZoneInfo("Europe/Moscow")
+
+@dataclass(frozen=True)
+class WalletJobParams:
+    payin_days_back: int = 2
+    payout_days_back: int = 7
 
 
-def _ensure_logged_in(page, context):
-    """Авторизация на Antares"""
+def _load_wallet_params() -> WalletJobParams:
+    """
+    Источник истины: rules.xlsx → sheet job_params (job=wallet)
+    YAML оставлен только как fallback, чтобы не ломать прод при миграции.
+    """
+    overrides = get_job_params_overrides(force_sync=False)
+    payin_days = get_job_param(overrides, job="wallet", key="payin_days_back", default=2)
+    payout_days = get_job_param(overrides, job="wallet", key="payout_days_back", default=7)
+
+    # YAML fallback (временно)
+    try:
+        import yaml
+
+        cfg_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "config",
+            "wallet_config.yaml",
+        )
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            payin_days = int(cfg.get("download_periods", {}).get("payin_days_back", payin_days))
+            payout_days = int(cfg.get("download_periods", {}).get("payout_days_back", payout_days))
+    except Exception:
+        pass
+
+    # guardrails
+    try:
+        payin_days = int(payin_days)
+    except Exception:
+        payin_days = 2
+
+    try:
+        payout_days = int(payout_days)
+    except Exception:
+        payout_days = 7
+
+    if payin_days < 0:
+        payin_days = 0
+    if payout_days < 0:
+        payout_days = 0
+
+    return WalletJobParams(payin_days_back=payin_days, payout_days_back=payout_days)
+
+
+def _ensure_logged_in(page, context) -> None:
+    """Авторизация в Antares UI. Если есть storage_state — используем его."""
     if os.path.exists(AUTH_STATE_FILE):
         logger.info("🔐 Используем сохранённую сессию")
         return
@@ -49,11 +105,15 @@ def _ensure_logged_in(page, context):
     page.click("button:has-text('Войти')")
     page.wait_for_load_state("networkidle")
     time.sleep(2)
+
     context.storage_state(path=AUTH_STATE_FILE)
     logger.info("✅ Сессия сохранена")
 
 
-def _find_and_pick_date(page, target_date: str):
+def _find_and_pick_date(page, target_date: str) -> bool:
+    """
+    target_date: YYYY-MM-DD (как в data-date)
+    """
     selector = f"[data-date='{target_date}']"
 
     for _ in range(12):
@@ -135,7 +195,7 @@ def _download_payout(page, ts: str, days_back: int) -> str:
 def _file_meta(p: str) -> dict:
     pp = Path(p)
     st = pp.stat()
-    return {"path": p, "size": st.st_size, "mtime": st.st_mtime}
+    return {"path": str(pp), "size": st.st_size, "mtime": st.st_mtime}
 
 
 def _calc_wallet_fingerprint(payin_path: str, payout_path: str) -> str:
@@ -144,54 +204,60 @@ def _calc_wallet_fingerprint(payin_path: str, payout_path: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def run_wallet_cycle():
-    if not LOGIN or not PASSWORD:
-        raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
-
-    ts = datetime.now(MSK_TZ).strftime("%H.%M")
-    logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
-
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "wallet_config.yaml")
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    payin_days = cfg.get("download_periods", {}).get("payin_days_back", 2)
-    payout_days = cfg.get("download_periods", {}).get("payout_days_back", 7)
-
+def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
-        context = browser.new_context(accept_downloads=True)
 
         if os.path.exists(AUTH_STATE_FILE):
             context = browser.new_context(storage_state=AUTH_STATE_FILE, accept_downloads=True)
+        else:
+            context = browser.new_context(accept_downloads=True)
 
         page = context.new_page()
         _ensure_logged_in(page, context)
 
-        payin_path = _download_payin(page, ts, payin_days)
-        payout_path = _download_payout(page, ts, payout_days)
+        payin_path = _download_payin(page, ts, params.payin_days_back)
+        payout_path = _download_payout(page, ts, params.payout_days_back)
 
         browser.close()
 
-    # --- skip after download (если файлы не изменились) ---
+    return payin_path, payout_path
+
+
+def run_wallet_cycle() -> None:
+    """
+    Wallet-цикл:
+      1) скачать payin/payout
+      2) fp = sha256(meta(files))
+      3) если fp == state.jobs.wallet.last_fingerprint → skip + event_log
+      4) иначе → analyze_wallets
+      5) записать fp в state только после успешного анализа
+    """
+    if not LOGIN or not PASSWORD:
+        raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
+
+    ts = datetime.now(MSK_TZ).strftime("%H.%M")
+    params = _load_wallet_params()
+
+    logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
+    logger.info(f"⚙️ wallet params: payin_days_back={params.payin_days_back}, payout_days_back={params.payout_days_back}")
+
+    payin_path, payout_path = _download_wallet_files(ts, params)
+
     fp = _calc_wallet_fingerprint(payin_path, payout_path)
-    last = get_last_fingerprint("wallet")
+    last = get_job_value("wallet", "last_fingerprint", default=None, force_sync=False)
 
     if last == fp:
         logger.info("🟨 [wallet] no changes -> skip analyzer")
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
         return
 
+    # анализ (если упадёт — fp НЕ сохранится, и следующий запуск не будет ошибочно skipped)
     analyze_wallets(payin_path, payout_path)
 
-    # записываем fingerprint только после успешного анализа
-    set_last_fingerprint("wallet", fp)
+    # фиксируем fp только после успешного анализа
+    set_job_value("wallet", "last_fingerprint", fp)
 
 
 if __name__ == "__main__":
-    try:
-        run_wallet_cycle()
-    except Exception as e:
-        logger.exception(f"❌ Ошибка в wallet-handler: {e}")
-        CHAT_ID_WALLET = os.getenv("TELEGRAM_CHAT_ID_WALLET") or os.getenv("TELEGRAM_CHAT_ID")
-        send_message_sync(f"❌ Ошибка в wallet-handler: {e}", chat_id=CHAT_ID_WALLET)
+    run_wallet_cycle()
