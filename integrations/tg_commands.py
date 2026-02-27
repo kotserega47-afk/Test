@@ -45,27 +45,10 @@ _HOURLY_PAYIN = f"{_HOURLY_DIR}/payin.xlsx"
 _HOURLY_PAYOUT = f"{_HOURLY_DIR}/payout.xlsx"
 
 
-def _fp_hourly_files(payin: str = _HOURLY_PAYIN, payout: str = _HOURLY_PAYOUT) -> Optional[str]:
-    def f(p: str):
-        pp = Path(p)
-        if not pp.exists():
-            return None
-        st = pp.stat()
-        return {"path": str(pp), "size": st.st_size, "mtime": st.st_mtime}
-
-    a = f(payin)
-    b = f(payout)
-    if not a or not b:
-        return None
-
-    raw = json.dumps({"payin": a, "payout": b}, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
-def run_hourly_job() -> None:
+def run_hourly_job():
     res = run_hourly_report(job="hourly")
 
-    # skip/no-changes уже в event_log; TG не шлём
+    # skip/no-changes уже залогировано внутри hourly_report
     if res.skipped_no_changes or not res.text:
         return
 
@@ -76,7 +59,7 @@ def run_hourly_job() -> None:
     # 1) transport
     send_text(text=res.text, chat_id=chat_id)
 
-    # 2) fp commit only after successful send
+    # 2) fp commit ONLY after successful send
     if res.fingerprint:
         set_last_fingerprint("hourly", res.fingerprint)
 
