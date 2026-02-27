@@ -83,6 +83,35 @@ def _build_partner_group_map(pg_df: pd.DataFrame, *, analyzer: str) -> Dict[str,
     return res
 
 
+def _build_partner_default_method_map(pg_df: pd.DataFrame, *, analyzer: str) -> Dict[str, str]:
+    """
+    Returns: partner_norm -> default_method (e.g. UNI/BST)
+
+    Rules:
+    - Reads optional column 'default_method' from partner_groups sheet.
+    - Applies only enabled=1 rows and matching analyzer.
+    - Values normalized to upper-case.
+    """
+    df = pg_df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    if "default_method" not in df.columns:
+        return {}
+
+    df = df[df["enabled"] == 1].copy()
+    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
+    df = df[df["_analyzers_list"].map(lambda xs: analyzer.lower() in xs)]
+    df["partner_norm"] = df["partner"].map(normalize_partner_name)
+    df["default_method_norm"] = df["default_method"].astype(str).fillna("").str.strip().str.upper()
+
+    res: Dict[str, str] = {}
+    for _, r in df.iterrows():
+        pn = r["partner_norm"]
+        dm = r["default_method_norm"]
+        if pn and dm and pn not in res:
+            res[pn] = dm
+    return res
+
 def resolve_wallet_limit(
     limits_df: pd.DataFrame,
     *,
@@ -196,10 +225,24 @@ def resolve_wallet_limit(
 # =============================================================================
 
 def _find_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    cols = {str(c).strip().lower(): c for c in df.columns}
+    # Exact match first (case-insensitive), then substring match (case-insensitive).
+    # Substring match is needed for columns like "enum метод".
+    cols_norm = [(str(c).strip().lower(), c) for c in df.columns]
+
+    # 1) exact
+    cols_exact = {k: orig for k, orig in cols_norm}
     for cand in candidates:
-        if cand.lower() in cols:
-            return cols[cand.lower()]
+        key = cand.strip().lower()
+        if key in cols_exact:
+            return cols_exact[key]
+
+    # 2) substring (stable: preserves df.columns order)
+    cand_norm = [c.strip().lower() for c in candidates]
+    for k, orig in cols_norm:
+        for cand in cand_norm:
+            if cand and cand in k:
+                return orig
+
     return None
 
 
@@ -251,13 +294,14 @@ def build_wallet_dto_from_payout_xlsx(
     pg_df = get_partner_groups_df(force_sync=rules_force_sync)
     limits_df = get_wallet_limits_df(force_sync=rules_force_sync)
     partner_to_group = _build_partner_group_map(pg_df, analyzer=analyzer)
+    partner_default_method = _build_partner_default_method_map(pg_df, analyzer=analyzer)
 
     # payout data
     df = pd.read_excel(payout_path)
     dt_col = _find_col(df, ["date", "datetime", "created_at", "дата", "дата/время", "дата/время создания", "дата создания"])
     partner_col = _find_col(df, ["partner", "партнер", "партнёр"])
     amount_col = _find_col(df, ["amount", "сумма", "sum", "итого"])
-    method_col = _find_col(df, ["method", "метод", "пул", "канал"])
+    method_col = _find_col(df, ["enum метод", "method", "метод", "пул", "канал"])
 
     if partner_col is None or amount_col is None:
         raise RuntimeError("payout file: missing required columns (partner, amount)")
@@ -277,6 +321,25 @@ def build_wallet_dto_from_payout_xlsx(
         df["_method"] = ""
     else:
         df["_method"] = df[method_col].astype(str).fillna("").str.strip().str.upper()
+
+    # Fill empty method from rules (partner_groups.default_method).
+    if "partner_default_method" in locals():
+        defaults = df["_partner_norm"].map(partner_default_method).fillna("")
+        m = df["_method"].eq("") & defaults.ne("")
+        if m.any():
+            df.loc[m, "_method"] = defaults.loc[m]
+
+    # Fail-fast: method must be resolved to UNI/BST (or explicit default) for every partner row.
+    bad = df["_method"].eq("")
+    if bad.any():
+        bad_partners = (
+            df.loc[bad, "_partner"].astype(str).dropna().unique().tolist()
+        )
+        raise RuntimeError(
+            "payout file: enum method empty and no default_method in rules for partners: "
+            + ", ".join(bad_partners[:20])
+            + (" …" if len(bad_partners) > 20 else "")
+        )
 
     # aggregate
     g = (
