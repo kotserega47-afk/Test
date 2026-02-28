@@ -90,8 +90,8 @@ def state_update(job_type: str, patch: Dict[str, Any]) -> None:
 
             append_event(
                 type="state_updated",
-                job_type=job_type,
-                payload={"keys": list(patch.keys())}
+                job_type="meta",
+                payload={"keys": ["last_update_ts", "last_update_by"]}
             )
 
             return

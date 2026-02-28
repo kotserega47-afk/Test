@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from analyzers.hourly_analyzer import HourlyDTO, HourlyPayoutBlock, HourlyRow, HourlyMethodRow
-from core.config_manager import get_job_params
+from analyzers.hourly_analyzer import HourlyDTO
+from core.config_manager import get_ui_layout_df
 
 
 @dataclass(frozen=True)
@@ -21,83 +21,94 @@ def _fmt_int(v: float) -> str:
         return "0"
 
 
+def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> str:
+    df = layout_df.copy()
+    df = df[(df["enabled"] == 1) & (df["view"].astype(str).str.strip().str.lower() == view.lower())]
+    if df.empty:
+        return ""
+
+    # стабильный порядок: section, order
+    df["section"] = df["section"].astype(str)
+    df["key"] = df["key"].astype(str)
+    df["title"] = df["title"].astype(str)
+    df["style"] = df["style"].astype(str).str.strip().str.lower()
+
+    df = df.sort_values(["order"], kind="stable")
+
+    out: List[str] = []
+
+    for _, row in df.iterrows():
+        key = row["key"].strip()
+        title = row["title"].strip()
+        style = row["style"] or "text"
+
+        val = render_model.get(key, None)
+
+        # if key missing -> skip silently (можно warning позже)
+        if val is None or val == "":
+            # но title можно вывести и без val (например "Выплаты:")
+            if title and style in ("bold", "text"):
+                out.append(_apply_style(title, style))
+            continue
+
+        if style == "list":
+            # val must be list[str]
+            items = val if isinstance(val, list) else [str(val)]
+            # если title задан — выводим перед списком
+            if title:
+                out.append(title)
+            for i, it in enumerate(items, 1):
+                out.append(f"{i}) {it}")
+            continue
+
+        if style == "hr":
+            out.append(str(val))
+            continue
+
+        # text/bold/dt/...
+        if title:
+            line = f"{title} {val}".strip()
+        else:
+            line = str(val)
+
+        out.append(_apply_style(line, style))
+
+    return "\n".join(out).strip() + "\n"
+
+
+def _apply_style(s: str, style: str) -> str:
+    if style == "bold":
+        return f"*{s}*"  # можно позже заменить на markdown/bold если используешь parse_mode
+    return s
+
+
 def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
     """
     Pure rendering.
-    Ordering / layout is controlled via rules.xlsx -> job_params (json).
+    Layout is controlled via rules.xlsx -> ui_layout (view='hourly').
     No Telegram here.
     """
-    params = get_job_params(job=job)  # already rules-driven
+    layout_df = get_ui_layout_df(force_sync=False)
 
-    # layout JSON example (stored in job_params.value for key=layout_json, type=json):
-    # {
-    #   "payout_layout": [{"group": ["A-мобайл", "АБХСбер (116)"], "spacing": 1}],
-    #   "payin_layout":  [{"group": ["A-мобайл", "Aurora"], "spacing": 0}]
-    # }
-    layout = params.get("layout_json") or {}
-    payout_layout = layout.get("payout_layout") or []
-    payin_layout = layout.get("payin_layout") or []
+    # build items exactly as твой текущий формат
+    payout_items: List[str] = []
+    for b in dto.payout:
+        payout_items.append(f"{b.title}:")
+        for m in b.methods:
+            c = f" ({m.comment})" if m.comment else ""
+            payout_items.append(f" - {m.title} – {_fmt_int(m.amount)}{c}")
 
-    # build fast lookup by title
-    payout_by_title: Dict[str, HourlyPayoutBlock] = {b.title: b for b in dto.payout}
-    payin_by_title: Dict[str, HourlyRow] = {r.title: r for r in dto.payin}
+    payin_items: List[str] = []
+    for r in dto.payin:
+        c = f" ({r.comment})" if r.comment else ""
+        payin_items.append(f"{r.title} – {_fmt_int(r.amount)}{c}")
 
-    lines: List[str] = []
-    lines.append(
-        f"Данные на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}"
-    )
-    lines.append("")
+    render_model: Dict[str, Any] = {
+        "header.period": f"на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}",
+        "payouts.items": payout_items,
+        "separator.line": "_______________________",
+        "payins.items": payin_items,
+    }
 
-    # PAYOUT
-    lines.append("Выплаты:")
-    counter = 1
-    if payout_layout:
-        for block in payout_layout:
-            group = block.get("group") or []
-            spacing = int(block.get("spacing") or 0)
-            for key in group:
-                b = payout_by_title.get(key)
-                if not b:
-                    continue
-                lines.append(f"{counter}) {b.title}:")
-                for m in b.methods:
-                    c = f" ({m.comment})" if m.comment else ""
-                    lines.append(f" - {m.title} – {_fmt_int(m.amount)}{c}")
-                counter += 1
-            for _ in range(spacing):
-                lines.append("")
-    else:
-        # fallback: natural order
-        for b in dto.payout:
-            lines.append(f"{counter}) {b.title}:")
-            for m in b.methods:
-                c = f" ({m.comment})" if m.comment else ""
-                lines.append(f" - {m.title} – {_fmt_int(m.amount)}{c}")
-            counter += 1
-
-    lines.append("_______________________")
-    lines.append("")
-
-    # PAYIN
-    lines.append("Поступления:")
-    counter = 1
-    if payin_layout:
-        for block in payin_layout:
-            group = block.get("group") or []
-            spacing = int(block.get("spacing") or 0)
-            for key in group:
-                r = payin_by_title.get(key)
-                if not r:
-                    continue
-                c = f" ({r.comment})" if r.comment else ""
-                lines.append(f"{counter}) {r.title} – {_fmt_int(r.amount)}{c}")
-                counter += 1
-            for _ in range(spacing):
-                lines.append("")
-    else:
-        for r in dto.payin:
-            c = f" ({r.comment})" if r.comment else ""
-            lines.append(f"{counter}) {r.title} – {_fmt_int(r.amount)}{c}")
-            counter += 1
-
-    return RenderedReport(text="\n".join(lines))
+    text = _render_by_layout(view="hourly", layout_df=layout_df, render_model=render_model)
+    return RenderedReport(text=text.strip())

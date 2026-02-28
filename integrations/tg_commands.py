@@ -22,6 +22,8 @@ from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
 from core.state_store import state_update
+from core.config_manager import rules_validate_all
+from core.rules_provider import get_rules_snapshot
 
 
 def _mk(profile_key: str):
@@ -100,6 +102,7 @@ def _help_text() -> str:
         "/run_wallet\n"
         "/run_hourly\n"
         "/run_rate\n"
+        "/rules_validate\n"
         "/help"
     )
 
@@ -179,6 +182,46 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"level: {level}"
     )
 
+async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "rules_validate"):
+        return
+
+    await update.message.reply_text("🔎 Валидирую rules.xlsx…")
+
+    try:
+        snap = get_rules_snapshot(force_sync=True)
+        errors, warnings = rules_validate_all(force_sync=False)  # rules уже скачали
+
+        if errors:
+            body = "\n".join(f"- {x}" for x in errors[:60])
+            tail = "" if len(errors) <= 60 else f"\n… (+{len(errors)-60} more)"
+            await update.message.reply_text(
+                "❌ rules_validate: FAIL\n"
+                f"rules_version: {snap.rules_version[:12]}\n"
+                f"source: {snap.source}\n\n"
+                + body + tail
+            )
+            return
+
+        if warnings:
+            body = "\n".join(f"- {x}" for x in warnings[:60])
+            tail = "" if len(warnings) <= 60 else f"\n… (+{len(warnings)-60} more)"
+            await update.message.reply_text(
+                "⚠️ rules_validate: WARN\n"
+                f"rules_version: {snap.rules_version[:12]}\n"
+                f"source: {snap.source}\n\n"
+                + body + tail
+            )
+            return
+
+        await update.message.reply_text(
+            "✅ rules_validate: OK\n"
+            f"rules_version: {snap.rules_version[:12]}\n"
+            f"source: {snap.source}"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ rules_validate crashed: {e}")
 
 async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "reload_rules"):
@@ -220,4 +263,5 @@ def get_handlers():
         CommandHandler("run_wallet", cmd_run_wallet),
         CommandHandler("run_hourly", cmd_run_hourly),
         CommandHandler("run_rate", cmd_run_rate),
+        CommandHandler("rules_validate", cmd_rules_validate),
     ]

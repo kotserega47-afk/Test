@@ -1059,3 +1059,187 @@ def clear_rules_caches() -> None:
     _JOB_PARAMS_CACHE.clear()
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
+
+# =============================================================================
+# rules_validate (aggregate)
+# =============================================================================
+
+def validate_access(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    required = ["chat_id", "user_id", "level"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        errors.append(f"access: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    if "enabled" not in df.columns:
+        df["enabled"] = 1
+
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
+    bad_enabled = df["enabled"].isna() | ~df["enabled"].isin([0, 1])
+    if bad_enabled.any():
+        errors.append("access: enabled must be 0/1")
+
+    for c in ["chat_id", "user_id", "level"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+        if df[c].isna().any():
+            errors.append(f"access: {c} must be numeric (non-empty)")
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+
+def validate_commands(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    required = ["command", "required_level", "allow_private", "allow_groups"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        errors.append(f"commands: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    if "enabled" not in df.columns:
+        df["enabled"] = 1
+
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
+    for c in ["required_level", "allow_private", "allow_groups"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if (~df["enabled"].isin([0, 1])).any():
+        errors.append("commands: enabled must be 0/1")
+    if df["command"].astype(str).str.strip().eq("").any():
+        errors.append("commands: command empty")
+    if df["required_level"].isna().any():
+        errors.append("commands: required_level empty/non-numeric")
+    if (~df["allow_private"].isin([0, 1])).any():
+        errors.append("commands: allow_private must be 0/1")
+    if (~df["allow_groups"].isin([0, 1])).any():
+        errors.append("commands: allow_groups must be 0/1")
+
+    # uniqueness among enabled=1
+    active = df[df["enabled"] == 1].copy()
+    if not active.empty and active["command"].duplicated().any():
+        errors.append("commands: duplicate command among enabled=1")
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+
+def validate_schedules(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    required = ["id", "enabled", "job_type", "schedule_type", "every_seconds", "cron", "jitter_sec", "max_runtime_sec", "coalesce"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        errors.append(f"schedules: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    for c in ["enabled", "every_seconds", "jitter_sec", "max_runtime_sec", "coalesce"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if (~df["enabled"].isin([0, 1])).any():
+        errors.append("schedules: enabled must be 0/1")
+    if df["job_type"].astype(str).str.strip().eq("").any():
+        errors.append("schedules: job_type empty")
+    if df["schedule_type"].astype(str).str.strip().eq("").any():
+        errors.append("schedules: schedule_type empty")
+    if (~df["coalesce"].isin([0, 1])).any():
+        errors.append("schedules: coalesce must be 0/1")
+
+    # basic sanity: at least one schedule field set when enabled=1
+    active = df[df["enabled"] == 1].copy()
+    if not active.empty:
+        st = active["schedule_type"].astype(str).str.strip().str.lower()
+        bad = []
+        for i, r in active.iterrows():
+            typ = str(r["schedule_type"]).strip().lower()
+            if typ in ("every_seconds", "interval", "seconds"):
+                if pd.isna(r["every_seconds"]) or int(r["every_seconds"]) <= 0:
+                    bad.append(str(r["id"]))
+            elif typ in ("cron",):
+                if str(r["cron"]).strip() == "":
+                    bad.append(str(r["id"]))
+            # else: allow custom types (warn only)
+            else:
+                warnings.append(f"schedules: unknown schedule_type='{typ}' (id={r['id']})")
+
+        if bad:
+            errors.append("schedules: bad schedule config for ids: " + ", ".join(bad[:30]) + (" …" if len(bad) > 30 else ""))
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+
+def rules_validate_all(*, force_sync: bool = True) -> Tuple[List[str], List[str]]:
+    """
+    Returns (errors, warnings).
+    errors => fatal
+    warnings => non-fatal
+    """
+    path = _get_local_rules_path(force_sync=force_sync)
+
+    validators = [
+        ("access", validate_access),
+        ("commands", validate_commands),
+        ("schedules", validate_schedules),
+        ("job_params", validate_job_params),
+        ("wallet_limits", validate_wallet_limits),
+        ("thresholds_partner", validate_thresholds_partner),
+        ("partner_groups", validate_partner_groups),
+        ("exclude_time", validate_exclude_time),
+    ]
+
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    for sheet, fn in validators:
+        try:
+            df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
+        except ValueError:
+            errors.append(f"{sheet}: sheet missing")
+            continue
+        except Exception as e:
+            errors.append(f"{sheet}: failed to read sheet: {e}")
+            continue
+
+        try:
+            res = fn(df)
+            errors.extend([f"{sheet}: {x}" for x in res.errors])
+            warnings.extend([f"{sheet}: {x}" for x in res.warnings])
+        except Exception as e:
+            errors.append(f"{sheet}: validator crashed: {e}")
+
+    return errors, warnings
+
+def get_ui_layout_df(*, force_sync: bool = False) -> pd.DataFrame:
+    path = _get_local_rules_path(force_sync=force_sync)
+    df = pd.read_excel(path, sheet_name="ui_layout", engine="openpyxl")
+
+    # normalize
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for c in ["id", "view", "section", "key", "title", "group_code", "style", "notes"]:
+        if c not in df.columns:
+            df[c] = ""
+    if "enabled" not in df.columns:
+        df["enabled"] = 1
+    if "order" not in df.columns:
+        df["order"] = 0
+
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce").fillna(0).astype(int)
+    df["order"] = pd.to_numeric(df["order"], errors="coerce").fillna(0).astype(int)
+
+    return df
