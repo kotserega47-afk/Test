@@ -87,10 +87,18 @@ def state_update(job_type: str, patch: Dict[str, Any]) -> None:
 
         try:
             _save_to_dropbox(st)
+
+            append_event(
+                type="state_updated",
+                job_type=job_type,
+                payload={"keys": list(patch.keys())}
+            )
+
             return
+
         except Exception as e:
             last_err = e
-            time.sleep(0.2 * (attempt + 1))  # небольшая backoff
+            time.sleep(0.2 * (attempt + 1))
 
     raise RuntimeError(f"state_update failed after 3 attempts: {last_err}") from last_err
 
