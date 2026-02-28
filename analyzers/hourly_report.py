@@ -73,7 +73,7 @@ def run_hourly_report(*, job: str = "hourly") -> HourlyRunResult:
         append_event(type="job_skipped_missing_inputs", job_type="hourly")
         return HourlyRunResult(skipped_no_changes=True, fingerprint=None, text="")
 
-    last = state_get("wallet", "last_fingerprint")
+    last = state_get("hourly", "last_fingerprint")
     if last == fp:
         append_event(type="job_skipped_no_changes", job_type="hourly", payload={"fingerprint": fp[:10]})
         return HourlyRunResult(skipped_no_changes=True, fingerprint=fp, text="")
