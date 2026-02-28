@@ -25,7 +25,7 @@ from reporters.wallet_reporter import render_wallet
 from transport.telegram_transport import send_text
 from core.event_log import append_event
 from core.config_manager import get_job_params_overrides, get_job_param
-from core.job_state import get_last_fingerprint, set_last_fingerprint
+from core.state_store import state_get, state_update
 
 
 icon, name = LOG_PROFILES["WALLET"]
@@ -214,7 +214,7 @@ def run_wallet_cycle() -> None:
     payin_path, payout_path = _download_wallet_files(ts, params)
     fp = _calc_wallet_fingerprint(payin_path, payout_path)
 
-    last = get_last_fingerprint("wallet")
+    last = state_get("wallet", "last_fingerprint")
     if last == fp:
         logger.info("🕒 [wallet] no changes -> skip analyzer")
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
@@ -240,7 +240,10 @@ def run_wallet_cycle() -> None:
     send_text(text=text, chat_id=chat_id)
 
     # 4) fp commit ONLY after successful send
-    set_last_fingerprint("wallet", fp)
+    state_update("wallet", {
+        "last_fingerprint": fp,
+        "last_sent_ts": int(time.time()),
+    })
 
 
 if __name__ == "__main__":

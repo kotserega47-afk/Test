@@ -1,6 +1,6 @@
 # integrations/tg_commands.py
 from __future__ import annotations
-
+import time
 import asyncio
 import os
 import traceback
@@ -20,8 +20,8 @@ from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 
 from analyzers.hourly_report import run_hourly_report
-from core.job_state import set_last_fingerprint
 from transport.telegram_transport import send_text
+from core.state_store import state_update
 
 
 def _mk(profile_key: str):
@@ -56,7 +56,10 @@ def run_hourly_job() -> None:
     send_text(text=res.text, chat_id=chat_id)
 
     if res.fingerprint:
-        set_last_fingerprint("hourly", res.fingerprint)
+        state_update("hourly", {
+            "last_fingerprint": res.fingerprint,
+            "last_sent_ts": int(time.time())
+        })
 
 
 # Единственная точка привязки job_type -> runnable

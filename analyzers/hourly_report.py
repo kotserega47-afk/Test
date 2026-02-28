@@ -10,12 +10,12 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from core.event_log import append_event
-from core.job_state import get_last_fingerprint
+
 
 from integrations.hourly_downloader import run_hourly_cycle
 from analyzers.hourly_analyzer import build_hourly_dto_from_files
 from reporters.hourly_reporter import render_hourly
-
+from core.state_store import state_get
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -73,7 +73,7 @@ def run_hourly_report(*, job: str = "hourly") -> HourlyRunResult:
         append_event(type="job_skipped_missing_inputs", job_type="hourly")
         return HourlyRunResult(skipped_no_changes=True, fingerprint=None, text="")
 
-    last = get_last_fingerprint("hourly")
+    last = state_get("wallet", "last_fingerprint")
     if last == fp:
         append_event(type="job_skipped_no_changes", job_type="hourly", payload={"fingerprint": fp[:10]})
         return HourlyRunResult(skipped_no_changes=True, fingerprint=fp, text="")
