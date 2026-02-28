@@ -37,9 +37,9 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     out: List[str] = []
 
     for _, row in df.iterrows():
-        key = row["key"].strip()
-        title = row["title"].strip()
-        style = row["style"] or "text"
+        key = str(row.get("key", "") or "").strip()
+        title = str(row.get("title", "") or "").strip()
+        style = str(row.get("style", "") or "").strip().lower() or "text"
 
         if key and key not in render_model:
             append_event(
