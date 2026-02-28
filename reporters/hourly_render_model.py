@@ -40,8 +40,13 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
 
     model: Dict[str, Any] = {
         "header.period": f"на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}",
+
+        "payouts.title": "",
         "payouts.items": payout_items,
+
         "separator.line": "_______________________",
+
+        "payins.title": "",
         "payins.items": payin_items,
     }
     return HourlyRenderModel(model=model)
