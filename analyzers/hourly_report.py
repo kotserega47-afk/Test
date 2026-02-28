@@ -59,7 +59,7 @@ def run_hourly_report(*, job: str = "hourly") -> HourlyRunResult:
     """
     Rule-driven hourly pipeline (NO transport, NO fp commit):
       - download
-      - fingerprint compare (state.json via job_state)
+      - fingerprint compare (core.state_store)
       - skip/no-changes -> event_log only
       - analyzer -> DTO
       - reporter -> text
@@ -71,7 +71,11 @@ def run_hourly_report(*, job: str = "hourly") -> HourlyRunResult:
     fp = _calc_fp(PAYIN_PATH, PAYOUT_PATH)
     if not fp:
         append_event(type="job_skipped_missing_inputs", job_type="hourly")
-        return HourlyRunResult(skipped_no_changes=True, fingerprint=None, text="")
+        return HourlyRunResult(
+            skipped_no_changes=False,
+            fingerprint=None,
+            text=""
+        )
 
     last = state_get("hourly", "last_fingerprint")
     if last == fp:

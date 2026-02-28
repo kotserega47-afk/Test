@@ -11,6 +11,7 @@ from integrations.dropbox_watcher import download_file, upload_file
 from core.rules_provider import _dropbox_rules_file_path
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+from core.event_log import append_event
 
 icon, name = LOG_PROFILES["MAIN"]
 log = get_logger(name, icon)
@@ -39,8 +40,7 @@ def _load_from_dropbox() -> Dict[str, Any]:
 
     ok = download_file(db_path, str(lp))
     if not ok:
-        log.warning("state.json not found in Dropbox → creating new")
-        return {}
+        raise RuntimeError("Failed to download state.json from Dropbox")
 
     try:
         return json.loads(lp.read_text(encoding="utf-8")) or {}
@@ -73,15 +73,22 @@ def state_get(job_type: str, key: str) -> Optional[Any]:
 
 
 def state_update(job_type: str, patch: Dict[str, Any]) -> None:
-    st = _load_from_dropbox()
+    last_err: Exception | None = None
 
-    st.setdefault("jobs", {})
-    st["jobs"].setdefault(job_type, {})
+    for attempt in range(3):
+        st = _load_from_dropbox()
+        st.setdefault("jobs", {})
+        st["jobs"].setdefault(job_type, {})
+        st["jobs"][job_type].update(patch)
 
-    st["jobs"][job_type].update(patch)
+        try:
+            _save_to_dropbox(st)
+            return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.2 * (attempt + 1))  # небольшая backoff
 
-    _save_to_dropbox(st)
-
+    raise RuntimeError(f"state_update failed after 3 attempts: {last_err}") from last_err
 
 def state_update_meta(actor: Dict[str, Any]) -> None:
     st = _load_from_dropbox()
