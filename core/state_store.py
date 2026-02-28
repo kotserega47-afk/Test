@@ -38,16 +38,20 @@ def _load_from_dropbox() -> Dict[str, Any]:
     db_path = _state_dropbox_path()
     lp = _local_path()
 
-    ok = download_file(db_path, str(lp))
-    if not ok:
-        raise RuntimeError("Failed to download state.json from Dropbox")
+    status = download_file(db_path, str(lp))
 
-    try:
-        return json.loads(lp.read_text(encoding="utf-8")) or {}
-    except Exception:
-        log.warning("state.json corrupted → reset")
+    if status == "not_found":
+        # первый запуск
         return {}
 
+    if status == "error":
+        raise RuntimeError("Failed to download state.json from Dropbox")
+
+    # status == "ok"
+    try:
+        return json.loads(lp.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        raise RuntimeError("state.json corrupted") from e
 
 def _save_to_dropbox(state: Dict[str, Any]) -> None:
     lp = _local_path()

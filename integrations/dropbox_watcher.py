@@ -3,6 +3,7 @@ import os
 import dropbox
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+from dropbox.exceptions import ApiError
 
 icon, name = LOG_PROFILES["DROPBOX"]
 logger = get_logger(name, icon)
@@ -40,15 +41,31 @@ def list_files(path: str):
         return []
 
 def download_file(dropbox_path: str, local_path: str):
-    """Скачать файл из dropbox на локальный диск"""
+    """
+    Возвращает:
+      "ok"        — файл скачан
+      "not_found" — файла нет
+      "error"     — иная ошибка
+    """
     try:
         metadata, res = dbx.files_download(dropbox_path)
         with open(local_path, "wb") as f:
             f.write(res.content)
-        return True
+        return "ok"
+
+    except ApiError as e:
+        # 404
+        if isinstance(e.error, dropbox.files.DownloadError) and e.error.is_path():
+            if e.error.get_path().is_not_found():
+                logger.info(f"File not found in Dropbox: {dropbox_path}")
+                return "not_found"
+
+        logger.error(f"Dropbox API error: {e}")
+        return "error"
+
     except Exception as e:
         logger.error(f"Ошибка download_file({dropbox_path}): {e}")
-        return False
+        return "error"
 
 def upload_file(local_path: str, dropbox_path: str):
     """Загрузить локальный файл в dropbox"""
