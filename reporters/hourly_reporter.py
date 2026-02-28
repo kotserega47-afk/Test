@@ -2,23 +2,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from analyzers.hourly_analyzer import HourlyDTO
 from core.config_manager import get_ui_layout_df
 from core.event_log import append_event
+from reporters.hourly_render_model import build_hourly_render_model
+
 
 @dataclass(frozen=True)
 class RenderedReport:
     text: str
 
 
-def _fmt_int(v: float) -> str:
-    try:
-        n = int(round(float(v)))
-        return f"{n:,}".replace(",", " ")
-    except Exception:
-        return "0"
+def _apply_style(s: str, style: str) -> str:
+    if style == "bold":
+        return f"*{s}*"
+    return s
 
 
 def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> str:
@@ -27,7 +27,6 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     if df.empty:
         return ""
 
-    # стабильный порядок: section, order
     df["section"] = df["section"].astype(str)
     df["key"] = df["key"].astype(str)
     df["title"] = df["title"].astype(str)
@@ -45,24 +44,20 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
         if key and key not in render_model:
             append_event(
                 type="layout_key_missing",
-                job_type=view,  # или "hourly" если хочешь жёстко
+                job_type=view,
                 payload={"view": view, "key": key, "id": row.get("id", ""), "section": row.get("section", "")},
             )
             continue
 
         val = render_model.get(key, None)
 
-        # if key missing -> skip silently (можно warning позже)
         if val is None or val == "":
-            # но title можно вывести и без val (например "Выплаты:")
             if title and style in ("bold", "text"):
                 out.append(_apply_style(title, style))
             continue
 
         if style == "list":
-            # val must be list[str]
             items = val if isinstance(val, list) else [str(val)]
-            # если title задан — выводим перед списком
             if title:
                 out.append(title)
             for i, it in enumerate(items, 1):
@@ -73,21 +68,10 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
             out.append(str(val))
             continue
 
-        # text/bold/dt/...
-        if title:
-            line = f"{title} {val}".strip()
-        else:
-            line = str(val)
-
+        line = f"{title} {val}".strip() if title else str(val)
         out.append(_apply_style(line, style))
 
     return "\n".join(out).strip() + "\n"
-
-
-def _apply_style(s: str, style: str) -> str:
-    if style == "bold":
-        return f"*{s}*"  # можно позже заменить на markdown/bold если используешь parse_mode
-    return s
 
 
 def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
@@ -98,25 +82,6 @@ def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
     """
     layout_df = get_ui_layout_df(force_sync=False)
 
-    # build items exactly as твой текущий формат
-    payout_items: List[str] = []
-    for b in dto.payout:
-        payout_items.append(f"{b.title}:")
-        for m in b.methods:
-            c = f" ({m.comment})" if m.comment else ""
-            payout_items.append(f" - {m.title} – {_fmt_int(m.amount)}{c}")
-
-    payin_items: List[str] = []
-    for r in dto.payin:
-        c = f" ({r.comment})" if r.comment else ""
-        payin_items.append(f"{r.title} – {_fmt_int(r.amount)}{c}")
-
-    render_model: Dict[str, Any] = {
-        "header.period": f"на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}",
-        "payouts.items": payout_items,
-        "separator.line": "_______________________",
-        "payins.items": payin_items,
-    }
-
-    text = _render_by_layout(view="hourly", layout_df=layout_df, render_model=render_model)
+    rm = build_hourly_render_model(dto)
+    text = _render_by_layout(view="hourly", layout_df=layout_df, render_model=rm.model)
     return RenderedReport(text=text.strip())
