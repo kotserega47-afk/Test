@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from analyzers.hourly_analyzer import HourlyDTO
 from core.config_manager import get_ui_layout_df
-
+from core.event_log import append_event
 
 @dataclass(frozen=True)
 class RenderedReport:
@@ -41,6 +41,14 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
         key = row["key"].strip()
         title = row["title"].strip()
         style = row["style"] or "text"
+
+        if key and key not in render_model:
+            append_event(
+                type="layout_key_missing",
+                job_type=view,  # или "hourly" если хочешь жёстко
+                payload={"view": view, "key": key, "id": row.get("id", ""), "section": row.get("section", "")},
+            )
+            continue
 
         val = render_model.get(key, None)
 
