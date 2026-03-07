@@ -23,55 +23,99 @@ def _apply_style(s: str, style: str) -> str:
 
 def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> str:
     df = layout_df.copy()
-    df = df[(df["enabled"] == 1) & (df["view"].astype(str).str.strip().str.lower() == view.lower())]
+    df = df[
+        (df["enabled"] == 1)
+        & (df["view"].astype(str).str.strip().str.lower() == view.lower())
+    ]
     if df.empty:
         return ""
 
-    df["section"] = df["section"].astype(str)
-    df["key"] = df["key"].astype(str)
-    df["title"] = df["title"].astype(str)
+    # normalize columns safely
+    for col in ["section", "key", "title", "style"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["section"] = df["section"].where(df["section"].notna(), "")
+    df["key"] = df["key"].where(df["key"].notna(), "")
+    df["title"] = df["title"].where(df["title"].notna(), "")
+    df["style"] = df["style"].where(df["style"].notna(), "")
+
+    df["section"] = df["section"].astype(str).str.strip()
+    df["key"] = df["key"].astype(str).str.strip()
+    df["title"] = df["title"].astype(str).str.strip()
     df["style"] = df["style"].astype(str).str.strip().str.lower()
+
+    # kill accidental "nan"
+    df["title"] = df["title"].replace("nan", "")
+    df["key"] = df["key"].replace("nan", "")
+    df["style"] = df["style"].replace("nan", "")
 
     df = df.sort_values(["order"], kind="stable")
 
     out: List[str] = []
 
     for _, row in df.iterrows():
-        key = str(row.get("key", "") or "").strip()
-        title = str(row.get("title", "") or "").strip()
-        style = str(row.get("style", "") or "").strip().lower() or "text"
+        key = row.get("key", "")
+        title = row.get("title", "")
+        style = row.get("style", "") or "text"
 
         if key and key not in render_model:
             append_event(
                 type="layout_key_missing",
                 job_type=view,
-                payload={"view": view, "key": key, "id": row.get("id", ""), "section": row.get("section", "")},
+                payload={
+                    "view": view,
+                    "key": key,
+                    "id": row.get("id", ""),
+                    "section": row.get("section", ""),
+                },
             )
             continue
 
-        val = render_model.get(key, None)
+        val = render_model.get(key, None) if key else None
 
-        if val is None or val == "":
-            if title and style in ("bold", "text"):
-                out.append(_apply_style(title, style))
-            continue
-
-        if style == "list":
-            items = val if isinstance(val, list) else [str(val)]
-            if title:
-                out.append(title)
-            for i, it in enumerate(items, 1):
-                out.append(f"{i}) {it}")
-            continue
-
+        # explicit separator line from layout/model
         if style == "hr":
-            out.append(str(val))
+            if val is None or str(val).strip() == "":
+                out.append("_______________________")
+            else:
+                out.append(str(val).strip())
             continue
 
-        line = f"{title} {val}".strip() if title else str(val)
-        out.append(_apply_style(line, style))
+        # empty/static line support
+        if style == "empty":
+            out.append("")
+            continue
 
-    return "\n".join(out).strip() + "\n"
+        # if value missing -> print only title for text/bold/static blocks
+        if val is None or val == "":
+            if title and style in ("bold", "text", "static"):
+                out.append(_apply_style(title, "bold" if style == "bold" else "text"))
+            continue
+
+        # render list values as multiline blocks, NOT as Python list string
+        if isinstance(val, list):
+            if title:
+                out.append(_apply_style(title, "bold" if style == "bold" else "text"))
+            for item in val:
+                s = "" if item is None else str(item).rstrip()
+                if s != "":
+                    out.append(s)
+            continue
+
+        # scalar value
+        if title:
+            line = f"{title} {val}".strip()
+        else:
+            line = str(val).strip()
+
+        out.append(_apply_style(line, "bold" if style == "bold" else "text"))
+
+    # clean excessive trailing empty lines
+    while out and out[-1] == "":
+        out.pop()
+
+    return "\n".join(out)
 
 
 def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
