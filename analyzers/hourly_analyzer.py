@@ -21,23 +21,23 @@ MSK = ZoneInfo("Europe/Moscow")
 
 @dataclass(frozen=True)
 class HourlyRow:
-    title: str                 # display title (partner or group title)
-    amount: float              # aggregated sum
-    comment: str = ""          # comment from rules (wallet_limits.comment)
-
+    entity_code: str
+    title: str
+    amount: float
+    comment: str = ""
 
 @dataclass(frozen=True)
 class HourlyMethodRow:
-    title: str                 # display method title (UNI/BST)
+    method_code: str
+    title: str
     amount: float
-    comment: str = ""          # comment from rules (wallet_limits.comment)
-
+    comment: str = ""
 
 @dataclass(frozen=True)
 class HourlyPayoutBlock:
-    title: str                 # partner title
+    group_code: str
+    title: str
     methods: List[HourlyMethodRow]
-
 
 @dataclass(frozen=True)
 class HourlyDTO:
@@ -239,8 +239,21 @@ def build_hourly_dto_from_files(
                 or payout_comment.get((partner_norm, ""))
                 or ""
             )
-            methods.append(HourlyMethodRow(title=method or "—", amount=amt, comment=c))
-        payout_blocks.append(HourlyPayoutBlock(title=display_partner, methods=methods))
+            methods.append(
+                HourlyMethodRow(
+                    method_code=method,
+                    title=method or "—",
+                    amount=amt,
+                    comment=c,
+                )
+            )
+        payout_blocks.append(
+            HourlyPayoutBlock(
+                group_code=partner_norm,
+                title=display_partner,
+                methods=methods,
+            )
+        )
 
     # Aggregate payin: partner_norm
     payin_rows: List[HourlyRow] = []
@@ -257,7 +270,14 @@ def build_hourly_dto_from_files(
         display_partner = df_payin.loc[df_payin["norm"] == pn, partner_col].astype(str).iloc[0]
         amt = float(r["_amount"] or 0.0)
         c = payin_comment.get(pn, "")
-        payin_rows.append(HourlyRow(title=display_partner, amount=amt, comment=c))
+        payin_rows.append(
+            HourlyRow(
+                entity_code=pn,
+                title=display_partner,
+                amount=amt,
+                comment=c,
+            )
+        )
 
     # Note: group totals and layout are applied in reporter using rules/job_params (no YAML).
     # We still expose partner_to_group & group_comment through job_params to reporter.

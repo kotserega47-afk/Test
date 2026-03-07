@@ -1243,3 +1243,27 @@ def get_ui_layout_df(*, force_sync: bool = False) -> pd.DataFrame:
     df["order"] = pd.to_numeric(df["order"], errors="coerce").fillna(0).astype(int)
 
     return df
+
+# =============================================================================
+# Hourly rules
+# =============================================================================
+
+def get_hourly_payins_df(*, force_sync: bool = False) -> pd.DataFrame:
+    path = _get_local_rules_path(force_sync=force_sync)
+    df = pd.read_excel(path, sheet_name="hourly_payins", engine="openpyxl")
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+
+
+def get_hourly_payouts_df(*, force_sync: bool = False) -> pd.DataFrame:
+    path = _get_local_rules_path(force_sync=force_sync)
+    df = pd.read_excel(path, sheet_name="hourly_payouts", engine="openpyxl")
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+
+
+def get_hourly_payout_methods_df(*, force_sync: bool = False) -> pd.DataFrame:
+    path = _get_local_rules_path(force_sync=force_sync)
+    df = pd.read_excel(path, sheet_name="hourly_payout_methods", engine="openpyxl")
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
