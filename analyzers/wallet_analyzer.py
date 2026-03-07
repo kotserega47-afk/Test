@@ -353,16 +353,6 @@ def resolve_wallet_limit(
         reason="",
     )
 
-
-def _load_wallet_runtime_params(*, rules_force_sync: bool) -> Dict[str, int]:
-    params = get_job_params(job="wallet", force_sync=rules_force_sync)
-
-    def _as_int(name: str, default: int) -> int:
-        try:
-            return int(params.get(name, default))
-        except Exception:
-            return default
-
 def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
     params = get_job_params(job="wallet", force_sync=rules_force_sync) or {}
 
@@ -555,7 +545,7 @@ def build_wallet_stats_dto(
     rules_force_sync: bool = False,
     now: Optional[datetime] = None,
 ) -> WalletStatsDTO:
-    runtime = _load_wallet_runtime_params(rules_force_sync=rules_force_sync)
+    runtime = _get_wallet_job_params(rules_force_sync=rules_force_sync)
     pg_df = get_partner_groups_df(force_sync=rules_force_sync)
     limits_df = get_wallet_limits_df(force_sync=rules_force_sync)
     thr_df = get_thresholds_partner_df(force_sync=rules_force_sync)
