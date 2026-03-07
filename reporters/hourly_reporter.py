@@ -87,9 +87,10 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
             if title:
                 out.append(_apply_style(title, style))
             for item in val:
-                s = "" if item is None else str(item).rstrip()
-                if s != "":
-                    out.append(s)
+                if item is None:
+                    out.append("")
+                else:
+                    out.append(str(item).rstrip())
             continue
 
         line = f"{title} {val}".strip() if title else str(val).strip()
