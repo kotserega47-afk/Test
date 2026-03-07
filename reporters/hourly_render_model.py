@@ -70,7 +70,8 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
         group_code = g["group_code"]
         title = g["display_name"]
 
-        payout_items.append(f"{i}) {title}:")
+        title_clean = str(title).rstrip(":").strip()
+        payout_items.append(f"{i}) {title_clean}:")
 
         methods = (
             methods_df[

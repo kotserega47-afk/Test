@@ -30,7 +30,6 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     if df.empty:
         return ""
 
-    # normalize columns safely
     for col in ["section", "key", "title", "style"]:
         if col not in df.columns:
             df[col] = ""
@@ -45,13 +44,11 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     df["title"] = df["title"].astype(str).str.strip()
     df["style"] = df["style"].astype(str).str.strip().str.lower()
 
-    # kill accidental "nan"
     df["title"] = df["title"].replace("nan", "")
     df["key"] = df["key"].replace("nan", "")
     df["style"] = df["style"].replace("nan", "")
 
-    df = df.sort_values(["order"], kind="stable")
-
+    # ВАЖНО: сохраняем порядок строк из Excel, не пересортировываем по order
     out: List[str] = []
 
     for _, row in df.iterrows():
@@ -74,7 +71,6 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
 
         val = render_model.get(key, None) if key else None
 
-        # explicit separator line from layout/model
         if style == "hr":
             if val is None or str(val).strip() == "":
                 out.append("_______________________")
@@ -82,40 +78,24 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
                 out.append(str(val).strip())
             continue
 
-        # empty/static line support
-        if style == "empty":
-            out.append("")
-            continue
-
-        # if value missing -> print only title for text/bold/static blocks
         if val is None or val == "":
-            if title and style in ("bold", "text", "static"):
-                out.append(_apply_style(title, "bold" if style == "bold" else "text"))
+            if title and style in ("bold", "text"):
+                out.append(_apply_style(title, style))
             continue
 
-        # render list values as multiline blocks, NOT as Python list string
         if isinstance(val, list):
             if title:
-                out.append(_apply_style(title, "bold" if style == "bold" else "text"))
+                out.append(_apply_style(title, style))
             for item in val:
                 s = "" if item is None else str(item).rstrip()
                 if s != "":
                     out.append(s)
             continue
 
-        # scalar value
-        if title:
-            line = f"{title} {val}".strip()
-        else:
-            line = str(val).strip()
+        line = f"{title} {val}".strip() if title else str(val).strip()
+        out.append(_apply_style(line, style))
 
-        out.append(_apply_style(line, "bold" if style == "bold" else "text"))
-
-    # clean excessive trailing empty lines
-    while out and out[-1] == "":
-        out.pop()
-
-    return "\n".join(out)
+    return "\n".join(out).strip()
 
 
 def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
