@@ -123,8 +123,8 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
             f"{i}) {r['display_name']} – {_fmt_amount(amount)}{c}"
         )
 
-        if int(r.get("group_break_after", 0)) == 1:
-            payin_items.append("")
+        if int(r.get("group_break_after", 0) or 0) == 1:
+            payin_items.append(None)
     return HourlyRenderModel(
         model={
             "header.period": f"Данные на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}",
