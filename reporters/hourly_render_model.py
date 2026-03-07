@@ -44,6 +44,16 @@ def _parse_source_partners(value) -> List[str]:
 
     return out
 
+def _norm_method_code(value, default: str = "UNI") -> str:
+    if value is None:
+        return default
+
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return default
+
+    return s.upper()
+
 def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     from core.config_manager import (
         get_hourly_payins_df,
@@ -71,7 +81,7 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     for block in dto.payout:
         partner_key = normalize_partner_name(str(block.group_code).strip())
         for m in block.methods:
-            method_key = str(m.method_code).strip().upper()
+            method_key = _norm_method_code(m.method_code, default="UNI")
             k = (partner_key, method_key)
             fact_payout_by_partner_method[k] = fact_payout_by_partner_method.get(k, 0.0) + float(m.amount or 0.0)
     # ===== payouts =====
@@ -98,7 +108,7 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
         group_sources = _parse_source_partners(g.get("source_partners", ""))
 
         for _, m in methods.iterrows():
-            method_code = str(m["method_code"]).strip().upper()
+            method_code = _norm_method_code(m.get("method_code"), default="UNI")
 
             method_sources = _parse_source_partners(m.get("source_partners", ""))
             sources = method_sources if method_sources else group_sources
