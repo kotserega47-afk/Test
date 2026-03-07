@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List
-
+from analyzers.hourly_analyzer import HourlyDTO
+from utils.normalization import normalize_partner_name
 from analyzers.hourly_analyzer import HourlyDTO
 
 
@@ -25,10 +26,23 @@ def _fmt_amount(v) -> str:
 def _parse_source_partners(value) -> List[str]:
     if value is None:
         return []
+
     s = str(value).strip()
     if not s:
         return []
-    return [x.strip() for x in s.split(",") if x.strip()]
+
+    out: List[str] = []
+    for x in s.split(","):
+        raw = x.strip()
+        if not raw:
+            continue
+
+        norm = normalize_partner_name(raw)
+        norm = str(norm).strip()
+        if norm:
+            out.append(norm)
+
+    return out
 
 def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     from core.config_manager import (
@@ -49,12 +63,13 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
 
     fact_payins_by_partner: Dict[str, float] = {}
     for r in dto.payin:
-        key = str(r.entity_code).strip()
+        key = normalize_partner_name(str(r.entity_code).strip())
+        key = str(key).strip()
         fact_payins_by_partner[key] = fact_payins_by_partner.get(key, 0.0) + float(r.amount or 0.0)
 
     fact_payout_by_partner_method: Dict[tuple[str, str], float] = {}
     for block in dto.payout:
-        partner_key = str(block.group_code).strip()
+        partner_key = normalize_partner_name(str(block.group_code).strip())
         for m in block.methods:
             method_key = str(m.method_code).strip().upper()
             k = (partner_key, method_key)
