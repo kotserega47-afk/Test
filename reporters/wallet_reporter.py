@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, List, Optional
 
-from analyzers.wallet_analyzer import WalletDTO, WalletPartnerBlock, WalletMethodRow
-from core.config_manager import get_job_params
+import pandas as pd
+
+from analyzers.wallet_analyzer import WalletStatsDTO
+from core.config_manager import get_ui_layout_df
+from core.event_log import append_event
+from reporters.wallet_render_model import build_wallet_render_model
 
 
 @dataclass(frozen=True)
@@ -13,105 +17,122 @@ class RenderedReport:
     text: str
 
 
-def _fmt_int(v: float) -> str:
-    try:
-        n = int(round(float(v)))
-        return f"{n:,}".replace(",", " ")
-    except Exception:
-        return "0"
+def _default_wallet_layout() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"enabled": 1, "view": "wallet", "section": "stuck", "order": 10, "key": "stuck.title", "style": "text"},
+        {"enabled": 1, "view": "wallet", "section": "stuck", "order": 20, "key": "stuck.items", "style": "text"},
+        {"enabled": 1, "view": "wallet", "section": "header", "order": 30, "key": "header.title", "style": "text"},
+        {"enabled": 1, "view": "wallet", "section": "header", "order": 40, "key": "header.window", "style": "text"},
+        {"enabled": 1, "view": "wallet", "section": "partners", "order": 50, "key": "partners.blocks", "style": "block"},
+        {"enabled": 1, "view": "wallet", "section": "alerts", "order": 60, "key": "alerts.title", "style": "text"},
+        {"enabled": 1, "view": "wallet", "section": "alerts", "order": 70, "key": "alerts.blocks", "style": "block"},
+    ])
 
 
-def _limit_suffix(row: WalletMethodRow) -> str:
-    # comment/reason come from rules.xlsx wallet_limits
-    c = (row.limit.comment or "").strip()
-    r = (row.limit.reason or "").strip()
-    parts = []
-    if c:
-        parts.append(c)
-    if r:
-        parts.append(r)
-    return f" ({' / '.join(parts)})" if parts else ""
+def _is_empty_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
 
 
-def render_wallet(dto: WalletDTO, *, job: str = "wallet") -> RenderedReport:
-    """
-    Pure rendering.
-    Ordering / layout is controlled via rules.xlsx -> job_params (json), key: layout_json.
+def _apply_style(value: Any, style: str) -> List[str]:
+    style = (style or "text").strip().lower()
 
-    layout_json example:
-    {
-      "wallet_layout": [
-        {"group": ["A-мобайл", "АБХСбер (116)"], "spacing": 1}
-      ]
-    }
-    Keys refer to dto.blocks[].group (preferred) OR dto.blocks[].partner (fallback).
-    """
-    params = get_job_params(job=job)
-    layout = params.get("layout_json") or {}
-    wallet_layout = layout.get("wallet_layout") or []
+    if style == "blank":
+        return [""]
 
-    # build lookups
-    by_group: Dict[str, List[WalletPartnerBlock]] = {}
-    by_partner: Dict[str, WalletPartnerBlock] = {}
-    for b in dto.blocks:
-        if b.group:
-            by_group.setdefault(b.group, []).append(b)
-        by_partner[b.partner] = b
+    if style == "hr":
+        return ["_______________________"]
 
-    # stable sorting inside group
-    for g in by_group:
-        by_group[g] = sorted(by_group[g], key=lambda x: x.partner.lower())
+    if _is_empty_value(value):
+        return []
 
-    lines: List[str] = []
-    lines.append(f"Данные на {dto.report_day.strftime('%d.%m')}")
-    lines.append("")
-    lines.append("Выплаты:")
+    if style == "text":
+        if isinstance(value, list):
+            return [str(x) for x in value]
+        return [str(value)]
 
-    counter = 1
-
-    def emit_block(title: str, blocks: List[WalletPartnerBlock]) -> None:
-        nonlocal counter
-        lines.append(f"{counter}) {title}:")
-        # If multiple partners in one group: print per partner as sub-headers
-        if len(blocks) == 1 and blocks[0].partner == title:
-            b = blocks[0]
-            for mr in b.rows:
-                lines.append(f" - {mr.method} – {_fmt_int(mr.amount)}{_limit_suffix(mr)}")
-        else:
-            for b in blocks:
-                lines.append(f" • {b.partner}:")
-                for mr in b.rows:
-                    lines.append(f"   - {mr.method} – {_fmt_int(mr.amount)}{_limit_suffix(mr)}")
-
-        counter += 1
-
-    if wallet_layout:
-        # layout-driven
-        for block in wallet_layout:
-            group_keys = block.get("group") or []
-            spacing = int(block.get("spacing") or 0)
-
-            for key in group_keys:
-                # prefer group match; else partner match
-                if key in by_group:
-                    emit_block(key, by_group[key])
-                elif key in by_partner:
-                    emit_block(key, [by_partner[key]])
-                else:
-                    continue
-
-            for _ in range(spacing):
+    if style == "block":
+        lines: List[str] = []
+        for idx, block in enumerate(value):
+            if idx > 0:
                 lines.append("")
-    else:
-        # fallback: group->partner->method
-        # groups first, then partners without group
-        used_partners = set()
-        for g in sorted(by_group.keys(), key=lambda x: x.lower()):
-            emit_block(g, by_group[g])
-            used_partners |= {b.partner for b in by_group[g]}
+            if isinstance(block, list):
+                lines.extend([str(x) for x in block])
+            else:
+                lines.append(str(block))
+        return lines
 
-        rest = [b for b in dto.blocks if b.partner not in used_partners]
-        for b in sorted(rest, key=lambda x: x.partner.lower()):
-            emit_block(b.partner, [b])
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    return [str(value)]
 
-    return RenderedReport(text="\n".join(lines))
+
+def _load_layout(force_sync: bool = False) -> pd.DataFrame:
+    df = get_ui_layout_df(force_sync=force_sync)
+    if df is None or df.empty:
+        return _default_wallet_layout()
+
+    out = df.copy()
+    out.columns = [str(c).strip().lower() for c in out.columns]
+    for c in ["enabled", "view", "key", "style", "order"]:
+        if c not in out.columns:
+            out[c] = "" if c != "enabled" else 1
+
+    out["view"] = out["view"].fillna("").astype(str).str.strip().str.lower()
+    out["enabled"] = pd.to_numeric(out["enabled"], errors="coerce").fillna(0).astype(int)
+    out["order"] = pd.to_numeric(out["order"], errors="coerce").fillna(999999).astype(int)
+
+    wallet_rows = out[(out["enabled"] == 1) & (out["view"] == "wallet")].copy()
+    if wallet_rows.empty:
+        return _default_wallet_layout()
+
+    return wallet_rows.sort_values("order", kind="stable")
+
+
+def render_wallet(
+    dto: WalletStatsDTO,
+    *,
+    job: str = "wallet",
+    layout_df: Optional[pd.DataFrame] = None,
+    rules_force_sync: bool = False,
+) -> RenderedReport:
+    _ = job  # совместимость по сигнатуре
+    rm = build_wallet_render_model(dto)
+    render_model = rm.model
+    df = _load_layout(force_sync=rules_force_sync) if layout_df is None else layout_df.copy()
+
+    result_lines: List[str] = []
+
+    for _, row in df.iterrows():
+        key = str(row.get("key", "")).strip()
+        style = str(row.get("style", "text")).strip().lower()
+
+        if not key:
+            continue
+
+        if key not in render_model:
+            append_event(
+                event_type="layout_key_missing",
+                payload={"view": "wallet", "key": key},
+            )
+            continue
+
+        value = render_model.get(key)
+        if style in {"text", "block"} and _is_empty_value(value):
+            continue
+
+        styled = _apply_style(value, style)
+        for line in styled:
+            if line == "" and result_lines and result_lines[-1] == "":
+                continue
+            result_lines.append(line)
+
+    while result_lines and result_lines[-1] == "":
+        result_lines.pop()
+
+    return RenderedReport(text="\n".join(result_lines).strip())

@@ -22,146 +22,27 @@ from utils.normalization import normalize_partner_name
 # =============================================================================
 
 ALLOWED_VALUE_TYPES = {"str", "int", "float", "bool", "csv", "json"}
-ALLOWED_SCOPES = {"global", "partner"}
+ALLOWED_SCOPES = {"global", "job", "partner"}
 
-ALLOWED_JOB_PARAMS: Dict[str, Dict[str, type]] = {
+# Храним ожидаемый value_type как строку, единообразно для всех job
+ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
     "hourly": {
-        "intraday_interval_minutes": int,
-        "final_daily_time": str,
-        "max_comment_length": int,
-        "send_enabled": bool,
+        "intraday_interval_minutes": "int",
+        "final_daily_time": "str",
+        "max_comment_length": "int",
+        "send_enabled": "bool",
     },
     "wallet": {
-        "payin_days_back": int,
-        "payout_days_back": int,
+        "window_minutes": "int",
+        "offset_minutes": "int",
+        "min_events": "int",
+        "pending_payin_minutes": "int",
+        "pending_payout_minutes": "int",
     },
     "ttl_clean": {
-        "interval_minutes": int,
+        "interval_minutes": "int",
     },
 }
-_JOB_PARAMS_CACHE = {}  # или твой Cache object, если он уже есть
-
-
-def validate_job_params(df: pd.DataFrame) -> List[str]:
-    """
-    Fail-fast валидатор job_params.
-    Ожидаемые колонки:
-      id, enabled, job, scope, scope_value, key, value_type, value
-    value_type: str|int|float|bool|json
-    """
-    errors: List[str] = []
-
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    required = ["id", "enabled", "job", "scope", "scope_value", "key", "value_type", "value"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        return [f"job_params: missing columns: {', '.join(missing)}"]
-
-    # enabled
-    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
-    bad_enabled = ~df["enabled"].isin([0, 1])
-    if bad_enabled.any():
-        bad_ids = df.loc[bad_enabled, "id"].astype(str).tolist()
-        errors.append("job_params: enabled must be 0/1; bad ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
-
-    # required strings
-    for c in ["id", "job", "scope", "key", "value_type"]:
-        bad = df[c].astype(str).str.strip() == ""
-        if bad.any():
-            bad_ids = df.loc[bad, "id"].astype(str).tolist()
-            errors.append(f"job_params: {c} empty; ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
-
-    # value_type whitelist
-    vt = df["value_type"].astype(str).str.strip().str.lower()
-    ok = vt.isin(["str", "int", "float", "bool", "json"])
-    if (~ok).any():
-        bad_ids = df.loc[~ok, "id"].astype(str).tolist()
-        errors.append("job_params: bad value_type; ids: " + ", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
-
-    return errors
-
-
-def _cast_job_param(value_type: str, value: Any, *, row_id: str) -> Any:
-    vt = (value_type or "").strip().lower()
-    if vt == "str":
-        return "" if value is None else str(value)
-    if vt == "int":
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            raise RuntimeError(f"job_params: int value is empty; id={row_id}")
-        return int(float(value))
-    if vt == "float":
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            raise RuntimeError(f"job_params: float value is empty; id={row_id}")
-        return float(value)
-    if vt == "bool":
-        s = str(value).strip().lower()
-        if s in ["1", "true", "yes", "y", "on"]:
-            return True
-        if s in ["0", "false", "no", "n", "off", ""]:
-            return False
-        raise RuntimeError(f"job_params: bad bool '{value}'; id={row_id}")
-    if vt == "json":
-        # value может быть уже dict (если excel reader/engine так вернул) или строка
-        if value is None or (isinstance(value, float) and pd.isna(value)) or str(value).strip() == "":
-            return {}
-        if isinstance(value, (dict, list)):
-            return value
-        try:
-            return json.loads(str(value))
-        except Exception as e:
-            raise RuntimeError(f"job_params: bad json; id={row_id}; err={e}")
-    raise RuntimeError(f"job_params: unsupported value_type={value_type}; id={row_id}")
-
-
-def get_job_params(
-    *,
-    rules_xlsx_path: str = "",
-    sheet_name: str = "job_params",
-    job: str,
-    force_sync: bool = False,
-) -> Dict[str, Any]:
-    """
-    Возвращает параметры для конкретного job.
-    Приоритет (если понадобится позже):
-      scope=job (scope_value=job) > scope=global
-    Сейчас у тебя scope=global, scope_value пустой — тоже ок.
-    """
-    path = _get_local_rules_path(force_sync=force_sync)
-
-    res = _read_sheet_cached(
-        cache=_JOB_PARAMS_CACHE,
-        path=path,
-        sheet_name=sheet_name,
-        validator=validate_job_params,
-    )
-    if res.errors:
-        raise RuntimeError("rules.xlsx validation fatal errors (job_params)")
-
-    df = res.df_norm.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
-
-    df = df[df["enabled"] == 1].copy()
-    df["job"] = df["job"].astype(str).str.strip().str.lower()
-    df["scope"] = df["scope"].astype(str).str.strip().str.lower()
-    df["scope_value"] = df["scope_value"].astype(str).fillna("").str.strip().str.lower()
-    df["key"] = df["key"].astype(str).str.strip()
-    df["value_type"] = df["value_type"].astype(str).str.strip().str.lower()
-
-    job_l = job.strip().lower()
-
-    # scope priority: job-specific > global
-    df_job = df[(df["scope"] == "job") & (df["scope_value"] == job_l) & (df["job"] == job_l)]
-    df_glb = df[(df["scope"] == "global") & (df["job"] == job_l)]
-
-    # если job-scope пустой — используем global
-    use = df_job if len(df_job) else df_glb
-
-    out: Dict[str, Any] = {}
-    for _, r in use.iterrows():
-        k = str(r["key"])
-        out[k] = _cast_job_param(r["value_type"], r["value"], row_id=str(r["id"]))
-
-    return out
 
 # =============================================================================
 # Result models
@@ -186,6 +67,311 @@ class _NotifyState:
     last_sent_ts: float = 0.0
     last_hash: str = ""
 
+
+# =============================================================================
+# job_params
+# =============================================================================
+
+def _parse_value(value: Any, value_type: str) -> Any:
+    vt = (value_type or "str").strip().lower()
+
+    if value is None:
+        if vt == "json":
+            return {}
+        if vt == "csv":
+            return []
+        if vt == "bool":
+            return False
+        return ""
+
+    # pandas NaN
+    try:
+        if pd.isna(value):
+            if vt == "json":
+                return {}
+            if vt == "csv":
+                return []
+            if vt == "bool":
+                return False
+            return ""
+    except Exception:
+        pass
+
+    v = str(value).strip()
+
+    if vt == "int":
+        return int(float(v))
+
+    if vt == "float":
+        return float(v)
+
+    if vt == "bool":
+        return v.lower() in ("1", "true", "yes", "y", "on")
+
+    if vt == "csv":
+        return [x.strip() for x in v.split(",") if x.strip()]
+
+    if vt == "json":
+        if not v:
+            return {}
+        return json.loads(v)
+
+    return v  # str
+
+
+def validate_job_params(df: pd.DataFrame) -> ValidationResult:
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    required = ["id", "enabled", "job", "scope", "scope_value", "key", "value_type", "value"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        errors.append(f"job_params: missing columns: {missing}")
+        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
+
+    # normalize
+    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
+    df["job"] = df["job"].fillna("").astype(str).str.strip().str.lower()
+    df["scope"] = df["scope"].fillna("").astype(str).str.strip().str.lower()
+    df["scope_value"] = df["scope_value"].fillna("").astype(str).str.strip()
+    df["key"] = df["key"].fillna("").astype(str).str.strip()
+    df["value_type"] = df["value_type"].fillna("").astype(str).str.strip().str.lower()
+
+    # value не приводим сразу к str, чтобы корректно парсить int/float/json
+    if "value" not in df.columns:
+        df["value"] = None
+
+    # enabled strict
+    bad_enabled = df["enabled"].isna() | ~df["enabled"].isin([0, 1])
+    if bad_enabled.any():
+        bad_ids = df.loc[bad_enabled, "id"].astype(str).tolist()
+        errors.append(
+            "job_params: enabled must be 0/1; bad ids: "
+            + ", ".join(bad_ids[:30])
+            + (" …" if len(bad_ids) > 30 else "")
+        )
+
+    # scope strict
+    bad_scope = ~df["scope"].isin(ALLOWED_SCOPES)
+    if bad_scope.any():
+        bad_ids = df.loc[bad_scope, "id"].astype(str).tolist()
+        errors.append(
+            "job_params: invalid scope (allowed: "
+            + f"{sorted(ALLOWED_SCOPES)}); ids: "
+            + ", ".join(bad_ids[:30])
+            + (" …" if len(bad_ids) > 30 else "")
+        )
+
+    # value_type strict
+    bad_vt = ~df["value_type"].isin(ALLOWED_VALUE_TYPES)
+    if bad_vt.any():
+        bad_ids = df.loc[bad_vt, "id"].astype(str).tolist()
+        errors.append(
+            "job_params: invalid value_type (allowed: "
+            + f"{sorted(ALLOWED_VALUE_TYPES)}); ids: "
+            + ", ".join(bad_ids[:30])
+            + (" …" if len(bad_ids) > 30 else "")
+        )
+
+    # required strings
+    for c in ["id", "job", "scope", "key", "value_type"]:
+        bad = df[c].astype(str).str.strip().eq("")
+        if bad.any():
+            bad_ids = df.loc[bad, "id"].astype(str).tolist()
+            errors.append(
+                f"job_params: {c} empty; ids: "
+                + ", ".join(bad_ids[:30])
+                + (" …" if len(bad_ids) > 30 else "")
+            )
+
+    active = df[df["enabled"] == 1].copy()
+
+    # whitelist + strict expected type
+    for _, r in active.iterrows():
+        job = r["job"]
+        key = r["key"]
+        row_id = str(r["id"])
+
+        if job not in ALLOWED_JOB_PARAMS:
+            errors.append(f"job_params: unknown job '{job}'; id={row_id}")
+            continue
+
+        if key not in ALLOWED_JOB_PARAMS[job]:
+            errors.append(f"job_params: invalid key '{key}' for job '{job}'; id={row_id}")
+            continue
+
+        expected_type = ALLOWED_JOB_PARAMS[job][key]
+        actual_type = r["value_type"]
+
+        if actual_type != expected_type:
+            errors.append(
+                f"job_params: key '{key}' for job '{job}' must have value_type='{expected_type}', "
+                f"got '{actual_type}'; id={row_id}"
+            )
+            continue
+
+        try:
+            _ = _parse_value(r["value"], actual_type)
+        except Exception as e:
+            errors.append(
+                f"job_params: parse failed for job='{job}' key='{key}' "
+                f"({actual_type}); id={row_id}; err={e}"
+            )
+
+    # uniqueness among enabled=1
+    if not active.empty:
+        dup = (
+            active.groupby(["job", "scope", "scope_value", "key"])
+            .size()
+            .reset_index(name="cnt")
+        )
+        if (dup["cnt"] > 1).any():
+            errors.append("job_params: duplicate active overrides (job/scope/scope_value/key)")
+
+    ok = len(errors) == 0
+    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
+
+
+def build_job_params_overrides(df: pd.DataFrame) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Strict mode:
+      - if validation errors -> returns ({}, errors)
+      - otherwise returns (overrides, [])
+    """
+    res = validate_job_params(df)
+    if res.errors:
+        return {}, res.errors
+
+    overrides: Dict[str, Any] = {}
+
+    active = res.df_norm[res.df_norm["enabled"] == 1].copy()
+    for _, r in active.iterrows():
+        job = r["job"]
+        scope = r["scope"]
+        scope_value = r["scope_value"] or "__global__"
+        key = r["key"]
+        value = _parse_value(r["value"], r["value_type"])
+
+        overrides.setdefault(job, {}).setdefault(scope, {}).setdefault(scope_value, {})[key] = value
+
+    return overrides, []
+
+
+def get_job_params_df(
+    *,
+    rules_xlsx_path: str = "",
+    sheet_name: str = "job_params",
+    force_sync: bool = False,
+) -> Optional[pd.DataFrame]:
+    path = _get_local_rules_path(force_sync=force_sync)
+
+    try:
+        return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+    except ValueError:
+        return None
+
+
+def get_job_params_overrides(
+    *,
+    rules_xlsx_path: str = "",
+    sheet_name: str = "job_params",
+    force_sync: bool = False,
+) -> Dict[str, Any]:
+    df = get_job_params_df(
+        rules_xlsx_path=rules_xlsx_path,
+        sheet_name=sheet_name,
+        force_sync=force_sync,
+    )
+    if df is None:
+        return {}
+
+    res = _read_sheet_cached(
+        cache=_JOB_PARAMS_CACHE,
+        path=_get_local_rules_path(force_sync=force_sync),
+        sheet_name=sheet_name,
+        validator=validate_job_params,
+    )
+    if res.errors:
+        return {}
+
+    overrides, errs = build_job_params_overrides(res.df_norm)
+    if errs:
+        return {}
+    return overrides
+
+
+def get_job_param(
+    overrides: Dict[str, Any],
+    *,
+    job: str,
+    key: str,
+    scope: str = "global",
+    scope_value: str = "",
+    default: Any = None,
+) -> Any:
+    """
+    Priority:
+      1) exact scope override (if scope != global)
+      2) job-scope override
+      3) global override
+      4) default
+    """
+    job = (job or "").strip().lower()
+    scope = (scope or "global").strip().lower()
+    scope_value = (scope_value or "").strip().lower()
+
+    if not overrides or job not in overrides:
+        return default
+
+    if scope != "global":
+        v = overrides.get(job, {}).get(scope, {}).get(scope_value, {}).get(key)
+        if v is not None:
+            return v
+
+    v = overrides.get(job, {}).get("job", {}).get(job, {}).get(key)
+    if v is not None:
+        return v
+
+    v = overrides.get(job, {}).get("global", {}).get("__global__", {}).get(key)
+    if v is not None:
+        return v
+
+    return default
+
+
+def get_job_params(
+    *,
+    rules_xlsx_path: str = "",
+    sheet_name: str = "job_params",
+    job: str,
+    force_sync: bool = False,
+) -> Dict[str, Any]:
+    """
+    Возвращает параметры для конкретного job.
+    Priority:
+      scope=<job-specific> > scope=global
+    """
+    overrides = get_job_params_overrides(
+        rules_xlsx_path=rules_xlsx_path,
+        sheet_name=sheet_name,
+        force_sync=force_sync,
+    )
+    if not overrides:
+        return {}
+
+    job_l = job.strip().lower()
+
+    result: Dict[str, Any] = {}
+
+    # global
+    result.update(overrides.get(job_l, {}).get("global", {}).get("__global__", {}))
+    # job-specific
+    result.update(overrides.get(job_l, {}).get("job", {}).get(job_l, {}))
+
+    return result
 
 # =============================================================================
 # Caches
@@ -312,213 +498,6 @@ def _read_sheet_cached(
     c.stat_key = stat_key
     c.result = res
     return res
-
-
-# =============================================================================
-# job_params
-# =============================================================================
-
-def _parse_value(value: str, value_type: str) -> Any:
-    vt = (value_type or "str").strip().lower()
-    v = "" if value is None else str(value)
-
-    if vt == "int":
-        return int(v)
-
-    if vt == "float":
-        return float(v)
-
-    if vt == "bool":
-        return v.strip().lower() in ("1", "true", "yes", "y", "on")
-
-    if vt == "csv":
-        return [x.strip() for x in v.split(",") if x.strip()]
-
-    if vt == "json":
-        return json.loads(v)
-
-    return v  # str
-
-
-def validate_job_params(df: pd.DataFrame) -> ValidationResult:
-    errors: List[str] = []
-    warnings: List[str] = []
-
-    df = df.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
-
-    required = ["id", "enabled", "job", "scope", "scope_value", "key", "value_type", "value"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        errors.append(f"job_params: missing columns: {missing}")
-        return ValidationResult(ok=False, errors=errors, warnings=warnings, df_norm=df)
-
-    # normalize
-    df["enabled"] = pd.to_numeric(df["enabled"], errors="coerce")
-    df["job"] = df["job"].astype(str).str.strip().str.lower()
-    df["scope"] = df["scope"].astype(str).str.strip().str.lower()
-    df["scope_value"] = df["scope_value"].astype(str).fillna("").str.strip()
-    df["key"] = df["key"].astype(str).str.strip()
-    df["value_type"] = df["value_type"].astype(str).str.strip().str.lower()
-    df["value"] = df["value"].astype(str).fillna("")
-
-    # enabled strict
-    bad_enabled = df["enabled"].isna() | ~df["enabled"].isin([0, 1])
-    if bad_enabled.any():
-        errors.append("job_params: enabled must be 0/1")
-
-    # scope strict
-    bad_scope = ~df["scope"].isin(ALLOWED_SCOPES)
-    if bad_scope.any():
-        errors.append(f"job_params: invalid scope (allowed: {sorted(ALLOWED_SCOPES)})")
-
-    # value_type strict
-    bad_vt = ~df["value_type"].isin(ALLOWED_VALUE_TYPES)
-    if bad_vt.any():
-        errors.append(f"job_params: invalid value_type (allowed: {sorted(ALLOWED_VALUE_TYPES)})")
-
-    # whitelist + type parse (strict)
-    active = df[df["enabled"] == 1].copy()
-    for _, r in active.iterrows():
-        job = r["job"]
-        key = r["key"]
-
-        if job not in ALLOWED_JOB_PARAMS:
-            errors.append(f"job_params: unknown job '{job}'")
-            continue
-
-        if key not in ALLOWED_JOB_PARAMS[job]:
-            errors.append(f"job_params: invalid key '{key}' for job '{job}'")
-            continue
-
-        # parse must succeed
-        try:
-            _ = _parse_value(r["value"], r["value_type"])
-        except Exception as e:
-            errors.append(f"job_params: parse failed for job='{job}' key='{key}' ({r['value_type']}): {e}")
-
-    # uniqueness among enabled=1
-    if not active.empty:
-        dup = (
-            active.groupby(["job", "scope", "scope_value", "key"])
-            .size()
-            .reset_index(name="cnt")
-        )
-        if (dup["cnt"] > 1).any():
-            errors.append("job_params: duplicate active overrides (job/scope/scope_value/key)")
-
-    ok = len(errors) == 0
-    return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
-
-
-def build_job_params_overrides(df: pd.DataFrame) -> Tuple[Dict[str, Any], List[str]]:
-    """
-    Strict mode:
-      - if validation errors -> returns ({}, errors)
-      - otherwise returns (overrides, [])
-    """
-    res = validate_job_params(df)
-    if res.errors:
-        return {}, res.errors
-
-    overrides: Dict[str, Any] = {}
-
-    active = res.df_norm[res.df_norm["enabled"] == 1]
-    for _, r in active.iterrows():
-        job = r["job"]
-        scope = r["scope"]
-        scope_value = r["scope_value"] or "__global__"
-        key = r["key"]
-        value = _parse_value(r["value"], r["value_type"])
-
-        overrides.setdefault(job, {}).setdefault(scope, {}).setdefault(scope_value, {})[key] = value
-
-    return overrides, []
-
-
-def get_job_params_df(
-    *,
-    rules_xlsx_path: str = "",
-    sheet_name: str = "job_params",
-    force_sync: bool = False,
-) -> Optional[pd.DataFrame]:
-    """
-    Reads job_params sheet from local rules snapshot.
-    Returns None if sheet missing.
-    """
-    path = _get_local_rules_path(force_sync=force_sync)
-
-    try:
-        return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
-    except ValueError:
-        # sheet not found
-        return None
-
-
-def get_job_params_overrides(
-    *,
-    rules_xlsx_path: str = "",
-    sheet_name: str = "job_params",
-    force_sync: bool = False,
-) -> Dict[str, Any]:
-    """
-    Strict mode:
-      - any error in job_params -> {}
-    """
-    df = get_job_params_df(rules_xlsx_path=rules_xlsx_path, sheet_name=sheet_name, force_sync=force_sync)
-    if df is None:
-        return {}
-
-    res = _read_sheet_cached(
-        cache=_JOB_PARAMS_CACHE,
-        path=_get_local_rules_path(force_sync=force_sync),
-        sheet_name=sheet_name,
-        validator=validate_job_params,
-    )
-    if res.errors:
-        return {}
-
-    overrides, errs = build_job_params_overrides(res.df_norm)
-    if errs:
-        return {}
-    return overrides
-
-
-def get_job_param(
-    overrides: Dict[str, Any],
-    *,
-    job: str,
-    key: str,
-    scope: str = "global",
-    scope_value: str = "",
-    default: Any = None,
-) -> Any:
-    """
-    Priority:
-      1) partner override (scope != global)
-      2) global override
-      3) default
-    """
-    job = (job or "").strip().lower()
-    scope = (scope or "global").strip().lower()
-    scope_value = (scope_value or "").strip()
-
-    if not overrides or job not in overrides:
-        return default
-
-    # partner scope override
-    if scope != "global":
-        v = overrides.get(job, {}).get(scope, {}).get(scope_value, {}).get(key)
-        if v is not None:
-            return v
-
-    # global override
-    v = overrides.get(job, {}).get("global", {}).get("__global__", {}).get(key)
-    if v is not None:
-        return v
-
-    return default
-
 
 # =============================================================================
 # wallet_limits
@@ -747,9 +726,18 @@ def validate_thresholds_partner(df: pd.DataFrame) -> ValidationResult:
                 + (", ".join(bad_ids[:30]) + (" …" if len(bad_ids) > 30 else ""))
             )
 
+    active = df[df["enabled"] == 1].copy()
+    if not active.empty:
+        dup = (
+            active.groupby(["analyzer", "partner", "metric"])
+            .size()
+            .reset_index(name="cnt")
+        )
+        if (dup["cnt"] > 1).any():
+            errors.append("thresholds_partner: duplicate active rules for same analyzer/partner/metric")
+
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings, df_norm=df)
-
 
 def get_thresholds_partner_df(
     *,
@@ -770,7 +758,6 @@ def get_thresholds_partner_df(
         raise RuntimeError("rules.xlsx validation fatal errors (thresholds_partner)")
 
     return res.df_norm
-
 
 # =============================================================================
 # partner_groups
@@ -1057,9 +1044,10 @@ def clear_rules_caches() -> None:
     _EXCLUDE_TIME_CACHE.clear()
     _WALLET_LIMITS_CACHE.clear()
     _JOB_PARAMS_CACHE.clear()
+    _THRESHOLDS_PARTNER_CACHE.clear()
+    _PARTNER_GROUPS_CACHE.clear()
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
-
 # =============================================================================
 # rules_validate (aggregate)
 # =============================================================================

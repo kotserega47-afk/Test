@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List
+
+from analyzers.wallet_analyzer import WalletStatsDTO, WalletPartnerStats, WalletAlertBlock
+
+
+@dataclass(frozen=True)
+class WalletRenderModel:
+    model: Dict[str, Any]
+
+
+def _fmt_amount(value: float | int | None) -> str:
+    if value is None:
+        return "—"
+    return f"{int(round(float(value))):,}"
+
+
+def _conversion_line(p: WalletPartnerStats) -> str:
+    if p.conversion_insufficient:
+        return f"  Конверсия: {p.conversion_pct:.1f}% — ℹ️ Недостаточно данных"
+
+    if p.conversion_threshold_pct is None:
+        return f"  Конверсия: {p.conversion_pct:.1f}% — ℹ️"
+    icon = "🔴" if p.conversion_bad else "🟢"
+    return f"  Конверсия: {p.conversion_pct:.1f}% (< {p.conversion_threshold_pct:.1f}%) — {icon}"
+
+
+def _payin_line(p: WalletPartnerStats) -> str:
+    amount = _fmt_amount(p.payin_amount)
+
+    if p.daily_limit is None:
+        return f"  Поступления: {amount} — ℹ️"
+
+    limit = _fmt_amount(p.daily_limit)
+    icon = "🟢"
+    if p.limit_bad:
+        icon = "🔴"
+    elif p.limit_warn:
+        icon = "🟡"
+
+    suffix = f" ({p.daily_limit_comment})" if p.daily_limit_comment else ""
+    return f"  Поступления: {amount} / {limit} ({p.percent_filled}%) — {icon}{suffix}"
+
+
+def _api_line(p: WalletPartnerStats) -> str:
+    if p.api_insufficient:
+        return f"  Отмен по API: {p.api_cancel_count} шт ({p.api_cancel_pct:.1f}%) — ℹ️"
+
+    icon = "🔴" if p.api_bad else "🟢"
+    return f"  Отмен по API: {p.api_cancel_count} шт ({p.api_cancel_pct:.1f}%) — {icon}"
+
+
+def _last_success_line(p: WalletPartnerStats) -> str:
+    if p.last_success_at is None:
+        return "  Последняя успешная операция: —"
+    return f"  Последняя успешная операция: {p.last_success_at.strftime('%d.%m %H:%M:%S')}"
+
+
+def _partner_block(p: WalletPartnerStats) -> List[str]:
+    block = [
+        p.partner,
+        f"  Всего операций: {p.total_ops}",
+        f"  Успешных: {p.success_ops}",
+        _conversion_line(p),
+        _payin_line(p),
+        _api_line(p),
+    ]
+    if p.nok_wallets_count > 0:
+        block.append(f"  Нет доступных аккаунтов: {p.nok_wallets_count} — 🔴")
+    block.append(_last_success_line(p))
+    return block
+
+
+def _alert_block(a: WalletAlertBlock) -> List[str]:
+    return [a.partner, *a.lines]
+
+
+def build_wallet_render_model(dto: WalletStatsDTO) -> WalletRenderModel:
+    partners_blocks = [_partner_block(p) for p in dto.partners]
+    alerts_title = "❗ Обнаружены отклонения:"
+    alerts_blocks = [_alert_block(a) for a in dto.alerts]
+    if not alerts_blocks:
+        alerts_title = ""
+
+    model = {
+        "stuck.title": "⏳ Зависшие:",
+        "stuck.items": [
+            f"• Поступления: {dto.stuck_payins_count} шт",
+            f"• Выплаты: {dto.stuck_payouts_count} шт",
+        ],
+        "header.title": "📦 Wallet Analyzer",
+        "header.window": f"🕒 Окно: {dto.window_minutes} мин (смещение {dto.offset_minutes})",
+        "partners.blocks": partners_blocks,
+        "alerts.title": alerts_title,
+        "alerts.blocks": alerts_blocks,
+    }
+    return WalletRenderModel(model=model)

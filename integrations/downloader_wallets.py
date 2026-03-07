@@ -1,31 +1,29 @@
 # integrations/downloader_wallets.py
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 import time
-import json
-import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
-
-from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
 
-# keep as in your project
+from playwright.sync_api import sync_playwright
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.loggers import get_logger
-from utils.log_profiles import LOG_PROFILES
-
-from analyzers.wallet_analyzer import build_wallet_dto_from_payout_xlsx
+from analyzers.wallet_analyzer import build_wallet_stats_dto
+from core.config_manager import get_job_param, get_job_params_overrides
+from core.event_log import append_event
+from core.state_store import state_get, state_update
 from reporters.wallet_reporter import render_wallet
 from transport.telegram_transport import send_text
-from core.event_log import append_event
-from core.config_manager import get_job_params_overrides, get_job_param
-from core.state_store import state_get, state_update
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
 
 
 icon, name = LOG_PROFILES["WALLET"]
@@ -45,31 +43,24 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 @dataclass(frozen=True)
 class WalletJobParams:
-    payin_days_back: int = 2
-    payout_days_back: int = 7
+    payin_days_back: int = 0
+    payout_days_back: int = 0
 
 
 def _load_wallet_params() -> WalletJobParams:
-    """
-    Source of truth: rules.xlsx -> job_params (job=wallet).
-    No YAML fallback (contract).
-    """
     overrides = get_job_params_overrides(force_sync=False)
-    payin_days = get_job_param(overrides, job="wallet", key="payin_days_back", default=2)
-    payout_days = get_job_param(overrides, job="wallet", key="payout_days_back", default=7)
+    payin_days = get_job_param(overrides, job="wallet", key="payin_days_back", default=0)
+    payout_days = get_job_param(overrides, job="wallet", key="payout_days_back", default=0)
 
     try:
-        payin_days = int(payin_days)
+        payin_days = max(0, int(payin_days))
     except Exception:
-        payin_days = 2
+        payin_days = 0
 
     try:
-        payout_days = int(payout_days)
+        payout_days = max(0, int(payout_days))
     except Exception:
-        payout_days = 7
-
-    payin_days = max(0, payin_days)
-    payout_days = max(0, payout_days)
+        payout_days = 0
 
     return WalletJobParams(payin_days_back=payin_days, payout_days_back=payout_days)
 
@@ -86,7 +77,6 @@ def _ensure_logged_in(page, context) -> None:
     page.click("button:has-text('Войти')")
     page.wait_for_load_state("networkidle")
     time.sleep(2)
-
     context.storage_state(path=AUTH_STATE_FILE)
     logger.info("✅ Сессия сохранена")
 
@@ -101,12 +91,10 @@ def _find_and_pick_date(page, target_date: str) -> bool:
 
         prev_btn = page.locator("button[aria-label='Previous month']")
         if prev_btn.count() == 0:
-            logger.warning("⚠️ Кнопка 'Previous month' не найдена!")
+            logger.warning("⚠️ Кнопка 'Previous month' не найдена")
             return False
-
         prev_btn.click()
         page.wait_for_timeout(180)
-
     logger.warning(f"⚠️ Дата {target_date} не найдена в пределах 12 месяцев")
     return False
 
@@ -194,14 +182,6 @@ def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
 
 
 def run_wallet_cycle() -> None:
-    """
-    Wallet cycle (rules-only):
-      - download
-      - fp compare in state.json (job_state)
-      - skip -> event_log only
-      - analyze
-      - fp commit after successful analyze
-    """
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN / ANTARES_PASSWORD не заданы")
 
@@ -209,7 +189,10 @@ def run_wallet_cycle() -> None:
     params = _load_wallet_params()
 
     logger.info(f"💼 WalletHandler стартовал (ts={ts})")
-    logger.info(f"⚙️ wallet params: payin_days_back={params.payin_days_back}, payout_days_back={params.payout_days_back}")
+    logger.info(
+        f"⚙️ wallet params: payin_days_back={params.payin_days_back}, "
+        f"payout_days_back={params.payout_days_back}"
+    )
 
     payin_path, payout_path = _download_wallet_files(ts, params)
     fp = _calc_wallet_fingerprint(payin_path, payout_path)
@@ -220,26 +203,23 @@ def run_wallet_cycle() -> None:
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
         return
 
-    # 1) analyzer -> DTO (NO TG here)
-    dto = build_wallet_dto_from_payout_xlsx(
+    dto = build_wallet_stats_dto(
+        payin_path=payin_path,
         payout_path=payout_path,
         analyzer="wallet",
         rules_force_sync=False,
     )
 
-    # 2) reporter -> text (NO TG here)
     rendered = render_wallet(dto, job="wallet")
     text = (rendered.text or "").strip()
     if not text:
         raise RuntimeError("wallet: rendered report is empty")
 
-    # 3) transport
     chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
     if not chat_id:
         raise RuntimeError("TELEGRAM_CHAT_ID_WALLET is not set")
     send_text(text=text, chat_id=chat_id)
 
-    # 4) fp commit ONLY after successful send
     state_update("wallet", {
         "last_fingerprint": fp,
         "last_sent_ts": int(time.time()),
