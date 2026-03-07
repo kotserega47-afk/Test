@@ -22,6 +22,13 @@ def _fmt_amount(v) -> str:
     except Exception:
         return "0"
 
+def _parse_source_partners(value) -> List[str]:
+    if value is None:
+        return []
+    s = str(value).strip()
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     from core.config_manager import (
@@ -37,14 +44,21 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     methods_df = get_hourly_payout_methods_df()
 
     # ===== индексы факта =====
+    # dto.* уже содержит факт по source partner / method.
+    # Здесь строим словари для быстрого суммирования по source_partners из rules.
 
-    fact_payins = {r.entity_code: r for r in dto.payin}
+    fact_payins_by_partner: Dict[str, float] = {}
+    for r in dto.payin:
+        key = str(r.entity_code).strip()
+        fact_payins_by_partner[key] = fact_payins_by_partner.get(key, 0.0) + float(r.amount or 0.0)
 
-    fact_payout = {}
+    fact_payout_by_partner_method: Dict[tuple[str, str], float] = {}
     for block in dto.payout:
+        partner_key = str(block.group_code).strip()
         for m in block.methods:
-            fact_payout[(block.group_code, m.method_code)] = m
-
+            method_key = str(m.method_code).strip().upper()
+            k = (partner_key, method_key)
+            fact_payout_by_partner_method[k] = fact_payout_by_partner_method.get(k, 0.0) + float(m.amount or 0.0)
     # ===== payouts =====
 
     payout_items: List[str] = []
@@ -65,12 +79,17 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
                 ]
             .sort_values("sort_order")
         )
+        group_sources = _parse_source_partners(g.get("source_partners", ""))
 
         for _, m in methods.iterrows():
-            key = (group_code, m["method_code"])
-            fact = fact_payout.get(key)
+            method_code = str(m["method_code"]).strip().upper()
 
-            amount = fact.amount if fact else 0
+            method_sources = _parse_source_partners(m.get("source_partners", ""))
+            sources = method_sources if method_sources else group_sources
+
+            amount = 0.0
+            for src in sources:
+                amount += fact_payout_by_partner_method.get((src, method_code), 0.0)
 
             comment = m.get("comment", "")
             c = f" ({comment})" if comment else ""
@@ -90,10 +109,11 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
 
     for i, (_, r) in enumerate(rows.iterrows(), start=1):
 
-        key = r["entity_code"]
-        fact = fact_payins.get(key)
+        sources = _parse_source_partners(r.get("source_partners", ""))
 
-        amount = fact.amount if fact else 0
+        amount = 0.0
+        for src in sources:
+            amount += fact_payins_by_partner.get(src, 0.0)
 
         comment = r.get("comment", "")
         c = f" ({comment})" if comment else ""
