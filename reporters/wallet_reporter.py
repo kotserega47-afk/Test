@@ -117,7 +117,8 @@ def render_wallet(
 
         if key not in render_model:
             append_event(
-                event_type="layout_key_missing",
+                type="layout_key_missing",
+                job_type="wallet",
                 payload={"view": "wallet", "key": key},
             )
             continue
