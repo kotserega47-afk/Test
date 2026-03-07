@@ -363,13 +363,51 @@ def _load_wallet_runtime_params(*, rules_force_sync: bool) -> Dict[str, int]:
         except Exception:
             return default
 
-    # Пока job_params whitelist у тебя не расширен, поэтому оставляем безопасные default.
+def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
+    params = get_job_params(job="wallet", force_sync=rules_force_sync) or {}
+
+    required_keys = {
+        "window_minutes",
+        "offset_minutes",
+        "min_events",
+        "pending_payin_minutes",
+        "pending_payout_minutes",
+    }
+
+    missing = [k for k in required_keys if k not in params or params.get(k) in (None, "")]
+    if missing:
+        raise RuntimeError(
+            "job_params: missing required wallet params: " + ", ".join(sorted(missing))
+        )
+
+    def _require_int(name: str) -> int:
+        raw = params.get(name)
+        try:
+            value = int(raw)
+        except Exception:
+            raise RuntimeError(
+                f"job_params: wallet param '{name}' must be int, got {raw!r}"
+            )
+
+        if name == "offset_minutes":
+            if value < 0:
+                raise RuntimeError(
+                    f"job_params: wallet param '{name}' must be >= 0, got {value}"
+                )
+        else:
+            if value < 1:
+                raise RuntimeError(
+                    f"job_params: wallet param '{name}' must be >= 1, got {value}"
+                )
+
+        return value
+
     return {
-        "window_minutes": max(1, _as_int("window_minutes", 15)),
-        "offset_minutes": max(0, _as_int("offset_minutes", 0)),
-        "min_events": max(1, _as_int("min_events", 10)),
-        "pending_payin_minutes": max(1, _as_int("pending_payin_minutes", 10)),
-        "pending_payout_minutes": max(1, _as_int("pending_payout_minutes", 180)),
+        "window_minutes": _require_int("window_minutes"),
+        "offset_minutes": _require_int("offset_minutes"),
+        "min_events": _require_int("min_events"),
+        "pending_payin_minutes": _require_int("pending_payin_minutes"),
+        "pending_payout_minutes": _require_int("pending_payout_minutes"),
     }
 
 

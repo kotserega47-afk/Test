@@ -17,18 +17,6 @@ class RenderedReport:
     text: str
 
 
-def _default_wallet_layout() -> pd.DataFrame:
-    return pd.DataFrame([
-        {"enabled": 1, "view": "wallet", "section": "stuck", "order": 10, "key": "stuck.title", "style": "text"},
-        {"enabled": 1, "view": "wallet", "section": "stuck", "order": 20, "key": "stuck.items", "style": "text"},
-        {"enabled": 1, "view": "wallet", "section": "header", "order": 30, "key": "header.title", "style": "text"},
-        {"enabled": 1, "view": "wallet", "section": "header", "order": 40, "key": "header.window", "style": "text"},
-        {"enabled": 1, "view": "wallet", "section": "partners", "order": 50, "key": "partners.blocks", "style": "block"},
-        {"enabled": 1, "view": "wallet", "section": "alerts", "order": 60, "key": "alerts.title", "style": "text"},
-        {"enabled": 1, "view": "wallet", "section": "alerts", "order": 70, "key": "alerts.blocks", "style": "block"},
-    ])
-
-
 def _is_empty_value(value: Any) -> bool:
     if value is None:
         return True
@@ -75,13 +63,24 @@ def _apply_style(value: Any, style: str) -> List[str]:
 def _load_layout(force_sync: bool = False) -> pd.DataFrame:
     df = get_ui_layout_df(force_sync=force_sync)
     if df is None or df.empty:
-        return _default_wallet_layout()
+        append_event(
+            type="ui_layout_missing",
+            job_type="wallet",
+            payload={"view": "wallet"},
+        )
+        raise RuntimeError(
+            "ui_layout: wallet layout not found. Check rules.xlsx sheet 'ui_layout'."
+        )
 
     out = df.copy()
     out.columns = [str(c).strip().lower() for c in out.columns]
-    for c in ["enabled", "view", "key", "style", "order"]:
-        if c not in out.columns:
-            out[c] = "" if c != "enabled" else 1
+
+    required_cols = {"enabled", "view", "key", "style", "order"}
+    missing = [c for c in required_cols if c not in out.columns]
+    if missing:
+        raise RuntimeError(
+            f"ui_layout: missing required columns for wallet: {', '.join(sorted(missing))}"
+        )
 
     out["view"] = out["view"].fillna("").astype(str).str.strip().str.lower()
     out["enabled"] = pd.to_numeric(out["enabled"], errors="coerce").fillna(0).astype(int)
@@ -89,7 +88,14 @@ def _load_layout(force_sync: bool = False) -> pd.DataFrame:
 
     wallet_rows = out[(out["enabled"] == 1) & (out["view"] == "wallet")].copy()
     if wallet_rows.empty:
-        return _default_wallet_layout()
+        append_event(
+            type="ui_layout_missing",
+            job_type="wallet",
+            payload={"view": "wallet"},
+        )
+        raise RuntimeError(
+            "ui_layout: no enabled rows for view='wallet'. Check rules.xlsx sheet 'ui_layout'."
+        )
 
     return wallet_rows.sort_values("order", kind="stable")
 
