@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from analyzers.wallet_analyzer import WalletStatsDTO, WalletPartnerStats, WalletAlertBlock
-
+from datetime import datetime
 
 @dataclass(frozen=True)
 class WalletRenderModel:
@@ -18,13 +18,20 @@ def _fmt_amount(value: float | int | None) -> str:
 
 
 def _conversion_line(p: WalletPartnerStats) -> str:
+    base = f"{p.success_ops} / {p.total_ops} = {p.conversion_pct:.1f}%"
+
     if p.conversion_insufficient:
-        return f"  Конверсия: {p.conversion_pct:.1f}% — ℹ️ Недостаточно данных"
+        return f"  Конверсия: {base} — ℹ️ Недостаточно данных"
 
     if p.conversion_threshold_pct is None:
-        return f"  Конверсия: {p.conversion_pct:.1f}% — ℹ️"
+        return f"  Конверсия: {base} — ℹ️"
+
     icon = "🔴" if p.conversion_bad else "🟢"
-    return f"  Конверсия: {p.conversion_pct:.1f}% (< {p.conversion_threshold_pct:.1f}%) — {icon}"
+
+    return (
+        f"  Конверсия: {base} "
+        f"(< {p.conversion_threshold_pct:.1f}%) — {icon}"
+    )
 
 
 def _payin_line(p: WalletPartnerStats) -> str:
@@ -45,24 +52,48 @@ def _payin_line(p: WalletPartnerStats) -> str:
 
 
 def _api_line(p: WalletPartnerStats) -> str:
+
+    if p.total_ops == 0:
+        return "  Отмен по API: —"
+
+    base = f"{p.api_cancel_count} / {p.total_ops} ({p.api_cancel_pct:.1f}%)"
+
     if p.api_insufficient:
-        return f"  Отмен по API: {p.api_cancel_count} шт ({p.api_cancel_pct:.1f}%) — ℹ️"
+        return f"  Отмен по API: {base} — ℹ️"
 
     icon = "🔴" if p.api_bad else "🟢"
-    return f"  Отмен по API: {p.api_cancel_count} шт ({p.api_cancel_pct:.1f}%) — {icon}"
+
+    return f"  Отмен по API: {base} — {icon}"
 
 
 def _last_success_line(p: WalletPartnerStats) -> str:
+
     if p.last_success_at is None:
         return "  Последняя успешная операция: —"
-    return f"  Последняя успешная операция: {p.last_success_at.strftime('%d.%m %H:%M:%S')}"
+
+    exact = p.last_success_at.strftime("%d.%m %H:%M:%S")
+
+    if p.last_success_minutes_ago is None:
+        return f"  Последняя успешная операция: ({exact})"
+
+    return (
+        f"  Последняя успешная операция: "
+        f"{p.last_success_minutes_ago} мин назад ({exact})"
+    )
+
+    now = datetime.utcnow()
+
+    minutes_ago = int((now - p.last_success_at).total_seconds() // 60)
+
+    exact = p.last_success_at.strftime("%d.%m %H:%M:%S")
+
+    return f"  Последняя успешная операция: {minutes_ago} мин назад ({exact})"
 
 
 def _partner_block(p: WalletPartnerStats) -> List[str]:
     block = [
         p.partner,
-        f"  Всего операций: {p.total_ops}",
-        f"  Успешных: {p.success_ops}",
+        "",
         _conversion_line(p),
         _payin_line(p),
         _api_line(p),

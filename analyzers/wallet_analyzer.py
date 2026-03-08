@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -81,13 +81,16 @@ class WalletPartnerStats:
     limit_warn: bool
 
     api_cancel_count: int
+    api_total_ops: int
     api_cancel_pct: float
     api_cancel_threshold_pct: Optional[float]
     api_insufficient: bool
     api_bad: bool
 
     nok_wallets_count: int
+
     last_success_at: Optional[datetime]
+    last_success_minutes_ago: int | None
 
 
 @dataclass(frozen=True)
@@ -674,6 +677,14 @@ def build_wallet_stats_dto(
         last_success = df[(df["_partner_norm"] == partner_norm) & (df["_status_success"])]
         last_success_at = None if last_success.empty else last_success["_dt"].max().to_pydatetime()
 
+        if last_success_at is None:
+            last_success_minutes_ago = None
+        else:
+            now = datetime.now(timezone.utc)
+            last_success_minutes_ago = int(
+                (now - last_success_at).total_seconds() // 60
+            )
+
         partners.append(
             WalletPartnerStats(
                 partner=display_partner,
@@ -691,12 +702,14 @@ def build_wallet_stats_dto(
                 limit_bad=limit_bad,
                 limit_warn=limit_warn,
                 api_cancel_count=api_cancel_count,
+                api_total_ops=total,
                 api_cancel_pct=api_pct,
                 api_cancel_threshold_pct=api_threshold,
                 api_insufficient=api_insufficient,
                 api_bad=api_bad,
                 nok_wallets_count=nok_wallets_count,
                 last_success_at=last_success_at,
+                last_success_minutes_ago=last_success_minutes_ago,
             )
         )
 
