@@ -54,6 +54,14 @@ def _norm_method_code(value, default: str = "UNI") -> str:
 
     return s.upper()
 
+def clean_comment(value) -> str:
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s.lower() in {"", "nan", "none"}:
+        return ""
+    return s
+
 def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
     from core.config_manager import (
         get_hourly_payins_df,
@@ -141,7 +149,7 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
         for src in sources:
             amount += fact_payins_by_partner.get(src, 0.0)
 
-        comment = r.get("comment", "")
+        comment = clean_comment(r.get("comment"))
         c = f" ({comment})" if comment else ""
 
         payin_items.append(
