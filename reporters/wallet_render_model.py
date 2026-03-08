@@ -69,15 +69,15 @@ def _api_line(p: WalletPartnerStats) -> str:
 def _last_success_line(p: WalletPartnerStats) -> str:
 
     if p.last_success_at is None:
-        return "  Последняя успешная операция: —"
+        return "  Последний успех: —"
 
     exact = p.last_success_at.strftime("%d.%m %H:%M:%S")
 
     if p.last_success_minutes_ago is None:
-        return f"  Последняя успешная операция: ({exact})"
+        return f"  Последний успех: ({exact})"
 
     return (
-        f"  Последняя успешная операция: "
+        f"  Последний успех: "
         f"{p.last_success_minutes_ago} мин назад ({exact})"
     )
 
@@ -87,7 +87,7 @@ def _last_success_line(p: WalletPartnerStats) -> str:
 
     exact = p.last_success_at.strftime("%d.%m %H:%M:%S")
 
-    return f"  Последняя успешная операция: {minutes_ago} мин назад ({exact})"
+    return f"  Последний успех: {minutes_ago} мин назад ({exact})"
 
 
 def _partner_block(p: WalletPartnerStats) -> List[str]:
