@@ -211,14 +211,21 @@ def run_wallet_cycle() -> None:
     )
 
     rendered = render_wallet(dto, job="wallet")
-    text = (rendered.text or "").strip()
-    if not text:
-        raise RuntimeError("wallet: rendered report is empty")
+
+    main_text = (rendered.main_text or "").strip()
+    alerts_text = (rendered.alerts_text or "").strip()
+
+    if not main_text:
+        raise RuntimeError("wallet: rendered main report is empty")
 
     chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
     if not chat_id:
         raise RuntimeError("TELEGRAM_CHAT_ID_WALLET is not set")
-    send_text(text=text, chat_id=chat_id)
+
+    send_text(text=main_text, chat_id=chat_id)
+
+    if alerts_text:
+        send_text(text=alerts_text, chat_id=chat_id)
 
     state_update("wallet", {
         "last_fingerprint": fp,

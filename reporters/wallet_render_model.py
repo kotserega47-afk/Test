@@ -95,5 +95,6 @@ def build_wallet_render_model(dto: WalletStatsDTO) -> WalletRenderModel:
         "partners.blocks": partners_blocks,
         "alerts.title": alerts_title,
         "alerts.blocks": alerts_blocks,
+        "header.spacer": "",
     }
     return WalletRenderModel(model=model)
