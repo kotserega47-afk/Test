@@ -90,11 +90,17 @@ def build_wallet_render_model(dto: WalletStatsDTO) -> WalletRenderModel:
             f"• Поступления: {dto.stuck_payins_count} шт",
             f"• Выплаты: {dto.stuck_payouts_count} шт",
         ],
+        "stuck.spacer": "",
+
         "header.title": "📦 Wallet Analyzer",
         "header.window": f"🕒 Окно: {dto.window_minutes} мин (смещение {dto.offset_minutes})",
+        "header.spacer": "",
+
         "partners.blocks": partners_blocks,
+        "partners.spacer": "",
+
         "alerts.title": alerts_title,
         "alerts.blocks": alerts_blocks,
-        "header.spacer": "",
+
     }
     return WalletRenderModel(model=model)
