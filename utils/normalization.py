@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, Any
 import pandas as pd
 from zoneinfo import ZoneInfo
+from core.datetime_utils import parse_msk_series
 
 MSK = ZoneInfo("Europe/Moscow")
 # -----------------------------
@@ -69,18 +70,12 @@ def parse_datetime(value: Any) -> Optional[datetime]:
 
     # Попытка строгого формата (быстрее)
     try:
-        parsed = pd.to_datetime(
-            value,
-            format="%d.%m.%Y %H:%M:%S",
-            errors="raise"
-        )
+        parsed = parse_dt_series_msk(
+            value)
     except Exception:
         # fallback — без жёсткого формата
-        parsed = pd.to_datetime(
-            value,
-            dayfirst=True,
-            errors="coerce"
-        )
+        parsed = parse_dt_series_msk(
+            value)
 
     if pd.isna(parsed):
         return None
@@ -94,55 +89,7 @@ def parse_datetime(value: Any) -> Optional[datetime]:
 
 def parse_dt_series_msk(series: pd.Series) -> pd.Series:
     """
-    Каноническое приведение столбца к tz-aware MSK.
-
-    Базовый контракт:
-    - основной входной формат: "ДД.ММ.ГГГГ чч:мм:сс"
-    - timezone: Europe/Moscow
-
-    Дополнительно поддерживает:
-    - строки без секунд: "ДД.ММ.ГГГГ чч:мм"
-    - Excel datetime / pandas Timestamp
-    - уже tz-aware значения
+    Backward-compatible wrapper.
+    Единый источник истины по datetime parsing находится в core.datetime_utils.parse_msk_series.
     """
-    if pd.api.types.is_datetime64_any_dtype(series):
-        dt = series
-    else:
-        cleaned = (
-            series.astype("string")
-            .fillna("")
-            .str.strip()
-            .replace({"": pd.NA, "nan": pd.NA, "NaT": pd.NA, "None": pd.NA})
-        )
-
-        # 1. основной строгий формат
-        dt = pd.to_datetime(
-            cleaned,
-            format="%d.%m.%Y %H:%M:%S",
-            errors="coerce",
-        )
-
-        # 2. fallback для строк без секунд
-        missing_mask = cleaned.notna() & dt.isna()
-        if missing_mask.any():
-            dt_fallback = pd.to_datetime(
-                cleaned[missing_mask],
-                format="%d.%m.%Y %H:%M",
-                errors="coerce",
-            )
-            dt.loc[missing_mask] = dt_fallback
-
-        # 3. fallback для уже datetime-like значений Excel/Timestamp
-        missing_mask = cleaned.notna() & dt.isna()
-        if missing_mask.any():
-            dt_fallback = pd.to_datetime(
-                cleaned[missing_mask],
-                dayfirst=True,
-                errors="coerce",
-            )
-            dt.loc[missing_mask] = dt_fallback
-
-    if dt.dt.tz is None:
-        return dt.dt.tz_localize(MSK, nonexistent="shift_forward", ambiguous="NaT")
-
-    return dt.dt.tz_convert(MSK)
+    return parse_msk_series(series)

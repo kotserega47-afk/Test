@@ -1,13 +1,12 @@
 from __future__ import annotations
-
+import pandas as pd
 import sys
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
-
-import pandas as pd
-
+from core.datetime_utils import parse_msk_series
 
 @dataclass
 class CheckMessage:
@@ -125,8 +124,8 @@ def check_rules_xlsx(path: Path) -> list[CheckMessage]:
                 msgs.append(CheckMessage("ERROR", "exclude_time", f"enabled=1 but analyzers empty in {int(empty_an.sum())} row(s)"))
 
             # dates sanity
-            start = pd.to_datetime(df["start_dt"], errors="coerce")
-            end = pd.to_datetime(df["end_dt"], errors="coerce")
+            start = parse_msk_series(df["start_dt"])
+            end = parse_msk_series(df["end_dt"])
             bad_dt = start.isna() | end.isna()
             if bad_dt.any():
                 msgs.append(CheckMessage("ERROR", "exclude_time", f"Unparseable start_dt/end_dt in {int(bad_dt.sum())} row(s)"))

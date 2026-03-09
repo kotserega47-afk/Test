@@ -115,6 +115,11 @@ class WalletStatsDTO:
 # =============================================================================
 # Helpers
 # =============================================================================
+def _calc_last_success_minutes_ago(now: datetime, last_success_at: datetime | None) -> int | None:
+    if last_success_at is None:
+        return None
+    return int((now - last_success_at).total_seconds() // 60)
+
 
 def _enabled_mask(s: pd.Series) -> pd.Series:
     return (
@@ -124,7 +129,6 @@ def _enabled_mask(s: pd.Series) -> pd.Series:
          .str.lower()
          .isin({"1", "true", "yes", "y"})
     )
-
 
 def _parse_analyzers_cell(s: str) -> List[str]:
     parts = [p.strip().lower() for p in str(s or "").split(",")]
@@ -669,9 +673,7 @@ def build_wallet_stats_dto(
         if last_success_at is None:
             last_success_minutes_ago = None
         else:
-            last_success_minutes_ago = int(
-                (now - last_success_at).total_seconds() // 60
-            )
+            last_success_minutes_ago = _calc_last_success_minutes_ago(now, last_success_at)
 
         partners.append(
             WalletPartnerStats(

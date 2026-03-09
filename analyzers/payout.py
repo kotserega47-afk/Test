@@ -7,6 +7,7 @@ import pandas as pd
 from utils.excel_utils import write_df_to_sheet
 from openpyxl import Workbook
 from datetime import datetime
+from utils.normalization import parse_dt_series_msk
 
 icon, name = LOG_PROFILES["PAYOUT"]
 logger = get_logger(name, icon)
@@ -68,7 +69,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     # приводим дату/время в формат datetime
     if "дата/время создания".lower() in df_payout.columns:
         col = "дата/время создания".lower()
-        df_payout[col] = pd.to_datetime(df_payout[col], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+        df_payout[col] = parse_dt_series_msk(df_payout[col])
 
     # убираем лишние пробелы в "карта"
     if "карта" in df_payout.columns:
@@ -162,7 +163,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                             "Info": matched_error,
                             "Количество подряд ошибок": consecutive,
                             "Последняя дата ошибки": (
-                                pd.to_datetime(last_datetime).strftime("%d.%m.%Y %H:%M:%S")
+                                parse_dt_series_msk(last_datetime)
                                 if pd.notna(last_datetime) else ""
                             ),
                         })
@@ -177,7 +178,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                     err_dt = row.get("дата/время создания")
                     if pd.notna(err_dt):
                         try:
-                            err_dt = pd.to_datetime(err_dt).strftime("%d.%m.%Y %H:%M:%S")
+                            err_dt = parse_dt_series_msk(err_dt)
                         except Exception:
                             err_dt = str(err_dt)
                     else:
@@ -197,15 +198,13 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
 
     # Сортировка по дате (от новых к старым), при этом "Дата ошибки" остаётся строкой
     if not df_check.empty and "Дата ошибки" in df_check.columns:
-        df_check["_sort_key"] = pd.to_datetime(df_check["Дата ошибки"], errors="coerce")
+        df_check["_sort_key"] = parse_dt_series_msk(df_check["Дата ошибки"])
         df_check.sort_values("_sort_key", ascending=False, na_position="last", inplace=True)
         df_check.drop(columns=["_sort_key"], inplace=True)
 
     # Сортируем df_problem по дате ошибки (от новых к старым)
     if not df_problem.empty and "Последняя дата ошибки" in df_problem.columns:
-        df_problem["_sort_key"] = pd.to_datetime(
-            df_problem["Последняя дата ошибки"], format="%d.%m.%Y %H:%M:%S", errors="coerce"
-        )
+        df_problem["_sort_key"] = parse_dt_series_msk(df_problem["Последняя дата ошибки"])
         df_problem.sort_values("_sort_key", ascending=False, inplace=True)
         df_problem.drop(columns=["_sort_key"], inplace=True)
 

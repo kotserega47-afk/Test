@@ -13,6 +13,7 @@ from utils.log_profiles import LOG_PROFILES
 from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
+from utils.normalization import parse_dt_series_msk
 
 icon, name = LOG_PROFILES["CONVERT"]
 logger = get_logger(name, icon)
@@ -86,7 +87,7 @@ def load_data(filepath, col_mapping: dict):
 
     if "datetime" in df:
         # В conversion обычно формат "%d.%m.%Y %H:%M:%S"
-        df["datetime"] = pd.to_datetime(df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+        df["datetime"] = parse_dt_series_msk(df["datetime"])
 
     required = [c for c in ["card", "status", "datetime"] if c in df.columns]
     if required:
@@ -108,8 +109,8 @@ def init_partner_settings():
         norm_name = normalize_name(raw_name)
         exclude_periods = []
         for period in settings.get("exclude", []):
-            start = pd.to_datetime(period.get("start"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
-            end = pd.to_datetime(period.get("end"), format="%d.%m.%Y %H:%M:%S", errors="coerce")
+            start = parse_dt_series_msk(period.get("start"))
+            end = parse_dt_series_msk(period.get("end"))
             if pd.notna(start) and pd.notna(end):
                 exclude_periods.append((start, end))
         partners[norm_name] = {
@@ -239,9 +240,8 @@ def run(
                 # нормализация
                 df_special["card"] = df_special["card"].astype(str).str.strip()
                 df_special["partner_norm"] = df_special["partner"].apply(normalize_name)
-                df_special["start_date"] = pd.to_datetime(
-                    df_special["start_date"].astype(str).str.strip(), dayfirst=True, errors="coerce"
-                )
+                df_special["start_date"] = parse_dt_series_msk(
+                    df_special["start_date"].astype(str).str.strip())
                 # дубликаты: оставляем запись с самой свежей датой по (card, partner_norm)
                 df_special.sort_values("start_date", ascending=False, inplace=True, na_position="last")
                 df_special.drop_duplicates(subset=["card", "partner_norm"], keep="first", inplace=True)
@@ -300,7 +300,7 @@ def run(
     # Нормализация полей
     conv_df["status"] = conv_df["status"].astype(str).str.strip().str.lower()
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
-    conv_df["datetime"] = pd.to_datetime(conv_df["datetime"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    conv_df["datetime"] = parse_dt_series_msk(conv_df["datetime"])
     conv_df.dropna(subset=["card", "datetime", "status"], inplace=True)
 
     # Фильтруем по допустимым статусам (ошибка/оплачен + валидные)

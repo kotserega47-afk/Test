@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 
 from core.rules_provider import get_rules_snapshot
-from utils.normalization import normalize_partner_name
+from utils.normalization import normalize_partner_name, parse_dt_series_msk
 
 
 # =============================================================================
@@ -939,7 +939,7 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
 
     # dates parsing
     for c in ["start_dt", "end_dt", "created_at"]:
-        df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+        df[c] = parse_dt_series_msk(df[c])
 
     for c in ["start_dt", "end_dt", "created_at"]:
         bad_dt = df[c].isna()
