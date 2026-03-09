@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -14,7 +14,7 @@ from core.config_manager import (
     get_thresholds_partner_df,
     get_wallet_limits_df,
 )
-from utils.normalization import normalize_partner_name
+from utils.normalization import normalize_partner_name, parse_dt_series_msk
 
 
 MSK_TZ = ZoneInfo("Europe/Moscow")
@@ -135,17 +135,6 @@ def _norm_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out.columns = [str(c).strip().lower() for c in out.columns]
     return out
-
-
-def _parse_dt_series(s: pd.Series) -> pd.Series:
-    if pd.api.types.is_datetime64_any_dtype(s):
-        dt = s
-    else:
-        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
-
-    if getattr(dt.dt, "tz", None) is None:
-        return dt.dt.tz_localize(MSK_TZ, nonexistent="shift_forward", ambiguous="NaT")
-    return dt.dt.tz_convert(MSK_TZ)
 
 
 def _parse_amount_series(s: pd.Series) -> pd.Series:
@@ -464,7 +453,7 @@ def build_wallet_dto_from_payout_xlsx(
         raise RuntimeError("payout file: missing required columns (partner, amount)")
 
     if dt_col is not None:
-        df["_dt"] = _parse_dt_series(df[dt_col])
+        df["_dt"] = parse_dt_series_msk(df[dt_col])
         df = df[df["_dt"].dt.date == report_day].copy()
     else:
         df = df.copy()
@@ -580,7 +569,7 @@ def build_wallet_stats_dto(
     if col_dt is None:
         raise RuntimeError("payin file: missing required column datetime")
 
-    df["_dt"] = _parse_dt_series(df[col_dt])
+    df["_dt"] = parse_dt_series_msk(df[col_dt])
     df = df[df["_dt"].notna()].copy()
 
     df["_partner"] = df[col_partner].fillna("").astype(str)
@@ -680,7 +669,6 @@ def build_wallet_stats_dto(
         if last_success_at is None:
             last_success_minutes_ago = None
         else:
-            now = datetime.now(timezone.utc)
             last_success_minutes_ago = int(
                 (now - last_success_at).total_seconds() // 60
             )
@@ -741,7 +729,7 @@ def build_wallet_stats_dto(
         payout_dt_col = _find_col(dfp, ["дата/время создания", "дата/время", "date", "created_at"])
         payout_status_col = _find_col(dfp, ["статус", "status"])
         if payout_dt_col and payout_status_col:
-            dfp["_dt"] = _parse_dt_series(dfp[payout_dt_col])
+            dfp["_dt"] = parse_dt_series_msk(dfp[payout_dt_col])
             dfp["_status_raw"] = dfp[payout_status_col].fillna("").astype(str)
             stuck_payouts_count = int(
                 dfp[

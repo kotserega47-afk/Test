@@ -161,6 +161,25 @@ def build_hourly_dto_from_files(
     - Comments pulled from rules.xlsx wallet_limits
     - Layout is applied in Reporter (ordering/grouping/labels)
     """
+
+    # -------------------------------------------------------------------------
+    # Normalize all boundary datetimes to Europe/Moscow
+    # -------------------------------------------------------------------------
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=MSK)
+    else:
+        start_dt = start_dt.astimezone(MSK)
+
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=MSK)
+    else:
+        end_dt = end_dt.astimezone(MSK)
+
+    if header_date.tzinfo is None:
+        header_date = header_date.replace(tzinfo=MSK)
+    else:
+        header_date = header_date.astimezone(MSK)
+
     df_payin = pd.read_excel(payin_path, dtype=str)
     df_payout = pd.read_excel(payout_path, dtype=str)
 
@@ -215,7 +234,10 @@ def build_hourly_dto_from_files(
     pg_df["_analyzers_list"] = pg_df["analyzers"].map(_parse_analyzers_cell)
     pg_df = pg_df[pg_df["_analyzers_list"].map(lambda xs: "wallet" in xs)]
     partner_to_group = dict(
-        zip(pg_df["partner"].map(normalize_partner_name), pg_df["group_name"].astype(str).str.strip().str.lower())
+        zip(
+            pg_df["partner"].map(normalize_partner_name),
+            pg_df["group_name"].astype(str).str.strip().str.lower(),
+        )
     )
 
     # Aggregate payout: partner_norm + method
@@ -226,19 +248,28 @@ def build_hourly_dto_from_files(
         .reset_index()
         .sort_values(["norm", "_method"])
     )
+
     for partner_norm, sub in g_payout.groupby("norm"):
         if not partner_norm:
             continue
-        display_partner = df_payout.loc[df_payout["norm"] == partner_norm, partner_col].astype(str).iloc[0]
+
+        display_partner = (
+            df_payout.loc[df_payout["norm"] == partner_norm, partner_col]
+            .astype(str)
+            .iloc[0]
+        )
+
         methods: List[HourlyMethodRow] = []
         for _, r in sub.iterrows():
             method = str(r["_method"] or "").strip().upper()
             amt = float(r["_amount"] or 0.0)
+
             c = (
                 payout_comment.get((partner_norm, method))
                 or payout_comment.get((partner_norm, ""))
                 or ""
             )
+
             methods.append(
                 HourlyMethodRow(
                     method_code=method,
@@ -247,6 +278,7 @@ def build_hourly_dto_from_files(
                     comment=c,
                 )
             )
+
         payout_blocks.append(
             HourlyPayoutBlock(
                 group_code=partner_norm,
@@ -263,13 +295,21 @@ def build_hourly_dto_from_files(
         .reset_index()
         .sort_values(["norm"])
     )
+
     for _, r in g_payin.iterrows():
         pn = str(r["norm"] or "").strip()
         if not pn:
             continue
-        display_partner = df_payin.loc[df_payin["norm"] == pn, partner_col].astype(str).iloc[0]
+
+        display_partner = (
+            df_payin.loc[df_payin["norm"] == pn, partner_col]
+            .astype(str)
+            .iloc[0]
+        )
+
         amt = float(r["_amount"] or 0.0)
         c = payin_comment.get(pn, "")
+
         payin_rows.append(
             HourlyRow(
                 entity_code=pn,
@@ -279,8 +319,6 @@ def build_hourly_dto_from_files(
             )
         )
 
-    # Note: group totals and layout are applied in reporter using rules/job_params (no YAML).
-    # We still expose partner_to_group & group_comment through job_params to reporter.
     return HourlyDTO(
         start_dt=start_dt,
         end_dt=end_dt,

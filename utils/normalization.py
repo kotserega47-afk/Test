@@ -96,23 +96,53 @@ def parse_dt_series_msk(series: pd.Series) -> pd.Series:
     """
     Каноническое приведение столбца к tz-aware MSK.
 
-    Поддерживает:
-    - строки "26.09.2025 18:00:00"
-    - строки без секунд
-    - Excel datetime
-    - pandas Timestamp
+    Базовый контракт:
+    - основной входной формат: "ДД.ММ.ГГГГ чч:мм:сс"
+    - timezone: Europe/Moscow
+
+    Дополнительно поддерживает:
+    - строки без секунд: "ДД.ММ.ГГГГ чч:мм"
+    - Excel datetime / pandas Timestamp
     - уже tz-aware значения
-
-    Возвращает Series с dtype datetime64[ns, Europe/Moscow]
-    Некорректные значения → NaT
     """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        dt = series
+    else:
+        cleaned = (
+            series.astype("string")
+            .fillna("")
+            .str.strip()
+            .replace({"": pd.NA, "nan": pd.NA, "NaT": pd.NA, "None": pd.NA})
+        )
 
-    # Векторизованный парсинг
-    dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
+        # 1. основной строгий формат
+        dt = pd.to_datetime(
+            cleaned,
+            format="%d.%m.%Y %H:%M:%S",
+            errors="coerce",
+        )
 
-    # Если tz-naive → локализуем как MSK
+        # 2. fallback для строк без секунд
+        missing_mask = cleaned.notna() & dt.isna()
+        if missing_mask.any():
+            dt_fallback = pd.to_datetime(
+                cleaned[missing_mask],
+                format="%d.%m.%Y %H:%M",
+                errors="coerce",
+            )
+            dt.loc[missing_mask] = dt_fallback
+
+        # 3. fallback для уже datetime-like значений Excel/Timestamp
+        missing_mask = cleaned.notna() & dt.isna()
+        if missing_mask.any():
+            dt_fallback = pd.to_datetime(
+                cleaned[missing_mask],
+                dayfirst=True,
+                errors="coerce",
+            )
+            dt.loc[missing_mask] = dt_fallback
+
     if dt.dt.tz is None:
-        return dt.dt.tz_localize(MSK)
+        return dt.dt.tz_localize(MSK, nonexistent="shift_forward", ambiguous="NaT")
 
-    # Если уже tz-aware → конвертируем в MSK
     return dt.dt.tz_convert(MSK)
