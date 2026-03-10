@@ -66,20 +66,41 @@ def _load_wallet_params() -> WalletJobParams:
 
 
 def _ensure_logged_in(page, context) -> None:
-    if os.path.exists(AUTH_STATE_FILE):
-        logger.info("🔑 Используем сохранённую сессию")
+    logger.info("🔑 Проверяем авторизацию в Antares…")
+
+    page.goto("https://antares.plus/lkcard/#/payin", wait_until="domcontentloaded")
+    page.wait_for_timeout(3000)
+
+    if "login" not in page.url.lower():
+        logger.info("✅ Сессия активна")
         return
 
-    logger.info("🔑 Логинимся в Antares…")
-    page.goto("https://antares.plus/lkcard/#/login")
-    page.fill("input[type='text']", LOGIN)
-    page.fill("input[type='password']", PASSWORD)
-    page.click("button:has-text('Войти')")
-    page.wait_for_load_state("networkidle")
-    time.sleep(2)
-    context.storage_state(path=AUTH_STATE_FILE)
-    logger.info("✅ Сессия сохранена")
+    logger.info("🔑 Сессия недействительна, логинимся заново…")
+    page.goto("https://antares.plus/lkcard/#/login", wait_until="domcontentloaded")
 
+    login_input = page.locator("input.form-control[type='text']").first
+    password_input = page.locator("input.form-control[type='password']").first
+    submit_btn = page.locator("button[type='submit']").first
+
+    login_input.wait_for(state="visible", timeout=15000)
+    password_input.wait_for(state="visible", timeout=15000)
+    submit_btn.wait_for(state="visible", timeout=15000)
+
+    login_input.click(force=True)
+    login_input.fill(LOGIN)
+
+    password_input.click(force=True)
+    password_input.fill(PASSWORD)
+
+    submit_btn.click(force=True)
+    page.wait_for_timeout(5000)
+
+    if "login" in page.url.lower():
+        page.screenshot(path=os.path.join(DOWNLOAD_DIR, "login_failed.png"), full_page=True)
+        raise RuntimeError("Логин не выполнен. Сохранил login_failed.png")
+
+    context.storage_state(path=AUTH_STATE_FILE)
+    logger.info("✅ Новая сессия сохранена")
 
 def _find_and_pick_date(page, target_date: str) -> bool:
     selector = f"[data-date='{target_date}']"
@@ -210,7 +231,7 @@ def run_wallet_cycle() -> None:
         rules_force_sync=False,
     )
 
-    rendered = render_wallet(dto, job="wallet")
+    rendered = render_wallet(dto)
 
     main_text = (rendered.main_text or "").strip()
     alerts_text = (rendered.alerts_text or "").strip()
@@ -219,13 +240,15 @@ def run_wallet_cycle() -> None:
         raise RuntimeError("wallet: rendered main report is empty")
 
     chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
+
     if not chat_id:
-        raise RuntimeError("TELEGRAM_CHAT_ID_WALLET is not set")
+        logger.warning("TELEGRAM_CHAT_ID_WALLET не задан — отправка отключена")
+    else:
+        send_text(text=main_text, chat_id=chat_id)
 
-    send_text(text=main_text, chat_id=chat_id)
+        if alerts_text:
+            send_text(text=alerts_text, chat_id=chat_id)
 
-    if alerts_text:
-        send_text(text=alerts_text, chat_id=chat_id)
 
     state_update("wallet", {
         "last_fingerprint": fp,

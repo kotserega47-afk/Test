@@ -45,7 +45,13 @@ def _load_from_dropbox() -> Dict[str, Any]:
         return {}
 
     if status == "error":
-        raise RuntimeError("Failed to download state.json from Dropbox")
+        log.warning("Failed to download state.json from Dropbox, using local state")
+        if lp.exists():
+            try:
+                return json.loads(lp.read_text(encoding="utf-8")) or {}
+            except Exception:
+                return {}
+        return {}
 
     # status == "ok"
     try:
