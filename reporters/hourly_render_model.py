@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List
-from analyzers.hourly_analyzer import HourlyDTO
 from utils.normalization import normalize_partner_name
 from analyzers.hourly_analyzer import HourlyDTO
-
+from typing import Tuple
 
 @dataclass(frozen=True)
 class HourlyRenderModel:
@@ -85,9 +84,11 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
         key = str(key).strip()
         fact_payins_by_partner[key] = fact_payins_by_partner.get(key, 0.0) + float(r.amount or 0.0)
 
-    fact_payout_by_partner_method: Dict[tuple[str, str], float] = {}
+    fact_payout_by_partner_method: Dict[Tuple[str, str], float] = {}
     for block in dto.payout:
         partner_key = normalize_partner_name(str(block.group_code).strip())
+        partner_key = normalize_partner_name(str(block.group_code or "").strip())
+        partner_key = str(partner_key).strip()
         for m in block.methods:
             method_key = _norm_method_code(m.method_code, default="UNI")
             k = (partner_key, method_key)
@@ -157,7 +158,7 @@ def build_hourly_render_model(dto: HourlyDTO) -> HourlyRenderModel:
         )
 
         if int(r.get("group_break_after", 0) or 0) == 1:
-            payin_items.append(None)
+            payin_items.append("")
     return HourlyRenderModel(
         model={
             "header.period": f"Данные на {dto.header_date.strftime('%d.%m')} с 00:00 по {dto.end_dt.strftime('%H:%M')}",

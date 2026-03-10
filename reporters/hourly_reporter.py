@@ -99,7 +99,7 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     return "\n".join(out).strip()
 
 
-def render_hourly(dto: HourlyDTO, *, job: str = "hourly") -> RenderedReport:
+def render_hourly(dto: HourlyDTO) -> RenderedReport:
     """
     Pure rendering.
     Layout is controlled via rules.xlsx -> ui_layout (view='hourly').
