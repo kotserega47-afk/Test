@@ -8,9 +8,8 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from core.config_manager import get_wallet_limits_df, get_partner_groups_df, get_job_params
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
-
+from core.rules_provider import get_snapshot_v2
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -80,69 +79,6 @@ def _parse_amount(s: pd.Series) -> pd.Series:
 
 
 # =============================================================================
-# Rules-derived comments (from wallet_limits)
-# =============================================================================
-
-def _parse_analyzers_cell(s: str) -> List[str]:
-    parts = [p.strip().lower() for p in str(s or "").split(",")]
-    return sorted(set(p for p in parts if p))
-
-
-def _build_comments_from_wallet_limits(*, analyzer: str = "wallet") -> Tuple[
-    Dict[str, str],                 # payin_comment: partner_norm -> comment (method default)
-    Dict[Tuple[str, str], str],     # payout_comment: (partner_norm, method) -> comment
-    Dict[str, str],                 # group_comment: group_name_lower -> comment
-]:
-    df = get_wallet_limits_df()
-    df.columns = [str(c).strip().lower() for c in df.columns]
-
-    df = df[df["enabled"] == 1].copy()
-    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
-    df = df[df["_analyzers_list"].map(lambda xs: analyzer.lower() in xs)]
-
-    # Normalization
-    df["scope"] = df["scope"].astype(str).str.strip().str.lower()
-    df["comment"] = df.get("comment", "").astype(str).fillna("").str.strip()
-    df["method_norm"] = df.get("method", "").astype(str).fillna("").str.strip().str.upper()
-    df["scope_value_norm"] = df["scope_value"].astype(str).str.strip()
-
-    is_partner = df["scope"] == "partner"
-    df.loc[is_partner, "scope_value_norm"] = df.loc[is_partner, "scope_value_norm"].map(normalize_partner_name)
-    df.loc[~is_partner, "scope_value_norm"] = df.loc[~is_partner, "scope_value_norm"].str.lower()
-
-    payin_comment: Dict[str, str] = {}
-    payout_comment: Dict[Tuple[str, str], str] = {}
-    group_comment: Dict[str, str] = {}
-
-    # partner comments
-    partner_df = df[df["scope"] == "partner"].copy()
-    for _, r in partner_df.iterrows():
-        c = str(r["comment"] or "").strip()
-        if not c:
-            continue
-        pn = str(r["scope_value_norm"] or "").strip()
-        m = str(r["method_norm"] or "").strip().upper()
-
-        # default for payin: method empty
-        if not m:
-            payin_comment[pn] = c
-            payout_comment[(pn, "")] = c
-        else:
-            payout_comment[(pn, m)] = c
-
-    # group comments
-    group_df = df[df["scope"] == "group"].copy()
-    for _, r in group_df.iterrows():
-        c = str(r["comment"] or "").strip()
-        if not c:
-            continue
-        gn = str(r["scope_value_norm"] or "").strip()
-        group_comment[gn] = c
-
-    return payin_comment, payout_comment, group_comment
-
-
-# =============================================================================
 # Analyzer
 # =============================================================================
 
@@ -161,6 +97,8 @@ def build_hourly_dto_from_files(
     - Comments pulled from rules.xlsx wallet_limits
     - Layout is applied in Reporter (ordering/grouping/labels)
     """
+    snapshot = get_snapshot_v2()
+    analyzer_job_key = "wallet"
 
     # -------------------------------------------------------------------------
     # Normalize all boundary datetimes to Europe/Moscow
@@ -225,20 +163,38 @@ def build_hourly_dto_from_files(
         df_payout["_method"] = df_payout[method_col].astype(str).fillna("").str.strip().str.upper()
 
     # Comments
-    payin_comment, payout_comment, group_comment = _build_comments_from_wallet_limits(analyzer="wallet")
+    payin_comment: Dict[str, str] = {}
+    payout_comment: Dict[Tuple[str, str], str] = {}
 
-    # Partner groups map (for optional group comments in reporter)
-    pg_df = get_partner_groups_df()
-    pg_df.columns = [str(c).strip().lower() for c in pg_df.columns]
-    pg_df = pg_df[pg_df["enabled"] == 1].copy()
-    pg_df["_analyzers_list"] = pg_df["analyzers"].map(_parse_analyzers_cell)
-    pg_df = pg_df[pg_df["_analyzers_list"].map(lambda xs: "wallet" in xs)]
-    partner_to_group = dict(
-        zip(
-            pg_df["partner"].map(normalize_partner_name),
-            pg_df["group_name"].astype(str).str.strip().str.lower(),
-        )
-    )
+    for rule in snapshot.limit_rules:
+        if not rule.enabled:
+            continue
+        if rule.job_key != analyzer_job_key:
+            continue
+        if rule.metric_key != "daily_max_amount":
+            continue
+
+        comment = (rule.comment or "").strip()
+        if not comment:
+            continue
+
+        if rule.scope_type == "partner":
+            partner_def = snapshot.partners.get(rule.scope_key)
+            if not partner_def:
+                continue
+
+            partner_norm = normalize_partner_name(
+                partner_def.source_name or partner_def.display_name or ""
+            )
+
+            method = (rule.method_key or "").upper()
+
+            if method:
+                payout_comment[(partner_norm, method)] = comment
+            else:
+                payin_comment[partner_norm] = comment
+                payout_comment[(partner_norm, "")] = comment
+
 
     # Aggregate payout: partner_norm + method
     payout_blocks: List[HourlyPayoutBlock] = []
