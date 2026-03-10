@@ -42,7 +42,23 @@ class BaseRulesAccessor:
         return None
 
     def get_group_memberships(self, job_key: str, partner_key: str) -> list[PartnerGroupMember]:
-        return self.indexes.group_members_by_job_and_partner.get((job_key, partner_key), [])
+        result: list[PartnerGroupMember] = []
+
+        group_keys = self.indexes.group_members_by_job_and_partner.get((job_key, partner_key), [])
+        if not group_keys:
+            return result
+
+        for member in self.snapshot.partner_group_members:
+            if not member.enabled:
+                continue
+            if member.job_key != job_key:
+                continue
+            if member.partner_key != partner_key:
+                continue
+            if member.group_key in group_keys:
+                result.append(member)
+
+        return result
 
     def get_primary_group(self, job_key: str, partner_key: str) -> PartnerGroupMember | None:
         members = self.get_group_memberships(job_key, partner_key)

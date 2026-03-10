@@ -238,9 +238,6 @@ def build_wallet_dto_from_payout_xlsx(
     if report_day is None:
         report_day = datetime.now(MSK_TZ).date()
 
-    partner_to_group = _build_partner_group_map(pg_df, analyzer=analyzer)
-    partner_default_method = _build_partner_default_method_map(pg_df, analyzer=analyzer)
-
     snapshot = get_snapshot_v2(force_sync=rules_force_sync)
     indexes = get_indexes_v2(force_sync=rules_force_sync)
     rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
@@ -258,12 +255,13 @@ def build_wallet_dto_from_payout_xlsx(
 
         memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
         if memberships:
-            group_key = memberships[0]
+            member = memberships[0]
+            group_key = member.group_key
+
             if group_key:
                 partner_to_group[partner_norm] = group_key
 
-            member = rules.get_primary_group(analyzer_job_key, partner_key)
-            if member and member.default_method_key:
+            if member.default_method_key:
                 partner_default_method[partner_norm] = str(member.default_method_key).upper()
 
     df = pd.read_excel(payout_path)
@@ -396,6 +394,10 @@ def build_wallet_stats_dto(
     rules_force_sync: bool = False,
     now: Optional[datetime] = None,
 ) -> WalletStatsDTO:
+
+    if now is None:
+        now = datetime.now(MSK_TZ)
+
     runtime = _get_wallet_job_params(rules_force_sync=rules_force_sync)
 
     snapshot = get_snapshot_v2(force_sync=rules_force_sync)
@@ -420,13 +422,14 @@ def build_wallet_stats_dto(
 
         memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
         if memberships:
-            group_key = memberships[0]
+            member = memberships[0]
+            group_key = member.group_key
+
             if group_key:
                 partner_to_group[partner_norm] = group_key
                 group_to_partners.setdefault(group_key, []).append(partner_norm)
 
-            member = rules.get_primary_group(analyzer_job_key, partner_key)
-            if member and member.default_method_key:
+            if member.default_method_key:
                 partner_default_method[partner_norm] = str(member.default_method_key).upper()
 
         conv_rule = rules.resolve_threshold_rule("conversion_rate", partner_key=partner_key)
