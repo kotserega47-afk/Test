@@ -18,7 +18,7 @@ def collect_unique_values(df: pd.DataFrame, column: str) -> list[str]:
 
 
 def main() -> None:
-    path = Path("rules.xlsx")
+    path = Path("../rules.xlsx")
     xls = pd.ExcelFile(path)
 
     result: dict[str, list[str]] = {}

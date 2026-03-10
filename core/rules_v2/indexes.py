@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .models import JobParam, LimitRule, RulesSnapshotV2, ThresholdRule
-
+from core.rules_v2.normalizers import normalize_key
 
 @dataclass(slots=True)
 class RulesIndexes:
+    partners_by_key: dict[str, str] = field(default_factory=dict)
+    partners_by_code: dict[str, str] = field(default_factory=dict)
     group_members_by_group: dict[str, list[str]] = field(default_factory=dict)
     group_members_by_job: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    group_members_by_job_and_partner: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     job_params_index: dict[tuple[str, str, str, str], JobParam] = field(default_factory=dict)
     limit_rules_index: dict[tuple[str, str, str, str, str | None], LimitRule] = field(default_factory=dict)
     threshold_rules_index: dict[tuple[str, str, str, str], ThresholdRule] = field(default_factory=dict)
@@ -17,11 +20,23 @@ class RulesIndexes:
 def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
     idx = RulesIndexes()
 
+    # ------------------------------------------------------------------
+    # partners
+    # ------------------------------------------------------------------
+
+    for partner_key, partner in snapshot.partners.items():
+        idx.partners_by_key[partner_key] = partner_key
+
+        if partner.partner_code:
+            idx.partners_by_code[str(partner.partner_code)] = partner_key
+
     for member in snapshot.partner_group_members:
         if not member.enabled:
             continue
         idx.group_members_by_group.setdefault(member.group_key, []).append(member.partner_key)
         idx.group_members_by_job.setdefault((member.job_key, member.group_key), []).append(member.partner_key)
+        idx.group_members_by_job_and_partner.setdefault((member.job_key, member.partner_key), []).append(
+            member.group_key)
 
     for param in snapshot.job_params:
         if not param.enabled:

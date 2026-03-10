@@ -8,14 +8,9 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from core.config_manager import (
-    get_job_params,
-    get_partner_groups_df,
-    get_thresholds_partner_df,
-    get_wallet_limits_df,
-)
+from core.rules_provider import get_snapshot_v2, get_indexes_v2
+from core.rules_v2.accessors import WalletRulesAccessor
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
-
 
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
@@ -120,16 +115,6 @@ def _calc_last_success_minutes_ago(now: datetime, last_success_at: datetime | No
         return None
     return int((now - last_success_at).total_seconds() // 60)
 
-
-def _enabled_mask(s: pd.Series) -> pd.Series:
-    return (
-        s.fillna("")
-         .astype(str)
-         .str.strip()
-         .str.lower()
-         .isin({"1", "true", "yes", "y"})
-    )
-
 def _parse_analyzers_cell(s: str) -> List[str]:
     parts = [p.strip().lower() for p in str(s or "").split(",")]
     return sorted(set(p for p in parts if p))
@@ -184,173 +169,10 @@ def _status_pending(s: str) -> bool:
     return _normalize_status(s) == "ожидает оплаты"
 
 
-def _build_partner_group_map(pg_df: pd.DataFrame, *, analyzer: str) -> Dict[str, str]:
-    df = _norm_columns(pg_df)
-    df = df[_enabled_mask(df["enabled"])].copy()
-    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
-    df = df[df["_analyzers_list"].map(lambda xs: analyzer.lower() in xs)]
-    df["partner_norm"] = df["partner"].map(normalize_partner_name)
-    df["group_name_norm"] = df["group_name"].fillna("").astype(str).str.strip().str.lower()
-
-    res: Dict[str, str] = {}
-    for _, r in df.iterrows():
-        pn = r["partner_norm"]
-        gn = r["group_name_norm"]
-        if pn and gn and pn not in res:
-            res[pn] = gn
-    return res
-
-
-def _build_group_partners_map(pg_df: pd.DataFrame, *, analyzer: str) -> Dict[str, List[str]]:
-    df = _norm_columns(pg_df)
-    df = df[_enabled_mask(df["enabled"])].copy()
-    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
-    df = df[df["_analyzers_list"].map(lambda xs: analyzer.lower() in xs)].copy()
-    df["group_name_norm"] = df["group_name"].fillna("").astype(str).str.strip().str.lower()
-    df["partner_norm"] = df["partner"].map(normalize_partner_name)
-
-    res: Dict[str, List[str]] = {}
-    for _, r in df.iterrows():
-        g = r["group_name_norm"]
-        p = r["partner_norm"]
-        if not g or not p:
-            continue
-        res.setdefault(g, []).append(p)
-    return res
-
-
-def _build_partner_default_method_map(pg_df: pd.DataFrame, *, analyzer: str) -> Dict[str, str]:
-    df = _norm_columns(pg_df)
-    if "default_method" not in df.columns:
-        return {}
-
-    df = df[_enabled_mask(df["enabled"])].copy()
-    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
-    df = df[df["_analyzers_list"].map(lambda xs: analyzer.lower() in xs)]
-    df["partner_norm"] = df["partner"].map(normalize_partner_name)
-    df["default_method_norm"] = (
-        df["default_method"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
-    res: Dict[str, str] = {}
-    for _, r in df.iterrows():
-        pn = r["partner_norm"]
-        dm = r["default_method_norm"]
-        if pn and dm and pn not in res:
-            res[pn] = dm
-    return res
-
-
-def resolve_wallet_limit(
-    limits_df: pd.DataFrame,
-    *,
-    analyzer: str,
-    partner: str,
-    group: Optional[str],
-    method: str,
-    limit_type: str = "daily_max_amount",
-) -> LimitResolved:
-    df = _norm_columns(limits_df)
-
-    analyzer = analyzer.lower().strip()
-    limit_type = limit_type.lower().strip()
-    method = (method or "").strip().upper()
-    partner_norm = normalize_partner_name(partner)
-    group_norm = (group or "").strip().lower() or None
-
-    df = df[_enabled_mask(df["enabled"])].copy()
-    df["_analyzers_list"] = df["analyzers"].map(_parse_analyzers_cell)
-    df = df[df["_analyzers_list"].map(lambda xs: analyzer in xs)]
-    df = df[df["limit_type"].fillna("").astype(str).str.strip().str.lower() == limit_type].copy()
-
-    df["scope"] = df["scope"].fillna("").astype(str).str.strip().str.lower()
-    if "method" in df.columns:
-        df["method_norm"] = (
-            df["method"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
-    else:
-        df["method_norm"] = ""
-
-    df["scope_value_norm"] = df["scope_value"].fillna("").astype(str).str.strip()
-    is_partner = df["scope"] == "partner"
-    df.loc[is_partner, "scope_value_norm"] = df.loc[is_partner, "scope_value_norm"].map(normalize_partner_name)
-    df.loc[~is_partner, "scope_value_norm"] = df.loc[~is_partner, "scope_value_norm"].str.lower()
-
-    def _pick(scope: str, scope_value_norm: str, method_norm: str) -> Optional[pd.Series]:
-        m = (
-            (df["scope"] == scope)
-            & (df["scope_value_norm"] == scope_value_norm)
-            & (df["method_norm"] == method_norm)
-        )
-        sub = df[m]
-        if sub.empty:
-            return None
-        return sub.iloc[0]
-
-    candidates: List[Tuple[str, str, str]] = [
-        ("partner", partner_norm, method),
-        ("partner", partner_norm, ""),
-    ]
-    if group_norm:
-        candidates += [
-            ("group", group_norm, method),
-            ("group", group_norm, ""),
-        ]
-
-    for scope, scope_value_norm, method_norm in candidates:
-        row = _pick(scope, scope_value_norm, method_norm)
-        if row is None:
-            continue
-
-        lv = float(row["limit_value"])
-        comment = str(row.get("comment", "") or "").strip()
-        reason = str(row.get("reason", "") or "").strip()
-        rule_id = str(row.get("id", "") or "").strip() or None
-
-        if lv == 0:
-            return LimitResolved(
-                status="STOP",
-                limit_value=0.0,
-                scope=scope,
-                scope_value=row["scope_value"],
-                method=method_norm or None,
-                rule_id=rule_id,
-                comment=comment,
-                reason=reason,
-            )
-
-        return LimitResolved(
-            status="ACTIVE",
-            limit_value=lv,
-            scope=scope,
-            scope_value=row["scope_value"],
-            method=method_norm or None,
-            rule_id=rule_id,
-            comment=comment,
-            reason=reason,
-        )
-
-    return LimitResolved(
-        status="MISSING",
-        limit_value=None,
-        scope=None,
-        scope_value=None,
-        method=None,
-        rule_id=None,
-        comment="",
-        reason="",
-    )
-
 def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
-    params = get_job_params(job="wallet", force_sync=rules_force_sync) or {}
+    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
+    indexes = get_indexes_v2(force_sync=rules_force_sync)
+    rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
 
     required_keys = {
         "window_minutes",
@@ -360,7 +182,12 @@ def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
         "pending_payout_minutes",
     }
 
-    missing = [k for k in required_keys if k not in params or params.get(k) in (None, "")]
+    params = {
+        key: rules.get_job_param("wallet", key)
+        for key in required_keys
+    }
+
+    missing = [k for k in required_keys if params.get(k) in (None, "")]
     if missing:
         raise RuntimeError(
             "job_params: missing required wallet params: " + ", ".join(sorted(missing))
@@ -397,37 +224,6 @@ def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
     }
 
 
-def _build_threshold_maps(thr_df: pd.DataFrame) -> tuple[Dict[str, float], Dict[str, float], Dict[str, int]]:
-    df = _norm_columns(thr_df)
-    df = df[_enabled_mask(df["enabled"])].copy()
-    df["analyzer"] = df["analyzer"].fillna("").astype(str).str.strip().str.lower()
-    df = df[df["analyzer"] == "wallet"].copy()
-    df["partner_norm"] = df["partner"].map(normalize_partner_name)
-    df["metric"] = df["metric"].fillna("").astype(str).str.strip().str.lower()
-
-    conv: Dict[str, float] = {}
-    api: Dict[str, float] = {}
-    mins: Dict[str, int] = {}
-
-    for _, r in df.iterrows():
-        pn = r["partner_norm"]
-        if not pn:
-            continue
-        metric = r["metric"]
-        if metric == "conversion_rate" and pd.notna(r.get("threshold_min")):
-            conv[pn] = float(r["threshold_min"])
-        elif metric == "api_cancel_rate" and pd.notna(r.get("threshold_max")):
-            api[pn] = float(r["threshold_max"])
-
-        if pd.notna(r.get("min_events")):
-            try:
-                mins[pn] = int(r["min_events"])
-            except Exception:
-                pass
-
-    return conv, api, mins
-
-
 # =============================================================================
 # Legacy payout-summary builder (preserved)
 # =============================================================================
@@ -442,10 +238,33 @@ def build_wallet_dto_from_payout_xlsx(
     if report_day is None:
         report_day = datetime.now(MSK_TZ).date()
 
-    pg_df = get_partner_groups_df(force_sync=rules_force_sync)
-    limits_df = get_wallet_limits_df(force_sync=rules_force_sync)
     partner_to_group = _build_partner_group_map(pg_df, analyzer=analyzer)
     partner_default_method = _build_partner_default_method_map(pg_df, analyzer=analyzer)
+
+    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
+    indexes = get_indexes_v2(force_sync=rules_force_sync)
+    rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
+
+    analyzer_job_key = analyzer.strip().lower()
+
+    partner_to_group: Dict[str, str] = {}
+    partner_default_method: Dict[str, str] = {}
+
+    for partner_key, partner_def in snapshot.partners.items():
+        raw_name = partner_def.source_name or partner_def.display_name or ""
+        partner_norm = normalize_partner_name(raw_name)
+        if not partner_norm:
+            continue
+
+        memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
+        if memberships:
+            group_key = memberships[0]
+            if group_key:
+                partner_to_group[partner_norm] = group_key
+
+            member = rules.get_primary_group(analyzer_job_key, partner_key)
+            if member and member.default_method_key:
+                partner_default_method[partner_norm] = str(member.default_method_key).upper()
 
     df = pd.read_excel(payout_path)
     dt_col = _find_col(df, ["date", "datetime", "created_at", "дата", "дата/время", "дата/время создания", "дата создания"])
@@ -514,14 +333,50 @@ def build_wallet_dto_from_payout_xlsx(
         for _, r in sub.iterrows():
             method = (r["_method"] or "").strip().upper() or "UNI"
             amount = float(r["_amount"] or 0.0)
-            lim = resolve_wallet_limit(
-                limits_df,
-                analyzer=analyzer,
-                partner=display_partner,
-                group=group_name,
-                method=method,
-                limit_type="daily_max_amount",
+            partner_obj = rules.resolve_partner(display_partner)
+            partner_key = partner_obj.partner_key if partner_obj else None
+
+            limit_rule = rules.resolve_limit_rule(
+                "daily_max_amount",
+                partner_key=partner_key,
+                group_key=group_name,
+                method_key=(method.lower() if method else None),
             )
+
+            if limit_rule is None:
+                lim = LimitResolved(
+                    status="MISSING",
+                    limit_value=None,
+                    scope=None,
+                    scope_value=None,
+                    method=None,
+                    rule_id=None,
+                    comment="",
+                    reason="",
+                )
+            elif float(limit_rule.limit_value) == 0:
+                lim = LimitResolved(
+                    status="STOP",
+                    limit_value=float(limit_rule.limit_value),
+                    scope=limit_rule.scope_type,
+                    scope_value=limit_rule.scope_key,
+                    method=limit_rule.method_key,
+                    rule_id=limit_rule.rule_key,
+                    comment=limit_rule.comment or "",
+                    reason="",
+                )
+            else:
+                lim = LimitResolved(
+                    status="ACTIVE",
+                    limit_value=float(limit_rule.limit_value),
+                    scope=limit_rule.scope_type,
+                    scope_value=limit_rule.scope_key,
+                    method=limit_rule.method_key,
+                    rule_id=limit_rule.rule_key,
+                    comment=limit_rule.comment or "",
+                    reason="",
+                )
+
             rows.append(WalletMethodRow(method=method, amount=amount, limit=lim))
 
         blocks.append(WalletPartnerBlock(partner=display_partner, group=group_name, rows=rows))
@@ -542,14 +397,52 @@ def build_wallet_stats_dto(
     now: Optional[datetime] = None,
 ) -> WalletStatsDTO:
     runtime = _get_wallet_job_params(rules_force_sync=rules_force_sync)
-    pg_df = get_partner_groups_df(force_sync=rules_force_sync)
-    limits_df = get_wallet_limits_df(force_sync=rules_force_sync)
-    thr_df = get_thresholds_partner_df(force_sync=rules_force_sync)
 
-    partner_to_group = _build_partner_group_map(pg_df, analyzer=analyzer)
-    group_to_partners = _build_group_partners_map(pg_df, analyzer=analyzer)
-    partner_default_method = _build_partner_default_method_map(pg_df, analyzer=analyzer)
-    conv_thresholds, api_thresholds, min_events_map = _build_threshold_maps(thr_df)
+    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
+    indexes = get_indexes_v2(force_sync=rules_force_sync)
+
+    rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
+
+    analyzer_job_key = analyzer.strip().lower()
+
+    partner_to_group: Dict[str, str] = {}
+    group_to_partners: Dict[str, List[str]] = {}
+    partner_default_method: Dict[str, str] = {}
+    conv_thresholds: Dict[str, float] = {}
+    api_thresholds: Dict[str, float] = {}
+    min_events_map: Dict[str, int] = {}
+
+    for partner_key, partner_def in snapshot.partners.items():
+        raw_name = partner_def.source_name or partner_def.display_name or ""
+        partner_norm = normalize_partner_name(raw_name)
+        if not partner_norm:
+            continue
+
+        memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
+        if memberships:
+            group_key = memberships[0]
+            if group_key:
+                partner_to_group[partner_norm] = group_key
+                group_to_partners.setdefault(group_key, []).append(partner_norm)
+
+            member = rules.get_primary_group(analyzer_job_key, partner_key)
+            if member and member.default_method_key:
+                partner_default_method[partner_norm] = str(member.default_method_key).upper()
+
+        conv_rule = rules.resolve_threshold_rule("conversion_rate", partner_key=partner_key)
+        if conv_rule and conv_rule.threshold_min is not None:
+            conv_thresholds[partner_norm] = float(conv_rule.threshold_min)
+
+        api_rule = rules.resolve_threshold_rule("api_cancel_rate", partner_key=partner_key)
+        if api_rule and api_rule.threshold_max is not None:
+            api_thresholds[partner_norm] = float(api_rule.threshold_max)
+
+        min_events_rule = (
+                rules.resolve_threshold_rule("conversion_rate", partner_key=partner_key)
+                or rules.resolve_threshold_rule("api_cancel_rate", partner_key=partner_key)
+        )
+        if min_events_rule and min_events_rule.min_events is not None:
+            min_events_map[partner_norm] = int(min_events_rule.min_events)
 
     if now is None:
         now = datetime.now(MSK_TZ)
@@ -627,16 +520,53 @@ def build_wallet_stats_dto(
         amount_today = float(today_success["_amount"].sum())
 
         default_method = partner_default_method.get(partner_norm, "")
-        lim = resolve_wallet_limit(
-            limits_df,
-            analyzer=analyzer,
-            partner=display_partner,
-            group=group_name,
-            method=default_method,
-            limit_type="daily_max_amount",
+        partner_obj = rules.resolve_partner(display_partner)
+        partner_key = partner_obj.partner_key if partner_obj else None
+
+        limit_rule = rules.resolve_limit_rule(
+            "daily_max_amount",
+            partner_key=partner_key,
+            group_key=group_name,
+            method_key=(default_method.lower() if default_method else None),
         )
 
+        if limit_rule is None:
+            lim = LimitResolved(
+                status="MISSING",
+                limit_value=None,
+                scope=None,
+                scope_value=None,
+                method=None,
+                rule_id=None,
+                comment="",
+                reason="",
+            )
+        elif float(limit_rule.limit_value) == 0:
+            lim = LimitResolved(
+                status="STOP",
+                limit_value=float(limit_rule.limit_value),
+                scope=limit_rule.scope_type,
+                scope_value=limit_rule.scope_key,
+                method=limit_rule.method_key,
+                rule_id=limit_rule.rule_key,
+                comment=limit_rule.comment or "",
+                reason="",
+            )
+        else:
+            lim = LimitResolved(
+                status="ACTIVE",
+                limit_value=float(limit_rule.limit_value),
+                scope=limit_rule.scope_type,
+                scope_value=limit_rule.scope_key,
+                method=limit_rule.method_key,
+                rule_id=limit_rule.rule_key,
+                comment=limit_rule.comment or "",
+                reason="",
+            )
+
         daily_limit = lim.limit_value if lim.status in {"ACTIVE", "STOP"} else None
+
+
         if group_name and daily_limit:
             group_partner_norms = set(group_to_partners.get(group_name, []))
             df_group_today = df_today[df_today["_partner_norm"].isin(group_partner_norms)]

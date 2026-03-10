@@ -101,7 +101,7 @@ class ScheduleRule:
     schedule_type: str
     every_seconds: int | None = None
     cron_expr: str | None = None
-    timezone: str = "Europe/Amsterdam"
+    timezone: str = "Europe/Moscow"
     coalesce: bool = True
     enabled: bool = True
     comment: str | None = None
