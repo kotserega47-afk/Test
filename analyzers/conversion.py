@@ -2,7 +2,6 @@
 
 import os
 import re
-import yaml
 import tempfile
 import pandas as pd
 
@@ -14,6 +13,9 @@ from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
 from utils.normalization import parse_dt_series_msk
+from core.rules_provider import get_snapshot_v2, get_indexes_v2
+from core.rules_v2.accessors import RulesAccessor
+
 
 icon, name = LOG_PROFILES["CONVERT"]
 logger = get_logger(name, icon)
@@ -22,18 +24,8 @@ logger = get_logger(name, icon)
 # Загрузка конфигурации
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "config", "conversion_config.yaml"))
-
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    CONFIG = yaml.safe_load(f) or {}
-
-COLUMNS = CONFIG.get("columns", {})  # ожидаемые имена колонок входного conversion-файла
-VALID_STATUSES = [s.strip().lower() for s in CONFIG.get("valid_statuses", [])]
-POOLS = CONFIG.get("pools", {})
 
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
-if not CHAT_ID:
-    raise RuntimeError("Не задан TELEGRAM_CHAT_ID_ANALIZ")
 
 # -----------------------------
 # Вспомогательные функции (используем уже существующую нормализацию)
@@ -99,30 +91,6 @@ def load_data(filepath, col_mapping: dict):
     return df
 
 
-def init_partner_settings():
-    """
-    Возвращает dict нормализованного имени партнёра -> {threshold, exclude: [(start, end), ...]}
-    где exclude — интервалы времени, которые исключаются из анализа.
-    """
-    partners = {}
-    for raw_name, settings in CONFIG.get("partners", {}).items():
-        norm_name = normalize_name(raw_name)
-        exclude_periods = []
-        for period in settings.get("exclude", []):
-            start = parse_dt_series_msk(period.get("start"))
-            end = parse_dt_series_msk(period.get("end"))
-            if pd.notna(start) and pd.notna(end):
-                exclude_periods.append((start, end))
-        partners[norm_name] = {
-            "threshold": settings.get("threshold", 4),
-            "exclude": exclude_periods,
-        }
-    return partners
-
-
-PARTNER_SETTINGS = init_partner_settings()
-
-
 def _send_problem_cards_to_telegram(problem_df: pd.DataFrame) -> None:
     """
     Отправляет построчно список карт на отключение батчами по ~500 строк.
@@ -185,6 +153,7 @@ def count_last_error_streak(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 # Основная функция анализа
 # -----------------------------
+
 def run(
     conv_file: str,
     card_files: list,
@@ -194,18 +163,35 @@ def run(
     send_telegram: bool = True,
 ) -> dict:
     """
-    Универсальный анализатор conversion-файлов (без БД):
-    - Загружает special_cards.xlsx из Dropbox (папка в .env: DROPBOX_SPECIAL_PATH)
-    - Сообщает в Telegram последнюю дату в special_cards.xlsx (или отсутствие/ошибку)
-    - Загружает conversion и card файлы
-    - Считает статистику по сегодняшним строкам (по партнёрам) и шлёт в Telegram
-    - Применяет индивидуальные start_date по (карта, партнёр) из special_cards.xlsx
-    - Применяет exclude-периоды из YAML
-    - Подсчитывает текущие серии ошибок (последняя непрерывная)
-    - Сравнивает с порогами из YAML
-    - Возвращает problem_cards и summary, формирует Excel, отправляет в Telegram
+    ...
     """
+    if send_telegram and not CHAT_ID:
+        logger.warning("TELEGRAM_CHAT_ID_ANALIZ не задан — отправка в Telegram отключена")
+        send_telegram = False
+
     logger.info(f"[run] 🚀 Начало анализа: {os.path.basename(conv_file)}")
+
+    snapshot = get_snapshot_v2()
+    indexes = get_indexes_v2()
+
+    _ = RulesAccessor(snapshot, indexes)
+
+    valid_statuses: set[str] = set()
+
+    for param in snapshot.job_params:
+        if not param.enabled:
+            continue
+        if param.job_key != "conversion":
+            continue
+        if param.param_key != "valid_status":
+            continue
+
+        value = str(param.value).strip().lower()
+        if value:
+            valid_statuses.add(value)
+
+    if not valid_statuses:
+        valid_statuses = {"готов к работе", "активный вход"}
 
     # 0) Пути к special_cards.xlsx в Dropbox
     special_folder = os.getenv("DROPBOX_SPECIAL_PATH", "/Ostin/platform/special")
@@ -304,7 +290,8 @@ def run(
     conv_df.dropna(subset=["card", "datetime", "status"], inplace=True)
 
     # Фильтруем по допустимым статусам (ошибка/оплачен + валидные)
-    conv_df = conv_df[conv_df["status"].isin(["ошибка", "оплачен"] + VALID_STATUSES)]
+    allowed_statuses = {"ошибка", "оплачен"} | valid_statuses
+    conv_df = conv_df[conv_df["status"].isin(allowed_statuses)]
     logger.info(f"[run] 📄 Загружено {len(conv_df)} строк из conversion.")
 
 
@@ -328,14 +315,34 @@ def run(
         if after != before:
             logger.info(f"[run] 🧭 Применены правила special_cards: отфильтровано {before - after} строк.")
 
-    # 4) Применяем exclude-периоды из YAML
-    for partner_name, settings in PARTNER_SETTINGS.items():
-        for start, end in settings.get("exclude", []):
-            before = len(conv_df)
-            mask = (conv_df["partner_norm"] == partner_name) & (conv_df["datetime"].between(start, end))
-            conv_df = conv_df[~mask]
-            if len(conv_df) != before:
-                logger.info(f"[run] ⏳ Исключено {before - len(conv_df)} строк по exclude для «{partner_name}»")
+    # 4) Применяем exclude-периоды из rules exclude_time
+    for rule in snapshot.exclusion_rules:
+        if not rule.enabled:
+            continue
+        if rule.job_key != "conversion":
+            continue
+        if rule.scope_type != "partner":
+            continue
+
+        partner = snapshot.partners.get(rule.scope_key)
+        if not partner:
+            continue
+
+        partner_norm = normalize_name(partner.display_name or partner.source_name or "")
+        if not partner_norm:
+            continue
+
+        before = len(conv_df)
+
+        mask = (
+                (conv_df["partner_norm"] == partner_norm)
+                & (conv_df["datetime"].between(rule.start_dt, rule.end_dt))
+        )
+        conv_df = conv_df[~mask]
+
+        excluded = before - len(conv_df)
+        if excluded > 0:
+            logger.info(f"[run] ⏳ Исключено {excluded} строк по exclude для «{partner_norm}»")
 
     # 5) Загрузка card-файлов (справочник статусов и партнёров)
     card_df_list = []
@@ -364,11 +371,35 @@ def run(
     conv_df.sort_values(["card", "partner_norm", "datetime"], inplace=True)
     max_errors = count_last_error_streak(conv_df)
 
-    # 7) Пороги из YAML
-    settings_df = pd.DataFrame(
-        [{"partner_norm": p, "threshold": s.get("threshold", 4)} for p, s in PARTNER_SETTINGS.items()]
-    )
-    merged = max_errors.merge(settings_df, on="partner_norm", how="left").fillna({"threshold": 4})
+    # 7) Пороги из rules thresholds_partner
+    threshold_map: dict[str, int] = {}
+
+    for rule in snapshot.threshold_rules:
+        if not rule.enabled:
+            continue
+        if rule.job_key != "conversion":
+            continue
+        if rule.scope_type != "partner":
+            continue
+        if rule.metric_key != "max_consecutive_errors":
+            continue
+
+        partner = snapshot.partners.get(rule.scope_key)
+        if not partner:
+            continue
+
+        partner_norm = normalize_name(partner.display_name or partner.source_name or "")
+        if not partner_norm:
+            continue
+
+        threshold_value = rule.threshold_min
+        if threshold_value is None:
+            continue
+
+        threshold_map[partner_norm] = int(threshold_value)
+
+    merged = max_errors.copy()
+    merged["threshold"] = merged["partner_norm"].map(threshold_map).fillna(4).astype(int)
 
     # 8) Добавляем статус и партнёров из card-файлов
     card_status_map = card_df.set_index("card")["status"].to_dict() if not card_df.empty else {}
@@ -380,7 +411,7 @@ def run(
     # 9) Фильтрация проблемных карт
     problem_mask = (
         (merged["max_consecutive_errors"] >= merged["threshold"])
-        & (merged["status"].isin(VALID_STATUSES))
+        & (merged["status"].isin(valid_statuses))
         & merged.apply(
             lambda r: isinstance(r["partner_list"], list) and r["partner_norm"] in r["partner_list"],
             axis=1
@@ -391,7 +422,7 @@ def run(
 
     # 10) Подсчёт "Карт в работе по партнёрам"
     # Берём карты из card_df в статусе "Готов к работе"/"Активный вход" и с заполненным партнёром
-    ACTIVE_STATUSES = VALID_STATUSES
+    ACTIVE_STATUSES = list(valid_statuses)
 
     active_cards = card_df[
         card_df["status"].isin(ACTIVE_STATUSES)

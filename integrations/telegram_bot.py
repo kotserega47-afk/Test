@@ -14,9 +14,6 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("Не задан TELEGRAM_BOT_TOKEN")
-
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # =====================================================
@@ -29,7 +26,7 @@ request = HTTPXRequest(
     read_timeout=40.0,
 )
 
-bot = Bot(token=TELEGRAM_TOKEN, request=request)
+bot = Bot(token=TELEGRAM_TOKEN, request=request) if TELEGRAM_TOKEN else None
 
 
 # =====================================================
@@ -81,10 +78,14 @@ loop.call_soon_threadsafe(loop.create_task, _worker())
 # =====================================================
 
 async def _send_message(chat_id: str, text: str):
+    if bot is None:
+        return
     await bot.send_message(chat_id=chat_id, text=text)
 
 
 async def _send_file(chat_id: str, path: str, caption: str | None):
+    if bot is None:
+        return
     with open(path, "rb") as f:
         await bot.send_document(chat_id=chat_id, document=InputFile(f), caption=caption)
 
@@ -101,6 +102,10 @@ def send_message_sync(text: str, chat_id: str):
     if not chat_id:
         raise ValueError("chat_id обязателен для send_message_sync")
 
+    if not TELEGRAM_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN не задан — сообщение не отправлено")
+        return
+
     try:
         loop.call_soon_threadsafe(
             queue.put_nowait,
@@ -114,6 +119,9 @@ def send_message_sync(text: str, chat_id: str):
 def send_photo_sync(photo_path: str, caption: str, chat_id: str):
     """Отправляет фото (например, скриншот) с подписью"""
     try:
+        if not TELEGRAM_TOKEN:
+            logger.warning("TELEGRAM_BOT_TOKEN не задан — файл не отправлен")
+            return
         with open(photo_path, "rb") as photo:
             requests.post(
                 f"{BASE_URL}/sendPhoto",
@@ -134,6 +142,10 @@ def send_file_sync(path: str, caption: str | None, chat_id: str):
     """
     if not chat_id:
         raise ValueError("chat_id обязателен для send_file_sync")
+
+    if not TELEGRAM_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN не задан — файл не отправлен")
+        return
 
     try:
         loop.call_soon_threadsafe(
@@ -156,6 +168,8 @@ def send_message_direct(text: str, chat_id: str):
     """
     if not chat_id:
         raise ValueError("chat_id обязателен для send_message_direct")
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 

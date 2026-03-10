@@ -221,3 +221,33 @@ class HourlyRulesAccessor(BaseRulesAccessor):
                 result[param_key] = value
 
         return result
+
+class RulesAccessor:
+
+    def __init__(self, snapshot, indexes):
+        self.snapshot = snapshot
+        self.indexes = indexes
+
+    def get_partner(self, partner_key):
+        return self.snapshot.partners.get(partner_key)
+
+    def get_partner_by_code(self, code):
+        partner_key = self.indexes.partners_by_code.get(str(code))
+        if not partner_key:
+            return None
+        return self.snapshot.partners.get(partner_key)
+
+    def get_group(self, group_key):
+        return self.snapshot.partner_groups.get(group_key)
+
+    def get_group_partners(self, job_key, group_key):
+        partners = []
+        for m in self.snapshot.partner_group_members:
+            if not m.enabled:
+                continue
+            if m.job_key != job_key:
+                continue
+            if m.group_key != group_key:
+                continue
+            partners.append(m.partner_key)
+        return partners
