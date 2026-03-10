@@ -14,10 +14,12 @@ class WalletRenderModel:
 def _fmt_amount(value: float | int | None) -> str:
     if value is None:
         return "—"
-    return f"{int(round(float(value))):,}"
+    return f"{int(round(float(value))):,}".replace(",", " ")
 
 
 def _conversion_line(p: WalletPartnerStats) -> str:
+    if p.total_ops == 0:
+        return "  Конверсия: —"
     base = f"{p.success_ops} / {p.total_ops} = {p.conversion_pct:.1f}%"
 
     if p.conversion_insufficient:
@@ -48,7 +50,8 @@ def _payin_line(p: WalletPartnerStats) -> str:
         icon = "🟡"
 
     suffix = f" ({p.daily_limit_comment})" if p.daily_limit_comment else ""
-    return f"  Поступления: {amount} / {limit} ({p.percent_filled}%) — {icon}{suffix}"
+    pct = f"{p.percent_filled}%" if p.percent_filled is not None else "—"
+    return f"  Поступления: {amount} / {limit} ({pct}) — {icon}{suffix}"
 
 
 def _api_line(p: WalletPartnerStats) -> str:
@@ -80,15 +83,6 @@ def _last_success_line(p: WalletPartnerStats) -> str:
         f"  Последний успех: "
         f"{p.last_success_minutes_ago} мин назад ({exact})"
     )
-
-    now = datetime.utcnow()
-
-    minutes_ago = int((now - p.last_success_at).total_seconds() // 60)
-
-    exact = p.last_success_at.strftime("%d.%m %H:%M:%S")
-
-    return f"  Последний успех: {minutes_ago} мин назад ({exact})"
-
 
 def _partner_block(p: WalletPartnerStats) -> List[str]:
     block = [

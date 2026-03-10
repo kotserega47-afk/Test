@@ -8,24 +8,25 @@ from dropbox.exceptions import ApiError
 icon, name = LOG_PROFILES["DROPBOX"]
 logger = get_logger(name, icon)
 
-# Получаем токены и ключи из env
-ACCESS_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN")
-REFRESH_TOKEN = os.getenv("DROPBOX_REFRESH_TOKEN")
-APP_KEY = os.getenv("DROPBOX_APP_KEY")
-APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
+def _get_dbx():
+    access_token = os.getenv("DROPBOX_ACCESS_TOKEN")
+    refresh_token = os.getenv("DROPBOX_REFRESH_TOKEN")
+    app_key = os.getenv("DROPBOX_APP_KEY")
+    app_secret = os.getenv("DROPBOX_APP_SECRET")
 
-# Создаём объект dropbox
-if ACCESS_TOKEN:
-    dbx = dropbox.Dropbox(ACCESS_TOKEN)
-elif REFRESH_TOKEN and APP_KEY and APP_SECRET:
-    dbx = dropbox.Dropbox(
-        oauth2_refresh_token=REFRESH_TOKEN,
-        app_key=APP_KEY,
-        app_secret=APP_SECRET
-    )
-else:
+    if access_token:
+        return dropbox.Dropbox(access_token)
+
+    if refresh_token and app_key and app_secret:
+        return dropbox.Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=app_key,
+            app_secret=app_secret,
+        )
+
     raise ValueError(
-        "Нужно указать DROPBOX_ACCESS_TOKEN или комбинацию DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET"
+        "Нужно указать DROPBOX_ACCESS_TOKEN или комбинацию "
+        "DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET"
     )
 
 # -----------------------------
@@ -34,6 +35,7 @@ else:
 def list_files(path: str):
     """Список файлов в папке dropbox"""
     try:
+        dbx = _get_dbx()
         res = dbx.files_list_folder(path)
         return [entry.name for entry in res.entries]
     except Exception as e:
@@ -48,6 +50,7 @@ def download_file(dropbox_path: str, local_path: str):
       "error"     — иная ошибка
     """
     try:
+        dbx = _get_dbx()
         metadata, res = dbx.files_download(dropbox_path)
         with open(local_path, "wb") as f:
             f.write(res.content)
@@ -70,6 +73,7 @@ def download_file(dropbox_path: str, local_path: str):
 def upload_file(local_path: str, dropbox_path: str):
     """Загрузить локальный файл в dropbox"""
     try:
+        dbx = _get_dbx()
         with open(local_path, "rb") as f:
             dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode("overwrite"))
         return True
@@ -80,6 +84,7 @@ def upload_file(local_path: str, dropbox_path: str):
 def move_file(src_path: str, dest_path: str):
     """Переместить файл внутри dropbox"""
     try:
+        dbx = _get_dbx()
         dbx.files_move_v2(src_path, dest_path, allow_shared_folder=True, autorename=True)
         return True
     except Exception as e:

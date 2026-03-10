@@ -16,6 +16,9 @@ class RenderedReport:
 
 
 def _apply_style(s: str, style: str) -> str:
+    s = str(s).strip()
+    if not s:
+        return ""
     if style == "bold":
         return f"*{s}*"
     return s
@@ -44,6 +47,7 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
     df["title"] = df["title"].astype(str).str.strip()
     df["style"] = df["style"].astype(str).str.strip().str.lower()
 
+    df = df.fillna("")
     df["title"] = df["title"].replace("nan", "")
     df["key"] = df["key"].replace("nan", "")
     df["style"] = df["style"].replace("nan", "")
@@ -87,10 +91,7 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
             if title:
                 out.append(_apply_style(title, style))
             for item in val:
-                if item is None:
-                    out.append("")
-                else:
-                    out.append(str(item).rstrip())
+                out.append(str(item).rstrip())
             continue
 
         line = f"{title} {val}".strip() if title else str(val).strip()

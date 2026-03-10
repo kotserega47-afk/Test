@@ -39,7 +39,7 @@ def _is_empty_value(value) -> bool:
 
 
 def _apply_style(value, style: str) -> List[str]:
-    style = (style or "text").strip().lower()
+    style = str(style or "text").strip().lower()
 
     if style == "blank":
         return [""]
@@ -102,6 +102,7 @@ def _load_layout(force_sync: bool = False) -> pd.DataFrame:
         )
 
     out = df.copy()
+    out = out.fillna("")
     out.columns = [str(c).strip().lower() for c in out.columns]
 
     required_cols = {"enabled", "view", "section", "key", "style", "order"}
@@ -166,15 +167,13 @@ def _render_part(df: pd.DataFrame, render_model: dict) -> str:
 
 def render_wallet(
     dto: WalletStatsDTO,
-    *,
-    job: str = "wallet",
     layout_df: Optional[pd.DataFrame] = None,
     rules_force_sync: bool = False,
 ) -> RenderedReport:
-    _ = job
     rm = build_wallet_render_model(dto)
     render_model = rm.model
     df = _load_layout(force_sync=rules_force_sync) if layout_df is None else layout_df.copy()
+    df = df.fillna("")
 
     df.columns = [str(c).strip().lower() for c in df.columns]
     if "section" not in df.columns:

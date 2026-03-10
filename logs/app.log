@@ -1406,3 +1406,4 @@ HH (А-мобайл Сбер
 2025-12-02 17:50:15,339 [INFO] ✅ Дата выбрана: 2025-11-25
 2025-12-02 17:50:23,051 [INFO] ✅ Payout сохранён: /tmp\wallet_handler\payout_17.48.xlsx
 2025-12-02 17:50:23,118 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_17.48.xlsx
+2026-03-10 14:17:49,847 [ERROR] ☁️ [Dropbox] Ошибка download_file(/rules.xlsx): Нужно указать DROPBOX_ACCESS_TOKEN или комбинацию DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET

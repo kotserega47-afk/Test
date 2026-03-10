@@ -97,6 +97,6 @@ def run_hourly_report(*, job: str = "hourly") -> HourlyRunResult:
     )
 
     # 3) Render text (layout from rules.xlsx job_params inside reporter)
-    rendered = render_hourly(dto, job=job)
+    rendered = render_hourly(dto)
 
     return HourlyRunResult(skipped_no_changes=False, fingerprint=fp, text=rendered.text)
