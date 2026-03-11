@@ -1407,3 +1407,108 @@ HH (А-мобайл Сбер
 2025-12-02 17:50:23,051 [INFO] ✅ Payout сохранён: /tmp\wallet_handler\payout_17.48.xlsx
 2025-12-02 17:50:23,118 [INFO] [Analyzer] Загружаю PayIn: /tmp\wallet_handler\payin_17.48.xlsx
 2026-03-10 14:17:49,847 [ERROR] ☁️ [Dropbox] Ошибка download_file(/rules.xlsx): Нужно указать DROPBOX_ACCESS_TOKEN или комбинацию DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET
+2026-03-11 02:57:21,130 [INFO] 🔁 [ConversionAnalyzer] [run] 🚀 Начало анализа: conv.xlsx
+2026-03-11 02:57:21,133 [INFO] Request to files/download
+2026-03-11 02:57:22,477 [ERROR] ☁️ [Dropbox] Ошибка download_file(/Ostin/platform/config/rules/rules.xlsx): AuthError('33f3eba2100e4510b36882ce69b0afe2', AuthError('invalid_access_token', None))
+2026-03-11 02:57:23,232 [INFO] 🔁 [ConversionAnalyzer] [run] valid_statuses for conversion: ['активный вход', 'готов к работе']
+2026-03-11 02:57:23,235 [INFO] Request to files/download
+2026-03-11 02:57:25,108 [ERROR] ☁️ [Dropbox] Dropbox API error: ApiError('09968782d8ea4cc0a85ae7be69b0afe5', DownloadError('path', LookupError('malformed_path', None)))
+2026-03-11 02:57:25,110 [INFO] 🔁 [ConversionAnalyzer] [run] 📥 special_cards.xlsx загружен: /Ostin/platform/special\special_cards.xlsx → C:\Users\denis\AppData\Local\Temp\special_cards.xlsx
+2026-03-11 02:57:25,112 [WARNING] 🔁 [ConversionAnalyzer] [run] ⚠️ Ошибка при загрузке/чтении special_cards.xlsx: [Errno 2] No such file or directory: 'C:\\Users\\denis\\AppData\\Local\\Temp\\special_cards.xlsx'
+2026-03-11 02:59:05,826 [INFO] 🔁 [ConversionAnalyzer] [run] 🚀 Начало анализа: conv.xlsx
+2026-03-11 02:59:05,826 [INFO] Request to files/download
+2026-03-11 02:59:06,801 [ERROR] ☁️ [Dropbox] Ошибка download_file(/Ostin/platform/config/rules/rules.xlsx): AuthError('48ef275be64f4171b4edb99469b0b04a', AuthError('invalid_access_token', None))
+2026-03-11 02:59:07,557 [INFO] 🔁 [ConversionAnalyzer] [run] valid_statuses for conversion: ['активный вход', 'готов к работе']
+2026-03-11 02:59:07,557 [INFO] Request to files/download
+2026-03-11 02:59:09,380 [ERROR] ☁️ [Dropbox] Dropbox API error: ApiError('e0b5921573364e2ca30b26c369b0b04d', DownloadError('path', LookupError('malformed_path', None)))
+2026-03-11 02:59:09,381 [INFO] 🔁 [ConversionAnalyzer] [run] 📥 special_cards.xlsx загружен: /Ostin/platform/special\special_cards.xlsx → C:\Users\denis\AppData\Local\Temp\special_cards.xlsx
+2026-03-11 02:59:09,382 [WARNING] 🔁 [ConversionAnalyzer] [run] ⚠️ Ошибка при загрузке/чтении special_cards.xlsx: [Errno 2] No such file or directory: 'C:\\Users\\denis\\AppData\\Local\\Temp\\special_cards.xlsx'
+2026-03-11 02:59:11,771 [INFO] 🔁 [ConversionAnalyzer] [run] 📄 Загружено 12723 строк из conversion.
+2026-03-11 02:59:11,876 [INFO] 🔁 [ConversionAnalyzer] [run] total excluded by rules exclude_time: 0
+2026-03-11 02:59:13,752 [INFO] 🔁 [ConversionAnalyzer] [load_data] Загружен файл C:\Users\denis\Downloads\card.xlsx с колонками: ['Карта', 'Телефон', 'Позиция/слот', 'Направление', 'Баланс', 'offline Баланс', 'Баланс инвалюты', 'Статус', 'Состояние', 'Метод пополнения', 'Комментарий', 'Длина очереди', 'Глубина очереди', 'KYC', 'Фамилия', 'Имя', 'Пол', 'Роль', 'Пул', 'КП', 'КВ', 'Кластер', 'Номер телефона внутри кластера', 'Номер слота симкарты внутри телефона', 'Сервер ID', 'Партнёр', 'Наш/не наш', 'Кластер.1', 'Bakai customer_id', 'Номер счета']
+2026-03-11 02:59:13,815 [INFO] 🔁 [ConversionAnalyzer] [run] 🧩 Загружено 8852 карт из card-файлов.
+2026-03-11 02:59:13,816 [INFO] 🔁 [ConversionAnalyzer] [run] Колонки в card_df: ['card', 'Телефон', 'Позиция/слот', 'Направление', 'Баланс', 'offline Баланс', 'Баланс инвалюты', 'status', 'Состояние', 'Метод пополнения', 'Комментарий', 'Длина очереди', 'Глубина очереди', 'KYC', 'Фамилия', 'Имя', 'Пол', 'Роль', 'pool', 'КП', 'КВ', 'Кластер', 'Номер телефона внутри кластера', 'Номер слота симкарты внутри телефона', 'Сервер ID', 'partner', 'Наш/не наш', 'Кластер.1', 'Bakai customer_id', 'Номер счета', 'partner_list']
+2026-03-11 02:59:14,636 [INFO] 🔁 [ConversionAnalyzer] [run] thresholds loaded for conversion: 17 partners
+2026-03-11 02:59:15,468 [INFO] 🔁 [ConversionAnalyzer] [run] ✅ Обнаружено 1 карт на отключение.
+2026-03-11 02:59:15,468 [INFO] 🔁 [ConversionAnalyzer] [run] 📊 Карт в работе по партнёрам: {'hh (абхасбер - сбер сбп)': 1495, 'hh (abhsber in) сбер карты + выплаты': 1386, 'hh (абхасбер - тбанк сбп)': 1300, 'кибит юмани': 802, 'hh (кибит сбер)': 773, 'hh (а-мобайл сбер + выплаты)': 770, 'hh (abhsber in) тинь карты': 766, 'hh вассл (тинь карты)': 541, 'hh (бакай тинь)': 419, 'hh аврора (юмани карты)': 360, 'hh (аврора сбер)': 243, 'hh (аврора тинь)': 205, 'nan': 192, 'hh вассл (втб сбп)': 142, 'hh (а-мобайл sbp in втб)': 98, 'hh вассл (тбанк сбп)': 73, 'hh (кибит тинь)': 72, 'hh (просто оставим)': 46, 'hh вассл (сбер сбп)': 41, 'hh tбанк сбп in/out': 4}
+2026-03-11 03:00:59,946 [INFO] Request to files/download
+2026-03-11 03:01:01,361 [ERROR] ☁️ [Dropbox] Ошибка download_file(/Ostin/platform/config/rules/rules.xlsx): AuthError('c3892f262a114fce87bbbe3769b0b0bd', AuthError('invalid_access_token', None))
+2026-03-11 03:26:10,226 [INFO] ⬇️ [Downloader] 🚀 Запуск run_download() из контейнера Railway
+2026-03-11 03:26:10,226 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): 🚀 Downloader запущен вручную на Railway
+2026-03-11 03:26:10,227 [INFO] ⬇️ [Downloader] 🕒 downloader стартовал, ts=03.26
+2026-03-11 03:26:10,228 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): 🕒 Запущен выгрузчик данных (ts=03.26)
+2026-03-11 03:26:10,605 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:26:10,606 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:26:10,667 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:26:10,668 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:26:11,774 [INFO] ⬇️ [Downloader] 🔑 Проверяем авторизацию в Antares…
+2026-03-11 03:26:19,557 [INFO] ⬇️ [Downloader] 🔑 Сессия недействительна, логинимся заново…
+2026-03-11 03:26:24,746 [INFO] ⬇️ [Downloader] ✅ Новая сессия сохранена
+2026-03-11 03:26:24,746 [INFO] ⬇️ [Downloader] ⬇️ Wallet → экспорт…
+2026-03-11 03:26:24,811 [INFO] ⬇️ [Downloader] ✅ Кнопка 'Экспорт' найдена, ждём 10 секунд перед кликом...
+2026-03-11 03:27:05,627 [INFO] ⬇️ [Downloader] ✅ Сохранено локально: /tmp\downloads\card_03.26.xlsx
+2026-03-11 03:27:05,627 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): ✅ Скачан card_03.26.xlsx
+2026-03-11 03:27:05,628 [INFO] ⬇️ [Downloader] ⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…
+2026-03-11 03:27:05,955 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:27:05,956 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:27:08,636 [INFO] ⬇️ [Downloader] 📅 Дата для выбора: 2026-03-09
+2026-03-11 03:27:28,675 [ERROR] ⬇️ [Downloader] ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 03:27:28,680 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeou
+2026-03-11 03:27:28,772 [ERROR] ⬇️ [Downloader] ❌ Downloader завершился с ошибкой: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 300, in <module>
+    run_download()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 03:27:28,774 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): ❌ Downloader завершился с ошибкой: Page.wait_for_selector: T

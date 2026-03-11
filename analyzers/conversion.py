@@ -13,8 +13,7 @@ from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
 from utils.normalization import parse_dt_series_msk
-from core.rules_provider import get_snapshot_v2, get_indexes_v2
-from core.rules_v2.accessors import RulesAccessor
+from core.rules_provider import get_snapshot_v2
 
 
 icon, name = LOG_PROFILES["CONVERT"]
@@ -25,7 +24,7 @@ logger = get_logger(name, icon)
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
+CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID_ANALIZ") or "").strip()
 
 # -----------------------------
 # Вспомогательные функции (используем уже существующую нормализацию)
@@ -96,6 +95,10 @@ def _send_problem_cards_to_telegram(problem_df: pd.DataFrame) -> None:
     Отправляет построчно список карт на отключение батчами по ~500 строк.
     Формат строки: "<card> <partner> <max_consecutive_errors>"
     """
+    if not CHAT_ID:
+        logger.warning("[telegram] CHAT_ID не задан — список карт не отправлен")
+        return
+
     if problem_df.empty:
         return
 
@@ -161,6 +164,7 @@ def run(
     *,
     generate_excel: bool = True,
     send_telegram: bool = True,
+    rules_force_sync: bool = False,
 ) -> dict:
     """
     ...
@@ -171,10 +175,7 @@ def run(
 
     logger.info(f"[run] 🚀 Начало анализа: {os.path.basename(conv_file)}")
 
-    snapshot = get_snapshot_v2()
-    indexes = get_indexes_v2()
-
-    _ = RulesAccessor(snapshot, indexes)
+    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
 
     valid_statuses: set[str] = set()
 
@@ -192,6 +193,7 @@ def run(
 
     if not valid_statuses:
         valid_statuses = {"готов к работе", "активный вход"}
+    logger.info(f"[run] valid_statuses for conversion: {sorted(valid_statuses)}")
 
     # 0) Пути к special_cards.xlsx в Dropbox
     special_folder = os.getenv("DROPBOX_SPECIAL_PATH", "/Ostin/platform/special")
@@ -314,6 +316,7 @@ def run(
         after = len(conv_df)
         if after != before:
             logger.info(f"[run] 🧭 Применены правила special_cards: отфильтровано {before - after} строк.")
+    excluded_total = 0
 
     # 4) Применяем exclude-периоды из rules exclude_time
     for rule in snapshot.exclusion_rules:
@@ -341,8 +344,10 @@ def run(
         conv_df = conv_df[~mask]
 
         excluded = before - len(conv_df)
+        excluded_total += excluded
         if excluded > 0:
             logger.info(f"[run] ⏳ Исключено {excluded} строк по exclude для «{partner_norm}»")
+    logger.info(f"[run] total excluded by rules exclude_time: {excluded_total}")
 
     # 5) Загрузка card-файлов (справочник статусов и партнёров)
     card_df_list = []
@@ -381,7 +386,7 @@ def run(
             continue
         if rule.scope_type != "partner":
             continue
-        if rule.metric_key != "max_consecutive_errors":
+        if rule.metric_key != "error_streak":
             continue
 
         partner = snapshot.partners.get(rule.scope_key)
@@ -392,11 +397,12 @@ def run(
         if not partner_norm:
             continue
 
-        threshold_value = rule.threshold_min
+        threshold_value = rule.threshold_max
         if threshold_value is None:
             continue
 
         threshold_map[partner_norm] = int(threshold_value)
+    logger.info(f"[run] thresholds loaded for conversion: {len(threshold_map)} partners")
 
     merged = max_errors.copy()
     merged["threshold"] = merged["partner_norm"].map(threshold_map).fillna(4).astype(int)
