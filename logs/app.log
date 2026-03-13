@@ -1512,3 +1512,213 @@ Call log:
   - waiting for locator(".b-calendar") to be visible
 
 2026-03-11 03:27:28,774 [INFO] 📨 Добавлено в очередь сообщение (-1002572334158): ❌ Downloader завершился с ошибкой: Page.wait_for_selector: T
+2026-03-11 03:29:01,110 [INFO] ⬇️ [Downloader] 🚀 Запуск run_download() из контейнера Railway
+2026-03-11 03:29:01,110 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🚀 Downloader запущен вручную на Railway
+2026-03-11 03:29:01,111 [INFO] ⬇️ [Downloader] 🕒 downloader стартовал, ts=03.29
+2026-03-11 03:29:01,112 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🕒 Запущен выгрузчик данных (ts=03.29)
+2026-03-11 03:29:01,482 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:29:01,483 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:29:01,539 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:29:01,540 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:29:01,850 [INFO] ⬇️ [Downloader] 🔑 Проверяем авторизацию в Antares…
+2026-03-11 03:29:06,047 [INFO] ⬇️ [Downloader] ✅ Сессия активна
+2026-03-11 03:29:06,047 [INFO] ⬇️ [Downloader] ⬇️ Wallet → экспорт…
+2026-03-11 03:29:06,090 [INFO] ⬇️ [Downloader] ✅ Кнопка 'Экспорт' найдена, ждём 10 секунд перед кликом...
+2026-03-11 03:29:46,449 [INFO] ⬇️ [Downloader] ✅ Сохранено локально: /tmp\downloads\card_03.29.xlsx
+2026-03-11 03:29:46,449 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ✅ Скачан card_03.29.xlsx
+2026-03-11 03:29:46,451 [INFO] ⬇️ [Downloader] ⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…
+2026-03-11 03:29:46,811 [INFO] HTTP Request: POST https://api.telegram.org/bottest/sendMessage "HTTP/1.1 404 Not Found"
+2026-03-11 03:29:46,812 [ERROR] ❌ Ошибка async отправки: Not Found
+2026-03-11 03:29:49,459 [INFO] ⬇️ [Downloader] 📅 Дата для выбора: 2026-03-09
+2026-03-11 03:30:09,490 [ERROR] ⬇️ [Downloader] ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 03:30:09,492 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeou
+2026-03-11 03:30:09,591 [ERROR] ⬇️ [Downloader] ❌ Downloader завершился с ошибкой: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 300, in <module>
+    run_download()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 03:30:09,593 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Downloader завершился с ошибкой: Page.wait_for_selector: T
+2026-03-11 09:13:12,654 [INFO] ⬇️ [Downloader] 🚀 Запуск run_download() из контейнера Railway
+2026-03-11 09:13:12,655 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🚀 Downloader запущен вручную на Railway
+2026-03-11 09:13:12,656 [INFO] ⬇️ [Downloader] 🕒 downloader стартовал, ts=09.13
+2026-03-11 09:13:12,657 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🕒 Запущен выгрузчик данных (ts=09.13)
+2026-03-11 09:13:13,038 [INFO] HTTP Request: POST https://api.telegram.org/bot8588742668:AAF0jg5WxQiez1HSiP4zqtvsF7T5e1eA2QE/sendMessage "HTTP/1.1 400 Bad Request"
+2026-03-11 09:13:13,039 [ERROR] ❌ Ошибка async отправки: Chat not found
+2026-03-11 09:13:13,106 [INFO] HTTP Request: POST https://api.telegram.org/bot8588742668:AAF0jg5WxQiez1HSiP4zqtvsF7T5e1eA2QE/sendMessage "HTTP/1.1 400 Bad Request"
+2026-03-11 09:13:13,107 [ERROR] ❌ Ошибка async отправки: Chat not found
+2026-03-11 09:13:14,500 [INFO] ⬇️ [Downloader] 🔑 Проверяем авторизацию в Antares…
+2026-03-11 09:13:21,387 [INFO] ⬇️ [Downloader] ✅ Сессия активна
+2026-03-11 09:13:21,387 [INFO] ⬇️ [Downloader] ⬇️ Wallet → экспорт…
+2026-03-11 09:13:21,451 [INFO] ⬇️ [Downloader] ✅ Кнопка 'Экспорт' найдена, ждём 10 секунд перед кликом...
+2026-03-11 09:14:02,626 [INFO] ⬇️ [Downloader] ✅ Сохранено локально: /tmp\downloads\card_09.13.xlsx
+2026-03-11 09:14:02,626 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ✅ Скачан card_09.13.xlsx
+2026-03-11 09:14:02,627 [INFO] ⬇️ [Downloader] ⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…
+2026-03-11 09:14:02,971 [INFO] HTTP Request: POST https://api.telegram.org/bot8588742668:AAF0jg5WxQiez1HSiP4zqtvsF7T5e1eA2QE/sendMessage "HTTP/1.1 400 Bad Request"
+2026-03-11 09:14:02,972 [ERROR] ❌ Ошибка async отправки: Chat not found
+2026-03-11 09:14:05,636 [INFO] ⬇️ [Downloader] 📅 Дата для выбора: 2026-03-09
+2026-03-11 09:14:25,689 [ERROR] ⬇️ [Downloader] ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 09:14:25,694 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Ошибка во время скачивания: Page.wait_for_selector: Timeou
+2026-03-11 09:14:25,801 [ERROR] ⬇️ [Downloader] ❌ Downloader завершился с ошибкой: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 300, in <module>
+    run_download()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 243, in run_download
+    conversion_local = _download_payin_export(page, timestamp)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 151, in _download_payin_export
+    page.wait_for_selector(".b-calendar", timeout=20000)
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\denis\PycharmProjects\analizis\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+
+2026-03-11 09:14:25,803 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Downloader завершился с ошибкой: Page.wait_for_selector: T
+2026-03-13 19:51:49,577 [INFO] ⬇️ [Downloader] 🚀 Запуск run_download() из контейнера Railway
+2026-03-13 19:51:49,578 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🚀 Downloader запущен вручную на Railway
+2026-03-13 19:51:49,578 [INFO] ⬇️ [Downloader] 🕒 downloader стартовал, ts=19.51
+2026-03-13 19:51:49,579 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): 🕒 Запущен выгрузчик данных (ts=19.51)
+2026-03-13 19:51:50,383 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2026-03-13 19:51:50,384 [INFO] 📤 Отправлено сообщение (chat_id=-1003429793111): 🚀 Downloader запущен вручную на Railway
+2026-03-13 19:51:50,636 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2026-03-13 19:51:50,637 [INFO] 📤 Отправлено сообщение (chat_id=-1003429793111): 🕒 Запущен выгрузчик данных (ts=19.51)
+2026-03-13 19:51:51,872 [INFO] ⬇️ [Downloader] 🔑 Проверяем авторизацию в Antares…
+2026-03-13 19:52:00,213 [INFO] ⬇️ [Downloader] ✅ Сессия активна
+2026-03-13 19:52:00,214 [INFO] ⬇️ [Downloader] ⬇️ Wallet → экспорт…
+2026-03-13 19:53:14,451 [INFO] ⬇️ [Downloader] ✅ Сохранено локально: /tmp\downloads\card_19.51.xlsx
+2026-03-13 19:53:14,452 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ✅ Скачан card_19.51.xlsx
+2026-03-13 19:53:14,453 [INFO] ⬇️ [Downloader] ⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…
+2026-03-13 19:53:14,453 [INFO] ⬇️ [Downloader] 📅 Дата для выбора: 2026-03-11
+2026-03-13 19:53:15,138 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2026-03-13 19:53:15,140 [INFO] 📤 Отправлено сообщение (chat_id=-1003429793111): ✅ Скачан card_19.51.xlsx
+2026-03-13 19:53:16,065 [INFO] ⬇️ [Downloader] ✅ Календарь открыт через button.btn.h-auto
+2026-03-13 19:53:16,133 [INFO] ⬇️ [Downloader] ✅ Выбрана дата 2026-03-11 прямым кликом
+2026-03-13 19:55:25,995 [INFO] ⬇️ [Downloader] ✅ Сохранено локально: /tmp\downloads\conversion_19.51.xlsx
+2026-03-13 19:55:25,995 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ✅ Скачан conversion_19.51.xlsx
+2026-03-13 19:55:25,997 [INFO] ⬇️ [Downloader] ⬇️ Wallet → экспорт (для cd)...
+2026-03-13 19:55:31,067 [INFO] HTTP Request: POST https://api.telegram.org/bot8371723190:AAGXbPlIUFfaB5LZjzCB_if6EDJA1YNfFUY/sendMessage "HTTP/1.1 200 OK"
+2026-03-13 19:55:31,069 [INFO] 📤 Отправлено сообщение (chat_id=-1003429793111): ✅ Скачан conversion_19.51.xlsx
+2026-03-13 19:55:46,026 [WARNING] ⬇️ [Downloader] ⚠️ Ошибка при скачивании cd: Timeout 20000ms exceeded while waiting for event "download"
+=========================== logs ===========================
+waiting for event "download"
+============================================================
+2026-03-13 19:55:46,027 [INFO] ⬇️ [Downloader] ⬇️ Payout → выставляем календарь на неделю и экспортируем...
+2026-03-13 19:56:06,157 [WARNING] ⬇️ [Downloader] ⚠️ Ошибка при скачивании payout: Page.wait_for_selector: Timeout 20000ms exceeded.
+Call log:
+  - waiting for locator(".b-calendar") to be visible
+    - waiting for" https://api.antares.plus/lk-card/wallet/file?name=reestr1619150312.xlsx&key=bS9ZVriGj4uzkq5J0_36eJ86xdMUa5x3" navigation to finish...
+
+2026-03-13 19:56:06,264 [INFO] Request to files/upload
+2026-03-13 19:56:07,228 [ERROR] ☁️ [Dropbox] Ошибка upload_file(/Ostin/platform/input/card_19.51.xlsx): AuthError('bcf58588ae154d84b03b136469b441a4', AuthError('invalid_access_token', None))
+2026-03-13 19:56:07,231 [ERROR] ⬇️ [Downloader] ❌ Ошибка при загрузке или анализе: Не удалось загрузить /tmp\downloads\card_19.51.xlsx в /Ostin/platform/input/card_19.51.xlsx
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 341, in run_download
+    _upload_local_to_dropbox(card_local, card_name)
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 63, in _upload_local_to_dropbox
+    raise RuntimeError(f"Не удалось загрузить {local_path} в {dropbox_path}")
+RuntimeError: Не удалось загрузить /tmp\downloads\card_19.51.xlsx в /Ostin/platform/input/card_19.51.xlsx
+2026-03-13 19:56:07,235 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Ошибка при загрузке или анализе: Не удалось загрузить /tmp
+2026-03-13 19:56:07,237 [ERROR] ⬇️ [Downloader] ❌ Downloader завершился с ошибкой: Не удалось загрузить /tmp\downloads\card_19.51.xlsx в /Ostin/platform/input/card_19.51.xlsx
+Traceback (most recent call last):
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 382, in <module>
+    run_download()
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 341, in run_download
+    _upload_local_to_dropbox(card_local, card_name)
+  File "C:\Users\denis\PycharmProjects\analizis\integrations\downloader.py", line 63, in _upload_local_to_dropbox
+    raise RuntimeError(f"Не удалось загрузить {local_path} в {dropbox_path}")
+RuntimeError: Не удалось загрузить /tmp\downloads\card_19.51.xlsx в /Ostin/platform/input/card_19.51.xlsx
+2026-03-13 19:56:07,237 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Downloader завершился с ошибкой: Не удалось загрузить /tmp

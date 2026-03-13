@@ -108,10 +108,6 @@ def _download_wallet_export(page, timestamp: str) -> str:
 
         # Ждём появления кнопки "Экспорт"
         page.wait_for_selector("button.btn-primary:has-text('Экспорт')", state="visible", timeout=60000)
-        logger.info("✅ Кнопка 'Экспорт' найдена, ждём 10 секунд перед кликом...")
-
-        # Даём странице полностью “ожить”
-        page.wait_for_timeout(10000)
 
         # Нажимаем экспорт и ждём скачивание
         with page.expect_download(timeout=360000) as d1:
@@ -124,8 +120,8 @@ def _download_wallet_export(page, timestamp: str) -> str:
         return local_path
 
     except Exception as e:
-        screenshot_path = f"/app/logs/error_export_{timestamp}.png"
-        html_path = f"/app/logs/error_export_{timestamp}.html"
+        screenshot_path = os.path.join(DOWNLOAD_DIR, f"payin_error_{timestamp}.png")
+        html_path = os.path.join(DOWNLOAD_DIR, f"payin_error_{timestamp}.html")
         try:
             page.screenshot(path=screenshot_path, full_page=True)
             with open(html_path, "w", encoding="utf-8") as f:
@@ -135,37 +131,123 @@ def _download_wallet_export(page, timestamp: str) -> str:
             logger.error(f"⚠️ Не удалось сохранить скриншот/HTML: {inner}")
         raise
 
+def _find_and_pick_date(page, target_date: str) -> bool:
+    selector = f"[data-date='{target_date}']"
+
+    for _ in range(12):
+        if page.locator(selector).count() > 0:
+            page.locator(selector).first.click(force=True)
+            logger.info(f"✅ Дата выбрана: {target_date}")
+            return True
+
+        prev_btn = page.locator("button[aria-label='Previous month']")
+        if prev_btn.count() == 0:
+            logger.warning("⚠️ Кнопка Previous month не найдена")
+            return False
+
+        prev_btn.first.click(force=True)
+        page.wait_for_timeout(200)
+
+    logger.warning(f"⚠️ Дата {target_date} не найдена в пределах 12 месяцев")
+    return False
+
 def _download_payin_export(page, timestamp: str) -> str:
     logger.info("⚙️ PayIn → выбираем дату (сегодня − 2) и экспорт…")
-    page.goto("https://antares.plus/lkcard/#/payin", wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
 
-    tz = zoneinfo.ZoneInfo("Europe/Moscow")
-    target_date = (datetime.now(tz) - timedelta(days=2)).strftime("%Y-%m-%d")
-    logger.info(f"📅 Дата для выбора: {target_date}")
-
-    calendar_trigger = page.locator("input.form-control").first
-    calendar_trigger.wait_for(state="visible", timeout=20000)
-    calendar_trigger.click(force=True)
-
-    page.wait_for_selector(".b-calendar", timeout=20000)
     try:
-        page.click(f"[data-date='{target_date}']")
-        logger.info(f"✅ Выбрана дата {target_date}")
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
+        target_date = (datetime.now(tz) - timedelta(days=2)).strftime("%Y-%m-%d")
+        logger.info(f"📅 Дата для выбора: {target_date}")
+
+        page.goto("https://antares.plus/lkcard/#/payin", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(1500)
+
+        # 1) Сначала используем старый рабочий триггер из твоего файла
+        calendar_opened = False
+
+        try:
+            trigger_btn = page.locator("button.btn.h-auto").nth(0)
+            trigger_btn.wait_for(state="visible", timeout=10000)
+            trigger_btn.click(force=True)
+            page.wait_for_selector(".b-calendar", state="visible", timeout=10000)
+            calendar_opened = True
+            logger.info("✅ Календарь открыт через button.btn.h-auto")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось открыть календарь через button.btn.h-auto: {e}")
+
+        # 2) fallback на label.form-control
+        if not calendar_opened:
+            try:
+                trigger_label = page.locator("label.form-control").first
+                trigger_label.wait_for(state="visible", timeout=10000)
+                trigger_label.click(force=True)
+                page.wait_for_selector(".b-calendar", state="visible", timeout=10000)
+                calendar_opened = True
+                logger.info("✅ Календарь открыт через label.form-control")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось открыть календарь через label.form-control: {e}")
+
+        # 3) fallback на input.form-control
+        if not calendar_opened:
+            trigger_input = page.locator("input.form-control").first
+            trigger_input.wait_for(state="visible", timeout=10000)
+            trigger_input.click(force=True)
+            page.wait_for_selector(".b-calendar", state="visible", timeout=10000)
+            calendar_opened = True
+            logger.info("✅ Календарь открыт через input.form-control")
+
+        # 4) Пробуем прямой выбор даты — как в старом рабочем коде
+        date_selected = False
+        try:
+            page.click(f"[data-date='{target_date}']", timeout=5000)
+            logger.info(f"✅ Выбрана дата {target_date} прямым кликом")
+            date_selected = True
+        except Exception as e:
+            logger.warning(f"⚠️ Прямой клик по дате не сработал: {e}")
+
+        # 5) Если прямой клик не сработал — fallback через пролистывание месяцев
+        if not date_selected:
+            ok = _find_and_pick_date(page, target_date)
+            if not ok:
+                raise RuntimeError(f"Не удалось выбрать дату {target_date} в календаре PayIn")
+
+        apply_btn = page.locator("button:has-text('Применить')").first
+        apply_btn.wait_for(state="visible", timeout=10000)
+        apply_btn.click(force=True)
+
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(1500)
+
+        export_btn = page.locator("button:has-text('Экспорт')").first
+        export_btn.wait_for(state="visible", timeout=20000)
+
+        with page.expect_download(timeout=300000) as d2:
+            export_btn.click(force=True)
+
+        download2 = d2.value
+        local_path = os.path.join(DOWNLOAD_DIR, f"conversion_{timestamp}.xlsx")
+        download2.save_as(local_path)
+
+        logger.info(f"✅ Сохранено локально: {local_path}")
+        return local_path
+
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось выбрать дату {target_date}: {e}")
+        screenshot_path = os.path.join(DOWNLOAD_DIR, f"payin_error_{timestamp}.png")
+        html_path = os.path.join(DOWNLOAD_DIR, f"payin_error_{timestamp}.html")
 
-    page.click("button:has-text('Применить')")
-    page.wait_for_load_state("networkidle")
-    time.sleep(1.5)
+        try:
+            page.screenshot(path=screenshot_path, full_page=True)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.error(
+                f"❌ Ошибка PayIn: {e}. "
+                f"Скриншот: {screenshot_path}, HTML: {html_path}"
+            )
+        except Exception as inner:
+            logger.error(f"⚠️ Не удалось сохранить диагностику PayIn: {inner}")
 
-    with page.expect_download(timeout=300000) as d2:
-        page.click("button:has-text('Экспорт')")
-    download2 = d2.value
-    local_path = os.path.join(DOWNLOAD_DIR, f"conversion_{timestamp}.xlsx")
-    download2.save_as(local_path)
-    logger.info(f"✅ Сохранено локально: {local_path}")
-    return local_path
+        raise
 
 def _download_extra_files(page, timestamp: str) -> list[str]:
     local_paths = []
