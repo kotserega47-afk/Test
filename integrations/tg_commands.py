@@ -18,6 +18,7 @@ from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
 
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
+from integrations.downloader import run_download
 
 from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
@@ -63,6 +64,8 @@ def run_hourly_job() -> None:
             "last_sent_ts": int(time.time())
         })
 
+def run_download_job() -> None:
+    run_download()
 
 # Единственная точка привязки job_type -> runnable
 JOB_REGISTRY.update(
@@ -70,9 +73,9 @@ JOB_REGISTRY.update(
         "wallet": run_wallet_cycle,
         "hourly": run_hourly_job,
         "rate": run_rate_monitor_safe,
+        "download": run_download_job,
     }
 )
-
 
 # =============================================================================
 # Access helpers
@@ -101,6 +104,7 @@ def _help_text() -> str:
         "/reload_rules\n"
         "/run_wallet\n"
         "/run_hourly\n"
+        "/run_download\n"
         "/run_rate\n"
         "/rules_validate\n"
         "/help"
@@ -246,6 +250,10 @@ async def cmd_run_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     await _run_job_async(update, "hourly")
 
+async def cmd_run_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "run_download"):
+        return
+    await _run_job_async(update, "download")
 
 async def cmd_run_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "run_rate"):
@@ -262,6 +270,7 @@ def get_handlers():
         CommandHandler("reload_rules", cmd_reload_rules),
         CommandHandler("run_wallet", cmd_run_wallet),
         CommandHandler("run_hourly", cmd_run_hourly),
+        CommandHandler("run_download", cmd_run_download),
         CommandHandler("run_rate", cmd_run_rate),
         CommandHandler("rules_validate", cmd_rules_validate),
     ]
