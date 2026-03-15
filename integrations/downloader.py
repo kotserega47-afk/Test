@@ -74,25 +74,19 @@ def _upload_local_to_dropbox(local_path: str, dropbox_name: str) -> str:
     return dropbox_name
 
 
-def _ensure_logged_in(page, context) -> None:
-    """Переиспользует storage_state, а если сессия умерла — логинится заново."""
-    logger.info("🔑 Проверяем авторизацию в Antares…")
-    page.goto("https://antares.plus/login", wait_until="domcontentloaded")
-
-    try:
-        page.wait_for_url("**/lkcard/**", timeout=8000)
-        logger.info("✅ Сессия активна")
+def _ensure_logged_in(page, context):
+    if os.path.exists(AUTH_STATE_FILE):
+        logger.info("🔐 Используем сохранённую сессию")
         return
-    except Exception:
-        logger.info("ℹ️ Нужен логин по паролю")
-
-    page.fill("input[type='email']", LOGIN)
+    logger.info("🔑 Логинимся в Antares")
+    page.goto("https://antares.plus/lkcard/#/login")
+    page.fill("input[type='text']", LOGIN)
     page.fill("input[type='password']", PASSWORD)
     page.click("button:has-text('Войти')")
-
-    page.wait_for_url("**/lkcard/**", timeout=30000)
+    page.wait_for_load_state("networkidle")
+    time.sleep(2)
     context.storage_state(path=AUTH_STATE_FILE)
-    logger.info("✅ Успешный вход, storage_state сохранён")
+    logger.info("✅ Сессия сохранена")
 
 
 def _download_wallet_export(page, timestamp: str) -> str:
