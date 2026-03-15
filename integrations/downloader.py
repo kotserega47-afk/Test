@@ -167,17 +167,46 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
     # CD-файл
     try:
         logger.info("⬇️ Wallet → экспорт (для cd)...")
-        page.goto("https://antares.plus/lkcard/#/wallet")
+
+        page.goto("https://antares.plus/lkcard/#/wallet", wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle")
-        with page.expect_download() as d_cd:
-            page.click("button:has-text('Экспорт')")
-        dl_cd = d_cd.value
+
+        export_selector = "button:has-text('Экспорт')"
+        page.wait_for_selector(export_selector, state="visible", timeout=30_000)
+
+        logger.info("🟡 Кнопка 'Экспорт' найдена, запускаю скачивание cd...")
+
+        with page.expect_download(timeout=90_000) as download_info:
+            page.click(export_selector)
+
+        dl_cd = download_info.value
+        suggested_name = dl_cd.suggested_filename
         cd_local = os.path.join(DOWNLOAD_DIR, f"cd_{timestamp}.xlsx")
+
         dl_cd.save_as(cd_local)
+
+        logger.info(f"✅ Скачивание cd успешно завершено: {suggested_name}")
         logger.info(f"✅ Сохранено локально (cd): {cd_local}")
+
         local_paths.append(cd_local)
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка при скачивании cd: {e}")
+
+    except Exception:
+        logger.exception("⚠️ Ошибка при скачивании cd")
+
+        try:
+            error_png = os.path.join(DOWNLOAD_DIR, f"cd_error_{timestamp}.png")
+            page.screenshot(path=error_png, full_page=True)
+            logger.info(f"🖼 Скриншот сохранён: {error_png}")
+        except Exception:
+            logger.exception("Не удалось сохранить скриншот при ошибке скачивания cd")
+
+        try:
+            error_html = os.path.join(DOWNLOAD_DIR, f"cd_error_{timestamp}.html")
+            with open(error_html, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.info(f"📝 HTML страницы сохранён: {error_html}")
+        except Exception:
+            logger.exception("Не удалось сохранить HTML страницы при ошибке скачивания cd")
 
     # Payout-файл
     try:
