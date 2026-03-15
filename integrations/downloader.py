@@ -211,34 +211,73 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
     # Payout-файл
     try:
         logger.info("⬇️ Payout → выставляем календарь на неделю и экспортируем...")
-        page.goto("https://antares.plus/lkcard/#/vyplaty")
+
+        page.goto("https://antares.plus/lkcard/#/vyplaty", wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle")
-        page.click("label.form-control")
-        page.wait_for_selector(".b-calendar", timeout=10000)
+
+        calendar_trigger_selector = "label.form-control"
+        apply_button_selector = "button:has-text('Применить')"
+        export_button_selector = "button:has-text('Экспорт')"
+
+        page.wait_for_selector(calendar_trigger_selector, state="visible", timeout=30_000)
+        page.click(calendar_trigger_selector)
+
+        page.wait_for_selector(".b-calendar", state="visible", timeout=10_000)
 
         start_date = (datetime.now(tz) - timedelta(days=7)).strftime("%Y-%m-%d")
         end_date = datetime.now(tz).strftime("%Y-%m-%d")
         logger.info(f"📅 Диапазон дат: {start_date} → {end_date}")
 
-        try:
-            page.click(f"[data-date='{start_date}']")
-            page.click(f"[data-date='{end_date}']")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось выбрать диапазон дат: {e}")
+        start_date_selector = f"[data-date='{start_date}']"
+        end_date_selector = f"[data-date='{end_date}']"
 
-        page.click("button:has-text('Применить')")
+        page.wait_for_selector(start_date_selector, state="visible", timeout=10_000)
+        page.click(start_date_selector)
+
+        page.wait_for_selector(end_date_selector, state="visible", timeout=10_000)
+        page.click(end_date_selector)
+
+        logger.info("🟡 Диапазон дат выбран, нажимаю 'Применить'...")
+
+        page.wait_for_selector(apply_button_selector, state="visible", timeout=10_000)
+        page.click(apply_button_selector)
+
         page.wait_for_load_state("networkidle")
-        time.sleep(1.5)
 
-        with page.expect_download(timeout=600000) as d_pay:
-            page.click("button:has-text('Экспорт')")
-        dl_pay = d_pay.value
+        page.wait_for_selector(export_button_selector, state="visible", timeout=30_000)
+        logger.info("🟡 Кнопка 'Экспорт' найдена, запускаю скачивание payout...")
+
+        with page.expect_download(timeout=120_000) as download_info:
+            page.click(export_button_selector)
+
+        dl_pay = download_info.value
         payout_local = os.path.join(DOWNLOAD_DIR, f"payout_{timestamp}.xlsx")
         dl_pay.save_as(payout_local)
+
+        logger.info(f"✅ Скачивание payout успешно завершено: {dl_pay.suggested_filename}")
         logger.info(f"✅ Сохранено локально (payout): {payout_local}")
+
         local_paths.append(payout_local)
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка при скачивании payout: {e}")
+
+    except Exception:
+        logger.exception("⚠️ Ошибка при скачивании payout")
+
+        try:
+            error_png = os.path.join(DOWNLOAD_DIR, f"payout_error_{timestamp}.png")
+            page.screenshot(path=error_png, full_page=True)
+            logger.info(f"🖼 Скриншот сохранён: {error_png}")
+        except Exception:
+            logger.exception("Не удалось сохранить скриншот при ошибке скачивания payout")
+
+        try:
+            error_html = os.path.join(DOWNLOAD_DIR, f"payout_error_{timestamp}.html")
+            with open(error_html, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.info(f"📝 HTML страницы сохранён: {error_html}")
+        except Exception:
+            logger.exception("Не удалось сохранить HTML страницы при ошибке скачивания payout")
+
+        raise
 
     return local_paths
 
