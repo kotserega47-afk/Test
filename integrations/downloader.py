@@ -201,7 +201,7 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
         page.wait_for_load_state("networkidle")
         time.sleep(1.5)
 
-        with page.expect_download(timeout=300000) as d_pay:
+        with page.expect_download(timeout=600000) as d_pay:
             page.click("button:has-text('Экспорт')")
         dl_pay = d_pay.value
         payout_local = os.path.join(DOWNLOAD_DIR, f"payout_{timestamp}.xlsx")
