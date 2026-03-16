@@ -78,8 +78,18 @@ def load_data(filepath, col_mapping: dict):
             df[c] = df[c].astype(str).str.strip().str.lower()
 
     if "datetime" in df:
-        # В conversion обычно формат "%d.%m.%Y %H:%M:%S"
+        raw_datetime = df["datetime"].copy()
         df["datetime"] = parse_dt_series_msk(df["datetime"])
+
+        invalid_datetime_mask = raw_datetime.notna() & df["datetime"].isna()
+        if invalid_datetime_mask.any():
+            bad_examples = raw_datetime[invalid_datetime_mask].astype(str).unique()[:10]
+            logger.warning(
+                f"[load_data] Некорректный формат datetime. "
+                f"Ожидается ДД.ММ.ГГГГ ЧЧ:ММ:СС. "
+                f"Невалидных строк: {int(invalid_datetime_mask.sum())}. "
+                f"Примеры: {', '.join(bad_examples)}"
+            )
 
     required = [c for c in ["card", "status", "datetime"] if c in df.columns]
     if required:
@@ -229,8 +239,20 @@ def run(
                 # нормализация
                 df_special["card"] = df_special["card"].astype(str).str.strip()
                 df_special["partner_norm"] = df_special["partner"].apply(normalize_name)
+                raw_start_date = df_special["start_date"].copy()
                 df_special["start_date"] = parse_dt_series_msk(
-                    df_special["start_date"].astype(str).str.strip())
+                    df_special["start_date"]
+                )
+
+                invalid_start_date_mask = raw_start_date.notna() & df_special["start_date"].isna()
+                if invalid_start_date_mask.any():
+                    bad_examples = raw_start_date[invalid_start_date_mask].astype(str).unique()[:10]
+                    logger.warning(
+                        f"[run] В special_cards.xlsx есть некорректные start_date. "
+                        f"Ожидается ДД.ММ.ГГГГ ЧЧ:ММ:СС. "
+                        f"Невалидных строк: {int(invalid_start_date_mask.sum())}. "
+                        f"Примеры: {', '.join(bad_examples)}"
+                    )
                 # дубликаты: оставляем запись с самой свежей датой по (card, partner_norm)
                 df_special.sort_values("start_date", ascending=False, inplace=True, na_position="last")
                 df_special.drop_duplicates(subset=["card", "partner_norm"], keep="first", inplace=True)
@@ -280,7 +302,7 @@ def run(
     # Нормализация полей
     conv_df["status"] = conv_df["status"].astype(str).str.strip().str.lower()
     conv_df["partner_norm"] = conv_df["partner"].apply(normalize_name)
-    conv_df["datetime"] = parse_dt_series_msk(conv_df["datetime"])
+
     conv_df.dropna(subset=["card", "datetime", "status"], inplace=True)
 
     # Фильтруем по допустимым статусам (ошибка/оплачен + валидные)
@@ -304,7 +326,18 @@ def run(
             conv_df = conv_df.merge(rules_df, on=["card", "partner_norm"], how="left")
 
             # НОРМАЛИЗАЦИЯ ТИПА start_date К ТОМУ ЖЕ TZ-ФОРМАТУ, ЧТО И conv_df["datetime"]
+            raw_start_date = conv_df["start_date"].copy()
             conv_df["start_date"] = parse_dt_series_msk(conv_df["start_date"])
+
+            invalid_start_date_mask = raw_start_date.notna() & conv_df["start_date"].isna()
+            if invalid_start_date_mask.any():
+                bad_examples = raw_start_date[invalid_start_date_mask].astype(str).unique()[:10]
+                logger.warning(
+                    f"[run] После merge обнаружены некорректные start_date. "
+                    f"Ожидается ДД.ММ.ГГГГ ЧЧ:ММ:СС. "
+                    f"Невалидных строк: {int(invalid_start_date_mask.sum())}. "
+                    f"Примеры: {', '.join(bad_examples)}"
+                )
 
             # Если для строки есть start_date -> оставляем только >= этой даты
             mask_keep = (conv_df["start_date"].isna()) | (conv_df["datetime"] >= conv_df["start_date"])

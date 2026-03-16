@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
-
+import logging
 import pandas as pd
 
 MSK_TZ_NAME = "Europe/Moscow"
 MSK_TZ = ZoneInfo(MSK_TZ_NAME)
+
+logger = logging.getLogger(__name__)
 
 EXCEL_DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
 EXCEL_DATE_FORMAT = "%d.%m.%Y"
@@ -66,6 +68,16 @@ def parse_msk_series(series: pd.Series) -> pd.Series:
             format=EXCEL_DATETIME_FORMAT,
             errors="coerce",
         )
+
+        invalid_mask = cleaned.notna() & dt.isna()
+        if invalid_mask.any():
+            bad_examples = cleaned[invalid_mask].dropna().astype(str).unique()[:10]
+            logger.warning(
+                "Некорректный формат datetime. Ожидается %s. Невалидных значений: %s. Примеры: %s",
+                EXCEL_DATETIME_FORMAT,
+                int(invalid_mask.sum()),
+                ", ".join(bad_examples),
+            )
 
     if dt.dt.tz is None:
         return dt.dt.tz_localize(MSK_TZ_NAME, nonexistent="shift_forward", ambiguous="NaT")
