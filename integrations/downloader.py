@@ -210,53 +210,54 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
 
     # Payout-файл
     try:
-        logger.info("⬇️ Payout → выставляем календарь на неделю и экспортируем...")
+        logger.info("⬇️ Payout → выставляем левую дату на неделю назад и экспортируем...")
 
         page.goto("https://antares.plus/lkcard/#/vyplaty", wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle")
 
-        calendar_trigger_selector = "label.form-control"
         apply_button_selector = "button:has-text('Применить')"
         export_button_selector = "button:has-text('Экспорт')"
 
-        page.wait_for_selector(calendar_trigger_selector, state="visible", timeout=30_000)
-        page.click(calendar_trigger_selector)
+        # Левая дата = today - 7
+        start_dt = datetime.now(tz) - timedelta(days=7)
+        start_day = str(start_dt.day)
+        logger.info(f"📅 Левая дата должна быть: {start_dt.strftime('%d.%m.%Y')}")
 
-        page.wait_for_selector(".b-calendar", state="visible", timeout=10_000)
+        # На странице два datepicker.
+        # Берём кнопку первого (левого) datepicker, а не общий label.form-control.
+        left_date_button = page.locator("div.b-form-datepicker button").nth(0)
+        left_date_button.wait_for(state="visible", timeout=30_000)
+        left_date_button.click()
 
-        start_date = (datetime.now(tz) - timedelta(days=7)).strftime("%Y-%m-%d")
-        end_date = datetime.now(tz).strftime("%Y-%m-%d")
-        logger.info(f"📅 Диапазон дат: {start_date} → {end_date}")
+        # Ждём открытие popup календаря первого datepicker
+        calendar_popup = page.locator("div.b-form-datepicker div.dropdown-menu[role='dialog']").nth(0)
+        calendar_popup.wait_for(state="visible", timeout=10_000)
 
-        start_date_selector = f"[data-date='{start_date}']"
-        end_date_selector = f"[data-date='{end_date}']"
+        # В этом календаре день рендерится как span/button с текстом числа, а не как [data-date=...]
+        day_locator = calendar_popup.locator(f"span.btn:has-text('{start_day}')").first
+        day_locator.wait_for(state="visible", timeout=10_000)
+        day_locator.click()
 
-        page.wait_for_selector(start_date_selector, state="visible", timeout=10_000)
-        page.click(start_date_selector)
-
-        page.wait_for_selector(end_date_selector, state="visible", timeout=10_000)
-        page.click(end_date_selector)
-
-        logger.info("🟡 Диапазон дат выбран, нажимаю 'Применить'...")
+        logger.info(f"✅ В левом календаре выбрано число: {start_day}")
 
         page.wait_for_selector(apply_button_selector, state="visible", timeout=10_000)
         page.click(apply_button_selector)
 
         page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(1500)
 
         page.wait_for_selector(export_button_selector, state="visible", timeout=30_000)
         logger.info("🟡 Кнопка 'Экспорт' найдена, запускаю скачивание payout...")
 
-        with page.expect_download(timeout=120_000) as download_info:
+        with page.expect_download(timeout=300_000) as d_pay:
             page.click(export_button_selector)
 
-        dl_pay = download_info.value
+        dl_pay = d_pay.value
         payout_local = os.path.join(DOWNLOAD_DIR, f"payout_{timestamp}.xlsx")
         dl_pay.save_as(payout_local)
 
         logger.info(f"✅ Скачивание payout успешно завершено: {dl_pay.suggested_filename}")
         logger.info(f"✅ Сохранено локально (payout): {payout_local}")
-
         local_paths.append(payout_local)
 
     except Exception:
