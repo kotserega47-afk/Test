@@ -240,9 +240,11 @@ def run(
                 df_special["card"] = df_special["card"].astype(str).str.strip()
                 df_special["partner_norm"] = df_special["partner"].apply(normalize_name)
                 raw_start_date = df_special["start_date"].copy()
-                df_special["start_date"] = parse_dt_series_msk(
-                    df_special["start_date"]
-                )
+                df_special["start_date"] = pd.to_datetime(
+                    df_special["start_date"],
+                    format="%d.%m.%Y",
+                    errors="coerce",
+                ).dt.date
 
                 invalid_start_date_mask = raw_start_date.notna() & df_special["start_date"].isna()
                 if invalid_start_date_mask.any():
@@ -264,7 +266,7 @@ def run(
 
                 # 🔹 Telegram-отчёт по сегодняшним special-картам
                 if send_telegram:
-                    today = start_of_day_msk(now_msk())
+                    today = now_msk().date()
                     today_special = df_special[df_special["start_date"] == today]
                     if not today_special.empty:
                         counts = today_special["partner_norm"].value_counts()
@@ -333,8 +335,8 @@ def run(
             if invalid_start_date_mask.any():
                 bad_examples = raw_start_date[invalid_start_date_mask].astype(str).unique()[:10]
                 logger.warning(
-                    f"[run] После merge обнаружены некорректные start_date. "
-                    f"Ожидается ДД.ММ.ГГГГ ЧЧ:ММ:СС. "
+                    f"[run] В special_cards.xlsx есть некорректные значения в колонке Дата. "
+                    f"Ожидается ДД.ММ.ГГГГ. "
                     f"Невалидных строк: {int(invalid_start_date_mask.sum())}. "
                     f"Примеры: {', '.join(bad_examples)}"
                 )
