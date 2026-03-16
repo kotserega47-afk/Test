@@ -274,16 +274,7 @@ def run(
         # если не загрузили — сообщения уже отправили выше
 
     # 2) Загрузка conversion-файла
-    usecols = list(col_mapping.values())
-    try:
-        conv_df = pd.read_excel(conv_file, dtype=str, usecols=usecols) if conv_file.endswith((".xlsx", ".xls")) \
-            else pd.read_csv(conv_file, dtype=str, usecols=usecols, sep=None, engine="python")
-    except ValueError as e:
-        logger.warning(f"[run] ⚠️ Не найдены все колонки ({usecols}), читаем доступные: {e}")
-        conv_df = pd.read_excel(conv_file, dtype=str) if conv_file.endswith((".xlsx", ".xls")) \
-            else pd.read_csv(conv_file, dtype=str, sep=None, engine="python")
-
-    conv_df.rename(columns={v: k for k, v in col_mapping.items()}, inplace=True)
+    conv_df = load_data(conv_file, col_mapping)
 
     # Нормализация полей
     conv_df["status"] = conv_df["status"].astype(str).str.strip().str.lower()
