@@ -163,7 +163,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
                             "Info": matched_error,
                             "Количество подряд ошибок": consecutive,
                             "Последняя дата ошибки": (
-                                parse_dt_series_msk(last_datetime)
+                                parse_dt_series_msk(pd.Series([last_datetime]))
                                 if pd.notna(last_datetime) else ""
                             ),
                         })
