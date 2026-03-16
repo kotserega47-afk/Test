@@ -301,6 +301,10 @@ def run(
                 columns=["card", "partner_norm", "start_date"]
             )
             conv_df = conv_df.merge(rules_df, on=["card", "partner_norm"], how="left")
+
+            # НОРМАЛИЗАЦИЯ ТИПА start_date К ТОМУ ЖЕ TZ-ФОРМАТУ, ЧТО И conv_df["datetime"]
+            conv_df["start_date"] = parse_dt_series_msk(conv_df["start_date"])
+
             # Если для строки есть start_date -> оставляем только >= этой даты
             mask_keep = (conv_df["start_date"].isna()) | (conv_df["datetime"] >= conv_df["start_date"])
             conv_df = conv_df.loc[mask_keep].drop(columns=["start_date"])

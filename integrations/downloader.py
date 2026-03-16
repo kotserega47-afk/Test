@@ -348,30 +348,34 @@ def run_download():
             )
             return
 
+        analysis_ok = False
         try:
-            logger.info(f"🚀 process_file(conversion): {conv_name} + aux={card_name}")
-            process_file(conv_name, aux_filename=card_name)
+            logger.info(f"▶️ Старт обработки Conversion: {conv_name} + aux={card_name}")
             send_message_sync(f"🚀 Запущен анализ Conversion ({conv_name})", chat_id=CHAT_ID)
+            process_file(conv_name, aux_filename=card_name)
 
             if any(s.startswith("cd_") for s in uploaded_extra) and any(
-                s.startswith("payout_") for s in uploaded_extra
+                    s.startswith("payout_") for s in uploaded_extra
             ):
                 cd_name = next(s for s in uploaded_extra if s.startswith("cd_"))
                 payout_name = next(s for s in uploaded_extra if s.startswith("payout_"))
-                logger.info(f"🚀 process_file(payout): {payout_name} + aux={cd_name}")
+
+                logger.info(f"▶️ Старт обработки Payout: {payout_name} + aux={cd_name}")
+                send_message_sync(f"🚀 Запущен анализ Payout ({payout_name})", chat_id=CHAT_ID)
                 process_file(payout_name, aux_filename=cd_name)
-                send_message_sync(
-                    f"🚀 Запущен анализ Payout ({payout_name})",
-                    chat_id=CHAT_ID,
-                )
             else:
                 logger.info("ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.")
                 send_message_sync(
                     "ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.",
                     chat_id=CHAT_ID,
                 )
+
+            analysis_ok = True
+
         finally:
             release_lock()
+
+        if analysis_ok:
             send_message_sync("✅ Downloader завершил цикл успешно.", chat_id=CHAT_ID)
 
     except Exception as e:
