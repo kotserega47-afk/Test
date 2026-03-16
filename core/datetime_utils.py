@@ -79,15 +79,6 @@ def parse_msk_series(series: pd.Series) -> pd.Series:
             )
             dt.loc[missing_mask] = dt_fallback
 
-        missing_mask = cleaned.notna() & dt.isna()
-        if missing_mask.any():
-            dt_fallback = pd.to_datetime(
-                cleaned[missing_mask],
-                dayfirst=True,
-                errors="coerce",
-            )
-            dt.loc[missing_mask] = dt_fallback
-
     if dt.dt.tz is None:
         return dt.dt.tz_localize(MSK_TZ_NAME, nonexistent="shift_forward", ambiguous="NaT")
 
