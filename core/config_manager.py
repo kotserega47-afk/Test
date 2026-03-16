@@ -866,7 +866,6 @@ _REQUIRED_EXCLUDE_COLS = [
     "end_dt",
     "reason",
     "created_by",
-    "created_at",
 ]
 
 _ID_RE = re.compile(r"^EXC-\d{5}$")
@@ -938,10 +937,10 @@ def validate_exclude_time(df: pd.DataFrame) -> ValidationResult:
         errors.append("exclude_time: duplicate id(s): " + (", ".join(dups[:30]) + (" …" if len(dups) > 30 else "")))
 
     # dates parsing
-    for c in ["start_dt", "end_dt", "created_at"]:
+    for c in ["start_dt", "end_dt"]:
         df[c] = parse_dt_series_msk(df[c])
 
-    for c in ["start_dt", "end_dt", "created_at"]:
+    for c in ["start_dt", "end_dt"]:
         bad_dt = df[c].isna()
         if bad_dt.any():
             bad_ids = df.loc[bad_dt, "id"].tolist()
