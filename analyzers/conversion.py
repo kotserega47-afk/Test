@@ -13,6 +13,7 @@ from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
 from utils.normalization import parse_dt_series_msk
+from core.datetime_utils import now_msk, start_of_day_msk
 from core.rules_provider import get_snapshot_v2
 
 
@@ -241,7 +242,7 @@ def run(
 
                 # 🔹 Telegram-отчёт по сегодняшним special-картам
                 if send_telegram:
-                    today = pd.Timestamp.now().normalize()
+                    today = start_of_day_msk(now_msk())
                     today_special = df_special[df_special["start_date"] == today]
                     if not today_special.empty:
                         counts = today_special["partner_norm"].value_counts()
@@ -523,7 +524,7 @@ def run(
         # Сохраняем отчёт
         tmp_dir = tempfile.gettempdir()
         # Добавляем дату в формате (ДД.ММ.ГГГГ) к имени отчёта
-        current_date = datetime.now().strftime("%d.%m.%Y")
+        current_date = now_msk().strftime("%d.%m.%Y")
         base_name = f"report_{os.path.splitext(os.path.basename(conv_file))[0]}_({current_date}).xlsx"
         report_path = os.path.join(tempfile.gettempdir(), base_name)
         logger.info(f"[run] Листы отчёта: {wb.sheetnames}")

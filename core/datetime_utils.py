@@ -9,7 +9,6 @@ MSK_TZ_NAME = "Europe/Moscow"
 MSK_TZ = ZoneInfo(MSK_TZ_NAME)
 
 EXCEL_DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
-EXCEL_DATETIME_FORMAT_NO_SECONDS = "%d.%m.%Y %H:%M"
 EXCEL_DATE_FORMAT = "%d.%m.%Y"
 EXCEL_TIME_FORMAT = "%H:%M:%S"
 
@@ -28,30 +27,28 @@ def parse_msk_datetime(value: object) -> datetime | None:
     if value is None:
         return None
 
+    if isinstance(value, datetime):
+        return ensure_aware_msk(value)
+
     s = str(value).strip()
     if not s or s.lower() in {"nan", "nat", "none"}:
         return None
 
     try:
         dt = datetime.strptime(s, EXCEL_DATETIME_FORMAT)
-        return dt.replace(tzinfo=MSK_TZ)
-    except ValueError:
-        pass
+    except ValueError as exc:
+        raise ValueError(
+            f"Cannot parse Moscow datetime from {value!r}. "
+            f"Expected format: {EXCEL_DATETIME_FORMAT}"
+        ) from exc
 
-    try:
-        dt = datetime.strptime(s, EXCEL_DATETIME_FORMAT_NO_SECONDS)
-        return dt.replace(tzinfo=MSK_TZ)
-    except ValueError:
-        pass
-
-    raise ValueError(f"Cannot parse Moscow datetime from {value!r}")
+    return dt.replace(tzinfo=MSK_TZ)
 
 
 def parse_msk_series(series: pd.Series) -> pd.Series:
     """
     Канонический путь парсинга:
-    - основной формат: ДД.ММ.ГГГГ чч:мм:сс
-    - fallback: ДД.ММ.ГГГГ чч:мм
+    - единственный формат: ДД.ММ.ГГГГ ЧЧ:ММ:СС
     - timezone: Europe/Moscow
     """
     if pd.api.types.is_datetime64_any_dtype(series):
@@ -69,15 +66,6 @@ def parse_msk_series(series: pd.Series) -> pd.Series:
             format=EXCEL_DATETIME_FORMAT,
             errors="coerce",
         )
-
-        missing_mask = cleaned.notna() & dt.isna()
-        if missing_mask.any():
-            dt_fallback = pd.to_datetime(
-                cleaned[missing_mask],
-                format=EXCEL_DATETIME_FORMAT_NO_SECONDS,
-                errors="coerce",
-            )
-            dt.loc[missing_mask] = dt_fallback
 
     if dt.dt.tz is None:
         return dt.dt.tz_localize(MSK_TZ_NAME, nonexistent="shift_forward", ambiguous="NaT")

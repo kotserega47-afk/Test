@@ -7,6 +7,7 @@ import pandas as pd
 from utils.excel_utils import write_df_to_sheet
 from openpyxl import Workbook
 from datetime import datetime
+from core.datetime_utils import now_msk
 from utils.normalization import parse_dt_series_msk
 
 icon, name = LOG_PROFILES["PAYOUT"]
@@ -259,7 +260,7 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
 
         # 2️⃣ Перемещаем исходный payout-файл в /processed с добавлением даты
         DROPBOX_PROCESSED_PATH = os.getenv("DROPBOX_PROCESSED_PATH")
-        today_str = datetime.now().strftime("(%d.%m.%Y)")
+        today_str = now_msk().strftime("(%d.%m.%Y)")
         base_name = os.path.basename(payout_file)
         new_name = (
             base_name[:-5] + f"_{today_str}.xlsx"

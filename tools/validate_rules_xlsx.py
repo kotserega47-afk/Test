@@ -4,6 +4,7 @@ import sys
 
 from dataclasses import dataclass
 from datetime import datetime
+from core.datetime_utils import now_msk
 from pathlib import Path
 from typing import Any, Iterable
 from core.datetime_utils import parse_msk_series
@@ -262,7 +263,7 @@ def _print_report(msgs: list[CheckMessage]) -> int:
                 continue
             print(f"[{m.level}] {m.where}: {m.message}")
 
-    print(f"Checked at: {datetime.now().isoformat(timespec='seconds')}")
+    print(f"Checked at: {now_msk().isoformat(timespec='seconds')}")
     _emit("INFO")
     _emit("WARN")
     _emit("ERROR")

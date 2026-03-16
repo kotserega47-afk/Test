@@ -1,6 +1,7 @@
 # integrations/bakai_monitor_playwright.py
 import os
 from datetime import datetime, time
+from core.datetime_utils import now_msk
 from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -133,7 +134,7 @@ def check_bakai_rate(chat_id: str = None):
         screenshot_path = None
         try:
             if 'page' in locals() and not page.is_closed():
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                ts = now_msk().strftime("%Y%m%d_%H%M%S")
                 screenshot_path = f"/tmp/bakai_error_{ts}.png"
                 page.screenshot(path=screenshot_path, full_page=True)
         except Exception:

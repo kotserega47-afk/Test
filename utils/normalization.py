@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Any
 import pandas as pd
 from zoneinfo import ZoneInfo
-from core.datetime_utils import parse_msk_series
+from core.datetime_utils import parse_msk_datetime, parse_msk_series
 
 MSK = ZoneInfo("Europe/Moscow")
 # -----------------------------
@@ -47,45 +47,7 @@ def normalize_card_number(value) -> Optional[str]:
 # Даты
 # -----------------------------
 def parse_datetime(value: Any) -> Optional[datetime]:
-    """
-    Канонический парсер для проекта:
-    - вход: строка dd.mm.yyyy HH:MM[:SS], Excel datetime, Timestamp, datetime
-    - выход: tz-aware datetime в MSK
-    """
-
-    if value is None:
-        return None
-
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-
-    # Уже datetime
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=MSK)
-        return value.astimezone(MSK)
-
-    # Попытка строгого формата (быстрее)
-    try:
-        parsed = parse_dt_series_msk(
-            value)
-    except Exception:
-        # fallback — без жёсткого формата
-        parsed = parse_dt_series_msk(
-            value)
-
-    if pd.isna(parsed):
-        return None
-
-    dt = parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
-
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=MSK)
-
-    return dt.astimezone(MSK)
+    return parse_msk_datetime(value)
 
 def parse_dt_series_msk(series: pd.Series) -> pd.Series:
     """

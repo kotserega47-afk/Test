@@ -1,7 +1,7 @@
 # main.py
 import os
 from datetime import datetime
-
+from core.datetime_utils import now_msk
 from analyzers.selector import get_analyzer
 from integrations.dropbox_watcher import download_file, move_file
 from integrations.telegram_bot import send_message_sync
@@ -67,7 +67,7 @@ def process_file(filename: str, aux_filename: str | None = None) -> bool:
                 try:
                     aux_processed_path = (
                         f"{DROPBOX_PROCESSED_PATH}/"
-                        f"{aux_filename[:-5]}_{datetime.now().strftime('(%d.%m.%Y)')}.xlsx"
+                        f"{aux_filename[:-5]}_{now_msk().strftime('(%d.%m.%Y)')}.xlsx"
                     )
                     move_file(aux_dropbox_path, aux_processed_path)
                     logger.info(f"✅ Вспомогательный файл {aux_filename} перемещён в /processed.")
@@ -79,7 +79,7 @@ def process_file(filename: str, aux_filename: str | None = None) -> bool:
                 logger.warning(f"⚠️ Не удалось скачать вспомогательный файл {aux_filename}")
                 aux_local_path = None
 
-    current_date = datetime.now().strftime("%d.%m.%Y")
+    current_date = now_msk().strftime("%d.%m.%Y")
     name, ext = os.path.splitext(filename)
     filename_with_date = f"{name}_({current_date}){ext}"
 
