@@ -18,14 +18,11 @@ def test_parse_dt_series_msk_parses_excel_datetime_text():
     assert str(parsed.dt.tz) == "Europe/Moscow"
 
 
-def test_parse_dt_series_msk_supports_missing_seconds():
+def test_parse_dt_series_msk_rejects_missing_seconds():
     s = pd.Series(["07.03.2026 21:25"])
     parsed = parse_dt_series_msk(s)
 
-    assert parsed.notna().sum() == 1
-    assert parsed.iloc[0].hour == 21
-    assert parsed.iloc[0].minute == 25
-    assert str(parsed.dt.tz) == "Europe/Moscow"
+    assert parsed.isna().all()
 
 
 def test_parse_dt_series_msk_handles_empty_values():

@@ -13,7 +13,7 @@ from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
 from utils.normalization import parse_dt_series_msk
-from core.datetime_utils import now_msk, start_of_day_msk
+from core.datetime_utils import now_msk
 from core.rules_provider import get_snapshot_v2
 
 
@@ -327,23 +327,12 @@ def run(
             )
             conv_df = conv_df.merge(rules_df, on=["card", "partner_norm"], how="left")
 
-            # НОРМАЛИЗАЦИЯ ТИПА start_date К ТОМУ ЖЕ TZ-ФОРМАТУ, ЧТО И conv_df["datetime"]
-            raw_start_date = conv_df["start_date"].copy()
-            conv_df["start_date"] = parse_dt_series_msk(conv_df["start_date"])
+            # start_date здесь уже date из special_cards.xlsx
+            # Если для строки есть start_date -> оставляем только операции в этот день и позже
+            conv_df["_op_date"] = conv_df["datetime"].dt.date
+            mask_keep = (conv_df["start_date"].isna()) | (conv_df["_op_date"] >= conv_df["start_date"])
+            conv_df = conv_df.loc[mask_keep].drop(columns=["start_date", "_op_date"])
 
-            invalid_start_date_mask = raw_start_date.notna() & conv_df["start_date"].isna()
-            if invalid_start_date_mask.any():
-                bad_examples = raw_start_date[invalid_start_date_mask].astype(str).unique()[:10]
-                logger.warning(
-                    f"[run] В special_cards.xlsx есть некорректные значения в колонке Дата. "
-                    f"Ожидается ДД.ММ.ГГГГ. "
-                    f"Невалидных строк: {int(invalid_start_date_mask.sum())}. "
-                    f"Примеры: {', '.join(bad_examples)}"
-                )
-
-            # Если для строки есть start_date -> оставляем только >= этой даты
-            mask_keep = (conv_df["start_date"].isna()) | (conv_df["datetime"] >= conv_df["start_date"])
-            conv_df = conv_df.loc[mask_keep].drop(columns=["start_date"])
         after = len(conv_df)
         if after != before:
             logger.info(f"[run] 🧭 Применены правила special_cards: отфильтровано {before - after} строк.")
