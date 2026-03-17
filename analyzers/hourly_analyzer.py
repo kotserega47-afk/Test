@@ -9,7 +9,8 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
-from core.rules_provider import get_snapshot_v2
+from core.rules_provider import get_snapshot_v2, get_indexes_v2
+from core.rules_v2.accessors import HourlyRulesAccessor
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -94,11 +95,13 @@ def build_hourly_dto_from_files(
     Rule-driven hourly analyzer.
     - No Telegram
     - No YAML business logic
-    - Comments pulled from rules.xlsx wallet_limits
-    - Layout is applied in Reporter (ordering/grouping/labels)
+    - Rules are resolved via RulesSnapshotV2 + HourlyRulesAccessor
+    - Layout is applied in Reporter
     """
     snapshot = get_snapshot_v2()
-    analyzer_job_key = "wallet"
+    indexes = get_indexes_v2()
+    rules = HourlyRulesAccessor(snapshot=snapshot, indexes=indexes)
+    analyzer_job_key = "hourly"
 
     # -------------------------------------------------------------------------
     # Normalize all boundary datetimes to Europe/Moscow
@@ -113,10 +116,28 @@ def build_hourly_dto_from_files(
     else:
         end_dt = end_dt.astimezone(MSK)
 
-    if header_date.tzinfo is None:
-        header_date = header_date.replace(tzinfo=MSK)
-    else:
-        header_date = header_date.astimezone(MSK)
+    partner_to_group: Dict[str, str] = {}
+    group_titles: Dict[str, str] = {}
+    partner_default_method: Dict[str, str] = {}
+
+    for group_key, group_def in snapshot.partner_groups.items():
+        group_titles[group_key] = group_def.display_name or group_key
+
+    for partner_key, partner_def in snapshot.partners.items():
+        raw_name = partner_def.source_name or partner_def.display_name or ""
+        partner_norm = normalize_partner_name(raw_name)
+        if not partner_norm:
+            continue
+
+        memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
+        if memberships:
+            member = memberships[0]
+
+            if member.group_key:
+                partner_to_group[partner_norm] = member.group_key
+
+            if member.default_method_key:
+                partner_default_method[partner_norm] = str(member.default_method_key).upper()
 
     df_payin = pd.read_excel(payin_path, dtype=str)
     df_payout = pd.read_excel(payout_path, dtype=str)
@@ -160,40 +181,50 @@ def build_hourly_dto_from_files(
     if method_col is None:
         df_payout["_method"] = ""
     else:
-        df_payout["_method"] = df_payout[method_col].astype(str).fillna("").str.strip().str.upper()
+        df_payout["_method"] = (
+            df_payout[method_col]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
 
-    # Comments
+    defaults = df_payout["norm"].map(partner_default_method).fillna("")
+    m = df_payout["_method"].eq("") & defaults.ne("")
+    if m.any():
+        df_payout.loc[m, "_method"] = defaults.loc[m]
+
+    # Comments / limits via accessor
     payin_comment: Dict[str, str] = {}
     payout_comment: Dict[Tuple[str, str], str] = {}
 
-    for rule in snapshot.limit_rules:
-        if not rule.enabled:
-            continue
-        if rule.job_key != analyzer_job_key:
-            continue
-        if rule.metric_key != "daily_max_amount":
+    for partner_key, partner_def in snapshot.partners.items():
+        raw_name = partner_def.source_name or partner_def.display_name or ""
+        partner_norm = normalize_partner_name(raw_name)
+        if not partner_norm:
             continue
 
-        comment = (rule.comment or "").strip()
-        if not comment:
-            continue
+        group_key = partner_to_group.get(partner_norm)
 
-        if rule.scope_type == "partner":
-            partner_def = snapshot.partners.get(rule.scope_key)
-            if not partner_def:
-                continue
+        payin_rule = rules.resolve_limit_rule(
+            "daily_max_amount",
+            partner_key=partner_key,
+            group_key=group_key,
+            method_key=None,
+        )
+        if payin_rule and (payin_rule.comment or "").strip():
+            payin_comment[partner_norm] = (payin_rule.comment or "").strip()
+            payout_comment[(partner_norm, "")] = (payin_rule.comment or "").strip()
 
-            partner_norm = normalize_partner_name(
-                partner_def.source_name or partner_def.display_name or ""
+        for method in ("UNI", "CARD", "CARDS", "SBP", "PAYOUT"):
+            payout_rule = rules.resolve_limit_rule(
+                "daily_max_amount",
+                partner_key=partner_key,
+                group_key=group_key,
+                method_key=method.lower(),
             )
-
-            method = (rule.method_key or "").upper()
-
-            if method:
-                payout_comment[(partner_norm, method)] = comment
-            else:
-                payin_comment[partner_norm] = comment
-                payout_comment[(partner_norm, "")] = comment
+            if payout_rule and (payout_rule.comment or "").strip():
+                payout_comment[(partner_norm, method)] = (payout_rule.comment or "").strip()
 
 
     # Aggregate payout: partner_norm + method
@@ -215,15 +246,19 @@ def build_hourly_dto_from_files(
             .iloc[0]
         )
 
+        group_key = partner_to_group.get(partner_norm)
+        block_code = group_key or partner_norm
+        block_title = group_titles.get(group_key, display_partner)
+
         methods: List[HourlyMethodRow] = []
         for _, r in sub.iterrows():
             method = str(r["_method"] or "").strip().upper()
             amt = float(r["_amount"] or 0.0)
 
             c = (
-                payout_comment.get((partner_norm, method))
-                or payout_comment.get((partner_norm, ""))
-                or ""
+                    payout_comment.get((partner_norm, method))
+                    or payout_comment.get((partner_norm, ""))
+                    or ""
             )
 
             methods.append(
@@ -237,8 +272,8 @@ def build_hourly_dto_from_files(
 
         payout_blocks.append(
             HourlyPayoutBlock(
-                group_code=partner_norm,
-                title=display_partner,
+                group_code=block_code,
+                title=block_title,
                 methods=methods,
             )
         )
@@ -263,17 +298,34 @@ def build_hourly_dto_from_files(
             .iloc[0]
         )
 
+        group_key = partner_to_group.get(pn)
+        entity_code = group_key or pn
+        title = group_titles.get(group_key, display_partner)
+
         amt = float(r["_amount"] or 0.0)
         c = payin_comment.get(pn, "")
 
         payin_rows.append(
             HourlyRow(
-                entity_code=pn,
-                title=display_partner,
+                entity_code=entity_code,
+                title=title,
                 amount=amt,
                 comment=c,
             )
         )
+
+    merged_payout: Dict[str, HourlyPayoutBlock] = {}
+    for block in payout_blocks:
+        if block.group_code not in merged_payout:
+            merged_payout[block.group_code] = HourlyPayoutBlock(
+                group_code=block.group_code,
+                title=block.title,
+                methods=list(block.methods),
+            )
+        else:
+            merged_payout[block.group_code].methods.extend(block.methods)
+
+    payout_blocks = list(merged_payout.values())
 
     return HourlyDTO(
         start_dt=start_dt,
