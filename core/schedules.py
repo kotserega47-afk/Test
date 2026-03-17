@@ -23,7 +23,7 @@ class Schedule:
 
 
 def load_schedules(*, force_sync: bool = False) -> List[Schedule]:
-    snapshot = get_snapshot_v2(force_sync=...)
+    snapshot = get_snapshot_v2(force_sync=force_sync)
     indexes = build_indexes(snapshot)
     accessor = ScheduleRulesAccessor(snapshot, indexes)
 
