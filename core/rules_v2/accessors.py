@@ -328,7 +328,8 @@ class WalletRulesAccessor(BaseRulesAccessor):
         group_key: str | None = None,
         method_key: str | None = None,
     ) -> LimitRule | None:
-        return super().resolve_limit_rule(
+        return BaseRulesAccessor.resolve_limit_rule(
+            self,
             self.job_key,
             metric_key,
             partner_key=partner_key,
@@ -343,7 +344,8 @@ class WalletRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> ThresholdRule | None:
-        return super().resolve_threshold_rule(
+        return BaseRulesAccessor.resolve_threshold_rule(
+            self,
             self.job_key,
             metric_key,
             partner_key=partner_key,
@@ -357,7 +359,8 @@ class WalletRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> ExclusionRule | None:
-        return super().get_exclusion(
+        return BaseRulesAccessor.get_exclusion(
+            self,
             self.job_key,
             at_dt,
             partner_key=partner_key,
@@ -371,7 +374,8 @@ class WalletRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> bool:
-        return super().is_excluded(
+        return BaseRulesAccessor.is_excluded(
+            self,
             self.job_key,
             at_dt,
             partner_key=partner_key,
@@ -394,7 +398,8 @@ class HourlyRulesAccessor(BaseRulesAccessor):
         group_key: str | None = None,
         method_key: str | None = None,
     ) -> LimitRule | None:
-        return super().resolve_limit_rule(
+        return BaseRulesAccessor.resolve_limit_rule(
+            self,
             self.job_key,
             metric_key,
             partner_key=partner_key,
@@ -409,7 +414,8 @@ class HourlyRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> ThresholdRule | None:
-        return super().resolve_threshold_rule(
+        return BaseRulesAccessor.resolve_threshold_rule(
+            self,
             self.job_key,
             metric_key,
             partner_key=partner_key,
@@ -423,7 +429,8 @@ class HourlyRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> ExclusionRule | None:
-        return super().get_exclusion(
+        return BaseRulesAccessor.get_exclusion(
+            self,
             self.job_key,
             at_dt,
             partner_key=partner_key,
@@ -437,7 +444,8 @@ class HourlyRulesAccessor(BaseRulesAccessor):
         partner_key: str | None = None,
         group_key: str | None = None,
     ) -> bool:
-        return super().is_excluded(
+        return BaseRulesAccessor.is_excluded(
+            self,
             self.job_key,
             at_dt,
             partner_key=partner_key,
