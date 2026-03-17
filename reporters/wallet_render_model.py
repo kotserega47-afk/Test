@@ -56,10 +56,11 @@ def _payin_line(p: WalletPartnerStats) -> str:
 
 def _api_line(p: WalletPartnerStats) -> str:
 
-    if p.total_ops == 0:
+
+    if p.api_total_ops == 0:
         return "  Отмен по API: —"
 
-    base = f"{p.api_cancel_count} / {p.total_ops} ({p.api_cancel_pct:.1f}%)"
+    base = f"{p.api_cancel_count} / {p.api_total_ops} ({p.api_cancel_pct:.1f}%)"
 
     if p.api_insufficient:
         return f"  Отмен по API: {base} — ℹ️"

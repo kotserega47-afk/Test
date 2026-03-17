@@ -625,7 +625,7 @@ def build_wallet_stats_dto(
                 limit_bad=limit_bad,
                 limit_warn=limit_warn,
                 api_cancel_count=api_cancel_count,
-                api_total_ops=total,
+                api_total_ops=lh_total,
                 api_cancel_pct=api_pct,
                 api_cancel_threshold_pct=api_threshold,
                 api_insufficient=api_insufficient,
