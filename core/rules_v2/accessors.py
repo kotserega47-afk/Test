@@ -196,6 +196,44 @@ class WalletRulesAccessor(BaseRulesAccessor):
 class HourlyRulesAccessor(BaseRulesAccessor):
     job_key: str = "hourly"
 
+    def resolve_limit_rule(
+        self,
+        metric_key: str,
+        *,
+        partner_key: str | None = None,
+        group_key: str | None = None,
+        method_key: str | None = None,
+    ):
+        job_key = "hourly"
+        metric_key = str(metric_key).strip()
+        method_key_norm = str(method_key).strip().lower() if method_key else None
+
+        candidates = []
+
+        if partner_key:
+            candidates.append(("partner", str(partner_key), method_key_norm))
+            candidates.append(("partner", str(partner_key), None))
+
+        if group_key:
+            candidates.append(("group", str(group_key), method_key_norm))
+            candidates.append(("group", str(group_key), None))
+
+        candidates.append(("global", "*", method_key_norm))
+        candidates.append(("global", "*", None))
+
+        seen = set()
+        for scope_type, scope_key, mk in candidates:
+            key = (job_key, scope_type, scope_key, metric_key, mk)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            rule = self.indexes.limit_rules_index.get(key)
+            if rule and rule.enabled:
+                return rule
+
+        return None
+
     def get_comment_params(
         self,
         *,
@@ -219,6 +257,25 @@ class HourlyRulesAccessor(BaseRulesAccessor):
             )
             if value is not None:
                 result[param_key] = value
+
+        return result
+
+    def get_group_memberships(self, job_key: str, partner_key: str) -> list:
+        group_keys = self.indexes.group_members_by_job_and_partner.get(
+            (str(job_key), str(partner_key)),
+            [],
+        )
+
+        result = []
+        for member in self.snapshot.partner_group_members:
+            if not member.enabled:
+                continue
+            if str(member.job_key) != str(job_key):
+                continue
+            if str(member.partner_key) != str(partner_key):
+                continue
+            if str(member.group_key) in group_keys:
+                result.append(member)
 
         return result
 
