@@ -194,7 +194,60 @@ class WalletRulesAccessor(BaseRulesAccessor):
 
 @dataclass(slots=True)
 class HourlyRulesAccessor(BaseRulesAccessor):
-    job_key: str = "hourly"
+    def get_group_members(self, job_key: str, group_key: str) -> list:
+        partner_keys = self.indexes.group_members_by_job.get((str(job_key), str(group_key)), [])
+        result = []
+
+        for member in self.snapshot.partner_group_members:
+            if not member.enabled:
+                continue
+            if str(member.job_key) != str(job_key):
+                continue
+            if str(member.group_key) != str(group_key):
+                continue
+            if str(member.partner_key) in partner_keys:
+                result.append(member)
+
+        return result
+
+    def get_group_memberships(self, job_key: str, partner_key: str) -> list:
+        result = []
+
+        for member in self.snapshot.partner_group_members:
+            if not member.enabled:
+                continue
+            if str(member.job_key) != str(job_key):
+                continue
+            if str(member.partner_key) != str(partner_key):
+                continue
+            result.append(member)
+
+        return result
+
+    def get_job_param(
+        self,
+        job_key: str,
+        param_key: str,
+        *,
+        partner_key: str | None = None,
+        group_key: str | None = None,
+    ):
+        candidates = []
+
+        if partner_key:
+            candidates.append((str(job_key), "partner", str(partner_key), str(param_key)))
+
+        if group_key:
+            candidates.append((str(job_key), "group", str(group_key), str(param_key)))
+
+        candidates.append((str(job_key), "global", "*", str(param_key)))
+
+        for key in candidates:
+            rule = self.indexes.job_params_index.get(key)
+            if rule and rule.enabled:
+                return rule
+
+        return None
 
     def resolve_limit_rule(
         self,
@@ -211,19 +264,18 @@ class HourlyRulesAccessor(BaseRulesAccessor):
         candidates = []
 
         if partner_key:
-            candidates.append(("partner", str(partner_key), method_key_norm))
-            candidates.append(("partner", str(partner_key), None))
+            candidates.append((job_key, "partner", str(partner_key), metric_key, method_key_norm))
+            candidates.append((job_key, "partner", str(partner_key), metric_key, None))
 
         if group_key:
-            candidates.append(("group", str(group_key), method_key_norm))
-            candidates.append(("group", str(group_key), None))
+            candidates.append((job_key, "group", str(group_key), metric_key, method_key_norm))
+            candidates.append((job_key, "group", str(group_key), metric_key, None))
 
-        candidates.append(("global", "*", method_key_norm))
-        candidates.append(("global", "*", None))
+        candidates.append((job_key, "global", "*", metric_key, method_key_norm))
+        candidates.append((job_key, "global", "*", metric_key, None))
 
         seen = set()
-        for scope_type, scope_key, mk in candidates:
-            key = (job_key, scope_type, scope_key, metric_key, mk)
+        for key in candidates:
             if key in seen:
                 continue
             seen.add(key)
@@ -234,50 +286,35 @@ class HourlyRulesAccessor(BaseRulesAccessor):
 
         return None
 
-    def get_comment_params(
+    def get_exclusion(
         self,
+        at_dt,
         *,
         partner_key: str | None = None,
         group_key: str | None = None,
-    ) -> dict[str, Any]:
-        result: dict[str, Any] = {}
+    ):
+        job_key = "hourly"
 
-        for param_key in (
-            "comment",
-            "label",
-            "display_name",
-            "sort_order",
-        ):
-            value = self.get_job_param(
-                self.job_key,
-                param_key,
-                partner_key=partner_key,
-                group_key=group_key,
-                default=None,
-            )
-            if value is not None:
-                result[param_key] = value
-
-        return result
-
-    def get_group_memberships(self, job_key: str, partner_key: str) -> list:
-        group_keys = self.indexes.group_members_by_job_and_partner.get(
-            (str(job_key), str(partner_key)),
-            [],
-        )
-
-        result = []
-        for member in self.snapshot.partner_group_members:
-            if not member.enabled:
+        for rule in self.snapshot.exclusion_rules:
+            if not rule.enabled:
                 continue
-            if str(member.job_key) != str(job_key):
+            if str(rule.job_key) != job_key:
                 continue
-            if str(member.partner_key) != str(partner_key):
-                continue
-            if str(member.group_key) in group_keys:
-                result.append(member)
 
-        return result
+            scope_type = str(rule.scope_type)
+            scope_key = str(rule.scope_key)
+
+            if scope_type == "partner" and partner_key and scope_key != str(partner_key):
+                continue
+            if scope_type == "group" and group_key and scope_key != str(group_key):
+                continue
+            if scope_type == "global" and scope_key != "*":
+                continue
+
+            if rule.start_dt <= at_dt <= rule.end_dt:
+                return rule
+
+        return None
 
 @dataclass(slots=True)
 class AccessRulesAccessor(BaseRulesAccessor):

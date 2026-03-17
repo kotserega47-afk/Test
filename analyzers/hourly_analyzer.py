@@ -111,14 +111,15 @@ def build_hourly_dto_from_files(
     else:
         start_dt = start_dt.astimezone(MSK)
 
-    if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=MSK)
+    if header_date.tzinfo is None:
+        header_date = header_date.replace(tzinfo=MSK)
     else:
-        end_dt = end_dt.astimezone(MSK)
+        header_date = header_date.astimezone(MSK)
 
     partner_to_group: Dict[str, str] = {}
     group_titles: Dict[str, str] = {}
     partner_default_method: Dict[str, str] = {}
+    norm_to_partner_key: Dict[str, str] = {}
 
     for group_key, group_def in snapshot.partner_groups.items():
         group_titles[group_key] = group_def.display_name or group_key
@@ -128,6 +129,8 @@ def build_hourly_dto_from_files(
         partner_norm = normalize_partner_name(raw_name)
         if not partner_norm:
             continue
+
+        norm_to_partner_key[partner_norm] = partner_key
 
         memberships = rules.get_group_memberships(analyzer_job_key, partner_key)
         if memberships:
@@ -198,12 +201,7 @@ def build_hourly_dto_from_files(
     payin_comment: Dict[str, str] = {}
     payout_comment: Dict[Tuple[str, str], str] = {}
 
-    for partner_key, partner_def in snapshot.partners.items():
-        raw_name = partner_def.source_name or partner_def.display_name or ""
-        partner_norm = normalize_partner_name(raw_name)
-        if not partner_norm:
-            continue
-
+    for partner_norm, partner_key in norm_to_partner_key.items():
         group_key = partner_to_group.get(partner_norm)
 
         payin_rule = rules.resolve_limit_rule(
@@ -225,7 +223,6 @@ def build_hourly_dto_from_files(
             )
             if payout_rule and (payout_rule.comment or "").strip():
                 payout_comment[(partner_norm, method)] = (payout_rule.comment or "").strip()
-
 
     # Aggregate payout: partner_norm + method
     payout_blocks: List[HourlyPayoutBlock] = []
@@ -277,6 +274,7 @@ def build_hourly_dto_from_files(
                 methods=methods,
             )
         )
+
 
     # Aggregate payin: partner_norm
     payin_rows: List[HourlyRow] = []
