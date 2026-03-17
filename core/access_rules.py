@@ -57,7 +57,7 @@ class AccessRules:
 
     def get_snapshot(self, force_sync: bool = False) -> Snapshot:
         snapshot_v2 = get_snapshot_v2(force_sync=force_sync)
-        indexes = build_rules_indexes(snapshot_v2)
+        indexes = build_indexes(snapshot_v2)
 
         meta = snapshot_v2.meta
         stat_key = (float(meta.updated_at.timestamp()), len(snapshot_v2.partners))
