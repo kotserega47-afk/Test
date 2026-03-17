@@ -24,7 +24,7 @@ from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
 from core.state_store import state_update
 from core.config_manager import rules_validate_all
-from core.rules_provider import get_rules_snapshot
+from core.rules_provider import get_snapshot_v2
 
 
 def _mk(profile_key: str):
@@ -193,16 +193,16 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("🔎 Валидирую rules.xlsx…")
 
     try:
-        snap = get_rules_snapshot(force_sync=True)
-        errors, warnings = rules_validate_all(force_sync=False)  # rules уже скачали
+        snap = get_snapshot_v2(force_reload=True)
+        errors, warnings = rules_validate_all(force_sync=False)
 
         if errors:
             body = "\n".join(f"- {x}" for x in errors[:60])
             tail = "" if len(errors) <= 60 else f"\n… (+{len(errors)-60} more)"
             await update.message.reply_text(
                 "❌ rules_validate: FAIL\n"
-                f"rules_version: {snap.rules_version[:12]}\n"
-                f"source: {snap.source}\n\n"
+                f"rules_version: {snap.meta.ruleset_version}\n"
+                f"source: snapshot_v2\n\n"
                 + body + tail
             )
             return
@@ -212,16 +212,16 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
             tail = "" if len(warnings) <= 60 else f"\n… (+{len(warnings)-60} more)"
             await update.message.reply_text(
                 "⚠️ rules_validate: WARN\n"
-                f"rules_version: {snap.rules_version[:12]}\n"
-                f"source: {snap.source}\n\n"
+                f"rules_version: {snap.meta.ruleset_version}\n"
+                f"source: snapshot_v2\n\n"
                 + body + tail
             )
             return
 
         await update.message.reply_text(
             "✅ rules_validate: OK\n"
-            f"rules_version: {snap.rules_version[:12]}\n"
-            f"source: {snap.source}"
+            f"rules_version: {snap.meta.ruleset_version}\n"
+            f"source: snapshot_v2\n\n"
         )
 
     except Exception as e:
@@ -234,7 +234,10 @@ async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     RULES.invalidate()
     try:
         snap = RULES.get_snapshot(force_sync=True)
-        await update.message.reply_text(f"♻️ rules.xlsx перечитан.\nsource: {snap.source}")
+        await update.message.reply_text(
+            f"♻️ rules snapshot перечитан.\n"
+            f"source: {snap.source}"
+        )
     except Exception as e:
         await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
 

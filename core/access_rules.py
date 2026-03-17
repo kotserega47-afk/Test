@@ -1,14 +1,14 @@
 # core/access_rules.py
-from __future__ import annotations
-
-import pandas as pd
 import time
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
-from core.rules_provider import get_rules_snapshot
+from core.rules_provider import get_snapshot_v2
+from core.rules_v2.accessors import AccessRulesAccessor
+from core.rules_v2.indexes import build_indexes
 
 icon, name = LOG_PROFILES["MAIN"]
 logger = get_logger(name, icon)
@@ -24,28 +24,12 @@ class CommandRule:
 
 @dataclass
 class Snapshot:
-    access_map: Dict[Tuple[Any, int], int]          # (chat_key, user_id) -> level
-    commands_map: Dict[str, CommandRule]            # command -> rule
-    stat_key: Tuple[float, int]                     # (mtime, size) of local cache file
+    access_map: Dict[Tuple[Any, int], int]
+    commands_map: Dict[str, CommandRule]
+    stat_key: Tuple[float, int]
     loaded_at_ts: float
-    source: str                                     # dropbox path used
-
-
-def _as_bool01(v: Any) -> bool:
-    try:
-        return int(v) == 1
-    except Exception:
-        return bool(v)
-
-
-def _norm_command(v: Any) -> str:
-    if v is None:
-        return ""
-    s = str(v).strip()
-    if s.startswith("/"):
-        s = s[1:]
-    return s.lower()
-
+    source: str
+    accessor: AccessRulesAccessor
 
 def _norm_chat_id(v: Any) -> Any:
     if v is None:
@@ -64,26 +48,6 @@ def _norm_chat_id(v: Any) -> Any:
         return v
 
 
-def _require_cols(df: pd.DataFrame, sheet: str, cols: Tuple[str, ...]) -> None:
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"[{sheet}] missing columns: {missing}")
-
-def _validate_access_df(df: pd.DataFrame) -> None:
-    bad = df[~df["chat_id"].apply(
-        lambda v: str(v).strip().lower() == "private"
-        or str(v).strip().lstrip("-").replace(".", "", 1).isdigit()
-    )]
-    if not bad.empty:
-        raise ValueError(f"[access] invalid chat_id values (examples): {bad['chat_id'].head(5).tolist()}")
-
-
-def _validate_commands_df(df: pd.DataFrame) -> None:
-    for c in ("allow_private", "allow_groups"):
-        vals = set(df[c].dropna().astype(int).unique().tolist())
-        if not vals.issubset({0, 1}):
-            raise ValueError(f"[commands] {c} must be 0/1, got {sorted(vals)}")
-
 class AccessRules:
     def __init__(self, rules_env_path: str | None = None):
         self._snap: Optional[Snapshot] = None
@@ -92,85 +56,66 @@ class AccessRules:
         self._snap = None
 
     def get_snapshot(self, force_sync: bool = False) -> Snapshot:
-        # 1) Получаем общий snapshot rules.xlsx (Dropbox -> /tmp/rules_cache/rules.xlsx)
-        #    Fail-safe уже внутри RulesProvider.
-        rs = get_rules_snapshot(force_sync=force_sync)
+        snapshot_v2 = get_snapshot_v2(force_reload=force_sync)
+        indexes = build_rules_indexes(snapshot_v2)
 
-        # 2) Если локальный cache-файл не изменился — возвращаем кэш, не перечитывая Excel.
-        key = rs.stat_key
-        if self._snap is not None and self._snap.stat_key == key:
+        meta = snapshot_v2.meta
+        stat_key = (float(meta.updated_at.timestamp()), len(snapshot_v2.partners))
+
+        if self._snap is not None and self._snap.stat_key == stat_key:
             return self._snap
 
-        # 3) Читаем Excel из локального cache-файла
-        df_access = pd.read_excel(rs.local_path, sheet_name="access")
-        df_cmds = pd.read_excel(rs.local_path, sheet_name="commands")
+        accessor = AccessRulesAccessor(snapshot_v2, indexes)
 
-        # 4) Проверяем схему (колонки)
-        _require_cols(df_access, "access", ("chat_id", "user_id", "level"))
-        _require_cols(df_cmds, "commands", ("command", "required_level", "allow_private", "allow_groups"))
-
-        # 5) Валидируем значения
-        _validate_access_df(df_access)
-        _validate_commands_df(df_cmds)
-
-        # 6) enabled по умолчанию = 1
-        if "enabled" not in df_access.columns:
-            df_access["enabled"] = 1
-        if "enabled" not in df_cmds.columns:
-            df_cmds["enabled"] = 1
-
-        # 7) Собираем access_map
         access_map: Dict[Tuple[Any, int], int] = {}
-        for _, r in df_access.iterrows():
-            if not _as_bool01(r.get("enabled", 1)):
+        for rule in snapshot_v2.access_rules:
+            if not rule.enabled:
                 continue
 
-            chat_key = _norm_chat_id(r.get("chat_id"))
-            if chat_key is None:
+            role = snapshot_v2.roles.get(rule.role_key)
+            if not role or not role.enabled:
                 continue
 
-            try:
-                user_id = int(float(r.get("user_id")))
-                level = int(float(r.get("level")))
-            except Exception:
-                continue
+            chat_key: Any = "private" if str(rule.chat_id).strip().lower() == "private" else int(rule.chat_id)
+            access_map[(chat_key, int(rule.user_id))] = int(role.role_level)
 
-            access_map[(chat_key, user_id)] = level
-
-        # 8) Собираем commands_map
         commands_map: Dict[str, CommandRule] = {}
-        for _, r in df_cmds.iterrows():
-            if not _as_bool01(r.get("enabled", 1)):
+        for command in snapshot_v2.commands.values():
+            if not command.enabled:
                 continue
 
-            cmd = _norm_command(r.get("command"))
+            policy = indexes.command_policy_by_command_key.get(command.command_key)
+            if not policy or not policy.enabled:
+                continue
+
+            role = snapshot_v2.roles.get(policy.min_role_key)
+            if not role or not role.enabled:
+                continue
+
+            cmd = str(command.command_text).strip().lstrip("/").lower()
             if not cmd:
                 continue
 
-            try:
-                required_level = int(float(r.get("required_level")))
-            except Exception:
-                required_level = 999  # fail-safe
-
             commands_map[cmd] = CommandRule(
-                required_level=required_level,
-                allow_private=_as_bool01(r.get("allow_private", 0)),
-                allow_groups=_as_bool01(r.get("allow_groups", 0)),
+                required_level=int(role.role_level),
+                allow_private=bool(policy.allow_private),
+                allow_groups=bool(policy.allow_groups),
                 enabled=True,
             )
 
-        # 9) Сохраняем snapshot (atomically)
         snap = Snapshot(
             access_map=access_map,
             commands_map=commands_map,
-            stat_key=key,
+            stat_key=stat_key,
             loaded_at_ts=time.time(),
-            source=rs.source,
+            source=f"snapshot_v2:{meta.ruleset_version}",
+            accessor=accessor,
         )
         self._snap = snap
 
         logger.info(
-            f"🔐 AccessRules loaded: access={len(access_map)} commands={len(commands_map)} src={rs.source} stat={key}"
+            f"🔐 AccessRules loaded from snapshot_v2: access={len(access_map)} "
+            f"commands={len(commands_map)} version={meta.ruleset_version}"
         )
         return snap
 

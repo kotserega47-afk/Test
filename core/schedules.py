@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-import pandas as pd
-
-from core.rules_provider import get_rules_snapshot
+from core.rules_provider import get_snapshot_v2
+from core.rules_v2.accessors import ScheduleRulesAccessor
+from core.rules_v2.indexes import build_indexes
 
 
 @dataclass(frozen=True)
@@ -22,63 +22,43 @@ class Schedule:
     coalesce: int
 
 
-def _i(v, default=0) -> int:
-    try:
-        if pd.isna(v):
-            return default
-    except Exception:
-        pass
-    try:
-        return int(float(v))
-    except Exception:
-        return default
-
-
 def load_schedules(*, force_sync: bool = False) -> List[Schedule]:
-    rs = get_rules_snapshot(force_sync=force_sync)
-    df = pd.read_excel(rs.local_path, sheet_name="schedules", engine="openpyxl")
-    if df is None or df.empty:
-        return []
-
-    df.columns = [str(c).strip().lower() for c in df.columns]
-
-    # minimal required
-    for c in ("id", "enabled", "job_type", "schedule_type"):
-        if c not in df.columns:
-            raise ValueError(f"[schedules] missing column: {c}")
+    snapshot = get_snapshot_v2(force_reload=force_sync)
+    indexes = build_indexes(snapshot)
+    accessor = ScheduleRulesAccessor(snapshot, indexes)
 
     out: List[Schedule] = []
-    for _, r in df.iterrows():
-        enabled = _i(r.get("enabled"), 0)
-        if enabled != 1:
+
+    for rule in accessor.get_enabled_schedules():
+        stype = str(rule.schedule_type or "").strip().lower()
+
+        if stype == "interval":
+            every_seconds = int(rule.every_seconds or 0)
+            cron = ""
+        elif stype == "cron":
+            every_seconds = 0
+            cron = str(rule.cron_expr or "").strip()
+        else:
             continue
 
-        job_type = str(r.get("job_type") or "").strip()
-        stype = str(r.get("schedule_type") or "").strip().lower()
-        every = _i(r.get("every_seconds"), 0)
-        cron = str(r.get("cron") or "").strip()
-
-        if not job_type:
+        if not rule.job_key:
             continue
-        if stype not in {"every_seconds", "cron"}:
-            continue
-        if stype == "every_seconds" and every <= 0:
+        if stype == "interval" and every_seconds <= 0:
             continue
         if stype == "cron" and not cron:
             continue
 
-        # optional columns (default 0 if absent)
         out.append(
             Schedule(
-                id=str(r.get("id") or "").strip(),
+                id=str(rule.schedule_key or "").strip(),
                 enabled=1,
-                job_type=job_type,
-                schedule_type=stype,
-                every_seconds=every,
+                job_type=str(rule.job_key).strip(),
+                schedule_type="every_seconds" if stype == "interval" else "cron",
+                every_seconds=every_seconds,
                 cron=cron,
-                jitter_sec=_i(r.get("jitter_sec"), 0),
-                max_runtime_sec=_i(r.get("max_runtime_sec"), 0),
-                coalesce=_i(r.get("coalesce"), 0),
+                jitter_sec=0,
+                max_runtime_sec=0,
+                coalesce=1 if bool(rule.coalesce) else 0,
             )
         )
 

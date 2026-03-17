@@ -222,6 +222,140 @@ class HourlyRulesAccessor(BaseRulesAccessor):
 
         return result
 
+@dataclass(slots=True)
+class AccessRulesAccessor(BaseRulesAccessor):
+    def resolve_role_level(
+        self,
+        *,
+        chat_id: int | str,
+        user_id: int,
+    ) -> int | None:
+        raw_chat = str(chat_id).strip().lower()
+        chat_key = "private" if raw_chat == "private" else str(int(chat_id))
+
+        rule = self.indexes.access_by_chat_user.get((chat_key.lower(), int(user_id)))
+        if not rule or not rule.enabled:
+            return None
+
+        role = self.snapshot.roles.get(rule.role_key)
+        if not role or not role.enabled:
+            return None
+
+        return int(role.role_level)
+
+    def get_command_rule(self, command_text: str):
+        cmd = str(command_text or "").strip()
+        if not cmd:
+            return None
+
+        if not cmd.startswith("/"):
+            cmd = f"/{cmd}"
+
+        command = self.indexes.commands_by_text.get(cmd)
+        if not command or not command.enabled:
+            return None
+
+        policy = self.indexes.command_policy_by_command_key.get(command.command_key)
+        if not policy or not policy.enabled:
+            return None
+
+        role = self.snapshot.roles.get(policy.min_role_key)
+        if not role or not role.enabled:
+            return None
+
+        return {
+            "required_level": int(role.role_level),
+            "allow_private": bool(policy.allow_private),
+            "allow_groups": bool(policy.allow_groups),
+            "enabled": True,
+            "command_key": command.command_key,
+        }
+
+
+    def get_command_rule(self, command_text: str):
+        cmd = str(command_text or "").strip()
+        if not cmd:
+            return None
+
+        if not cmd.startswith("/"):
+            cmd = f"/{cmd}"
+
+        command = self.indexes.commands_by_text.get(cmd)
+        if not command or not command.enabled:
+            return None
+
+        policy = self.indexes.command_policy_by_command_key.get(command.command_key)
+        if not policy or not policy.enabled:
+            return None
+
+        role = self.snapshot.roles.get(policy.min_role_key)
+        if not role or not role.enabled:
+            return None
+
+        return {
+            "required_level": int(role.role_level),
+            "allow_private": bool(policy.allow_private),
+            "allow_groups": bool(policy.allow_groups),
+            "enabled": True,
+            "command_key": command.command_key,
+        }
+
+    def is_allowed(
+        self,
+        *,
+        command_text: str,
+        chat_id: int | str,
+        user_id: int,
+        is_private: bool,
+    ) -> tuple[bool, str, dict]:
+        rule = self.get_command_rule(command_text)
+        cmd = str(command_text or "").strip().lstrip("/").lower()
+
+        details = {
+            "command": cmd,
+            "chat_id": chat_id,
+            "user_id": int(user_id),
+        }
+
+        if rule is None:
+            return False, "unknown_command", details
+
+        if is_private and not rule["allow_private"]:
+            return False, "command_not_allowed_here", {**details, "where": "private"}
+
+        if (not is_private) and not rule["allow_groups"]:
+            return False, "command_not_allowed_here", {**details, "where": "group"}
+
+        level = self.resolve_role_level(chat_id=chat_id, user_id=int(user_id))
+        if level is None:
+            return False, "no_access_rule", {**details, "level": 0, "required": rule["required_level"]}
+
+        if int(level) < int(rule["required_level"]):
+            return False, "insufficient_level", {
+                **details,
+                "level": int(level),
+                "required": int(rule["required_level"]),
+            }
+
+        return True, "ok", {
+            **details,
+            "level": int(level),
+            "required": int(rule["required_level"]),
+        }
+
+
+@dataclass(slots=True)
+class ScheduleRulesAccessor(BaseRulesAccessor):
+    def get_enabled_schedules(self) -> list:
+        result = []
+        for rule in self.snapshot.schedule_rules:
+            if not rule.enabled:
+                continue
+            result.append(rule)
+        return result
+
+    def get_schedules_for_job(self, job_key: str) -> list:
+        return list(self.indexes.schedule_rules_by_job.get(str(job_key), []))
 class RulesAccessor:
 
     def __init__(self, snapshot, indexes):
