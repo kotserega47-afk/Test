@@ -114,14 +114,20 @@ def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
 
         idx.commands_by_text[cmd] = command
 
-    # ------------------------------------------------------------------
-    # command policies
-    # ------------------------------------------------------------------
-    for policy in snapshot.command_policies:
-        if not policy.enabled:
-            continue
+        # ------------------------------------------------------------------
+        # command policies
+        # ------------------------------------------------------------------
+        policies_iter = (
+            snapshot.command_policies.values()
+            if isinstance(snapshot.command_policies, dict)
+            else snapshot.command_policies
+        )
 
-        idx.command_policy_by_command_key[policy.command_key] = policy
+        for policy in policies_iter:
+            if not policy.enabled:
+                continue
+
+            idx.command_policy_by_command_key[policy.command_key] = policy
 
     # ------------------------------------------------------------------
     # schedules
