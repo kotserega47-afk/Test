@@ -193,7 +193,7 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("🔎 Валидирую rules.xlsx…")
 
     try:
-        snap = get_snapshot_v2(force_reload=True)
+        snap = get_snapshot_v2(force_sync=...)
         errors, warnings = rules_validate_all(force_sync=False)
 
         if errors:

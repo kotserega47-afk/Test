@@ -56,7 +56,7 @@ class AccessRules:
         self._snap = None
 
     def get_snapshot(self, force_sync: bool = False) -> Snapshot:
-        snapshot_v2 = get_snapshot_v2(force_reload=force_sync)
+        snapshot_v2 = get_snapshot_v2(force_sync=force_sync)
         indexes = build_rules_indexes(snapshot_v2)
 
         meta = snapshot_v2.meta
