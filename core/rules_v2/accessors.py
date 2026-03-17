@@ -318,7 +318,7 @@ class WalletRulesAccessor(BaseRulesAccessor):
     job_key: str = "wallet"
 
     def get_default_method_key(self, partner_key: str) -> str | None:
-        return super().get_default_method_key(self.job_key, partner_key)
+        return BaseRulesAccessor.get_default_method_key(self, self.job_key, partner_key)
 
     def resolve_limit_rule(
         self,
@@ -384,7 +384,7 @@ class HourlyRulesAccessor(BaseRulesAccessor):
     job_key: str = "hourly"
 
     def get_default_method_key(self, partner_key: str) -> str | None:
-        return super().get_default_method_key(self.job_key, partner_key)
+        return BaseRulesAccessor.get_default_method_key(self, self.job_key, partner_key)
 
     def resolve_limit_rule(
         self,
