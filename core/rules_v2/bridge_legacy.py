@@ -25,6 +25,10 @@ from core.rules_v2.models import (
     PartnerDef,
     PartnerGroupDef,
     PartnerGroupMember,
+    ReportDef,
+    ReportItem,
+    ReportItemMember,
+    ReportSection,
     RoleDef,
     RulesSnapshotV2,
     ScheduleRule,
@@ -65,6 +69,10 @@ def build_snapshot_v2_from_legacy(path: str | Path) -> RulesSnapshotV2:
     threshold_rules = _build_threshold_rules(sheets)
     exclusion_rules = _build_exclusion_rules(sheets, partners)
 
+    reports = _build_reports(sheets)
+    report_sections = _build_report_sections(sheets, reports)
+    report_items, report_item_members = _build_report_items(sheets, reports)
+
     return RulesSnapshotV2(
         meta=meta,
         jobs=jobs,
@@ -81,10 +89,10 @@ def build_snapshot_v2_from_legacy(path: str | Path) -> RulesSnapshotV2:
         limit_rules=limit_rules,
         threshold_rules=threshold_rules,
         exclusion_rules=exclusion_rules,
-        reports={},
-        report_sections=[],
-        report_items=[],
-        report_item_members=[],
+        reports=reports,
+        report_sections=report_sections,
+        report_items=report_items,
+        report_item_members=report_item_members,
     )
 
 
@@ -92,14 +100,45 @@ def build_snapshot_v2_from_legacy(path: str | Path) -> RulesSnapshotV2:
 # Helpers
 # -----------------------------------------------------------------------------
 
+def _derive_layout_section(row: pd.Series) -> tuple[str, str]:
+    raw_section = _as_str(row.get("section"))
+    if raw_section:
+        section_key = normalize_key(raw_section)
+        if section_key:
+            return section_key, raw_section
+
+    raw_key = _as_str(row.get("key"))
+    if raw_key and "." in raw_key:
+        prefix = raw_key.split(".", 1)[0].strip()
+        section_key = normalize_key(prefix)
+        if section_key:
+            return section_key, prefix
+
+    return "", ""
 
 def _is_enabled(value: Any) -> bool:
     if pd.isna(value):
         return False
+
     if isinstance(value, bool):
         return value
+
+    if isinstance(value, (int, float)):
+        try:
+            return float(value) != 0.0
+        except (TypeError, ValueError):
+            return False
+
     s = str(value).strip().lower()
-    return s in {"1", "true", "yes", "y", "да"}
+    if not s:
+        return False
+
+    try:
+        return float(s) != 0.0
+    except ValueError:
+        pass
+
+    return s in {"true", "yes", "y", "да", "on"}
 
 
 def _as_str(value: Any) -> str:
@@ -155,7 +194,353 @@ def _scope_key_from_legacy(scope: str, scope_value: str, partners: dict[str, Par
 
     return normalize_key(scope_value)
 
+def _safe_sort_order(value: Any, default: int = 1000) -> int:
+    n = _safe_int(value)
+    return int(n) if n is not None else default
 
+
+def _csv_tokens(value: Any) -> list[str]:
+    s = _as_str(value)
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x and str(x).strip()]
+
+
+def _item_key(*parts: Any) -> str:
+    tokens = []
+    for p in parts:
+        s = _as_str(p)
+        if not s:
+            continue
+        tokens.append(normalize_key(s))
+    return ".".join(tokens)
+
+
+def _section_key(report_key: str, section_name: str) -> str:
+    return f"{normalize_key(report_key)}.{normalize_key(section_name)}"
+
+def _build_reports(sheets: dict[str, pd.DataFrame]) -> dict[str, ReportDef]:
+    reports: dict[str, ReportDef] = {}
+
+    ui_df = sheets.get("ui_layout")
+    if ui_df is not None and not ui_df.empty:
+        for view in ui_df.get("view", pd.Series(dtype=str)).dropna().tolist():
+            view_key = normalize_key(view)
+            if not view_key:
+                continue
+
+            reports[view_key] = ReportDef(
+                report_key=view_key,
+                job_key=view_key,
+                display_name=str(view).strip(),
+                enabled=True,
+            )
+
+    # transitional hourly fallback:
+    # даже если ui_layout временно пустой/битый, hourly report должен существовать.
+    if "hourly" not in reports:
+        reports["hourly"] = ReportDef(
+            report_key="hourly",
+            job_key="hourly",
+            display_name="hourly",
+            enabled=True,
+        )
+
+    return reports
+
+
+def _build_report_sections(
+    sheets: dict[str, pd.DataFrame],
+    reports: dict[str, ReportDef],
+) -> list[ReportSection]:
+    sections: list[ReportSection] = []
+    seen: set[str] = set()
+
+    ui_df = sheets.get("ui_layout")
+    if ui_df is not None and not ui_df.empty:
+        for _, row in ui_df.iterrows():
+            if not _is_enabled_default_true(row.get("enabled")):
+                continue
+
+            report_key = normalize_key(row.get("view"))
+            section_name, _section_display_name = _derive_layout_section(row)
+
+            if not report_key or not section_name:
+                continue
+            if report_key not in reports:
+                continue
+
+            key = _section_key(report_key, section_name)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            sections.append(
+                ReportSection(
+                    section_key=key,
+                    report_key=report_key,
+                    parent_section_key=None,
+                    display_name=section_name,
+                    section_type="layout",
+                    sort_order=_safe_sort_order(row.get("order"), default=1000),
+                    style_key=None,
+                    enabled=True,
+                )
+            )
+
+    # transitional config sections for hourly
+    if "hourly" in reports:
+        extra_sections = [
+            ("config_payins", "config_payins", 100),
+            ("config_payouts", "config_payouts", 110),
+            ("config_payout_methods", "config_payout_methods", 120),
+        ]
+        for section_name, display_name, sort_order in extra_sections:
+            key = _section_key("hourly", section_name)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            sections.append(
+                ReportSection(
+                    section_key=key,
+                    report_key="hourly",
+                    parent_section_key=None,
+                    display_name=display_name,
+                    section_type="config",
+                    sort_order=sort_order,
+                    style_key=None,
+                    enabled=True,
+                )
+            )
+
+    sections.sort(key=lambda x: (x.report_key, x.sort_order, x.section_key))
+    return sections
+
+def _is_enabled_default_true(value: Any) -> bool:
+    if pd.isna(value):
+        return True
+    return _is_enabled(value)
+
+def _build_report_items(
+    sheets: dict[str, pd.DataFrame],
+    reports: dict[str, ReportDef],
+) -> tuple[list[ReportItem], list[ReportItemMember]]:
+    items: list[ReportItem] = []
+    members: list[ReportItemMember] = []
+
+    # ------------------------------------------------------------------
+    # ui_layout -> layout items
+    # ------------------------------------------------------------------
+    ui_df = sheets.get("ui_layout")
+    if ui_df is not None and not ui_df.empty:
+        for idx, row in ui_df.iterrows():
+            if not _is_enabled_default_true(row.get("enabled")):
+                continue
+
+            report_key = normalize_key(row.get("view"))
+            section_name = normalize_key(row.get("section"))
+            if not report_key or not section_name:
+                continue
+            if report_key not in reports:
+                continue
+
+            section_key = _section_key(report_key, section_name)
+            line_key = _as_str(row.get("key"))
+            title = _as_str(row.get("title")) or line_key
+            style = _as_optional_str(row.get("style"))
+
+            item_key = _item_key(
+                "layout",
+                report_key,
+                section_name,
+                _safe_sort_order(row.get("order"), default=idx + 1),
+                line_key or f"row_{idx+1}",
+            )
+
+            items.append(
+                ReportItem(
+                    item_key=item_key,
+                    report_key=report_key,
+                    section_key=section_key,
+                    item_type="layout_line",
+                    source_key=line_key,
+                    method_key=None,
+                    display_name=title,
+                    sort_order=_safe_sort_order(row.get("order"), default=idx + 1),
+                    enabled=True,
+                    comment=style,
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # hourly_payins -> config items
+    # ------------------------------------------------------------------
+    payins_df = sheets.get("hourly_payins")
+    if payins_df is not None and not payins_df.empty and "hourly" in reports:
+        section_key = _section_key("hourly", "config_payins")
+
+        for idx, row in payins_df.iterrows():
+            if not _is_enabled_default_true(row.get("enabled")):
+                continue
+
+            display_name = _as_str(row.get("display_name"))
+            group_code = _as_str(row.get("group_code")) or display_name
+            source_key = group_code or display_name or f"payin_{idx+1}"
+            comment = _as_optional_str(row.get("comment"))
+
+            item_key = _item_key("hourly", "payin", idx + 1, source_key)
+
+            items.append(
+                ReportItem(
+                    item_key=item_key,
+                    report_key="hourly",
+                    section_key=section_key,
+                    item_type="payin_row",
+                    source_key=source_key,
+                    method_key=None,
+                    display_name=display_name or source_key,
+                    sort_order=_safe_sort_order(row.get("sort_order"), default=idx + 1),
+                    enabled=True,
+                    comment=comment,
+                )
+            )
+
+            source_partners = _csv_tokens(row.get("source_partners"))
+            for member_order, partner_name in enumerate(source_partners, start=1):
+                members.append(
+                    ReportItemMember(
+                        item_key=item_key,
+                        member_type="source_partner",
+                        member_key=normalize_key(partner_name),
+                        sort_order=member_order,
+                        enabled=True,
+                    )
+                )
+
+            if _safe_int(row.get("group_break_after")) == 1:
+                members.append(
+                    ReportItemMember(
+                        item_key=item_key,
+                        member_type="group_break_after",
+                        member_key="1",
+                        sort_order=999,
+                        enabled=True,
+                    )
+                )
+
+    # ------------------------------------------------------------------
+    # hourly_payouts -> payout group config
+    # ------------------------------------------------------------------
+    payout_group_item_keys: dict[str, str] = {}
+
+    payouts_df = sheets.get("hourly_payouts")
+    if payouts_df is not None and not payouts_df.empty and "hourly" in reports:
+        section_key = _section_key("hourly", "config_payouts")
+
+        for idx, row in payouts_df.iterrows():
+            if not _is_enabled_default_true(row.get("enabled")):
+                continue
+
+            group_code = _as_str(row.get("group_code"))
+            display_name = _as_str(row.get("display_name")) or group_code
+            if not group_code:
+                continue
+
+            item_key = _item_key("hourly", "payout_group", group_code)
+            payout_group_item_keys[group_code] = item_key
+
+            items.append(
+                ReportItem(
+                    item_key=item_key,
+                    report_key="hourly",
+                    section_key=section_key,
+                    item_type="payout_group",
+                    source_key=group_code,
+                    method_key=None,
+                    display_name=display_name,
+                    sort_order=_safe_sort_order(row.get("sort_order"), default=idx + 1),
+                    enabled=True,
+                    comment=None,
+                )
+            )
+
+            if _safe_int(row.get("group_break_after")) == 1:
+                members.append(
+                    ReportItemMember(
+                        item_key=item_key,
+                        member_type="group_break_after",
+                        member_key="1",
+                        sort_order=999,
+                        enabled=True,
+                    )
+                )
+
+    # ------------------------------------------------------------------
+    # hourly_payout_methods -> payout method config
+    # ------------------------------------------------------------------
+    methods_df = sheets.get("hourly_payout_methods")
+    if methods_df is not None and not methods_df.empty and "hourly" in reports:
+        section_key = _section_key("hourly", "config_payout_methods")
+
+        for idx, row in methods_df.iterrows():
+            if not _is_enabled_default_true(row.get("enabled")):
+                continue
+
+            group_code = _as_str(row.get("group_code"))
+            method_key = normalize_key(_as_str(row.get("method_code")) or "UNI")
+            method_name = _as_str(row.get("method_name")) or method_key.upper()
+            comment = _as_optional_str(row.get("comment"))
+
+            if not group_code:
+                continue
+
+            item_key = _item_key("hourly", "payout_method", group_code, method_key, idx + 1)
+
+            items.append(
+                ReportItem(
+                    item_key=item_key,
+                    report_key="hourly",
+                    section_key=section_key,
+                    item_type="payout_method",
+                    source_key=group_code,
+                    method_key=method_key,
+                    display_name=method_name,
+                    sort_order=_safe_sort_order(row.get("sort_order"), default=idx + 1),
+                    enabled=True,
+                    comment=comment,
+                )
+            )
+
+            # link payout_method -> payout_group
+            parent_group_item_key = payout_group_item_keys.get(group_code)
+            if parent_group_item_key:
+                members.append(
+                    ReportItemMember(
+                        item_key=item_key,
+                        member_type="parent_group_item",
+                        member_key=parent_group_item_key,
+                        sort_order=1,
+                        enabled=True,
+                    )
+                )
+
+            # keep legacy source_partners semantics for transitional render-model
+            source_partners = _csv_tokens(row.get("source_partners"))
+            for member_order, partner_name in enumerate(source_partners, start=10):
+                members.append(
+                    ReportItemMember(
+                        item_key=item_key,
+                        member_type="source_partner",
+                        member_key=normalize_key(partner_name),
+                        sort_order=member_order,
+                        enabled=True,
+                    )
+                )
+
+    items.sort(key=lambda x: (x.report_key, x.section_key, x.sort_order, x.item_key))
+    members.sort(key=lambda x: (x.item_key, x.sort_order, x.member_type, x.member_key))
+    return items, members
 # -----------------------------------------------------------------------------
 # Builders
 # -----------------------------------------------------------------------------
