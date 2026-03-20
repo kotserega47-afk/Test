@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from analyzers.hourly_analyzer import HourlyDTO
-from core.config_manager import get_ui_layout_df
 from core.event_log import append_event
+from core.rules_provider import get_snapshot_v2
 from reporters.hourly_render_model import build_hourly_render_model
 
 
@@ -24,41 +24,27 @@ def _apply_style(s: str, style: str) -> str:
     return s
 
 
-def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> str:
-    df = layout_df.copy()
-    df = df[
-        (df["enabled"] == 1)
-        & (df["view"].astype(str).str.strip().str.lower() == view.lower())
+def _render_by_snapshot_layout(*, view: str, render_model: Dict[str, Any]) -> str:
+    snapshot = get_snapshot_v2(force_sync=False)
+
+    layout_items = [
+        x
+        for x in snapshot.report_items
+        if x.enabled
+        and x.report_key == view
+        and x.item_type == "layout_line"
     ]
-    if df.empty:
+    layout_items.sort(key=lambda x: (x.sort_order, x.item_key))
+
+    if not layout_items:
         return ""
 
-    for col in ["section", "key", "title", "style"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    df["section"] = df["section"].where(df["section"].notna(), "")
-    df["key"] = df["key"].where(df["key"].notna(), "")
-    df["title"] = df["title"].where(df["title"].notna(), "")
-    df["style"] = df["style"].where(df["style"].notna(), "")
-
-    df["section"] = df["section"].astype(str).str.strip()
-    df["key"] = df["key"].astype(str).str.strip()
-    df["title"] = df["title"].astype(str).str.strip()
-    df["style"] = df["style"].astype(str).str.strip().str.lower()
-
-    df = df.fillna("")
-    df["title"] = df["title"].replace("nan", "")
-    df["key"] = df["key"].replace("nan", "")
-    df["style"] = df["style"].replace("nan", "")
-
-    # ВАЖНО: сохраняем порядок строк из Excel, не пересортировываем по order
     out: List[str] = []
 
-    for _, row in df.iterrows():
-        key = row.get("key", "")
-        title = row.get("title", "")
-        style = row.get("style", "") or "text"
+    for item in layout_items:
+        key = str(item.source_key or "").strip()
+        title = str(item.display_name or "").strip()
+        style = str(item.comment or "").strip().lower() or "text"
 
         if key and key not in render_model:
             append_event(
@@ -67,8 +53,8 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
                 payload={
                     "view": view,
                     "key": key,
-                    "id": row.get("id", ""),
-                    "section": row.get("section", ""),
+                    "item_key": item.item_key,
+                    "section_key": item.section_key,
                 },
             )
             continue
@@ -90,8 +76,8 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
         if isinstance(val, list):
             if title:
                 out.append(_apply_style(title, style))
-            for item in val:
-                out.append(str(item).rstrip())
+            for row in val:
+                out.append(str(row).rstrip())
             continue
 
         line = f"{title} {val}".strip() if title else str(val).strip()
@@ -101,13 +87,6 @@ def _render_by_layout(*, view: str, layout_df, render_model: Dict[str, Any]) -> 
 
 
 def render_hourly(dto: HourlyDTO) -> RenderedReport:
-    """
-    Pure rendering.
-    Layout is controlled via rules.xlsx -> ui_layout (view='hourly').
-    No Telegram here.
-    """
-    layout_df = get_ui_layout_df(force_sync=False)
-
     rm = build_hourly_render_model(dto)
-    text = _render_by_layout(view="hourly", layout_df=layout_df, render_model=rm.model)
+    text = _render_by_snapshot_layout(view="hourly", render_model=rm.model)
     return RenderedReport(text=text.strip())

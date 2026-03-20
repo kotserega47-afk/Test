@@ -347,7 +347,7 @@ def _build_report_items(
 
             section_key = _section_key(report_key, section_name)
             line_key = _as_str(row.get("key"))
-            title = _as_str(row.get("title")) or line_key
+            title = _as_optional_str(row.get("title"))
             style = _as_optional_str(row.get("style"))
 
             item_key = _item_key(
@@ -366,7 +366,7 @@ def _build_report_items(
                     item_type="layout_line",
                     source_key=line_key,
                     method_key=None,
-                    display_name=title,
+                    display_name=title,  # без fallback на line_key
                     sort_order=_safe_sort_order(row.get("order"), default=idx + 1),
                     enabled=True,
                     comment=style,
@@ -385,9 +385,16 @@ def _build_report_items(
                 continue
 
             display_name = _as_str(row.get("display_name"))
-            group_code = _as_str(row.get("group_code")) or display_name
-            source_key = group_code or display_name or f"payin_{idx+1}"
+            group_code = _as_str(row.get("group_code"))
             comment = _as_optional_str(row.get("comment"))
+
+            # фильтр пустых строк
+            if not display_name and not group_code and not comment:
+                continue
+
+            source_key = group_code or display_name
+            if not source_key:
+                continue
 
             item_key = _item_key("hourly", "payin", idx + 1, source_key)
 
