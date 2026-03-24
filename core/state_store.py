@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from integrations.dropbox_watcher import download_file, upload_file
-from core.rules_provider import _dropbox_rules_file_path
+from integrations.dropbox_watcher import download_file_status, upload_file
+from core.rules_provider import _rules_dropbox_path
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from core.event_log import append_event
@@ -25,7 +25,7 @@ _LOCAL_TMP.mkdir(parents=True, exist_ok=True)
 # --------------------------------------------------------
 
 def _state_dropbox_path() -> str:
-    rules_path = _dropbox_rules_file_path()
+    rules_path = _rules_dropbox_path()
     base = rules_path.rsplit("/", 1)[0]
     return f"{base}/state/state.json"
 
@@ -38,7 +38,7 @@ def _load_from_dropbox() -> Dict[str, Any]:
     db_path = _state_dropbox_path()
     lp = _local_path()
 
-    status = download_file(db_path, str(lp))
+    status = download_file_status(db_path, str(lp))
 
     if status == "not_found":
         # первый запуск

@@ -31,8 +31,8 @@ SCOPE_TYPES = {"global", "group", "partner"}
 SCHEDULE_TYPES = {"interval", "cron"}
 VALUE_TYPES = {"int", "float", "str", "bool", "time", "json"}
 LIMIT_TYPES = {"min", "max", "target", "soft_max", "hard_max"}
-ITEM_TYPES = {"partner", "group", "metric", "aggregate"}
-MEMBER_TYPES = {"partner", "group"}
+ITEM_TYPES = {"partner", "group", "metric", "aggregate", "layout_line", "payin_row", "payout_group", "payout_method"}
+MEMBER_TYPES = {"partner", "group", "source_partner", "group_break_after", "parent_group_item"}
 
 ALLOWED_JOB_PARAMS: dict[str, dict[str, str]] = {
     "wallet": {

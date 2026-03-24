@@ -25,6 +25,7 @@ from transport.telegram_transport import send_text
 from core.state_store import state_update
 from core.config_manager import rules_validate_all
 from core.rules_provider import get_snapshot_v2
+from core.rules_v2.validators import validate_snapshot
 
 
 def _mk(profile_key: str):
@@ -193,8 +194,12 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("🔎 Валидирую rules.xlsx…")
 
     try:
-        snap = get_snapshot_v2(force_sync=...)
-        errors, warnings = rules_validate_all(force_sync=False)
+        snap = get_snapshot_v2(force_sync=True)
+        legacy_errors, legacy_warnings = rules_validate_all(force_sync=False)
+        v2_result = validate_snapshot(snap)
+
+        errors = list(legacy_errors) + [issue.message for issue in v2_result.errors]
+        warnings = list(legacy_warnings) + [issue.message for issue in v2_result.warnings]
 
         if errors:
             body = "\n".join(f"- {x}" for x in errors[:60])

@@ -42,9 +42,9 @@ def list_files(path: str):
         logger.error(f"Ошибка list_files({path}): {e}")
         return []
 
-def download_file(dropbox_path: str, local_path: str):
+def download_file_status(dropbox_path: str, local_path: str) -> str:
     """
-    Возвращает:
+    Возвращает статус скачивания:
       "ok"        — файл скачан
       "not_found" — файла нет
       "error"     — иная ошибка
@@ -57,7 +57,6 @@ def download_file(dropbox_path: str, local_path: str):
         return "ok"
 
     except ApiError as e:
-        # 404
         if isinstance(e.error, dropbox.files.DownloadError) and e.error.is_path():
             if e.error.get_path().is_not_found():
                 logger.info(f"File not found in Dropbox: {dropbox_path}")
@@ -69,6 +68,17 @@ def download_file(dropbox_path: str, local_path: str):
     except Exception as e:
         logger.error(f"Ошибка download_file({dropbox_path}): {e}")
         return "error"
+
+
+def download_file(dropbox_path: str, local_path: str) -> bool:
+    """
+    Булев контракт для runtime-кода.
+    True — файл успешно скачан.
+    False — файл не скачан по любой причине.
+
+    Для различения причин используйте download_file_status().
+    """
+    return download_file_status(dropbox_path, local_path) == "ok"
 
 def upload_file(local_path: str, dropbox_path: str):
     """Загрузить локальный файл в dropbox"""
@@ -103,8 +113,8 @@ def download_rules_xlsx() -> str:
     """
     os.makedirs(os.path.dirname(RULES_LOCAL_PATH), exist_ok=True)
 
-    ok = download_file(RULES_DROPBOX_PATH, RULES_LOCAL_PATH)
-    if not ok:
+    status = download_file_status(RULES_DROPBOX_PATH, RULES_LOCAL_PATH)
+    if status != "ok":
         raise RuntimeError(f"Failed to download rules.xlsx from Dropbox: {RULES_DROPBOX_PATH}")
 
     logger.info(f"✅ rules.xlsx downloaded: {RULES_DROPBOX_PATH} → {RULES_LOCAL_PATH}")
