@@ -10,6 +10,7 @@ here — bridge and snapshot layout stay unchanged.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -48,6 +49,8 @@ class RulesWorkbookSnapshot:
 _RULES_CACHE_DIR = Path("/tmp/rules_cache")
 _RULES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _RULES_LOCAL = _RULES_CACHE_DIR / "rules.xlsx"
+
+log = logging.getLogger(__name__)
 
 _last_rules_sync_ts: float = 0.0
 _last_rules_wb: Optional[RulesWorkbookSnapshot] = None
@@ -259,6 +262,20 @@ def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
         return _last_v2_snapshot
 
     decision = evaluate_snapshot_publish(path, policy_mode=policy)
+
+    try:
+        from core.config_manager import rules_validate_all
+        from core.rules_v2.rules_validate_audit import try_append_publish_audit_trail
+
+        _leg_e, _leg_w = rules_validate_all(force_sync=False)
+        try_append_publish_audit_trail(
+            wb=wb,
+            decision=decision,
+            legacy_errors=list(_leg_e),
+            legacy_warnings=list(_leg_w),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("rules_validate_audit: publish hook failed (ignored)")
 
     if not decision.publish_allowed:
         raise ContractPublishRejected(decision)

@@ -23,9 +23,8 @@ from integrations.downloader import run_download
 from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
 from core.state_store import state_update
-from core.config_manager import rules_validate_all
-from core.rules_provider import get_snapshot_v2
-from core.rules_v2.validators import validate_snapshot
+from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
+from core.rules_v2.rules_validate_audit import try_append_manual_validate_audit_from_payload
 
 
 def _mk(profile_key: str):
@@ -191,46 +190,23 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await _guard_or_deny(update, "rules_validate"):
         return
 
-    await update.message.reply_text("🔎 Валидирую rules.xlsx…")
+    loop = asyncio.get_running_loop()
+    try:
+        chunks, payload = await loop.run_in_executor(None, build_rules_validate_telegram_chunks_with_payload)
+    except Exception as e:
+        log.exception("/rules_validate failed")
+        await update.message.reply_text(f"❌ /rules_validate failed: {type(e).__name__}: {e}")
+        return
+
+    total = len(chunks)
+    for idx, body in enumerate(chunks):
+        prefix = "" if idx == 0 else f"(part {idx + 1}/{total})\n"
+        await update.message.reply_text(prefix + body)
 
     try:
-        snap = get_snapshot_v2(force_sync=True)
-        legacy_errors, legacy_warnings = rules_validate_all(force_sync=False)
-        v2_result = validate_snapshot(snap)
-
-        errors = list(legacy_errors) + [issue.message for issue in v2_result.errors]
-        warnings = list(legacy_warnings) + [issue.message for issue in v2_result.warnings]
-
-        if errors:
-            body = "\n".join(f"- {x}" for x in errors[:60])
-            tail = "" if len(errors) <= 60 else f"\n… (+{len(errors)-60} more)"
-            await update.message.reply_text(
-                "❌ rules_validate: FAIL\n"
-                f"rules_version: {snap.meta.ruleset_version}\n"
-                f"source: snapshot_v2\n\n"
-                + body + tail
-            )
-            return
-
-        if warnings:
-            body = "\n".join(f"- {x}" for x in warnings[:60])
-            tail = "" if len(warnings) <= 60 else f"\n… (+{len(warnings)-60} more)"
-            await update.message.reply_text(
-                "⚠️ rules_validate: WARN\n"
-                f"rules_version: {snap.meta.ruleset_version}\n"
-                f"source: snapshot_v2\n\n"
-                + body + tail
-            )
-            return
-
-        await update.message.reply_text(
-            "✅ rules_validate: OK\n"
-            f"rules_version: {snap.meta.ruleset_version}\n"
-            f"source: snapshot_v2\n\n"
-        )
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ rules_validate crashed: {e}")
+        await loop.run_in_executor(None, try_append_manual_validate_audit_from_payload, payload)
+    except Exception:  # noqa: BLE001
+        log.exception("rules_validate_audit: tg manual_validate hook failed (ignored)")
 
 async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "reload_rules"):
