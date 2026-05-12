@@ -331,7 +331,10 @@ def build_wallet_dto_from_payout_xlsx(
         for _, r in sub.iterrows():
             method = (r["_method"] or "").strip().upper() or "UNI"
             amount = float(r["_amount"] or 0.0)
-            partner_obj = rules.resolve_partner(display_partner)
+            partner_obj = rules.resolve_partner(
+                display_partner,
+                expect_raw_excel_partner_label=True,
+            )
             partner_key = partner_obj.partner_key if partner_obj else None
 
             limit_rule = rules.resolve_limit_rule(
@@ -523,7 +526,10 @@ def build_wallet_stats_dto(
         amount_today = float(today_success["_amount"].sum())
 
         default_method = partner_default_method.get(partner_norm, "")
-        partner_obj = rules.resolve_partner(display_partner)
+        partner_obj = rules.resolve_partner(
+            display_partner,
+            expect_raw_excel_partner_label=True,
+        )
         partner_key = partner_obj.partner_key if partner_obj else None
 
         limit_rule = rules.resolve_limit_rule(

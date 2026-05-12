@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -22,11 +23,17 @@ logger = logging.getLogger(__name__)
 
 _HOURLY_PAYIN_SECTION = "hourly.config_payins"
 
+# -----------------------------------------------------------------------------
+# Naming contract (do not mix):
+#   raw_partner_name       — cell text from Excel export (Партнер)
+#   normalized_partner_name — normalize_partner_name(raw); grouping / legacy only
+#   partner_key            — RulesSnapshotV2 partner_key (canonical id)
+#   report_source_key      — hourly payin_row report_items.source_key
+# -----------------------------------------------------------------------------
+
 # =============================================================================
 # DTO
 # =============================================================================
-
-
 @dataclass(frozen=True)
 class HourlyRow:
     entity_code: str
@@ -171,18 +178,18 @@ def _build_hourly_payin_member_key_to_report_sources(snapshot: RulesSnapshotV2) 
 
 
 def _partner_keys_for_excel_partner_cell(
-    raw_label: str,
+    raw_partner_name: str,
     *,
     indexes,
     rules: HourlyRulesAccessor,
 ) -> tuple[list[str], list[str]]:
     """
-    Resolve partner_key list from an Excel ``Партнер`` cell.
+    Resolve ``partner_key`` list from a raw Excel ``Партнер`` cell.
 
     Returns (partner_keys_in_order, warning_messages).
     """
 
-    raw = str(raw_label or "").strip()
+    raw = str(raw_partner_name or "").strip()
     warns: list[str] = []
     keys: list[str] = []
     if not raw:
@@ -196,18 +203,25 @@ def _partner_keys_for_excel_partner_cell(
             keys.append(pk)
 
     if not keys:
-        p = rules.resolve_partner(raw)
+        p = rules.resolve_partner(raw, expect_raw_excel_partner_label=True)
         if p:
             keys.append(p.partner_key)
 
     if not keys:
-        norm = normalize_partner_name(raw)
-        if norm:
-            p2 = rules.resolve_partner(norm)
+        normalized_partner_name = normalize_partner_name(raw)
+        if normalized_partner_name:
+            p2 = rules.resolve_partner(
+                normalized_partner_name,
+                expect_raw_excel_partner_label=False,
+            )
             if p2:
                 keys.append(p2.partner_key)
 
     return keys, warns
+
+
+def _hourly_payin_mapping_strict_ambiguous() -> bool:
+    return os.getenv("HOURLY_PAYIN_MAPPING_STRICT", "").strip().lower() in ("1", "true", "yes")
 
 
 def _pick_single_payin_report_source(
@@ -225,7 +239,14 @@ def _pick_single_payin_report_source(
             )
         return None, warns
     if len(rkeys) > 1:
-        warns.append(f"ambiguous hourly payin_row mapping; using {sorted(rkeys)[0]!r} among {sorted(rkeys)!r}")
+        msg = (
+            f"ambiguous hourly payin_row mapping among {sorted(rkeys)!r}; "
+            "refusing to pick a single report source_key (set HOURLY_PAYIN_MAPPING_STRICT=1 to raise)"
+        )
+        warns.append(msg)
+        if _hourly_payin_mapping_strict_ambiguous():
+            raise RuntimeError(msg)
+        return None, warns
     return sorted(rkeys)[0], warns
 
 
@@ -322,20 +343,20 @@ def build_hourly_dto_from_files(
 
     warn_lines: list[str] = []
 
-    for raw in df_payin[partner_col].astype(str).tolist():
-        keys, w1 = _partner_keys_for_excel_partner_cell(raw, indexes=indexes, rules=rules)
+    for raw_partner_name in df_payin[partner_col].astype(str).tolist():
+        keys, w1 = _partner_keys_for_excel_partner_cell(raw_partner_name, indexes=indexes, rules=rules)
         payin_key_lists.append(keys)
         rsk, w2 = _pick_single_payin_report_source(keys, payin_member_index)
         for w in w1 + w2:
-            warn_lines.append(f"payin row partner={raw!r}: {w}")
+            warn_lines.append(f"payin row partner={raw_partner_name!r}: {w}")
         payin_pk.append(keys[0] if keys else None)
         payin_rsk.append(rsk)
 
-    for raw in df_payout[partner_col].astype(str).tolist():
-        keys, w1 = _partner_keys_for_excel_partner_cell(raw, indexes=indexes, rules=rules)
+    for raw_partner_name in df_payout[partner_col].astype(str).tolist():
+        keys, w1 = _partner_keys_for_excel_partner_cell(raw_partner_name, indexes=indexes, rules=rules)
         payout_key_lists.append(keys)
         for w in w1:
-            warn_lines.append(f"payout row partner={raw!r}: {w}")
+            warn_lines.append(f"payout row partner={raw_partner_name!r}: {w}")
         payout_pk.append(keys[0] if keys else None)
 
     for msg in warn_lines[:500]:
@@ -350,7 +371,18 @@ def build_hourly_dto_from_files(
     df_payin["_payin_report_source"] = payin_rsk
     df_payout["_partner_key"] = payout_pk
 
-    unmapped_payin_amt = float(df_payin.loc[df_payin["_payin_report_source"].isna(), "_amount"].sum() or 0.0)
+    _mapped_mask = df_payin["_payin_report_source"].notna()
+    _mapped_rows = int(_mapped_mask.sum())
+    _unmapped_rows = int((~_mapped_mask).sum())
+    _unmapped_sum = float(df_payin.loc[~_mapped_mask, "_amount"].sum() or 0.0)
+    logger.info(
+        "hourly payin mapping stats: mapped=%s unmapped=%s unmapped_sum=%s",
+        _mapped_rows,
+        _unmapped_rows,
+        _unmapped_sum,
+    )
+
+    unmapped_payin_amt = _unmapped_sum
     if unmapped_payin_amt > 0:
         logger.warning(
             "hourly payin: %.2f total amount in rows not mapped to any hourly payin_row (source_key)",

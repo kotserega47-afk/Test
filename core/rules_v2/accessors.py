@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from core.rules_v2.indexes import RulesIndexes
 from core.rules_v2.models import (
@@ -57,13 +60,31 @@ class BaseRulesAccessor:
     # -------------------------------------------------------------------------
     # partner / group
     # -------------------------------------------------------------------------
-    def resolve_partner(self, raw_partner: str | None) -> PartnerDef | None:
+    def resolve_partner(
+        self,
+        raw_partner: str | None,
+        *,
+        expect_raw_excel_partner_label: bool = False,
+    ) -> PartnerDef | None:
+        """Resolve a workbook / export partner label to ``PartnerDef``.
+
+        When ``expect_raw_excel_partner_label`` is True (Antares-style exports with
+        ``Name (123)``), log if the string has no ``'('`` so callers do not accidentally
+        pass ``normalize_partner_name`` output (codes stripped, code extraction fails).
+        """
         if not raw_partner:
             return None
 
         raw = str(raw_partner).strip()
         if not raw:
             return None
+
+        if expect_raw_excel_partner_label and "(" not in raw:
+            logger.warning(
+                "resolve_partner: value looks like a normalized partner name, not a raw Excel "
+                "label (no '('). extract_partner_code() may miss the partner_code. value=%r",
+                raw[:200],
+            )
 
         partner_code = extract_partner_code(raw)
         if partner_code and partner_code in self.indexes.partners_by_code:

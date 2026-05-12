@@ -100,6 +100,171 @@ def _minimal_snapshot_for_hourly_payin() -> RulesSnapshotV2:
     )
 
 
+def _snapshot_disjoint_payin_rows_for_ambiguity() -> RulesSnapshotV2:
+    """Two payin_row items; partner 108 maps to A, partner 999 maps to B (ambiguous together)."""
+    now = datetime(2026, 1, 2, 12, 0, tzinfo=MSK)
+    meta = MetaInfo(ruleset_version="test", updated_at=now, updated_by="test")
+    partners = {
+        "hh_test_108": PartnerDef(
+            partner_key="hh_test_108",
+            partner_code="108",
+            source_name=None,
+            display_name="T108",
+            enabled=True,
+        ),
+        "hh_test_999": PartnerDef(
+            partner_key="hh_test_999",
+            partner_code="999",
+            source_name=None,
+            display_name="T999",
+            enabled=True,
+        ),
+    }
+    report_items = [
+        ReportItem(
+            item_key="hourly.payin.item.a",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="hourly.payin.row_a",
+            method_key=None,
+            display_name="Row A",
+            sort_order=1,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.item.b",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="hourly.payin.row_b",
+            method_key=None,
+            display_name="Row B",
+            sort_order=2,
+            enabled=True,
+        ),
+    ]
+    report_item_members = [
+        ReportItemMember(
+            item_key="hourly.payin.item.a",
+            member_type="source_partner",
+            member_key="hh_test_108",
+            sort_order=1,
+            enabled=True,
+        ),
+        ReportItemMember(
+            item_key="hourly.payin.item.b",
+            member_type="source_partner",
+            member_key="hh_test_999",
+            sort_order=1,
+            enabled=True,
+        ),
+    ]
+    return RulesSnapshotV2(
+        meta=meta,
+        partners=partners,
+        report_items=report_items,
+        report_item_members=report_item_members,
+    )
+
+
+def test_ambiguous_payin_mapping_skips_amount_non_strict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    monkeypatch.delenv("HOURLY_PAYIN_MAPPING_STRICT", raising=False)
+    caplog.set_level(logging.INFO, logger="analyzers.hourly_analyzer")
+
+    snap = _snapshot_disjoint_payin_rows_for_ambiguity()
+    idx = build_indexes(snap)
+    payin = tmp_path / "payin.xlsx"
+    payout = tmp_path / "payout.xlsx"
+    day = datetime(2026, 5, 12, 11, 0, tzinfo=MSK)
+    dt_s = "12.05.2026 11:00:00"
+    df_payin = pd.DataFrame(
+        {
+            "Дата/Время создания": [dt_s],
+            "Партнер": ["Multi (108+999)"],
+            "Статус": ["Оплачен"],
+            "Сумма": [42],
+        }
+    )
+    df_payout = pd.DataFrame(
+        {
+            "Дата/Время создания": [dt_s],
+            "Партнер": ["Multi (108+999)"],
+            "Статус": ["Оплачен"],
+            "Сумма": [1],
+            "метод": ["UNI"],
+        }
+    )
+    df_payin.to_excel(payin, index=False)
+    df_payout.to_excel(payout, index=False)
+    start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = day.replace(hour=23, minute=59, second=0, microsecond=0)
+
+    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
+        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+            dto = build_hourly_dto_from_files(
+                payin_path=str(payin),
+                payout_path=str(payout),
+                start_dt=start,
+                end_dt=end,
+                header_date=start,
+            )
+
+    assert dto.payin == []
+    assert "mapped=0" in caplog.text and "unmapped=1" in caplog.text and "unmapped_sum=" in caplog.text
+
+
+def test_ambiguous_payin_mapping_strict_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOURLY_PAYIN_MAPPING_STRICT", "1")
+    snap = _snapshot_disjoint_payin_rows_for_ambiguity()
+    idx = build_indexes(snap)
+    payin = tmp_path / "payin.xlsx"
+    payout = tmp_path / "payout.xlsx"
+    day = datetime(2026, 5, 12, 11, 0, tzinfo=MSK)
+    dt_s = "12.05.2026 11:00:00"
+    df_payin = pd.DataFrame(
+        {
+            "Дата/Время создания": [dt_s],
+            "Партнер": ["Multi (108+999)"],
+            "Статус": ["Оплачен"],
+            "Сумма": [42],
+        }
+    )
+    df_payout = pd.DataFrame(
+        {
+            "Дата/Время создания": [dt_s],
+            "Партнер": ["Payout single (108)"],
+            "Статус": ["Оплачен"],
+            "Сумма": [1],
+            "метод": ["UNI"],
+        }
+    )
+    df_payin.to_excel(payin, index=False)
+    df_payout.to_excel(payout, index=False)
+    start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = day.replace(hour=23, minute=59, second=0, microsecond=0)
+
+    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
+        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+            with pytest.raises(RuntimeError, match="ambiguous"):
+                build_hourly_dto_from_files(
+                    payin_path=str(payin),
+                    payout_path=str(payout),
+                    start_dt=start,
+                    end_dt=end,
+                    header_date=start,
+                )
+
+
 def test_payin_rows_aggregate_by_report_source_key_composite(
     tmp_path: Path,
 ) -> None:
@@ -254,3 +419,14 @@ def test_unknown_partner_code_does_not_crash(tmp_path: Path, caplog: pytest.LogC
 
     assert dto.payin == []
     assert "unknown partner_code 99999" in caplog.text
+
+
+def test_pick_ambiguous_report_sources_returns_none() -> None:
+    from analyzers.hourly_analyzer import _pick_single_payin_report_source
+
+    rsk, warns = _pick_single_payin_report_source(
+        ["hh_a", "hh_b"],
+        {"hh_a": {"row1"}, "hh_b": {"row2"}},
+    )
+    assert rsk is None
+    assert any("ambiguous" in w for w in warns)
