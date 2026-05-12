@@ -806,6 +806,42 @@
 
 ---
 
+## 23. Explainability (C11)
+
+Нормативное разделение слоя объяснимости от runtime-resolve. **Семантика**
+production-resolve **не меняется** C11; только контракты и опциональный replay.
+
+### 23.1 C11.1 — trace contracts
+
+- Стабильные имена операций / фаз и структура шага трассировки (например
+  ``ResolutionTraceStep`` в ``core.rules_v2.explain.types``).
+- Назначение: единый формат для тестов, будущей диагностики и документации
+  без привязки к provider / audit / analyzers.
+
+### 23.2 C11.2 — explicit replay API
+
+- Явный **read-only replay** выбранных путей разрешения (например partner /
+  limit rule), выровненный по порядку и ключам с ``BaseRulesAccessor``.
+- **Explicit opt-in:** replay вызывается только там, где нужен пошаговый trace;
+  это **не** автоматическая инструментизация runtime.
+
+### 23.3 Runtime instrumentation
+
+- **Пока отсутствует:** обычные пути resolve в проде **не** обязаны и **не**
+  должны неявно генерировать полные trace-цепочки только из-за наличия C11.
+- Replay и контракты трассировки — вспомогательный слой вне hot path.
+
+### 23.4 Зависимости и импорт пакета ``explain``
+
+- **Пакет по умолчанию** (лёгкий импорт типов / констант) остаётся без тяжёлых
+  транзитивных зависимостей там, где это зафиксировано реализацией (см. модуль
+  ``core.rules_v2.explain``).
+- **Replay** может тянуть цепочку нормализации (в т.ч. транзитивно **pandas**);
+  это допустимо, т.к. replay вне production hot path и не меняет результат
+  resolve — только воспроизводит его как шаги.
+
+---
+
 ## Document history
 
 | Version | Date | Notes |
@@ -813,3 +849,4 @@
 | V2 design | 2026-05-11 | Initial spec + pass 2: entity identity (§4), layer model (§6), version migration (§12), deterministic ordering (§13), runtime guarantees (§14), implementation constraints (§16); full renumber §1–§16. |
 | V2 design | 2026-05-11 | Pass 3 (architecture): §17 Snapshot lifecycle, §18 Error codes, §19 Compatibility matrix, §20 Performance guarantees, §21 Source of truth, §22 Stage roadmap; cross-refs §2, §7, §16. |
 | V2 design | 2026-05-12 | Stage 1 / C2: §18 расширен тремя кодами для workbook schema validation — `RULE_MISSING_SHEET`, `RULE_MISSING_COLUMN`, `RULE_DEPRECATED_COLUMN`. Семантика runtime не меняется; коды используются исключительно валидатором workbook (lib-only в C2). |
+| V2 design | 2026-05-12 | C11: добавлен §23 Explainability — C11.1 trace contracts, C11.2 explicit replay API, отсутствие обязательной runtime-инструментизации; политика лёгкого импорта пакета explain vs допустимые транзитивные зависимости replay. |

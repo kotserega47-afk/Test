@@ -1,5 +1,8 @@
 """C11.1 — resolution trace contract (explain layer).
 
+Part of **C11 explainability** (see ``CONTRACT_V2.md`` §23): this module defines
+trace **contracts** only; **C11.2 replay** lives in ``replay`` and is opt-in.
+
 Explain contracts are **read-only** descriptions of resolution: they do not
 mutate ``RulesSnapshotV2``, ``RulesIndexes``, or any runtime/provider state.
 
@@ -76,7 +79,7 @@ class ResolutionTraceStep:
     # (MappingProxyType, sorted candidate keys) if drift-safe replay requires it.
     inputs: Mapping[str, JsonPrimitive]
     candidates: tuple[Mapping[str, str | None], ...]
-    index_key: tuple[str, ...] | None
+    index_key: tuple[str | None, ...] | None
     result_ref: str | None
 
 
@@ -94,7 +97,10 @@ def trace_step_to_jsonable(step: ResolutionTraceStep) -> dict[str, Any]:
     candidates_out: list[dict[str, Any]] = []
     for row in step.candidates:
         candidates_out.append({str(k): (None if v is None else str(v)) for k, v in row.items()})
-    index_out: list[str] | None = None if step.index_key is None else [str(x) for x in step.index_key]
+    if step.index_key is None:
+        index_out = None
+    else:
+        index_out = [None if x is None else str(x) for x in step.index_key]
     return {
         "op": str(step.op),
         "phase": str(step.phase),

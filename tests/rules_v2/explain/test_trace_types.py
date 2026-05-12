@@ -141,12 +141,12 @@ def test_trace_steps_to_jsonable_order() -> None:
 def test_types_module_import_does_not_load_pandas_openpyxl() -> None:
     repo = Path(__file__).resolve().parents[3]
     code = (
-        "import sys; "
-        f"sys.path.insert(0, {str(repo)!r}); "
-        "import core.rules_v2.explain.types as t; "
-        "assert 'pandas' not in sys.modules; "
-        "assert 'openpyxl' not in sys.modules; "
-        "print('ok')"
+        "import sys\n"
+        f"sys.path.insert(0, {str(repo)!r})\n"
+        "import core.rules_v2.explain.types as t\n"
+        "assert 'pandas' not in sys.modules\n"
+        "assert 'openpyxl' not in sys.modules\n"
+        "print('ok')\n"
     )
     subprocess.check_call([sys.executable, "-c", code], cwd=str(repo))
 
@@ -154,11 +154,11 @@ def test_types_module_import_does_not_load_pandas_openpyxl() -> None:
 def test_package_import_does_not_load_rules_provider() -> None:
     repo = Path(__file__).resolve().parents[3]
     code = (
-        "import sys; "
-        f"sys.path.insert(0, {str(repo)!r}); "
-        "import core.rules_v2.explain as ex; "
-        "assert 'core.rules_provider' not in sys.modules; "
-        "assert 'core.rules_v2.ops_rules_validate_summary' not in sys.modules; "
-        "print('ok')"
+        "import sys\n"
+        f"sys.path.insert(0, {str(repo)!r})\n"
+        "import core.rules_v2.explain as ex\n"
+        "assert 'core.rules_provider' not in sys.modules\n"
+        "assert 'core.rules_v2.ops_rules_validate_summary' not in sys.modules\n"
+        "print('ok')\n"
     )
     subprocess.check_call([sys.executable, "-c", code], cwd=str(repo))
