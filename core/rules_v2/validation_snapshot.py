@@ -1,0 +1,740 @@
+"""Snapshot-level diagnostic validation (CONTRACT_V2 §7 / §9 / §13 / §18).
+
+Stage 1 / C3 scope:
+
+* Pure / read-only analysis of an already-built ``RulesSnapshotV2``.
+* Emits ``ValidationIssue`` records ONLY.
+* Builds **ephemeral validation indexes** (local dicts inside each check)
+  to detect duplicates, orphans, collisions, and overlaps. These indexes
+  are NEVER published, NEVER replace ``RulesIndexes``, and do not change
+  runtime resolution.
+* Does NOT mutate the snapshot, does not call into bridge / accessors /
+  analyzers / reporters, does not "fix" or "deduplicate" anything.
+
+What it detects (see CONTRACT_V2 §18 for codes):
+
+1. Duplicate index keys for enabled rules:
+   * ``RULE_DUPLICATE_LIMIT``
+   * ``RULE_DUPLICATE_THRESHOLD``
+   * ``RULE_DUPLICATE_JOB_PARAM``
+   * ``RULE_DUPLICATE_ACCESS``
+   * ``RULE_DUPLICATE_COMMAND``
+   * ``RULE_DUPLICATE_SCHEDULE_ID``
+2. Orphan scope references in rules:
+   * ``RULE_ORPHAN_PARTNER`` (limit / threshold / job_param / exclusion
+     with ``scope_type=partner`` and ``scope_key`` not in
+     ``snapshot.partners``)
+   * ``RULE_ORPHAN_GROUP`` (same for ``scope_type=group``)
+3. Overlap of exclusion intervals (CONTRACT_V2 §8.4):
+   * ``RULE_OVERLAPPING_EXCLUSION``
+4. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
+   * ``RULE_NON_DETERMINISTIC_ORDER`` — multiple memberships per
+     (job, partner) without explicit priority; partner_code mapped to
+     more than one partner_key; multiple parent_group_item refs from
+     payout_method members pointing to non-existent items, etc.
+
+Severity policy: by default, codes are emitted at the catalog default
+(``error`` for duplicates / orphans / overlaps; ``warn`` for
+non-determinism). In legacy mode (``strict=False`` — current default),
+duplicates / orphans / overlaps are downgraded to ``warn`` to match
+CONTRACT_V2 §18 "Legacy behavior" column. Strict mode (``strict=True``)
+uses the catalog defaults.
+
+Out of C3 scope (do NOT add here):
+
+* No row-level workbook checks (those live in `validation_workbook` /
+  C2 or row validators / C5+).
+* No precedence changes (CONTRACT_V2 §16.3).
+* No silent dedup / runtime index rewrites.
+* No bridge / accessor / scheduler modification.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Hashable, Iterable
+
+from .contract_errors import (
+    RULE_DUPLICATE_ACCESS,
+    RULE_DUPLICATE_COMMAND,
+    RULE_DUPLICATE_JOB_PARAM,
+    RULE_DUPLICATE_LIMIT,
+    RULE_DUPLICATE_SCHEDULE_ID,
+    RULE_DUPLICATE_THRESHOLD,
+    RULE_NON_DETERMINISTIC_ORDER,
+    RULE_ORPHAN_GROUP,
+    RULE_ORPHAN_PARTNER,
+    RULE_OVERLAPPING_EXCLUSION,
+    make_issue,
+)
+from .models import (
+    AccessRule,
+    CommandDef,
+    ExclusionRule,
+    JobParam,
+    LimitRule,
+    PartnerGroupMember,
+    RulesSnapshotV2,
+    ScheduleRule,
+    ThresholdRule,
+)
+from .validation_issues import ValidationIssue, ValidationSeverity
+
+
+# ---------------------------------------------------------------------------
+# Severity policy (legacy vs strict)
+# ---------------------------------------------------------------------------
+
+# Codes that CONTRACT_V2 §18 downgrades from ``error`` to ``warn`` in legacy
+# mode. Strict mode keeps catalog defaults.
+_LEGACY_DOWNGRADE_TO_WARN: frozenset[str] = frozenset(
+    {
+        RULE_DUPLICATE_LIMIT,
+        RULE_DUPLICATE_THRESHOLD,
+        RULE_DUPLICATE_JOB_PARAM,
+        RULE_DUPLICATE_ACCESS,
+        RULE_DUPLICATE_COMMAND,
+        RULE_DUPLICATE_SCHEDULE_ID,
+        RULE_ORPHAN_PARTNER,
+        RULE_ORPHAN_GROUP,
+        RULE_OVERLAPPING_EXCLUSION,
+    }
+)
+
+
+def _severity_for(code: str, *, strict: bool) -> ValidationSeverity | None:
+    """Return explicit severity override for ``code`` under current mode.
+
+    Returns ``None`` to indicate "use the catalog default" (which
+    ``make_issue`` will resolve via ``default_severity``).
+    """
+
+    if strict:
+        return None
+    if code in _LEGACY_DOWNGRADE_TO_WARN:
+        return ValidationSeverity.WARN
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public entrypoint
+# ---------------------------------------------------------------------------
+
+
+def validate_snapshot(
+    snapshot: RulesSnapshotV2,
+    *,
+    strict: bool = False,
+) -> list[ValidationIssue]:
+    """Run all C3 snapshot-level checks against ``snapshot``.
+
+    Parameters
+    ----------
+    snapshot:
+        An already-built ``RulesSnapshotV2`` (typically from
+        ``bridge_legacy.build_snapshot_v2_from_legacy``). Must not be
+        mutated by callers during validation.
+    strict:
+        Severity policy. ``False`` (default, legacy): duplicates /
+        orphans / overlaps are emitted at ``warn`` per CONTRACT_V2 §18
+        "Legacy behavior". ``True``: catalog defaults (``error``).
+
+    Returns
+    -------
+    list[ValidationIssue]
+        Deterministic list of structured findings. Empty when the
+        snapshot is free of duplicates, orphans, collisions, and
+        overlaps within the C3 scope.
+    """
+
+    issues: list[ValidationIssue] = []
+
+    issues.extend(_check_duplicate_limits(snapshot, strict=strict))
+    issues.extend(_check_duplicate_thresholds(snapshot, strict=strict))
+    issues.extend(_check_duplicate_job_params(snapshot, strict=strict))
+    issues.extend(_check_duplicate_access(snapshot, strict=strict))
+    issues.extend(_check_duplicate_commands(snapshot, strict=strict))
+    issues.extend(_check_duplicate_schedules(snapshot, strict=strict))
+
+    issues.extend(_check_orphan_scope_refs_in_limits(snapshot, strict=strict))
+    issues.extend(_check_orphan_scope_refs_in_thresholds(snapshot, strict=strict))
+    issues.extend(_check_orphan_scope_refs_in_job_params(snapshot, strict=strict))
+    issues.extend(_check_orphan_scope_refs_in_exclusions(snapshot, strict=strict))
+
+    issues.extend(_check_exclusion_overlaps(snapshot, strict=strict))
+
+    issues.extend(_check_partner_code_collisions(snapshot))
+    issues.extend(_check_primary_group_ambiguity(snapshot))
+    issues.extend(_check_orphan_report_item_members(snapshot))
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection (CONTRACT_V2 §9 / §18)
+# ---------------------------------------------------------------------------
+
+
+def _check_duplicate_limits(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Limits: key = (job_key, scope_type, scope_key, metric_key, method_key)."""
+
+    groups: dict[
+        tuple[str, str, str, str, str | None], list[LimitRule]
+    ] = defaultdict(list)
+    for rule in snapshot.limit_rules:
+        if not rule.enabled:
+            continue
+        key = (
+            rule.job_key,
+            rule.scope_type,
+            rule.scope_key,
+            rule.metric_key,
+            rule.method_key,
+        )
+        groups[key].append(rule)
+
+    issues: list[ValidationIssue] = []
+    for key, rules in _sorted_dup_groups(groups):
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_LIMIT,
+                "wallet_limits",
+                key,
+                [r.rule_key for r in rules],
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_duplicate_thresholds(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Thresholds: key = (job_key, scope_type, scope_key, metric_key)."""
+
+    groups: dict[tuple[str, str, str, str], list[ThresholdRule]] = defaultdict(list)
+    for rule in snapshot.threshold_rules:
+        if not rule.enabled:
+            continue
+        key = (rule.job_key, rule.scope_type, rule.scope_key, rule.metric_key)
+        groups[key].append(rule)
+
+    issues: list[ValidationIssue] = []
+    for key, rules in _sorted_dup_groups(groups):
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_THRESHOLD,
+                "thresholds_partner",
+                key,
+                [r.rule_key for r in rules],
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_duplicate_job_params(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Job params: key = (job_key, scope_type, scope_key, param_key)."""
+
+    groups: dict[tuple[str, str, str, str], list[JobParam]] = defaultdict(list)
+    for param in snapshot.job_params:
+        if not param.enabled:
+            continue
+        key = (param.job_key, param.scope_type, param.scope_key, param.param_key)
+        groups[key].append(param)
+
+    issues: list[ValidationIssue] = []
+    for key, params in _sorted_dup_groups(groups):
+        # job_params has no per-row rule_key in the model; surface scope
+        # tuple in details for ops triage.
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_JOB_PARAM,
+                "job_params",
+                key,
+                rule_ids=None,
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_duplicate_access(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Access: key = (chat_id_norm, user_id_norm).
+
+    Normalization matches the index builder behavior (see
+    ``indexes.build_indexes``): chat trimmed-and-lowered; user_id
+    coerced to int when parseable, otherwise kept as the stripped
+    string for comparison so unparseable rows are still de-duplicated
+    against themselves.
+    """
+
+    groups: dict[tuple[str, object], list[AccessRule]] = defaultdict(list)
+    for rule in snapshot.access_rules:
+        if not rule.enabled:
+            continue
+        chat_norm = str(rule.chat_id).strip().lower()
+        user_raw = str(rule.user_id).strip()
+        try:
+            user_norm: object = int(user_raw)
+        except (TypeError, ValueError):
+            user_norm = user_raw
+        groups[(chat_norm, user_norm)].append(rule)
+
+    issues: list[ValidationIssue] = []
+    for key, rules in _sorted_dup_groups(groups):
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_ACCESS,
+                "access",
+                key,
+                rule_ids=None,
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_duplicate_commands(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Commands: key = normalized ``/cmd`` text used by the runtime index.
+
+    ``snapshot.commands`` is already a dict keyed by ``command_key``,
+    so a "same command_key" collision is collapsed before we see it.
+    What we *can* detect here is two distinct ``CommandDef`` entries
+    that produce the same indexed ``commands_by_text`` key — i.e. the
+    same ``command_text`` after the bridge-style ``/`` prefix + lower.
+    """
+
+    groups: dict[str, list[CommandDef]] = defaultdict(list)
+    for command in snapshot.commands.values():
+        if not command.enabled:
+            continue
+        text = str(command.command_text or "").strip()
+        if not text:
+            continue
+        if not text.startswith("/"):
+            text = "/" + text
+        groups[text.lower()].append(command)
+
+    issues: list[ValidationIssue] = []
+    for key, defs in _sorted_dup_groups(groups):
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_COMMAND,
+                "commands",
+                key,
+                [d.command_key for d in defs],
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_duplicate_schedules(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Schedules: duplicate ``schedule_key`` among enabled rules."""
+
+    groups: dict[str, list[ScheduleRule]] = defaultdict(list)
+    for rule in snapshot.schedule_rules:
+        if not rule.enabled:
+            continue
+        groups[rule.schedule_key].append(rule)
+
+    issues: list[ValidationIssue] = []
+    for key, rules in _sorted_dup_groups(groups):
+        issues.append(
+            _make_duplicate_issue(
+                RULE_DUPLICATE_SCHEDULE_ID,
+                "schedules",
+                key,
+                [r.schedule_key for r in rules],
+                strict=strict,
+            )
+        )
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Orphan reference detection
+# ---------------------------------------------------------------------------
+
+
+def _check_orphan_scope_refs_in_limits(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for rule in snapshot.limit_rules:
+        if not rule.enabled:
+            continue
+        issues.extend(
+            _orphan_scope_ref(
+                snapshot,
+                sheet="wallet_limits",
+                rule_id=rule.rule_key,
+                scope_type=rule.scope_type,
+                scope_key=rule.scope_key,
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_orphan_scope_refs_in_thresholds(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for rule in snapshot.threshold_rules:
+        if not rule.enabled:
+            continue
+        issues.extend(
+            _orphan_scope_ref(
+                snapshot,
+                sheet="thresholds_partner",
+                rule_id=rule.rule_key,
+                scope_type=rule.scope_type,
+                scope_key=rule.scope_key,
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_orphan_scope_refs_in_job_params(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for param in snapshot.job_params:
+        if not param.enabled:
+            continue
+        issues.extend(
+            _orphan_scope_ref(
+                snapshot,
+                sheet="job_params",
+                rule_id=None,
+                scope_type=param.scope_type,
+                scope_key=param.scope_key,
+                strict=strict,
+                extra_details={
+                    "job_key": param.job_key,
+                    "param_key": param.param_key,
+                },
+            )
+        )
+    return issues
+
+
+def _check_orphan_scope_refs_in_exclusions(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for rule in snapshot.exclusion_rules:
+        if not rule.enabled:
+            continue
+        issues.extend(
+            _orphan_scope_ref(
+                snapshot,
+                sheet="exclude_time",
+                rule_id=rule.exclusion_key,
+                scope_type=rule.scope_type,
+                scope_key=rule.scope_key,
+                strict=strict,
+            )
+        )
+    return issues
+
+
+def _orphan_scope_ref(
+    snapshot: RulesSnapshotV2,
+    *,
+    sheet: str,
+    rule_id: str | None,
+    scope_type: str,
+    scope_key: str,
+    strict: bool,
+    extra_details: dict[str, object] | None = None,
+) -> list[ValidationIssue]:
+    """Return at most one orphan issue for a single rule's scope reference."""
+
+    if scope_type == "partner":
+        if scope_key in snapshot.partners:
+            return []
+        details: dict[str, object] = {"scope_key": scope_key}
+        if extra_details:
+            details.update(extra_details)
+        return [
+            make_issue(
+                RULE_ORPHAN_PARTNER,
+                f"Unknown partner '{scope_key}' referenced from {sheet}",
+                severity=_severity_for(RULE_ORPHAN_PARTNER, strict=strict),
+                sheet=sheet,
+                rule_id=rule_id,
+                field="scope_key",
+                details=details,
+            )
+        ]
+    if scope_type == "group":
+        if scope_key in snapshot.partner_groups:
+            return []
+        details = {"scope_key": scope_key}
+        if extra_details:
+            details.update(extra_details)
+        return [
+            make_issue(
+                RULE_ORPHAN_GROUP,
+                f"Unknown group '{scope_key}' referenced from {sheet}",
+                severity=_severity_for(RULE_ORPHAN_GROUP, strict=strict),
+                sheet=sheet,
+                rule_id=rule_id,
+                field="scope_key",
+                details=details,
+            )
+        ]
+    # global scope or anything else — out of orphan-detection scope here.
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Exclusion overlaps (CONTRACT_V2 §8.4)
+# ---------------------------------------------------------------------------
+
+
+def _check_exclusion_overlaps(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Pairwise overlap on enabled exclusions sharing (job, scope_type, scope_key).
+
+    One issue per overlapping pair. Iteration uses sorted ``(start_dt,
+    end_dt, exclusion_key)`` order so output is deterministic; inner
+    loop breaks once the next start is beyond the current end (since
+    starts are non-decreasing).
+    """
+
+    groups: dict[tuple[str, str, str], list[ExclusionRule]] = defaultdict(list)
+    for rule in snapshot.exclusion_rules:
+        if not rule.enabled:
+            continue
+        groups[(rule.job_key, rule.scope_type, rule.scope_key)].append(rule)
+
+    issues: list[ValidationIssue] = []
+    for group_key in sorted(groups.keys()):
+        rules = sorted(
+            groups[group_key],
+            key=lambda r: (r.start_dt, r.end_dt, r.exclusion_key),
+        )
+        n = len(rules)
+        for i in range(n):
+            a = rules[i]
+            for j in range(i + 1, n):
+                b = rules[j]
+                if b.start_dt >= a.end_dt:
+                    # Sorted-by-start invariant: nothing after b can
+                    # start before a.end_dt either.
+                    break
+                # Half-open overlap test: a and b share at least one
+                # instant.
+                issues.append(
+                    make_issue(
+                        RULE_OVERLAPPING_EXCLUSION,
+                        (
+                            f"Overlapping exclusions "
+                            f"'{a.exclusion_key}' and '{b.exclusion_key}' "
+                            f"for {group_key[1]}={group_key[2]!r} "
+                            f"in job '{group_key[0]}'"
+                        ),
+                        severity=_severity_for(
+                            RULE_OVERLAPPING_EXCLUSION, strict=strict
+                        ),
+                        sheet="exclude_time",
+                        rule_id=a.exclusion_key,
+                        details={
+                            "other_rule_id": b.exclusion_key,
+                            "job_key": group_key[0],
+                            "scope_type": group_key[1],
+                            "scope_key": group_key[2],
+                            "a_start": a.start_dt.isoformat(),
+                            "a_end": a.end_dt.isoformat(),
+                            "b_start": b.start_dt.isoformat(),
+                            "b_end": b.end_dt.isoformat(),
+                        },
+                    )
+                )
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Non-deterministic collisions (CONTRACT_V2 §13)
+# ---------------------------------------------------------------------------
+
+
+def _check_partner_code_collisions(
+    snapshot: RulesSnapshotV2,
+) -> list[ValidationIssue]:
+    """One ``partner_code`` mapped to more than one ``partner_key``.
+
+    This is what makes ``partners_by_code`` ambiguous and CONTRACT_V2
+    §13 deprecates "row-order wins". WARN-only by design (§13).
+    """
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for partner_key, partner in snapshot.partners.items():
+        if not partner.enabled:
+            continue
+        code = partner.partner_code
+        if code is None:
+            continue
+        groups[str(code)].append(partner_key)
+
+    issues: list[ValidationIssue] = []
+    for code in sorted(k for k, v in groups.items() if len(v) > 1):
+        partner_keys = sorted(groups[code])
+        issues.append(
+            make_issue(
+                RULE_NON_DETERMINISTIC_ORDER,
+                (
+                    f"partner_code '{code}' maps to multiple partner_keys: "
+                    f"{partner_keys}"
+                ),
+                sheet="partners (derived)",
+                field="partner_code",
+                details={"partner_code": code, "partner_keys": partner_keys},
+            )
+        )
+    return issues
+
+
+def _check_primary_group_ambiguity(
+    snapshot: RulesSnapshotV2,
+) -> list[ValidationIssue]:
+    """Multiple memberships per ``(job_key, partner_key)`` without priority.
+
+    CONTRACT_V2 §8.3: primary group is deterministic only when
+    ``is_primary`` / ``group_priority`` is present. While those columns
+    are not in the Excel schema, we surface ambiguous cases as
+    ``RULE_NON_DETERMINISTIC_ORDER`` (warn) per §13.
+    """
+
+    groups: dict[tuple[str, str], list[PartnerGroupMember]] = defaultdict(list)
+    for member in snapshot.partner_group_members:
+        if not member.enabled:
+            continue
+        groups[(member.job_key, member.partner_key)].append(member)
+
+    issues: list[ValidationIssue] = []
+    for (job_key, partner_key) in sorted(
+        k for k, v in groups.items() if len(v) > 1
+    ):
+        members = groups[(job_key, partner_key)]
+        group_keys = sorted({m.group_key for m in members})
+        issues.append(
+            make_issue(
+                RULE_NON_DETERMINISTIC_ORDER,
+                (
+                    f"Partner '{partner_key}' has multiple group memberships "
+                    f"for job '{job_key}' without explicit priority: "
+                    f"{group_keys}"
+                ),
+                sheet="partner_groups",
+                field="group_name",
+                details={
+                    "job_key": job_key,
+                    "partner_key": partner_key,
+                    "group_keys": group_keys,
+                },
+            )
+        )
+    return issues
+
+
+def _check_orphan_report_item_members(
+    snapshot: RulesSnapshotV2,
+) -> list[ValidationIssue]:
+    """``parent_group_item`` references that point to non-existent items.
+
+    The bridge (``_build_report_items``) emits a ``parent_group_item``
+    member for each payout method, pointing at the payout_group's
+    item_key. If the chain breaks (group missing or out of order), the
+    member ends up dangling. Flag as warn (RULE_NON_DETERMINISTIC_ORDER
+    — closest catalog code; treat as diagnostic of inconsistent layout).
+    """
+
+    valid_item_keys = {item.item_key for item in snapshot.report_items}
+
+    issues: list[ValidationIssue] = []
+    for member in snapshot.report_item_members:
+        if not member.enabled:
+            continue
+        if member.member_type != "parent_group_item":
+            continue
+        if member.member_key in valid_item_keys:
+            continue
+        issues.append(
+            make_issue(
+                RULE_NON_DETERMINISTIC_ORDER,
+                (
+                    f"Report item member 'parent_group_item' refers to "
+                    f"unknown item_key '{member.member_key}'"
+                ),
+                sheet="report_item_members (derived)",
+                rule_id=member.item_key,
+                field="member_key",
+                details={
+                    "owner_item_key": member.item_key,
+                    "member_key": member.member_key,
+                },
+            )
+        )
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _sorted_dup_groups(
+    groups: dict[Hashable, list],
+) -> Iterable[tuple[Hashable, list]]:
+    """Yield (key, rules) only where ``len(rules) > 1``, deterministic order."""
+
+    return sorted(
+        ((k, v) for k, v in groups.items() if len(v) > 1),
+        key=lambda kv: repr(kv[0]),
+    )
+
+
+def _make_duplicate_issue(
+    code: str,
+    sheet: str,
+    key: Hashable,
+    rule_ids: list[str] | None,
+    *,
+    strict: bool,
+) -> ValidationIssue:
+    details: dict[str, object] = {"key": list(key) if isinstance(key, tuple) else key}
+    if rule_ids is not None:
+        details["rule_ids"] = list(rule_ids)
+    details["count"] = (
+        len(rule_ids)
+        if rule_ids is not None
+        else None
+    )
+    return make_issue(
+        code,
+        f"Duplicate active rules on '{sheet}' for key={key!r}",
+        severity=_severity_for(code, strict=strict),
+        sheet=sheet,
+        rule_id=(rule_ids[0] if rule_ids else None),
+        details={k: v for k, v in details.items() if v is not None},
+    )
+
+
+__all__ = ["validate_snapshot"]

@@ -1,0 +1,11 @@
+{
+  "fixture_id": "baseline_prod_synthetic",
+  "description": "Synthetic workbook mirroring prod validation posture: zero blocking issues and exactly one RULE_NON_DETERMINISTIC_ORDER from partner_code collision on code 120.",
+  "workbook_sha256": "20bc66bd4d1ab8a4214c4271917063573a26dae98673b799107a2a5179213eb6",
+  "snapshot_fingerprint": "1e7243ea70d5c81374b242652514aaaa2fdcf815a79ae90345c427d362bc2bbf",
+  "strict": false,
+  "stages": [
+    "workbook_schema",
+    "snapshot"
+  ]
+}

@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from core.rules_provider import get_rules_snapshot
+from core.rules_provider import get_rules_snapshot, invalidate_rules_v2_cache
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
 
 
@@ -1047,6 +1047,7 @@ def clear_rules_caches() -> None:
     _PARTNER_GROUPS_CACHE.clear()
     _NOTIFY_STATES["exclude.fatal"] = _NotifyState()
     _NOTIFY_STATES["exclude.warn"] = _NotifyState()
+    invalidate_rules_v2_cache()
 # =============================================================================
 # rules_validate (aggregate)
 # =============================================================================

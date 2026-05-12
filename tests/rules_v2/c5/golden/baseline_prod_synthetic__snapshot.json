@@ -1,0 +1,18 @@
+[
+  {
+    "code": "RULE_NON_DETERMINISTIC_ORDER",
+    "severity": "warn",
+    "message": "partner_code '120' maps to multiple partner_keys: ['partner_alpha_120', 'partner_beta_120']",
+    "sheet": "partners (derived)",
+    "row_index": null,
+    "rule_id": null,
+    "field": "partner_code",
+    "details": {
+      "partner_code": "120",
+      "partner_keys": [
+        "partner_alpha_120",
+        "partner_beta_120"
+      ]
+    }
+  }
+]

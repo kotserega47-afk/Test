@@ -1,0 +1,12 @@
+[
+  {
+    "code": "RULE_MISSING_COLUMN",
+    "severity": "error",
+    "message": "Required column 'value' missing on sheet 'meta'",
+    "sheet": "meta",
+    "row_index": null,
+    "rule_id": null,
+    "field": "value",
+    "details": null
+  }
+]
