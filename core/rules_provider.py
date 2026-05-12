@@ -1,54 +1,65 @@
-# core/state_provider.py
+# core/rules_provider.py
+"""Rules workbook sync + ``RulesSnapshotV2`` publish path (C4).
+
+Downloads or resolves ``rules.xlsx``, evaluates CONTRACT_V2 publish policy,
+and returns a snapshot for runtime readers (access rules, schedules, …).
+
+``RULES_CONTRACT_STRICT`` / ``RULES_CONTRACT_SHADOW`` are interpreted only
+here — bridge and snapshot layout stay unchanged.
+"""
+
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from integrations.dropbox_watcher import download_file, upload_file
+from integrations.dropbox_watcher import download_file
+
+from core.rules_v2.contract_publish import (
+    ContractPublishRejected,
+    ContractValidationMode,
+    SnapshotPublishDecision,
+    evaluate_snapshot_publish,
+    resolve_contract_validation_mode,
+)
+from core.rules_v2.indexes import RulesIndexes, build_indexes
+from core.rules_v2.models import RulesSnapshotV2
 
 
 @dataclass(frozen=True)
-class StateSnapshot:
+class RulesWorkbookSnapshot:
+    """Local materialization of ``rules.xlsx`` (path + freshness key).
+
+    ``rules_version`` mirrors ``RulesSnapshotV2.meta.ruleset_version`` (meta sheet
+    ``version`` key, default ``legacy``) for callers such as ``job_runner`` that
+    only use ``get_rules_snapshot()`` without loading the full snapshot.
+    """
+
     local_path: str
-    stat_key: tuple[float, int]       # (mtime, size)
+    stat_key: tuple[float, int]
     loaded_at_ts: float
-    source: str                       # dropbox path used
+    source: str
+    rules_version: str
 
 
-_CACHE_DIR = Path("/tmp/state_cache")
-_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_RULES_CACHE_DIR = Path("/tmp/rules_cache")
+_RULES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_RULES_LOCAL = _RULES_CACHE_DIR / "rules.xlsx"
 
-_CACHE_PATH = _CACHE_DIR / "state.json"
+_last_rules_sync_ts: float = 0.0
+_last_rules_wb: Optional[RulesWorkbookSnapshot] = None
 
-_last_sync_ts: float = 0.0
-_last_snap: Optional[StateSnapshot] = None
-_last_state: Optional[Dict[str, Any]] = None
+_last_v2_stat: Optional[tuple[float, int]] = None
+_last_v2_snapshot: Optional[RulesSnapshotV2] = None
+_last_v2_decision: Optional[SnapshotPublishDecision] = None
 
-
-def _rules_dropbox_path() -> str:
-    """
-    RULES_XLSX_PATH:
-      - can be '/folder' or '/folder/rules.xlsx'
-    Returns dropbox path to rules.xlsx.
-    """
-    p = (os.getenv("RULES_XLSX_PATH") or "").strip()
-    if not p:
-        raise RuntimeError("RULES_XLSX_PATH пуст — ожидаю dropbox папку или путь к rules.xlsx")
-    return p if p.lower().endswith(".xlsx") else p.rstrip("/") + "/rules.xlsx"
-
-
-def _state_dropbox_path() -> str:
-    """
-    Canonical:
-      <rules_folder>/state/state.json
-    """
-    rules = _rules_dropbox_path()
-    folder = rules[:-len("/rules.xlsx")] if rules.lower().endswith("/rules.xlsx") else rules.rsplit("/", 1)[0]
-    return folder.rstrip("/") + "/state/state.json"
+_last_indexes: Optional[RulesIndexes] = None
+_last_indexes_stat: Optional[tuple[float, int]] = None
+_last_indexes_policy: Optional[str] = None
+_last_indexes_snapshot_id: Optional[int] = None
 
 
 def _stat_key(path: Path) -> tuple[float, int]:
@@ -56,152 +67,252 @@ def _stat_key(path: Path) -> tuple[float, int]:
     return (st.st_mtime, st.st_size)
 
 
-def _load_local_json(path: Path) -> Dict[str, Any]:
+def _read_meta_ruleset_version(path: Path) -> str:
+    """Read ``meta.version`` from workbook; align defaults with ``bridge_legacy._build_meta``."""
+
     try:
-        if not path.exists():
-            return {}
-        raw = path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return {}
-        return json.loads(raw) or {}
+        import pandas as pd
+
+        df = pd.read_excel(path, sheet_name="meta", engine="openpyxl")
+        df.columns = [str(c).strip() for c in df.columns]
+        if "key" not in df.columns or "value" not in df.columns:
+            return "legacy"
+        for _, row in df.iterrows():
+            k = row.get("key")
+            if k is None or (isinstance(k, float) and pd.isna(k)):
+                continue
+            if str(k).strip() != "version":
+                continue
+            v = row.get("value")
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "legacy"
+            s = str(v).strip()
+            return s if s else "legacy"
+        return "legacy"
     except Exception:
-        return {}
+        return "legacy"
 
 
-def _save_local_json(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def _rules_version_for_workbook(path: Path, stat_key: tuple[float, int]) -> str:
+    """Prefer published snapshot meta when this workbook is already loaded under C4."""
+
+    global _last_rules_wb, _last_v2_stat, _last_v2_snapshot
+
+    try:
+        if (
+            _last_rules_wb is not None
+            and _last_v2_snapshot is not None
+            and _last_v2_stat == stat_key
+            and Path(_last_rules_wb.local_path).resolve() == path.resolve()
+        ):
+            return _last_v2_snapshot.meta.ruleset_version
+    except OSError:
+        pass
+    return _read_meta_ruleset_version(path)
 
 
-def get_state_snapshot(*, force_sync: bool = False) -> StateSnapshot:
+def _make_workbook_snapshot(
+    *,
+    local_path: str,
+    stat_key: tuple[float, int],
+    loaded_at_ts: float,
+    source: str,
+) -> RulesWorkbookSnapshot:
+    p = Path(local_path)
+    return RulesWorkbookSnapshot(
+        local_path=local_path,
+        stat_key=stat_key,
+        loaded_at_ts=loaded_at_ts,
+        source=source,
+        rules_version=_rules_version_for_workbook(p, stat_key),
+    )
+
+
+def _rules_dropbox_path() -> str:
     """
-    Fetches /state/state.json from Dropbox into /tmp/state_cache/state.json.
-    Fail-safe:
-      - if download fails but we have cached local -> return cached snapshot
-      - else raise
+    ``RULES_XLSX_PATH``:
+      - can be '/folder' or '/folder/rules.xlsx'
+    Returns Dropbox path to ``rules.xlsx``.
     """
-    global _last_sync_ts, _last_snap, _last_state
+    p = (os.getenv("RULES_XLSX_PATH") or "").strip()
+    if not p:
+        raise RuntimeError("RULES_XLSX_PATH пуст — ожидаю dropbox папку или путь к rules.xlsx")
+    return p if p.lower().endswith(".xlsx") else p.rstrip("/") + "/rules.xlsx"
 
-    ttl = float(os.getenv("STATE_SYNC_MIN_INTERVAL_SEC", "30"))
+
+def _try_local_workbook_path() -> Path | None:
+    raw = (os.getenv("RULES_XLSX_PATH") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser().resolve()
+    if p.is_file() and p.suffix.lower() == ".xlsx":
+        return p
+    return None
+
+
+def invalidate_rules_v2_cache() -> None:
+    """Drop cached workbook metadata, published snapshot, and ``RulesIndexes`` (C4)."""
+
+    global _last_rules_sync_ts, _last_rules_wb
+    global _last_v2_stat, _last_v2_snapshot, _last_v2_decision
+    global _last_indexes, _last_indexes_stat, _last_indexes_policy, _last_indexes_snapshot_id
+
+    _last_rules_sync_ts = 0.0
+    _last_rules_wb = None
+    _last_v2_stat = None
+    _last_v2_snapshot = None
+    _last_v2_decision = None
+    _last_indexes = None
+    _last_indexes_stat = None
+    _last_indexes_policy = None
+    _last_indexes_snapshot_id = None
+
+
+def get_rules_snapshot(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
+    """Ensure ``rules.xlsx`` exists locally and return its path + ``stat_key``."""
+
+    global _last_rules_sync_ts, _last_rules_wb
+
+    ttl = float(os.getenv("RULES_SYNC_MIN_INTERVAL_SEC", "30"))
     now = time.time()
 
-    if (not force_sync) and _last_snap is not None and _CACHE_PATH.exists() and (now - _last_sync_ts) < ttl:
+    local_direct = _try_local_workbook_path()
+    if local_direct is not None:
+        st = _stat_key(local_direct)
+        snap = _make_workbook_snapshot(
+            local_path=str(local_direct),
+            stat_key=st,
+            loaded_at_ts=now,
+            source=f"local:{local_direct}",
+        )
+        _last_rules_wb = snap
+        return snap
+
+    if (
+        (not force_sync)
+        and _last_rules_wb is not None
+        and Path(_last_rules_wb.local_path).exists()
+        and (now - _last_rules_sync_ts) < ttl
+    ):
         try:
-            if _stat_key(_CACHE_PATH) == _last_snap.stat_key:
-                return _last_snap
-        except Exception:
+            if _stat_key(Path(_last_rules_wb.local_path)) == _last_rules_wb.stat_key:
+                return _last_rules_wb
+        except OSError:
             pass
 
-    src = _state_dropbox_path()
+    db_path = _rules_dropbox_path()
+    ok = download_file(db_path, str(_RULES_LOCAL))
+    policy = resolve_contract_validation_mode()
 
-    # download (if missing in dropbox -> we will bootstrap later on write)
-    ok = download_file(src, str(_CACHE_PATH))
-    if ok:
-        _last_sync_ts = now
-        key = _stat_key(_CACHE_PATH)
-        _last_snap = StateSnapshot(local_path=str(_CACHE_PATH), stat_key=key, loaded_at_ts=now, source=src)
-        _last_state = _load_local_json(_CACHE_PATH)
-        return _last_snap
+    if ok and _RULES_LOCAL.exists():
+        _last_rules_sync_ts = now
+        key = _stat_key(_RULES_LOCAL)
+        snap = _make_workbook_snapshot(
+            local_path=str(_RULES_LOCAL),
+            stat_key=key,
+            loaded_at_ts=now,
+            source=db_path,
+        )
+        _last_rules_wb = snap
+        return snap
 
-    # fail-safe fallback: if we already have local cached state
-    if _last_snap is not None and Path(_last_snap.local_path).exists():
-        return _last_snap
-    if _CACHE_PATH.exists():
-        key = _stat_key(_CACHE_PATH)
-        _last_snap = StateSnapshot(local_path=str(_CACHE_PATH), stat_key=key, loaded_at_ts=now, source=src)
-        _last_state = _load_local_json(_CACHE_PATH)
-        return _last_snap
+    # fail-soft: reuse last local workbook if present (legacy-style availability).
+    if _last_rules_wb is not None and Path(_last_rules_wb.local_path).exists():
+        if policy == ContractValidationMode.STRICT:
+            raise RuntimeError(f"rules.xlsx download failed (strict; no stale reuse): {db_path}")
+        return _last_rules_wb
 
-    raise RuntimeError(f"state.json not ready (download failed): {src}")
+    if _RULES_LOCAL.exists():
+        _last_rules_sync_ts = now
+        key = _stat_key(_RULES_LOCAL)
+        snap = _make_workbook_snapshot(
+            local_path=str(_RULES_LOCAL),
+            stat_key=key,
+            loaded_at_ts=now,
+            source=db_path,
+        )
+        _last_rules_wb = snap
+        return snap
 
-
-def load_state(*, force_sync: bool = False) -> Dict[str, Any]:
-    global _last_state
-    get_state_snapshot(force_sync=force_sync)
-    if _last_state is None:
-        _last_state = _load_local_json(_CACHE_PATH)
-    return _last_state
-
-
-def _ensure_shape(st: Dict[str, Any]) -> Dict[str, Any]:
-    st = st or {}
-    st.setdefault("meta", {})
-    st.setdefault("jobs", {})
-    return st
-
-
-def get_job_state(job_type: str, *, force_sync: bool = False) -> Dict[str, Any]:
-    st = _ensure_shape(load_state(force_sync=force_sync))
-    return dict(st.get("jobs", {}).get(job_type, {}) or {})
+    raise RuntimeError(f"rules.xlsx not available: download failed and no cache at {db_path}")
 
 
-def get_job_value(job_type: str, key: str, default: Any = None, *, force_sync: bool = False) -> Any:
-    js = get_job_state(job_type, force_sync=force_sync)
-    return js.get(key, default)
+def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+    """Load ``RulesSnapshotV2`` through C4 publish policy."""
+
+    global _last_v2_stat, _last_v2_snapshot, _last_v2_decision
+
+    wb = get_rules_snapshot(force_sync=force_sync)
+    path = Path(wb.local_path)
+    st = _stat_key(path)
+
+    policy = resolve_contract_validation_mode()
+
+    if (
+        not force_sync
+        and _last_v2_snapshot is not None
+        and _last_v2_stat == st
+        and _last_v2_decision is not None
+        and _last_v2_decision.publish_allowed
+        and _last_v2_decision.policy_mode == policy.value
+    ):
+        return _last_v2_snapshot
+
+    decision = evaluate_snapshot_publish(path, policy_mode=policy)
+
+    if not decision.publish_allowed:
+        raise ContractPublishRejected(decision)
+
+    assert decision.snapshot is not None
+    _last_v2_stat = st
+    _last_v2_snapshot = decision.snapshot
+    _last_v2_decision = decision
+    return decision.snapshot
 
 
-def update_job_state(
-    job_type: str,
-    patch: Dict[str, Any],
-    *,
-    actor: Optional[Dict[str, Any]] = None,
-    force_sync: bool = True,
-) -> Dict[str, Any]:
+def get_indexes_v2(*, force_sync: bool = False) -> RulesIndexes:
+    """Return ``RulesIndexes`` for the published snapshot (cached across calls).
+
+    Reuses the same ``RulesIndexes`` instance when the workbook ``stat_key``,
+    contract policy mode, and cached snapshot match — without calling
+    ``build_indexes`` again. ``force_sync=True`` forces a fresh snapshot then
+    rebuilds indexes.
     """
-    Atomic update:
-      - download latest (force_sync)
-      - apply patch
-      - upload overwrite
-      - update local cache
-    If state.json doesn't exist in dropbox yet, we'll create it.
-    """
-    global _last_sync_ts, _last_snap, _last_state
 
-    # always pull fresh before write (avoid lost updates)
-    src = _state_dropbox_path()
+    global _last_indexes, _last_indexes_stat, _last_indexes_policy, _last_indexes_snapshot_id
 
-    st = {}
-    ok = download_file(src, str(_CACHE_PATH))
-    if ok:
-        st = _load_local_json(_CACHE_PATH)
+    policy = resolve_contract_validation_mode()
+    policy_s = policy.value
 
-    st = _ensure_shape(st)
+    snapshot = get_snapshot_v2(force_sync=force_sync)
+    snap_id = id(snapshot)
 
-    jobs = st.setdefault("jobs", {})
-    cur = dict(jobs.get(job_type, {}) or {})
-    cur.update(patch or {})
-    jobs[job_type] = cur
+    if (
+        not force_sync
+        and _last_indexes is not None
+        and _last_indexes_stat is not None
+        and _last_indexes_snapshot_id is not None
+        and _last_indexes_policy == policy_s
+        and _last_v2_stat is not None
+        and _last_indexes_stat == _last_v2_stat
+        and _last_indexes_snapshot_id == snap_id
+    ):
+        return _last_indexes
 
-    meta = st.setdefault("meta", {})
-    meta["last_update_ts"] = int(time.time())
-    if actor:
-        meta["last_update_by"] = actor
-
-    tmp = _CACHE_DIR / f"state_tmp_{int(time.time() * 1000)}.json"
-    _save_local_json(tmp, st)
-
-    up_ok = upload_file(str(tmp), src)
-    try:
-        tmp.unlink(missing_ok=True)
-    except Exception:
-        pass
-
-    if not up_ok:
-        raise RuntimeError(f"Failed to upload state.json to Dropbox: {src}")
-
-    # refresh local cache from what we wrote
-    _save_local_json(_CACHE_PATH, st)
-    _last_sync_ts = time.time()
-    _last_snap = StateSnapshot(local_path=str(_CACHE_PATH), stat_key=_stat_key(_CACHE_PATH), loaded_at_ts=_last_sync_ts, source=src)
-    _last_state = st
-    return st
+    indexes = build_indexes(snapshot)
+    _last_indexes = indexes
+    _last_indexes_stat = _last_v2_stat
+    _last_indexes_policy = policy_s
+    _last_indexes_snapshot_id = snap_id
+    return indexes
 
 
-def set_job_value(
-    job_type: str,
-    key: str,
-    value: Any,
-    *,
-    actor: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return update_job_state(job_type, {key: value}, actor=actor, force_sync=True)
+__all__ = [
+    "RulesWorkbookSnapshot",
+    "get_rules_snapshot",
+    "get_snapshot_v2",
+    "get_indexes_v2",
+    "_rules_dropbox_path",
+    "invalidate_rules_v2_cache",
+    "ContractPublishRejected",
+]
