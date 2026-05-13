@@ -632,11 +632,28 @@ def _build_jobs(sheets: dict[str, pd.DataFrame]) -> dict[str, JobDef]:
 
 
 def _build_roles(sheets: dict[str, pd.DataFrame]) -> dict[str, RoleDef]:
-    df = sheets.get("access", pd.DataFrame(columns=["level"]))
-    levels = sorted({_safe_int(v) for v in df.get("level", pd.Series(dtype=object)).dropna().tolist() if _safe_int(v) is not None})
+    """
+    Role keys ``level_N`` must exist for every ``required_level`` referenced on ``commands``,
+    not only for levels that appear on ``access``. Otherwise ``core.access_rules`` drops those
+    commands from ``commands_map`` (no ``RoleDef`` for ``policy.min_role_key``).
+    """
+    levels: set[int] = set()
+
+    df_access = sheets.get("access", pd.DataFrame(columns=["level"]))
+    for v in df_access.get("level", pd.Series(dtype=object)).dropna().tolist():
+        lv = _safe_int(v)
+        if lv is not None:
+            levels.add(lv)
+
+    df_commands = sheets.get("commands", pd.DataFrame())
+    if not df_commands.empty and "required_level" in df_commands.columns:
+        for v in df_commands["required_level"].dropna().tolist():
+            lv = _safe_int(v)
+            if lv is not None:
+                levels.add(lv)
 
     roles: dict[str, RoleDef] = {}
-    for level in levels:
+    for level in sorted(levels):
         role_key = f"level_{level}"
         roles[role_key] = RoleDef(
             role_key=role_key,
