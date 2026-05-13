@@ -48,5 +48,6 @@ ALLOWED_JOB_PARAMS: dict[str, dict[str, str]] = {
         "intraday_interval_minutes": "int",
         "final_daily_time": "time",
         "include_empty_sections": "bool",
+        "hide_inactive_rows": "bool",
     },
 }

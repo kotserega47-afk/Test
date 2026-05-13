@@ -31,6 +31,7 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
         "final_daily_time": "str",
         "max_comment_length": "int",
         "send_enabled": "bool",
+        "hide_inactive_rows": "bool",
     },
     "wallet": {
         "window_minutes": "int",
