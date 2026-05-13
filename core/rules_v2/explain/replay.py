@@ -1,4 +1,4 @@
-"""C11.2 — explicit read-only replay for resolver paths (no accessors / no I/O).
+"""C11.2+ — explicit read-only replay for selected resolver paths (no accessors / no I/O).
 
 **Architecture (non-runtime)**
 
@@ -30,8 +30,10 @@ from __future__ import annotations
 from typing import Any
 
 from core.rules_v2.explain.types import (
+    OP_GET_JOB_PARAM,
     OP_RESOLVE_LIMIT_RULE,
     OP_RESOLVE_PARTNER,
+    OP_RESOLVE_THRESHOLD_RULE,
     PHASE_CANDIDATE_BUILT,
     PHASE_FALLBACK,
     PHASE_INDEX_LOOKUP,
@@ -40,7 +42,7 @@ from core.rules_v2.explain.types import (
     ResolutionTraceStep,
 )
 from core.rules_v2.indexes import RulesIndexes
-from core.rules_v2.models import LimitRule, PartnerDef, RulesSnapshotV2
+from core.rules_v2.models import LimitRule, PartnerDef, RulesSnapshotV2, ThresholdRule
 from core.rules_v2.normalizers import extract_partner_code, normalize_key
 
 
@@ -376,6 +378,196 @@ def limit_rule_from_explain_result(
         if s.phase == PHASE_RESULT and s.outcome == "hit" and s.result_ref:
             rk = str(s.result_ref)
             for r in snapshot.limit_rules:
+                if r.rule_key == rk and r.enabled:
+                    return r
+    return None
+
+
+def explain_resolve_threshold_rule(
+    snapshot: RulesSnapshotV2,
+    indexes: RulesIndexes,
+    job_key: str,
+    metric_key: str,
+    *,
+    partner_key: str | None = None,
+    group_key: str | None = None,
+) -> tuple[ResolutionTraceStep, ...]:
+    """Replay ``BaseRulesAccessor.resolve_threshold_rule`` as ordered steps."""
+
+    _ = snapshot  # Call-site symmetry with other explain_* APIs; lookup uses ``indexes`` only.
+    steps: list[ResolutionTraceStep] = []
+
+    def _finish(outcome: str, ref: str | None) -> tuple[ResolutionTraceStep, ...]:
+        steps.append(
+            ResolutionTraceStep(
+                op=OP_RESOLVE_THRESHOLD_RULE,
+                phase=PHASE_RESULT,
+                outcome=outcome,  # type: ignore[arg-type]
+                inputs={},
+                candidates=(),
+                index_key=None,
+                result_ref=ref,
+            )
+        )
+        return tuple(steps)
+
+    job_k = _norm_str(job_key)
+    metric_k = _norm_str(metric_key)
+
+    steps.append(
+        ResolutionTraceStep(
+            op=OP_RESOLVE_THRESHOLD_RULE,
+            phase=PHASE_INPUT_NORMALIZED,
+            outcome="hit",
+            inputs={
+                "job_key": job_k,
+                "metric_key": metric_k,
+                "partner_key": partner_key or "",
+                "group_key": group_key or "",
+            },
+            candidates=tuple(
+                {"scope_type": st, "scope_key": sk}
+                for st, sk in _build_scope_candidates(partner_key=partner_key, group_key=group_key)
+            ),
+            index_key=None,
+            result_ref=None,
+        )
+    )
+
+    for scope_type, scope_key in _build_scope_candidates(partner_key=partner_key, group_key=group_key):
+        key = (job_k, scope_type, scope_key, metric_k)
+        rule = indexes.threshold_rules_index.get(key)
+        if rule and rule.enabled:
+            steps.append(
+                ResolutionTraceStep(
+                    op=OP_RESOLVE_THRESHOLD_RULE,
+                    phase=PHASE_INDEX_LOOKUP,
+                    outcome="hit",
+                    inputs={"rule_key": rule.rule_key},
+                    candidates=({"scope_type": scope_type, "scope_key": scope_key},),
+                    index_key=tuple(key),
+                    result_ref=None,
+                )
+            )
+            return _finish("hit", rule.rule_key)
+        steps.append(
+            ResolutionTraceStep(
+                op=OP_RESOLVE_THRESHOLD_RULE,
+                phase=PHASE_INDEX_LOOKUP,
+                outcome="miss",
+                inputs={
+                    "reason": "no_rule_or_disabled" if rule and not rule.enabled else "no_rule",
+                },
+                candidates=({"scope_type": scope_type, "scope_key": scope_key},),
+                index_key=tuple(key),
+                result_ref=None,
+            )
+        )
+
+    return _finish("miss", None)
+
+
+def explain_get_job_param(
+    snapshot: RulesSnapshotV2,
+    indexes: RulesIndexes,
+    job_key: str,
+    param_key: str,
+    *,
+    partner_key: str | None = None,
+    group_key: str | None = None,
+    default: Any = None,
+) -> tuple[ResolutionTraceStep, ...]:
+    """Replay ``BaseRulesAccessor.get_job_param``.
+
+    The trace does not embed ``default`` or resolved values in ``inputs`` (JSON-safe
+    contract). The final ``PHASE_RESULT`` records only ``value_source``:
+    ``snapshot`` on hit, ``default`` when the accessor would return ``default``
+    after exhausting scopes.
+    """
+
+    _ = snapshot  # Call-site symmetry with other explain_* APIs; lookup uses ``indexes`` only.
+    steps: list[ResolutionTraceStep] = []
+
+    def _finish_result(outcome: str, value_source: str) -> tuple[ResolutionTraceStep, ...]:
+        steps.append(
+            ResolutionTraceStep(
+                op=OP_GET_JOB_PARAM,
+                phase=PHASE_RESULT,
+                outcome=outcome,  # type: ignore[arg-type]
+                inputs={"value_source": value_source},
+                candidates=(),
+                index_key=None,
+                result_ref=None,
+            )
+        )
+        return tuple(steps)
+
+    job_k = _norm_str(job_key)
+    param_k = _norm_str(param_key)
+
+    steps.append(
+        ResolutionTraceStep(
+            op=OP_GET_JOB_PARAM,
+            phase=PHASE_INPUT_NORMALIZED,
+            outcome="hit",
+            inputs={
+                "job_key": job_k,
+                "param_key": param_k,
+                "partner_key": partner_key or "",
+                "group_key": group_key or "",
+            },
+            candidates=tuple(
+                {"scope_type": st, "scope_key": sk}
+                for st, sk in _build_scope_candidates(partner_key=partner_key, group_key=group_key)
+            ),
+            index_key=None,
+            result_ref=None,
+        )
+    )
+
+    for scope_type, scope_key in _build_scope_candidates(partner_key=partner_key, group_key=group_key):
+        key = (job_k, scope_type, scope_key, param_k)
+        param = indexes.job_params_index.get(key)
+        if param and param.enabled:
+            steps.append(
+                ResolutionTraceStep(
+                    op=OP_GET_JOB_PARAM,
+                    phase=PHASE_INDEX_LOOKUP,
+                    outcome="hit",
+                    inputs={},
+                    candidates=({"scope_type": scope_type, "scope_key": scope_key},),
+                    index_key=tuple(key),
+                    result_ref=None,
+                )
+            )
+            return _finish_result("hit", "snapshot")
+        steps.append(
+            ResolutionTraceStep(
+                op=OP_GET_JOB_PARAM,
+                phase=PHASE_INDEX_LOOKUP,
+                outcome="miss",
+                inputs={
+                    "reason": "no_param_or_disabled" if param and not param.enabled else "no_param",
+                },
+                candidates=({"scope_type": scope_type, "scope_key": scope_key},),
+                index_key=tuple(key),
+                result_ref=None,
+            )
+        )
+
+    return _finish_result("miss", "default")
+
+
+def threshold_rule_from_explain_result(
+    snapshot: RulesSnapshotV2,
+    steps: tuple[ResolutionTraceStep, ...],
+) -> ThresholdRule | None:
+    """Derive accessor-equivalent threshold rule from the final ``PHASE_RESULT`` step."""
+
+    for s in reversed(steps):
+        if s.phase == PHASE_RESULT and s.outcome == "hit" and s.result_ref:
+            rk = str(s.result_ref)
+            for r in snapshot.threshold_rules:
                 if r.rule_key == rk and r.enabled:
                     return r
     return None

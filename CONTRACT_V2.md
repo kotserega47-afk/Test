@@ -814,16 +814,20 @@ production-resolve **не меняется** C11; только контракт�
 ### 23.1 C11.1 — trace contracts
 
 - Стабильные имена операций / фаз и структура шага трассировки (например
-  ``ResolutionTraceStep`` в ``core.rules_v2.explain.types``).
+  ``ResolutionTraceStep`` в ``core.rules_v2.explain.types``): значения в
+  ``inputs`` ограничены JSON-примитивами (``JsonPrimitive``); сериализация для
+  тестов — ``trace_step_to_jsonable`` / ``trace_steps_to_jsonable``.
 - Назначение: единый формат для тестов, будущей диагностики и документации
   без привязки к provider / audit / analyzers.
 
 ### 23.2 C11.2 — explicit replay API
 
-- Явный **read-only replay** выбранных путей разрешения (например partner /
-  limit rule), выровненный по порядку и ключам с ``BaseRulesAccessor``.
-- **Explicit opt-in:** replay вызывается только там, где нужен пошаговый trace;
-  это **не** автоматическая инструментизация runtime.
+- Явный **read-only replay** выбранных путей разрешения (в т.ч. partner, limit,
+  threshold, job param — см. §23.5), выровненный по порядку и ключам с
+  ``BaseRulesAccessor`` / ``RulesIndexes``.
+- **Explicit opt-in:** replay вызывается только явным импортом и вызовом
+  ``explain_*``; production resolve **не** оборачивается автоматически. Это
+  **не** runtime-инструментизация.
 
 ### 23.3 Runtime instrumentation
 
@@ -840,6 +844,16 @@ production-resolve **не меняется** C11; только контракт�
   это допустимо, т.к. replay вне production hot path и не меняет результат
   resolve — только воспроизводит его как шаги.
 
+### 23.5 C11.3 — threshold и job_param replay
+
+- Явный replay для ``resolve_threshold_rule`` и ``get_job_param`` (только
+  индексы; ключи как в ``RulesIndexes``; финальный шаг ``PHASE_RESULT``
+  обязателен).
+- Для ``get_job_param`` в ``inputs`` шагов **нет** произвольных значений
+  параметра и **нет** сериализации ``default``; на финальном ``PHASE_RESULT``
+  только ``value_source`` (**snapshot** | **default**), см. реализацию
+  ``explain_get_job_param``.
+
 ---
 
 ## Document history
@@ -850,3 +864,5 @@ production-resolve **не меняется** C11; только контракт�
 | V2 design | 2026-05-11 | Pass 3 (architecture): §17 Snapshot lifecycle, §18 Error codes, §19 Compatibility matrix, §20 Performance guarantees, §21 Source of truth, §22 Stage roadmap; cross-refs §2, §7, §16. |
 | V2 design | 2026-05-12 | Stage 1 / C2: §18 расширен тремя кодами для workbook schema validation — `RULE_MISSING_SHEET`, `RULE_MISSING_COLUMN`, `RULE_DEPRECATED_COLUMN`. Семантика runtime не меняется; коды используются исключительно валидатором workbook (lib-only в C2). |
 | V2 design | 2026-05-12 | C11: добавлен §23 Explainability — C11.1 trace contracts, C11.2 explicit replay API, отсутствие обязательной runtime-инструментизации; политика лёгкого импорта пакета explain vs допустимые транзитивные зависимости replay. |
+| V2 design | 2026-05-13 | C11.3: §23.5 — replay для ``resolve_threshold_rule`` и ``get_job_param``; трассировка job_param без произвольных значений в ``inputs``. |
+| V2 design | 2026-05-13 | C11 stabilization: §23.2/§23.5 уточнены под текущий replay; explicit opt-in / JSON-safe trace / no runtime instrumentation. |

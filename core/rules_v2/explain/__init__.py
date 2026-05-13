@@ -1,11 +1,12 @@
-"""C11 explainability — trace contracts (C11.1) and explicit replay (C11.2).
+"""C11 explainability — trace contracts (C11.1) and explicit replay (C11.2+).
 
 **C11.1 — trace contracts** live in ``types``: ``ResolutionTraceStep``, op/phase
 constants, JSON helpers. No provider coupling.
 
-**C11.2 — explicit replay** lives in ``replay``: optional functions that mirror
-``BaseRulesAccessor`` resolution as ordered steps. They are exposed from this
-package but **loaded lazily** (see ``__getattr__`` below).
+**Replay (C11.2 / C11.3)** lives in ``replay``: optional functions that mirror
+selected ``BaseRulesAccessor`` paths (partner, limit, threshold, job param) as
+ordered steps. Exported replay symbols are **loaded lazily** (see ``__getattr__``
+below); see ``CONTRACT_V2.md`` §23.
 
 **Invariant — package import surface**
 
@@ -50,10 +51,13 @@ from core.rules_v2.explain.types import (
 )
 
 __all__ = [
+    "explain_get_job_param",
     "explain_resolve_limit_rule",
     "explain_resolve_partner",
+    "explain_resolve_threshold_rule",
     "limit_rule_from_explain_result",
     "partner_def_from_explain_result",
+    "threshold_rule_from_explain_result",
     "OP_GET_EXCLUSION",
     "OP_GET_EXCLUSIONS",
     "OP_GET_GROUP_MEMBERSHIPS",
@@ -80,10 +84,13 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name in (
+        "explain_get_job_param",
         "explain_resolve_limit_rule",
         "explain_resolve_partner",
+        "explain_resolve_threshold_rule",
         "limit_rule_from_explain_result",
         "partner_def_from_explain_result",
+        "threshold_rule_from_explain_result",
     ):
         from core.rules_v2.explain import replay as _replay
 

@@ -1,7 +1,7 @@
 """C11.1 — resolution trace contract (explain layer).
 
 Part of **C11 explainability** (see ``CONTRACT_V2.md`` §23): this module defines
-trace **contracts** only; **C11.2 replay** lives in ``replay`` and is opt-in.
+trace **contracts** only; **replay** (C11.2+) lives in ``replay`` and is opt-in.
 
 Explain contracts are **read-only** descriptions of resolution: they do not
 mutate ``RulesSnapshotV2``, ``RulesIndexes``, or any runtime/provider state.
@@ -75,7 +75,7 @@ class ResolutionTraceStep:
     op: ResolutionOpName
     phase: ResolutionPhaseName
     outcome: ResolutionOutcome
-    # TODO(C11.2): optional deep immutability / canonicalization for nested maps
+    # TODO: optional deep immutability / canonicalization for nested maps
     # (MappingProxyType, sorted candidate keys) if drift-safe replay requires it.
     inputs: Mapping[str, JsonPrimitive]
     candidates: tuple[Mapping[str, str | None], ...]
