@@ -1,0 +1,4 @@
+❗ Обнаружены отклонения:
+Alert Partner X
+Threshold breach on conversion
+Gate delayed
