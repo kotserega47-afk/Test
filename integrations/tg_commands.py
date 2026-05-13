@@ -23,6 +23,7 @@ from integrations.downloader import run_download
 from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
 from core.state_store import state_update
+from core.scheduler_clocks_control import request_scheduler_clocks_reset
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
 from core.rules_v2.rules_validate_audit import try_append_manual_validate_audit_from_payload
 
@@ -215,6 +216,7 @@ async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     RULES.invalidate()
     try:
         snap = RULES.get_snapshot(force_sync=True)
+        request_scheduler_clocks_reset(reason="reload_rules")
         await update.message.reply_text(
             f"♻️ rules snapshot перечитан.\n"
             f"source: {snap.source}"

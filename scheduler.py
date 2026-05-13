@@ -15,6 +15,7 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
 from core.schedules import load_schedules, Schedule
+from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
 from core.job_runner import request_job, Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
@@ -168,6 +169,8 @@ def schedule_loop() -> None:
     log.info("🕒 schedule loop started (rules.xlsx:schedules + job_params gating)")
 
     while True:
+        _apply_scheduler_clock_reset_if_requested(next_every, next_cron, logger=log)
+
         try:
             schedules = load_schedules(force_sync=False)
         except Exception as e:
