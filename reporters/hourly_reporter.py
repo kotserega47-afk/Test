@@ -24,6 +24,30 @@ def _apply_style(s: str, style: str) -> str:
     return s
 
 
+_HOURLY_SECTION_LAYOUT_KEYS: dict[str, str] = {
+    "payouts.title": "payouts",
+    "payouts.items": "payouts",
+    "payins.title": "payins",
+    "payins.items": "payins",
+}
+
+
+def _hourly_section_id_for_layout_key(key: str) -> str | None:
+    if not key:
+        return None
+    return _HOURLY_SECTION_LAYOUT_KEYS.get(key.strip())
+
+
+def _hourly_layout_item_will_emit(*, val: Any, title: str, style: str) -> bool:
+    if style == "hr":
+        return True
+    if val is None or val == "":
+        return bool(title and style in ("bold", "text"))
+    if isinstance(val, list):
+        return bool(title) or bool(val)
+    return True
+
+
 def _render_by_snapshot_layout(*, view: str, render_model: Dict[str, Any]) -> str:
     snapshot = get_snapshot_v2(force_sync=False)
 
@@ -40,6 +64,7 @@ def _render_by_snapshot_layout(*, view: str, render_model: Dict[str, Any]) -> st
         return ""
 
     out: List[str] = []
+    hourly_section_lead_emitted: set[str] = set()
 
     for item in layout_items:
         key = str(item.source_key or "").strip()
@@ -61,6 +86,19 @@ def _render_by_snapshot_layout(*, view: str, render_model: Dict[str, Any]) -> st
 
         val = render_model.get(key, None) if key else None
 
+        def _hourly_prepend_section_blank_if_needed() -> None:
+            if view != "hourly":
+                return
+            section = _hourly_section_id_for_layout_key(key)
+            if not section or section in hourly_section_lead_emitted:
+                return
+            if not _hourly_layout_item_will_emit(val=val, title=title, style=style):
+                return
+            if not out or out[-1] == "":
+                return
+            out.append("")
+            hourly_section_lead_emitted.add(section)
+
         if style == "hr":
             if val is None or str(val).strip() == "":
                 out.append("_______________________")
@@ -70,16 +108,19 @@ def _render_by_snapshot_layout(*, view: str, render_model: Dict[str, Any]) -> st
 
         if val is None or val == "":
             if title and style in ("bold", "text"):
+                _hourly_prepend_section_blank_if_needed()
                 out.append(_apply_style(title, style))
             continue
 
         if isinstance(val, list):
+            _hourly_prepend_section_blank_if_needed()
             if title:
                 out.append(_apply_style(title, style))
             for row in val:
                 out.append(str(row).rstrip())
             continue
 
+        _hourly_prepend_section_blank_if_needed()
         line = f"{title} {val}".strip() if title else str(val).strip()
         out.append(_apply_style(line, style))
 
