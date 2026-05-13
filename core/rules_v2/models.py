@@ -49,6 +49,8 @@ class PartnerGroupMember:
     job_key: str
     default_method_key: str | None = None
     enabled: bool = True
+    is_primary: bool = False
+    group_priority: int | None = None
 
 
 @dataclass(slots=True)

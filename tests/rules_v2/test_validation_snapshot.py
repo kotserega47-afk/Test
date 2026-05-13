@@ -656,6 +656,7 @@ def test_primary_group_ambiguity_emits_warn():
     assert nd[0].details["partner_key"] == "p1"
     assert nd[0].details["job_key"] == "wallet"
     assert sorted(nd[0].details["group_keys"]) == ["group_a", "group_b"]
+    assert nd[0].details.get("disambiguation") == "no_explicit_metadata"
 
 
 def test_single_membership_is_deterministic():

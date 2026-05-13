@@ -19,6 +19,44 @@ from core.rules_v2.models import (
 from core.rules_v2.normalizers import extract_partner_code, normalize_key
 
 
+def _order_partner_group_memberships(members: list[PartnerGroupMember]) -> list[PartnerGroupMember]:
+    """Apply primary-group ordering (CONTRACT_V2 §8.3 Stage 1).
+
+    * No explicit metadata (no ``is_primary``, all ``group_priority`` is
+      ``None``) → preserve **snapshot insertion order** (legacy prod).
+    * Exactly one ``is_primary`` → that row first; others keep relative
+      snapshot order.
+    * Two or more ``is_primary`` → keep full snapshot order (no crash);
+      validation emits ``RULE_NON_DETERMINISTIC_ORDER``.
+    * Otherwise, if any ``group_priority`` is set → lowest numeric priority
+      first; others keep snapshot order. Ties on the minimum → full
+      snapshot order; validation warns.
+    """
+
+    if len(members) <= 1:
+        return list(members)
+
+    primaries = [m for m in members if m.is_primary]
+    if len(primaries) >= 2:
+        return list(members)
+
+    if len(primaries) == 1:
+        p = primaries[0]
+        return [p] + [m for m in members if m is not p]
+
+    with_pri = [m for m in members if m.group_priority is not None]
+    if not with_pri:
+        return list(members)
+
+    min_p = min(m.group_priority for m in with_pri)
+    tied = [m for m in members if m.group_priority == min_p]
+    if len(tied) >= 2:
+        return list(members)
+
+    w = tied[0]
+    return [w] + [m for m in members if m is not w]
+
+
 @dataclass(slots=True)
 class BaseRulesAccessor:
     snapshot: RulesSnapshotV2
@@ -138,6 +176,19 @@ class BaseRulesAccessor:
         return result
 
     def get_group_memberships(self, job_key: str, partner_key: str) -> list[PartnerGroupMember]:
+        """Enabled ``PartnerGroupMember`` rows for ``(job_key, partner_key)``.
+
+        **Ordering (CONTRACT_V2 §8.3):** if no explicit primary metadata is
+        provided (no ``is_primary=True``, all ``group_priority is None``),
+        the returned list matches **snapshot insertion order** (legacy prod
+        Excel row order). When ``is_primary`` / ``group_priority`` disambiguate,
+        the winning membership is moved first without an automatic stable sort
+        of unrelated rows.
+
+        ``get_primary_group`` is always ``get_group_memberships(...)[0]`` when
+        non-empty (same semantics as wallet code paths that use
+        ``memberships[0]``).
+        """
         job_key = self._norm_str(job_key)
         partner_key = self._norm_str(partner_key)
 
@@ -159,9 +210,10 @@ class BaseRulesAccessor:
                 continue
             result.append(member)
 
-        return result
+        return _order_partner_group_memberships(result)
 
     def get_primary_group(self, job_key: str, partner_key: str) -> PartnerGroupMember | None:
+        """Primary membership: first entry from :meth:`get_group_memberships`."""
         members = self.get_group_memberships(job_key, partner_key)
         return members[0] if members else None
 

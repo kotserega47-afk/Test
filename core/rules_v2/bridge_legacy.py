@@ -171,6 +171,28 @@ def _safe_int(value: Any) -> int | None:
     return int(float(s))
 
 
+def _parse_bool_flag(value: Any) -> bool:
+    """Parse optional Excel flags (e.g. ``is_primary``): empty/NaN → ``False``."""
+
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    s = str(value).strip().lower()
+    if not s:
+        return False
+    if s in {"1", "true", "yes", "y", "да", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off", "нет"}:
+        return False
+    try:
+        return float(s) != 0.0
+    except ValueError:
+        return False
+
+
 def _parse_analyzers_cell(value: Any) -> list[str]:
     s = _as_str(value)
     if not s:
@@ -831,6 +853,15 @@ def _build_partner_group_members(
         partner_key = build_partner_key(partner_name)
         default_method_key = normalize_key(default_method) if default_method else None
 
+        is_primary = (
+            _parse_bool_flag(row.get("is_primary"))
+            if "is_primary" in df.columns
+            else False
+        )
+        group_priority: int | None = None
+        if "group_priority" in df.columns:
+            group_priority = _safe_int(row.get("group_priority"))
+
         if partner_key not in partners:
             continue
 
@@ -842,6 +873,8 @@ def _build_partner_group_members(
                     job_key=job_key,
                     default_method_key=default_method_key,
                     enabled=enabled,
+                    is_primary=is_primary,
+                    group_priority=group_priority,
                 )
             )
 

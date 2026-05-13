@@ -29,9 +29,11 @@ What it detects (see CONTRACT_V2 §18 for codes):
    * ``RULE_OVERLAPPING_EXCLUSION``
 4. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
    * ``RULE_NON_DETERMINISTIC_ORDER`` — multiple memberships per
-     (job, partner) without explicit priority; partner_code mapped to
-     more than one partner_key; multiple parent_group_item refs from
-     payout_method members pointing to non-existent items, etc.
+     (job, partner) without resolvable ``is_primary`` / ``group_priority``;
+     conflicting ``is_primary``; tied minimum ``group_priority``;
+     partner_code mapped to more than one partner_key; orphan
+     ``parent_group_item`` refs from payout_method members pointing to
+     non-existent items, etc.
 
 Severity policy: by default, codes are emitted at the catalog default
 (``error`` for duplicates / orphans / overlaps; ``warn`` for
@@ -611,15 +613,44 @@ def _check_partner_code_collisions(
     return issues
 
 
+def _primary_group_disambiguation_resolved(members: list[PartnerGroupMember]) -> bool:
+    """Whether ``(job, partner)`` multi-membership is unambiguous per §8.3."""
+
+    if len(members) <= 1:
+        return True
+
+    primaries = [m for m in members if m.is_primary]
+    if len(primaries) == 1:
+        return True
+    if len(primaries) > 1:
+        return False
+
+    with_pri = [m for m in members if m.group_priority is not None]
+    if not with_pri:
+        return False
+
+    min_p = min(m.group_priority for m in with_pri)
+    winners = [m for m in with_pri if m.group_priority == min_p]
+    return len(winners) == 1
+
+
 def _check_primary_group_ambiguity(
     snapshot: RulesSnapshotV2,
 ) -> list[ValidationIssue]:
-    """Multiple memberships per ``(job_key, partner_key)`` without priority.
+    """Multiple memberships per ``(job_key, partner_key)`` without resolution.
 
-    CONTRACT_V2 §8.3: primary group is deterministic only when
-    ``is_primary`` / ``group_priority`` is present. While those columns
-    are not in the Excel schema, we surface ambiguous cases as
-    ``RULE_NON_DETERMINISTIC_ORDER`` (warn) per §13.
+    Emits ``RULE_NON_DETERMINISTIC_ORDER`` (warn) when:
+
+    * more than one enabled membership shares ``(job_key, partner_key)``
+      and there is **no** disambiguation: no ``is_primary=True`` and all
+      ``group_priority`` are ``None`` (legacy row-order dependence);
+    * **two or more** ``is_primary=True`` on the same ``(job, partner)``;
+    * **tie** on the minimum ``group_priority`` among non-``None`` values.
+
+    Skips the issue when exactly one membership has ``is_primary=True``, or
+    when a **unique** minimum ``group_priority`` picks a single winner among
+    rows that set ``group_priority``. Runtime ordering for accessors matches
+    these rules (see ``_order_partner_group_memberships``).
     """
 
     groups: dict[tuple[str, str], list[PartnerGroupMember]] = defaultdict(list)
@@ -633,21 +664,46 @@ def _check_primary_group_ambiguity(
         k for k, v in groups.items() if len(v) > 1
     ):
         members = groups[(job_key, partner_key)]
+        if _primary_group_disambiguation_resolved(members):
+            continue
+
         group_keys = sorted({m.group_key for m in members})
+        primaries = [m for m in members if m.is_primary]
+        with_pri = [m for m in members if m.group_priority is not None]
+
+        if len(primaries) > 1:
+            kind = "multiple_is_primary"
+            msg = (
+                f"Partner '{partner_key}' has multiple memberships with "
+                f"is_primary=true for job '{job_key}': "
+                f"{sorted({m.group_key for m in primaries})}"
+            )
+        elif with_pri:
+            min_p = min(m.group_priority for m in with_pri)
+            winners = [m for m in with_pri if m.group_priority == min_p]
+            kind = "tied_group_priority"
+            msg = (
+                f"Partner '{partner_key}' has tied minimum group_priority={min_p} "
+                f"for job '{job_key}': {sorted(m.group_key for m in winners)}"
+            )
+        else:
+            kind = "no_explicit_metadata"
+            msg = (
+                f"Partner '{partner_key}' has multiple group memberships "
+                f"for job '{job_key}' without explicit priority: {group_keys}"
+            )
+
         issues.append(
             make_issue(
                 RULE_NON_DETERMINISTIC_ORDER,
-                (
-                    f"Partner '{partner_key}' has multiple group memberships "
-                    f"for job '{job_key}' without explicit priority: "
-                    f"{group_keys}"
-                ),
+                msg,
                 sheet="partner_groups",
                 field="group_name",
                 details={
                     "job_key": job_key,
                     "partner_key": partner_key,
                     "group_keys": group_keys,
+                    "disambiguation": kind,
                 },
             )
         )

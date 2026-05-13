@@ -183,6 +183,36 @@
 
 **Уникальность V2:** `(job_key, scope_type, scope_key, param_key)` — дубликат enabled → MUST FAIL.
 
+**Каталог ключей `job_params` для `job = hourly` (расширяется синхронно с реализацией и этим документом):**
+
+| `key` | `value_type` | Default при отсутствии строки / нет активного override | Назначение |
+|-------|----------------|----------------------------------------------------------|------------|
+| `hide_inactive_rows` | `bool` | `false` | Только **presentation** hourly-отчёта (см. §3.8.1). |
+
+**Scope и приоритет:** те же, что для любой строки `job_params` (колонки `job`, `scope`, `scope_value`); разрешение значения — как в runtime (`get_job_params` / snapshot), без отдельной ветки для hourly.
+
+#### 3.8.1 `hide_inactive_rows` — семантика (hourly text only)
+
+Если после разрешения `job_params` для `job = hourly` флаг **`hide_inactive_rows = true`**, текстовый hourly-рендерер **скрывает неактивные строки постфактум** (после построения DTO), сохраняя порядок конфигурации (`sort_order` / ключи layout):
+
+- **Payin:** строка конфигурации (`hourly_payins` → payin row) **не выводится**, если за выбранный период **нет** соответствующего payin-fact (по `source_key`) в DTO.
+- **Payout:** строка метода (`hourly_payout_methods`) **не выводится**, если за период **нет** fact для пары `(group_code, method_key)`.
+- **Критерий активности (текущий runtime):** `amount != 0` после слияния фактов; **на будущее:** `count > 0 OR amount != 0`, если в DTO появится поле `count`; комментарий при нулевой сумме **не** считается активностью.
+- **Заголовок payout-группы** (`hourly_payouts`): **не выводится**, если после фильтрации **не осталось** ни одной видимой строки метода в этой группе.
+
+**Явные non-effects (MUST NOT для этого флага):**
+
+- не меняет агрегацию hourly-analyzer и состав `HourlyDTO`;
+- не меняет `rules_v2` provider / accessors / indexes / семантику валидации snapshot (ключ параметра задаётся только через каталог `job_params` для `hourly`, согласованный с реализацией);
+- **не** удаляет и **не** игнорирует строки в `rules.xlsx` — влияние только на **финальный текст** hourly-отчёта;
+- не влияет на wallet report и прочие view.
+
+#### 3.8.2 Вертикальный отступ перед секциями payouts / payins (hourly text only)
+
+При сборке **текста** hourly-отчёта (layout-renderer для `view = hourly`) реализация **вставляет ровно одну пустую строку** перед **первой** реально выводимой строкой секции **payouts** (ключи layout `payouts.title` / `payouts.items`) и аналогично перед секцией **payins** (`payins.title` / `payins.items`), **если** поток вывода ещё не заканчивается пустой строкой (без двойных blank подряд).
+
+- **Порядок элементов `ui_layout` / `report_items` не меняется** — отступ только в потоке выходного текста (сопоставление ключей — §8.7).
+
 ### 3.9 `ui_layout`
 
 | | |
@@ -233,14 +263,14 @@
 |--|--|
 | **Назначение** | Принадлежность партнёра к группе по job; default method на уровне membership. |
 | **Обязательные колонки** | `id`, `enabled`, `analyzers`, `group_name`, `partner` |
-| **Опциональные** | `default_method`, `updated_at`, `comment` |
+| **Опциональные** | `default_method`, `updated_at`, `comment`, `group_priority`, `is_primary` (§8.3) |
 | **Deprecated / ignored** | — |
 | **Пустые строки** | Без `group_name` или `partner` — skip/MUST FAIL. |
 | **`enabled`** | `0` — membership не активен. |
 
-**V2 расширение (рекомендуется в данных):** колонки `group_priority` / `is_primary` (или одно из) — для детерминированного primary group (§8). Пока колонок нет — **legacy** порядок строк + WARN (см. §13).
+**V2 расширение (рекомендуется в данных):** колонки `group_priority` / `is_primary` (или одно из) — для детерминированного primary group (§8). Пока колонок нет или они пустые — **legacy** порядок строк + WARN (см. §13).
 
----
+**Инвариант legacy (runtime):** *If no explicit primary metadata is provided, membership ordering must remain identical to snapshot insertion order* — порядок элементов, который видят `get_group_memberships` и «primary = первый элемент», совпадает с порядком списка `partner_group_members` в `RulesSnapshotV2` после bridge (в prod сегодня это порядок строк Excel). Автоматический stable sort без явных колонок **не допускается** — иначе меняется primary group без явного признака в данных. Регрессии: ``tests/rules_v2/test_membership_order_legacy.py``.
 
 ## 4. Entity identity contract
 
@@ -438,6 +468,8 @@
 
 **До появления полей в Excel — legacy:** первая membership в порядке строк snapshot + WARN (**зависимость от порядка строк — deprecated**, §13).
 
+**Инвариант (нормативно для кода):** *If no explicit primary metadata is provided, membership ordering must remain identical to snapshot insertion order.* Регрессионные тесты фиксируют, что при двух группах на одного партнёра порядок `[A, B]` в snapshot даёт `[A, B]` у accessor, а перестановка строк на `[B, A]` даёт `[B, A]`; в обоих случаях валидация по-прежнему эмитит `RULE_NON_DETERMINISTIC_ORDER` до миграции на явные поля (см. ``tests/rules_v2/test_membership_order_legacy.py``).
+
 ### 8.4 Exclusion overlap behavior
 
 **Вариант A (рекомендуемый strict):** пересечение интервалов для одного `(job_key, partner_key)` → MUST FAIL при валидации.
@@ -584,6 +616,7 @@
 
 - Поведение «первая подходящая строка в порядке загрузки» помечается как **WARN + deprecated** и должно быть устранено введением явных полей или сортировки §13.2.
 - В strict V2 такое поведение **не является целевым** и подлежит удалению после окна совместимости (§12.3).
+- **Primary group / memberships:** пока нет явных полей приоритета, runtime **обязан** сохранять порядок списка в snapshot (см. §8.3 инвариант); это *намеренное* legacy-поведение, а не недоработка stable sort — автоматическая пересортировка без колонок меняла бы prod без миграции.
 
 ---
 
@@ -866,3 +899,5 @@ production-resolve **не меняется** C11; только контракт�
 | V2 design | 2026-05-12 | C11: добавлен §23 Explainability — C11.1 trace contracts, C11.2 explicit replay API, отсутствие обязательной runtime-инструментизации; политика лёгкого импорта пакета explain vs допустимые транзитивные зависимости replay. |
 | V2 design | 2026-05-13 | C11.3: §23.5 — replay для ``resolve_threshold_rule`` и ``get_job_param``; трассировка job_param без произвольных значений в ``inputs``. |
 | V2 design | 2026-05-13 | C11 stabilization: §23.2/§23.5 уточнены под текущий replay; explicit opt-in / JSON-safe trace / no runtime instrumentation. |
+| V2 design | 2026-05-13 | Hourly presentation flags: `job_params.hide_inactive_rows` (bool, default false, presentation-only) + section spacing (одна пустая строка перед payouts/payins в тексте hourly без смены порядка `ui_layout`) — §3.8.1–§3.8.2. |
+| V2 design | 2026-05-13 | §3.13 / §8.3 / §13.3: явный инвариант legacy — без `is_primary` / `group_priority` порядок membership в runtime = порядок вставки в snapshot; регрессионные тесты против silent stable sort; таблица §3.13 дополнена опциональными колонками. |

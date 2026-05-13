@@ -1,6 +1,7 @@
 # core/job_runner.py
 from __future__ import annotations
 
+import logging
 import os
 import time
 import uuid
@@ -9,7 +10,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.event_log import append_event
-from core.rules_provider import get_rules_snapshot
+from core.rules_provider import get_rules_snapshot, get_snapshot_v2
+from core.rules_v2.snapshot_fingerprint import rules_snapshot_fingerprint
+
+log = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -174,6 +178,19 @@ def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) 
         rules_source=rs.source,
     )
 
+    # Stage 1 observability only (CONTRACT_V2 §17.3 gap); real pinning requires
+    # explicit snapshot/index propagation. Detect active rules snapshot fingerprint drift.
+    fp_before: Optional[str] = None
+    try:
+        snap_before = get_snapshot_v2(force_sync=False)
+        fp_before = rules_snapshot_fingerprint(snap_before)
+    except Exception:
+        log.warning(
+            "job_runner: could not read rules snapshot before job; skipping rules-changed telemetry",
+            exc_info=True,
+        )
+
+    job_exc: Optional[Exception] = None
     try:
         fn()
         append_event(
@@ -186,6 +203,7 @@ def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) 
             payload={"runtime_sec": round(time.time() - started, 3)},
         )
     except Exception as e:
+        job_exc = e
         append_event(
             type="job_failed",
             job_id=job_id,
@@ -195,9 +213,37 @@ def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) 
             rules_source=rs.source,
             payload={"err": str(e), "runtime_sec": round(time.time() - started, 3)},
         )
-        raise
     finally:
+        if fp_before is not None:
+            try:
+                snap_after = get_snapshot_v2(force_sync=False)
+                fp_after = rules_snapshot_fingerprint(snap_after)
+                if fp_after != fp_before:
+                    append_event(
+                        type="rules_changed_during_job",
+                        job_id=job_id,
+                        job_type=jt,
+                        actor=actor_d,
+                        rules_version=rs.rules_version,
+                        rules_source=rs.source,
+                        payload={
+                            "fingerprint_before": fp_before,
+                            "fingerprint_after": fp_after,
+                        },
+                    )
+                    log.warning(
+                        "job_runner: rules snapshot fingerprint changed during job job_id=%s job_type=%s",
+                        job_id,
+                        jt,
+                    )
+            except Exception:
+                log.warning(
+                    "job_runner: post-job rules fingerprint check failed",
+                    exc_info=True,
+                )
         _RUNNING.pop(jt, None)
         _unlock(jt)
+        if job_exc is not None:
+            raise job_exc
 
     return job_id

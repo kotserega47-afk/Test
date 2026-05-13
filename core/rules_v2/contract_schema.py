@@ -216,7 +216,8 @@ SHEET_SCHEMAS: Final[dict[str, SheetSchema]] = {
     # §3.13 — group_priority / is_primary are CONTRACT V2 forward-looking
     # optional columns (see §3.13 note about Excel extension for
     # deterministic primary group, §8.3); their absence is fine in
-    # current legacy files.
+    # current legacy files. Runtime membership order without those fields
+    # MUST match snapshot insertion order (CONTRACT_V2 §8.3 invariant).
     "partner_groups": SheetSchema(
         sheet="partner_groups",
         required_columns=frozenset(
