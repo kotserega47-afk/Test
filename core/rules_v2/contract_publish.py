@@ -27,6 +27,7 @@ from core.rules_v2.validation_issues import (
     is_blocking,
 )
 from core.rules_v2.validation_snapshot import validate_snapshot
+from core.rules_v2.validation_commands import validate_duplicate_command_policies
 from core.rules_v2.validation_workbook import (
     read_workbook_headers,
     validate_meta_version,
@@ -153,6 +154,7 @@ def evaluate_snapshot_publish(
         headers = read_workbook_headers(path)
         issues.extend(validate_workbook_schema(headers, strict=v_strict))
         issues.extend(validate_meta_version(path, strict=v_strict))
+        issues.extend(validate_duplicate_command_policies(path, strict=v_strict))
     except Exception as exc:
         load_error = f"{type(exc).__name__}: {exc}"
         log.exception(
