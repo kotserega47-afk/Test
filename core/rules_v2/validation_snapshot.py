@@ -32,9 +32,20 @@ What it detects (see CONTRACT_V2 §18 for codes):
      with ``scope_type=partner`` and ``scope_key`` not in
      ``snapshot.partners``)
    * ``RULE_ORPHAN_GROUP`` (same for ``scope_type=group``)
-5. Overlap of exclusion intervals (CONTRACT_V2 §8.4):
+5. Orphan ``job_key`` on enabled memberships (CONTRACT_V2 §7.1 / §18):
+   * ``RULE_ORPHAN_JOB`` — ``partner_group_members.job_key`` not in
+     ``snapshot.jobs``
+6. Empty job catalog after build (CONTRACT_V2 §7.1 / §18):
+   * ``RULE_EMPTY_JOBS`` — ``snapshot.jobs`` is empty
+7. Unsupported ``job_params`` keys (CONTRACT_V2 §3.8 / §18):
+   * ``RULE_UNSUPPORTED_JOB_PARAM`` — enabled ``param_key`` not in
+     ``ALLOWED_JOB_PARAMS`` for ``job_key`` (same registry as legacy validators)
+8. Invalid threshold bounds (CONTRACT_V2 §3.3 / §18):
+   * ``RULE_INVALID_THRESHOLD`` — enabled row with both ``threshold_min`` and
+     ``threshold_max`` missing after bridge
+9. Overlap of exclusion intervals (CONTRACT_V2 §8.4):
    * ``RULE_OVERLAPPING_EXCLUSION``
-6. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
+10. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
    * ``RULE_NON_DETERMINISTIC_ORDER`` — multiple memberships per
      (job, partner) without resolvable ``is_primary`` / ``group_priority``;
      conflicting ``is_primary``; tied minimum ``group_priority``;
@@ -70,15 +81,20 @@ from .contract_errors import (
     RULE_DUPLICATE_LIMIT,
     RULE_DUPLICATE_SCHEDULE_ID,
     RULE_DUPLICATE_THRESHOLD,
+    RULE_EMPTY_JOBS,
     RULE_INVALID_SCHEDULE,
     RULE_INVALID_SCHEDULE_TYPE,
+    RULE_INVALID_THRESHOLD,
     RULE_INVALID_SCOPE,
     RULE_NON_DETERMINISTIC_ORDER,
     RULE_ORPHAN_GROUP,
+    RULE_ORPHAN_JOB,
     RULE_ORPHAN_PARTNER,
     RULE_OVERLAPPING_EXCLUSION,
+    RULE_UNSUPPORTED_JOB_PARAM,
     make_issue,
 )
+from .constants import ALLOWED_JOB_PARAMS
 from .models import (
     AccessRule,
     CommandDef,
@@ -111,6 +127,10 @@ _LEGACY_DOWNGRADE_TO_WARN: frozenset[str] = frozenset(
         RULE_INVALID_SCHEDULE_TYPE,
         RULE_ORPHAN_PARTNER,
         RULE_ORPHAN_GROUP,
+        RULE_ORPHAN_JOB,
+        RULE_EMPTY_JOBS,
+        RULE_UNSUPPORTED_JOB_PARAM,
+        RULE_INVALID_THRESHOLD,
         RULE_OVERLAPPING_EXCLUSION,
     }
 )
@@ -169,9 +189,13 @@ def validate_snapshot(
 
     issues: list[ValidationIssue] = []
 
+    issues.extend(_check_empty_jobs(snapshot, strict=strict))
+    issues.extend(_check_orphan_job_refs(snapshot, strict=strict))
     issues.extend(_check_duplicate_limits(snapshot, strict=strict))
     issues.extend(_check_duplicate_thresholds(snapshot, strict=strict))
+    issues.extend(_check_invalid_threshold_bounds(snapshot, strict=strict))
     issues.extend(_check_duplicate_job_params(snapshot, strict=strict))
+    issues.extend(_check_unsupported_job_params(snapshot, strict=strict))
     issues.extend(_check_duplicate_access(snapshot, strict=strict))
     issues.extend(_check_duplicate_commands(snapshot, strict=strict))
     issues.extend(_check_duplicate_schedules(snapshot, strict=strict))
@@ -189,6 +213,104 @@ def validate_snapshot(
     issues.extend(_check_primary_group_ambiguity(snapshot))
     issues.extend(_check_orphan_report_item_members(snapshot))
 
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Job catalog (CONTRACT_V2 §7.1 / §18)
+# ---------------------------------------------------------------------------
+
+
+def _check_empty_jobs(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Emit ``RULE_EMPTY_JOBS`` when ``snapshot.jobs`` has no entries."""
+
+    if snapshot.jobs:
+        return []
+    return [
+        make_issue(
+            RULE_EMPTY_JOBS,
+            "No jobs loaded in snapshot after build",
+            severity=_severity_for(RULE_EMPTY_JOBS, strict=strict),
+        )
+    ]
+
+
+def _check_orphan_job_refs(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Emit ``RULE_ORPHAN_JOB`` for enabled memberships with unknown ``job_key``."""
+
+    issues: list[ValidationIssue] = []
+    for member in sorted(
+        snapshot.partner_group_members,
+        key=lambda m: (m.job_key, m.partner_key, m.group_key),
+    ):
+        if not member.enabled:
+            continue
+        if member.job_key in snapshot.jobs:
+            continue
+        issues.append(
+            make_issue(
+                RULE_ORPHAN_JOB,
+                (
+                    f"Unknown job '{member.job_key}' referenced from "
+                    f"partner_group_members"
+                ),
+                severity=_severity_for(RULE_ORPHAN_JOB, strict=strict),
+                sheet="partner_groups",
+                field="job_key",
+                details={
+                    "job_key": member.job_key,
+                    "group_key": member.group_key,
+                    "partner_key": member.partner_key,
+                },
+            )
+        )
+    return issues
+
+
+def _check_unsupported_job_params(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Emit ``RULE_UNSUPPORTED_JOB_PARAM`` for unknown enabled ``param_key`` values.
+
+    Uses ``ALLOWED_JOB_PARAMS`` from ``constants`` — the same registry as
+    ``core.rules_v2.validators``. Jobs without a catalog entry are skipped
+    (no issue from this check; legacy ``No param registry`` warn is out of
+    scope for this code).
+    """
+
+    issues: list[ValidationIssue] = []
+    for param in sorted(
+        snapshot.job_params,
+        key=lambda p: (p.job_key, p.scope_type, p.scope_key, p.param_key),
+    ):
+        if not param.enabled:
+            continue
+        allowed = ALLOWED_JOB_PARAMS.get(param.job_key)
+        if allowed is None:
+            continue
+        if param.param_key in allowed:
+            continue
+        issues.append(
+            make_issue(
+                RULE_UNSUPPORTED_JOB_PARAM,
+                (
+                    f"Unsupported param_key '{param.param_key}' "
+                    f"for job '{param.job_key}'"
+                ),
+                severity=_severity_for(RULE_UNSUPPORTED_JOB_PARAM, strict=strict),
+                sheet="job_params",
+                field="key",
+                details={
+                    "job_key": param.job_key,
+                    "param_key": param.param_key,
+                    "allowed_param_keys": sorted(allowed.keys()),
+                },
+            )
+        )
     return issues
 
 
@@ -252,6 +374,36 @@ def _check_duplicate_thresholds(
                 key,
                 [r.rule_key for r in rules],
                 strict=strict,
+            )
+        )
+    return issues
+
+
+def _check_invalid_threshold_bounds(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Emit ``RULE_INVALID_THRESHOLD`` when both bounds are missing on enabled rows."""
+
+    issues: list[ValidationIssue] = []
+    for rule in sorted(snapshot.threshold_rules, key=lambda r: r.rule_key):
+        if not rule.enabled:
+            continue
+        if rule.threshold_min is not None or rule.threshold_max is not None:
+            continue
+        issues.append(
+            make_issue(
+                RULE_INVALID_THRESHOLD,
+                (
+                    "Threshold rule must have threshold_min or threshold_max"
+                ),
+                severity=_severity_for(RULE_INVALID_THRESHOLD, strict=strict),
+                sheet="thresholds_partner",
+                rule_id=rule.rule_key,
+                field="threshold_min",
+                details={
+                    "threshold_min": rule.threshold_min,
+                    "threshold_max": rule.threshold_max,
+                },
             )
         )
     return issues

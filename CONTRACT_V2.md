@@ -410,6 +410,10 @@
 - Строгий режим: **любая неизвестная колонка** на листе.
 - Конфликтующие **command policies** на один `command_key`.
 - **Orphan references:** limit/threshold на partner/group, отсутствующих в справочнике (если включено правило строгой ссылочной целостности).
+- **Orphan `job_key`:** enabled `partner_group_members` ссылается на `job_key`, отсутствующий в `snapshot.jobs` — код `RULE_ORPHAN_JOB` (§18, C3).
+- **Пустой каталог jobs:** после build snapshot `snapshot.jobs` пуст — код `RULE_EMPTY_JOBS` (§18, C3).
+- **Неподдерживаемый `param_key`:** enabled `job_params` с ключом вне каталога для данного `job` (§3.8) — код `RULE_UNSUPPORTED_JOB_PARAM` (§18, C3).
+- **Невалидный threshold:** enabled `threshold_rules` без `threshold_min` и без `threshold_max` (§3.3) — код `RULE_INVALID_THRESHOLD` (§18, C3).
 - **Overlapping exclusions** — если выбрана политика §8.4 «запрет пересечений».
 - Нарушение **immutable-осей** (§4.6) при попытке представить как «ту же» строку — в strict (политика внедрения).
 
@@ -659,6 +663,7 @@
 6. **Schedule validation:** валидные / невалидные строки; strict запрещает silent skip.
 7. **Golden report tests:** фикстурные payin/payout + rules → эталонные строки hourly (и критичный wallet блок).
 8. **Determinism:** перестановка строк Excel без изменения данных и приоритетов → идентичный индекс/результат resolve (после внедрения §13).
+9. **P0 snapshot validation (C3):** focused regression tests для кодов `RULE_EMPTY_JOBS`, `RULE_ORPHAN_JOB`, `RULE_UNSUPPORTED_JOB_PARAM`, `RULE_INVALID_THRESHOLD` — в strict каждый код даёт `severity=error`, блокирует публикацию snapshot (`publish_allowed=false`); в legacy policy — `severity=warn`, deprecated publish allowed (§17.1, §18).
 
 ---
 
@@ -750,6 +755,10 @@
 | `RULE_INVALID_SCHEDULE` | error | `schedule_type` / `every_seconds` / `cron` не удовлетворяют §3.7. | MUST FAIL / не публиковать при enabled. | WARN или skip строки — **deprecated**; цель — WARN с кодом, затем MUST FAIL в strict. |
 | `RULE_ORPHAN_PARTNER` | error | Ссылка на partner/group в limit/threshold/param при включённой ссылочной целостности (§7.1). | MUST FAIL. | WARN или ignore — только явная политика legacy. |
 | `RULE_ORPHAN_GROUP` | error | Ссылка на неизвестную группу при strict ссылочности. | MUST FAIL. | WARN / policy. |
+| `RULE_ORPHAN_JOB` | error | **C3** snapshot validation: enabled `partner_group_members` ссылается на `job_key`, отсутствующий в `snapshot.jobs` (§3.13). | MUST FAIL / не публиковать snapshot. | WARN; deprecated publish allowed при legacy policy (§17.1). |
+| `RULE_EMPTY_JOBS` | error | **C3** snapshot validation: после bridge `snapshot.jobs` пуст — нет ни одного `job_key`, пригодного для schedules/params/limits/runtime. | MUST FAIL / не публиковать snapshot. | WARN; deprecated publish allowed при legacy policy (§17.1). |
+| `RULE_UNSUPPORTED_JOB_PARAM` | error | **C3** snapshot validation: enabled `job_params` с `param_key` вне каталога допустимых ключей для данного `job_key` (§3.8). | MUST FAIL / не публиковать snapshot. | WARN; deprecated publish allowed при legacy policy (§17.1). |
+| `RULE_INVALID_THRESHOLD` | error | **C3** snapshot validation: enabled `threshold_rules` без `threshold_min` и без `threshold_max` (§3.3). | MUST FAIL / не публиковать snapshot. | WARN; deprecated publish allowed при legacy policy (§17.1). |
 | `RULE_OVERLAPPING_EXCLUSION` | error | Пересечение exclusion-интервалов при политике §8.4 вариант A. | MUST FAIL. | WARN + недетерминизм запрещён в целевом V2 (вариант B с `priority`). |
 | `RULE_UNKNOWN_COLUMN` | error | Лист содержит столбец вне схемы (§3, strict). | MUST FAIL. | WARN + игнор столбца. |
 | `RULE_MISSING_SHEET` | error | Лист, обязательный для текущей версии контракта (§3), отсутствует в workbook. | MUST FAIL pipeline / не публиковать snapshot. | error для обязательных листов; для известных опциональных листов допустим явный override severity до warn (политика валидатора). |
@@ -901,3 +910,4 @@ production-resolve **не меняется** C11; только контракт�
 | V2 design | 2026-05-13 | C11 stabilization: §23.2/§23.5 уточнены под текущий replay; explicit opt-in / JSON-safe trace / no runtime instrumentation. |
 | V2 design | 2026-05-13 | Hourly presentation flags: `job_params.hide_inactive_rows` (bool, default false, presentation-only) + section spacing (одна пустая строка перед payouts/payins в тексте hourly без смены порядка `ui_layout`) — §3.8.1–§3.8.2. |
 | V2 design | 2026-05-13 | §3.13 / §8.3 / §13.3: явный инвариант legacy — без `is_primary` / `group_priority` порядок membership в runtime = порядок вставки в snapshot; регрессионные тесты против silent stable sort; таблица §3.13 дополнена опциональными колонками. |
+| V2 design | 2026-05-16 | Stage 1 gap closure / P0 validator codes: §7.1, §15, §18 — добавлены `RULE_EMPTY_JOBS`, `RULE_ORPHAN_JOB`, `RULE_UNSUPPORTED_JOB_PARAM`, `RULE_INVALID_THRESHOLD` (C3 snapshot validation; strict MUST FAIL / no publish; legacy WARN + deprecated publish allowed). Семантика runtime, schema, precedence, lifecycle, C11 и migration policy не меняются. |

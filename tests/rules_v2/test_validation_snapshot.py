@@ -22,6 +22,10 @@ from core.rules_v2.contract_errors import (
     RULE_DUPLICATE_LIMIT,
     RULE_DUPLICATE_SCHEDULE_ID,
     RULE_DUPLICATE_THRESHOLD,
+    RULE_EMPTY_JOBS,
+    RULE_ORPHAN_JOB,
+    RULE_UNSUPPORTED_JOB_PARAM,
+    RULE_INVALID_THRESHOLD,
     RULE_INVALID_SCHEDULE,
     RULE_INVALID_SCHEDULE_TYPE,
     RULE_INVALID_SCOPE,
@@ -38,6 +42,7 @@ from core.rules_v2.models import (
     AccessRule,
     CommandDef,
     ExclusionRule,
+    JobDef,
     JobParam,
     LimitRule,
     MetaInfo,
@@ -71,8 +76,33 @@ def _meta() -> MetaInfo:
     )
 
 
+def _job(key: str = "wallet") -> JobDef:
+    return JobDef(job_key=key, display_name=key, enabled=True)
+
+
+def _member(
+    *,
+    group_key: str = "group_a",
+    partner_key: str = "p1",
+    job_key: str = "wallet",
+    enabled: bool = True,
+) -> PartnerGroupMember:
+    return PartnerGroupMember(
+        group_key=group_key,
+        partner_key=partner_key,
+        job_key=job_key,
+        enabled=enabled,
+    )
+
+
 def _empty_snapshot() -> RulesSnapshotV2:
-    return RulesSnapshotV2(meta=_meta())
+    """Minimal snapshot with one job (avoids ``RULE_EMPTY_JOBS`` in unrelated tests)."""
+
+    return RulesSnapshotV2(meta=_meta(), jobs={"wallet": _job("wallet")})
+
+
+def _snapshot_without_jobs() -> RulesSnapshotV2:
+    return RulesSnapshotV2(meta=_meta(), jobs={})
 
 
 def _partner(key: str, code: str | None = None) -> PartnerDef:
@@ -118,6 +148,8 @@ def _threshold(
     scope_type: str = "partner",
     scope_key: str = "p1",
     metric_key: str = "conversion_rate",
+    threshold_min: float | None = 0.5,
+    threshold_max: float | None = None,
     enabled: bool = True,
 ) -> ThresholdRule:
     return ThresholdRule(
@@ -126,7 +158,8 @@ def _threshold(
         scope_type=scope_type,
         scope_key=scope_key,
         metric_key=metric_key,
-        threshold_min=0.5,
+        threshold_min=threshold_min,
+        threshold_max=threshold_max,
         enabled=enabled,
     )
 
@@ -213,11 +246,213 @@ def _by_code(issues: list[ValidationIssue], code: str) -> list[ValidationIssue]:
 # ---------------------------------------------------------------------------
 
 
-def test_empty_snapshot_produces_no_issues():
+def test_empty_jobs_emits_rule_empty_jobs_legacy_warn():
+    snapshot = _snapshot_without_jobs()
+
+    issues = validate_snapshot(snapshot, strict=False)
+
+    empty = _by_code(issues, RULE_EMPTY_JOBS)
+    assert len(empty) == 1
+    assert empty[0].severity == ValidationSeverity.WARN
+    assert not has_blocking_errors(issues)
+
+
+def test_empty_jobs_emits_rule_empty_jobs_strict_error():
+    snapshot = _snapshot_without_jobs()
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    empty = _by_code(issues, RULE_EMPTY_JOBS)
+    assert len(empty) == 1
+    assert empty[0].severity == ValidationSeverity.ERROR
+    assert has_blocking_errors(issues)
+
+
+def test_snapshot_with_jobs_has_no_empty_jobs_issue():
     snapshot = _empty_snapshot()
 
-    assert validate_snapshot(snapshot) == []
-    assert validate_snapshot(snapshot, strict=True) == []
+    assert _by_code(validate_snapshot(snapshot), RULE_EMPTY_JOBS) == []
+    assert _by_code(validate_snapshot(snapshot, strict=True), RULE_EMPTY_JOBS) == []
+
+
+def test_empty_jobs_issue_is_deterministic():
+    snapshot = _snapshot_without_jobs()
+
+    a = validate_snapshot(snapshot, strict=True)
+    b = validate_snapshot(snapshot, strict=True)
+
+    assert a == b
+    assert len(_by_code(a, RULE_EMPTY_JOBS)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Orphan job_key (partner_group_members)
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_job_on_enabled_membership_legacy_warn():
+    snapshot = _empty_snapshot()
+    snapshot.partner_groups = {"group_a": _group("group_a")}
+    snapshot.partners = {"p1": _partner("p1")}
+    snapshot.partner_group_members = [
+        _member(job_key="hourly"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=False)
+
+    orphans = _by_code(issues, RULE_ORPHAN_JOB)
+    assert len(orphans) == 1
+    assert orphans[0].severity == ValidationSeverity.WARN
+    assert orphans[0].sheet == "partner_groups"
+    assert orphans[0].field == "job_key"
+    assert orphans[0].details["job_key"] == "hourly"
+    assert not has_blocking_errors(issues)
+
+
+def test_orphan_job_on_enabled_membership_strict_error():
+    snapshot = _empty_snapshot()
+    snapshot.partner_groups = {"group_a": _group("group_a")}
+    snapshot.partners = {"p1": _partner("p1")}
+    snapshot.partner_group_members = [
+        _member(job_key="hourly"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    orphans = _by_code(issues, RULE_ORPHAN_JOB)
+    assert len(orphans) == 1
+    assert orphans[0].severity == ValidationSeverity.ERROR
+    assert has_blocking_errors(issues)
+
+
+def test_orphan_job_ignores_disabled_membership():
+    snapshot = _empty_snapshot()
+    snapshot.partner_groups = {"group_a": _group("group_a")}
+    snapshot.partners = {"p1": _partner("p1")}
+    snapshot.partner_group_members = [
+        _member(job_key="hourly", enabled=False),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_ORPHAN_JOB) == []
+
+
+def test_valid_job_key_on_membership_no_orphan_issue():
+    snapshot = _empty_snapshot()
+    snapshot.jobs = {"wallet": _job("wallet"), "hourly": _job("hourly")}
+    snapshot.partner_groups = {"group_a": _group("group_a")}
+    snapshot.partners = {"p1": _partner("p1")}
+    snapshot.partner_group_members = [
+        _member(job_key="wallet"),
+        _member(job_key="hourly", group_key="group_b"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_ORPHAN_JOB) == []
+
+
+def test_unsupported_job_param_legacy_warn():
+    snapshot = _empty_snapshot()
+    snapshot.job_params = [
+        _job_param(job_key="hourly", param_key="not_in_catalog"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=False)
+
+    bad = _by_code(issues, RULE_UNSUPPORTED_JOB_PARAM)
+    assert len(bad) == 1
+    assert bad[0].severity == ValidationSeverity.WARN
+    assert bad[0].sheet == "job_params"
+    assert bad[0].field == "key"
+    assert bad[0].details["param_key"] == "not_in_catalog"
+    assert "hide_inactive_rows" in bad[0].details["allowed_param_keys"]
+    assert not has_blocking_errors(issues)
+
+
+def test_unsupported_job_param_strict_error():
+    snapshot = _empty_snapshot()
+    snapshot.job_params = [
+        _job_param(job_key="wallet", param_key="bogus_param"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_UNSUPPORTED_JOB_PARAM)
+    assert len(bad) == 1
+    assert bad[0].severity == ValidationSeverity.ERROR
+    assert has_blocking_errors(issues)
+
+
+def test_unsupported_job_param_ignores_disabled():
+    snapshot = _empty_snapshot()
+    snapshot.job_params = [
+        _job_param(job_key="hourly", param_key="bogus_param", enabled=False),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_UNSUPPORTED_JOB_PARAM) == []
+
+
+def test_supported_job_param_no_issue():
+    snapshot = _empty_snapshot()
+    snapshot.job_params = [
+        _job_param(job_key="wallet", param_key="window_minutes"),
+        _job_param(job_key="hourly", param_key="hide_inactive_rows"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_UNSUPPORTED_JOB_PARAM) == []
+
+
+def test_unknown_job_key_skips_unsupported_param_check():
+    """Jobs without ``ALLOWED_JOB_PARAMS`` entry emit nothing here."""
+
+    snapshot = _empty_snapshot()
+    snapshot.jobs = {"custom": _job("custom")}
+    snapshot.job_params = [
+        _job_param(job_key="custom", param_key="anything"),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_UNSUPPORTED_JOB_PARAM) == []
+
+
+def test_unsupported_job_param_issue_is_deterministic():
+    snapshot = _empty_snapshot()
+    snapshot.job_params = [
+        _job_param(job_key="hourly", param_key="z_bad"),
+        _job_param(job_key="wallet", param_key="a_bad"),
+    ]
+
+    a = validate_snapshot(snapshot, strict=True)
+    b = validate_snapshot(snapshot, strict=True)
+
+    assert a == b
+    assert len(_by_code(a, RULE_UNSUPPORTED_JOB_PARAM)) == 2
+
+
+def test_orphan_job_issue_is_deterministic():
+    snapshot = _empty_snapshot()
+    snapshot.partner_groups = {
+        "group_b": _group("group_b"),
+        "group_a": _group("group_a"),
+    }
+    snapshot.partners = {"p1": _partner("p1"), "p2": _partner("p2")}
+    snapshot.partner_group_members = [
+        _member(group_key="group_b", partner_key="p2", job_key="hourly"),
+        _member(group_key="group_a", partner_key="p1", job_key="hourly"),
+    ]
+
+    a = validate_snapshot(snapshot, strict=True)
+    b = validate_snapshot(snapshot, strict=True)
+
+    assert a == b
+    assert len(_by_code(a, RULE_ORPHAN_JOB)) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +520,99 @@ def test_duplicate_limits_method_specific_vs_generic_are_not_dupes():
     issues = validate_snapshot(snapshot, strict=True)
 
     assert _by_code(issues, RULE_DUPLICATE_LIMIT) == []
+
+
+def test_invalid_threshold_both_bounds_missing_legacy_warn():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-1", threshold_min=None, threshold_max=None),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=False)
+
+    bad = _by_code(issues, RULE_INVALID_THRESHOLD)
+    assert len(bad) == 1
+    assert bad[0].severity == ValidationSeverity.WARN
+    assert bad[0].sheet == "thresholds_partner"
+    assert bad[0].rule_id == "THR-1"
+    assert not has_blocking_errors(issues)
+
+
+def test_invalid_threshold_both_bounds_missing_strict_error():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-1", threshold_min=None, threshold_max=None),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_THRESHOLD)
+    assert len(bad) == 1
+    assert bad[0].severity == ValidationSeverity.ERROR
+    assert has_blocking_errors(issues)
+
+
+def test_invalid_threshold_ignores_disabled():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(
+            rule_key="THR-1",
+            threshold_min=None,
+            threshold_max=None,
+            enabled=False,
+        ),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_THRESHOLD) == []
+
+
+def test_threshold_min_only_no_issue():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-1", threshold_min=0.5, threshold_max=None),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_THRESHOLD) == []
+
+
+def test_threshold_max_only_no_issue():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-1", threshold_min=None, threshold_max=35.0),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_THRESHOLD) == []
+
+
+def test_threshold_both_bounds_present_no_issue():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-1", threshold_min=0.5, threshold_max=35.0),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_THRESHOLD) == []
+
+
+def test_invalid_threshold_issue_is_deterministic():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [
+        _threshold(rule_key="THR-B", threshold_min=None, threshold_max=None),
+        _threshold(rule_key="THR-A", threshold_min=None, threshold_max=None),
+    ]
+
+    a = validate_snapshot(snapshot, strict=True)
+    b = validate_snapshot(snapshot, strict=True)
+
+    assert a == b
+    assert len(_by_code(a, RULE_INVALID_THRESHOLD)) == 2
 
 
 def test_duplicate_thresholds_detected():

@@ -10,58 +10,83 @@ import pandas as pd
 from core.config_manager import clear_rules_caches
 from core.event_log import append_event
 from core.rules_provider import _rules_dropbox_path
-from core.rules_v2.bridge_legacy import build_snapshot_v2_from_legacy
-from core.rules_v2.validators import validate_snapshot
+from core.rules_v2.contract_publish import (
+    ContractValidationMode,
+    evaluate_snapshot_publish,
+)
+from core.rules_v2.validation_issues import ValidationIssue, ValidationSeverity, is_blocking
 from core.state_store import state_update_meta
 from integrations.dropbox_watcher import download_file, upload_file
-from tools.validate_rules_xlsx import check_rules_xlsx
 
 
 _TMP_DIR = Path("/tmp/rules_writer")
 _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _format_contract_issue_line(issue: ValidationIssue) -> str:
+    where = issue.sheet or "workbook"
+    parts = [issue.code, issue.message]
+    if issue.rule_id:
+        parts.append(f"id={issue.rule_id}")
+    if issue.field:
+        parts.append(f"field={issue.field}")
+    if issue.row_index is not None:
+        parts.append(f"row={issue.row_index}")
+    return f"{where}: {' | '.join(parts)}"
+
+
 def _validate_rules_file(local_path: Path) -> None:
     """
-    Валидирует именно тот workbook, который только что изменили.
+    Pre-upload validation via the contract pipeline (C2 + C2.5 + C3) in STRICT mode.
 
-    1) legacy/workbook-level checks
-    2) snapshot-v2 checks
-
-    Если есть хотя бы одна ошибка — бросает RuntimeError.
-    Warnings не блокируют upload.
+    Upload is blocked when ``publish_allowed`` is false or any infra failure
+    (load / build / validation crash) is present. WARN-level contract findings
+    do not block upload.
     """
+    decision = evaluate_snapshot_publish(
+        local_path,
+        policy_mode=ContractValidationMode.STRICT,
+    )
+
     errors: List[str] = []
     warnings: List[str] = []
 
-    # 1. workbook / sheet-level validation
-    workbook_msgs = check_rules_xlsx(local_path)
-    for msg in workbook_msgs:
-        line = f"{msg.where}: {msg.message}"
-        if msg.level == "ERROR":
+    if decision.load_error:
+        errors.append(f"workbook: load: {decision.load_error}")
+    if decision.build_error:
+        errors.append(f"workbook: build: {decision.build_error}")
+    if decision.validation_crash:
+        errors.append(f"workbook: validation: {decision.validation_crash}")
+
+    for issue in decision.contract_issues:
+        line = _format_contract_issue_line(issue)
+        if is_blocking(issue):
             errors.append(line)
-        elif msg.level == "WARN":
+        elif issue.severity == ValidationSeverity.WARN:
             warnings.append(line)
 
-    # 2. snapshot-v2 validation
-    try:
-        snapshot = build_snapshot_v2_from_legacy(local_path)
-        result = validate_snapshot(snapshot)
+    blocked = (
+        decision.load_error is not None
+        or decision.build_error is not None
+        or decision.validation_crash is not None
+        or not decision.publish_allowed
+    )
 
-        for issue in result.errors:
-            errors.append(issue.message)
+    if not blocked:
+        return
 
-        for issue in result.warnings:
-            warnings.append(issue.message)
+    details_lines = [f"- {x}" for x in errors[:30]]
+    if len(errors) > 30:
+        details_lines.append(f"- ... and {len(errors) - 30} more")
+    if warnings:
+        details_lines.append("")
+        details_lines.append("Warnings (context, non-blocking):")
+        details_lines.extend(f"- {x}" for x in warnings[:10])
+        if len(warnings) > 10:
+            details_lines.append(f"- ... and {len(warnings) - 10} more warnings")
 
-    except Exception as e:
-        errors.append(f"snapshot build/validate failed: {e}")
-
-    if errors:
-        details = "\n".join(f"- {x}" for x in errors[:30])
-        if len(errors) > 30:
-            details += f"\n- ... and {len(errors) - 30} more"
-        raise RuntimeError(f"rules validation failed ({len(errors)} errors)\n{details}")
+    details = "\n".join(details_lines)
+    raise RuntimeError(f"rules validation failed ({len(errors)} errors)\n{details}")
 
 
 def update_sheet(
