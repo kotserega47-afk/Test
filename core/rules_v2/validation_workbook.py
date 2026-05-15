@@ -20,14 +20,16 @@ What it does:
    (``RULE_DEPRECATED_COLUMN``, default ``warn``).
 4. Reports unknown columns (``RULE_UNKNOWN_COLUMN``) with severity
    driven by ``strict``: ``error`` in strict mode, ``warn`` in legacy.
+5. Validates ``meta.version`` against ``SUPPORTED_META_VERSIONS``
+   (``RULE_INVALID_META_VERSION``).
 
 What it does **not** do (out of C2 scope — explicit non-goals):
 
 * No row-level checks (XOR threshold_min/threshold_max, duplicate keys,
   datetime parsing, etc.) — those live in C3 ``validate_snapshot``
   / snapshot-level validators.
-* No version range gate (``RULE_INVALID_META_VERSION``) — handled
-  separately when `meta.version` is read at snapshot build time.
+* ``RULE_INVALID_META_VERSION`` — workbook ``meta.version`` must be an
+  integer in ``SUPPORTED_META_VERSIONS`` (CONTRACT_V2 §2.1, §19).
 * No unknown-sheet detection — current §18 has no code for it, so
   unknown sheets are silently skipped (matches legacy CLI behavior).
 """
@@ -40,6 +42,7 @@ from typing import Final
 
 from .contract_errors import (
     RULE_DEPRECATED_COLUMN,
+    RULE_INVALID_META_VERSION,
     RULE_MISSING_COLUMN,
     RULE_MISSING_SHEET,
     RULE_UNKNOWN_COLUMN,
@@ -54,6 +57,11 @@ from .contract_schema import (
     normalize_header,
 )
 from .validation_issues import ValidationIssue, ValidationSeverity
+
+
+# CONTRACT_V2 §19 — supported ``meta.version`` integers for this runtime.
+# Bump here + document when the Excel contract version changes (§12.1).
+SUPPORTED_META_VERSIONS: Final[frozenset[int]] = frozenset({3})
 
 
 # Public input alias: caller passes a mapping sheet -> ordered iterable of
@@ -285,8 +293,139 @@ def read_workbook_headers(path: str | Path) -> dict[str, list[str]]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# meta.version (CONTRACT_V2 §2.1 / §19 / §18)
+# ---------------------------------------------------------------------------
+
+
+def parse_contract_meta_version(raw: object | None) -> int | None:
+    """Parse workbook ``meta.version`` as a contract integer.
+
+    Returns ``None`` when the value is missing, empty, or not an integer
+    literal (e.g. ``"legacy"``, ``"v3"``). Accepts Excel float cells
+    such as ``3.0``.
+    """
+
+    if raw is None:
+        return None
+
+    if isinstance(raw, bool):
+        return None
+
+    if isinstance(raw, int):
+        return raw
+
+    if isinstance(raw, float):
+        import math
+
+        if math.isnan(raw):
+            return None
+        if raw == int(raw):
+            return int(raw)
+        return None
+
+    s = str(raw).strip()
+    if not s or s.lower() in {"nan", "nat", "none"}:
+        return None
+
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    if f != int(f):
+        return None
+    return int(f)
+
+
+def read_meta_version_raw(path: str | Path) -> object | None:
+    """Read the raw ``meta`` sheet ``version`` value (read-only).
+
+    Returns ``None`` when the sheet, columns, or key is absent. Does not
+    interpret or coerce beyond locating the cell — see
+    ``parse_contract_meta_version``.
+    """
+
+    import pandas as pd
+
+    path = Path(path)
+    try:
+        df = pd.read_excel(path, sheet_name="meta", engine="openpyxl")
+    except ValueError:
+        return None
+
+    col_map = {str(c).strip().lower(): c for c in df.columns}
+    key_col = col_map.get("key")
+    val_col = col_map.get("value")
+    if key_col is None or val_col is None:
+        return None
+
+    for _, row in df.iterrows():
+        k = row.get(key_col)
+        if k is None or (isinstance(k, float) and pd.isna(k)):
+            continue
+        if str(k).strip() != "version":
+            continue
+        return row.get(val_col)
+
+    return None
+
+
+def validate_meta_version(
+    path: str | Path,
+    *,
+    strict: bool,
+) -> list[ValidationIssue]:
+    """Validate workbook ``meta.version`` against ``SUPPORTED_META_VERSIONS``.
+
+    Legacy policy (explicit): emit ``RULE_INVALID_META_VERSION`` at ``warn``
+    severity so publish is not blocked (§18 legacy / risk acceptance).
+    Strict policy: ``error`` severity — blocks publish via C4.
+    """
+
+    raw = read_meta_version_raw(path)
+    parsed = parse_contract_meta_version(raw)
+
+    if parsed is not None and parsed in SUPPORTED_META_VERSIONS:
+        return []
+
+    if raw is None:
+        reason = "missing"
+        message = "meta.version key is missing or unreadable on sheet 'meta'"
+    elif parsed is None:
+        reason = "non_integer"
+        message = f"meta.version is not a supported integer (got {raw!r})"
+    else:
+        reason = "unsupported"
+        supported = sorted(SUPPORTED_META_VERSIONS)
+        message = (
+            f"meta.version {parsed} is not supported for this runtime "
+            f"(supported: {supported})"
+        )
+
+    severity = ValidationSeverity.ERROR if strict else ValidationSeverity.WARN
+    return [
+        make_issue(
+            RULE_INVALID_META_VERSION,
+            message,
+            severity=severity,
+            sheet="meta",
+            field="version",
+            details={
+                "raw": None if raw is None else str(raw),
+                "parsed": parsed,
+                "reason": reason,
+                "supported": sorted(SUPPORTED_META_VERSIONS),
+            },
+        )
+    ]
+
+
 __all__ = [
     "WorkbookHeaders",
+    "SUPPORTED_META_VERSIONS",
+    "parse_contract_meta_version",
+    "read_meta_version_raw",
+    "validate_meta_version",
     "validate_workbook_schema",
     "read_workbook_headers",
 ]

@@ -11,6 +11,7 @@ isolates the C3 validators.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -21,10 +22,17 @@ from core.rules_v2.contract_errors import (
     RULE_DUPLICATE_LIMIT,
     RULE_DUPLICATE_SCHEDULE_ID,
     RULE_DUPLICATE_THRESHOLD,
+    RULE_INVALID_SCHEDULE,
+    RULE_INVALID_SCHEDULE_TYPE,
+    RULE_INVALID_SCOPE,
     RULE_NON_DETERMINISTIC_ORDER,
     RULE_ORPHAN_GROUP,
     RULE_ORPHAN_PARTNER,
     RULE_OVERLAPPING_EXCLUSION,
+)
+from core.rules_v2.contract_publish import (
+    ContractValidationMode,
+    evaluate_snapshot_publish,
 )
 from core.rules_v2.models import (
     AccessRule,
@@ -169,6 +177,25 @@ def _command(*, key: str, text: str, enabled: bool = True) -> CommandDef:
         command_text=text,
         job_key=None,
         display_name=text,
+        enabled=enabled,
+    )
+
+
+def _schedule(
+    *,
+    schedule_key: str = "SCHED-1",
+    job_key: str = "wallet",
+    schedule_type: str = "interval",
+    every_seconds: int | None = 60,
+    cron_expr: str | None = None,
+    enabled: bool = True,
+) -> ScheduleRule:
+    return ScheduleRule(
+        schedule_key=schedule_key,
+        job_key=job_key,
+        schedule_type=schedule_type,
+        every_seconds=every_seconds,
+        cron_expr=cron_expr,
         enabled=enabled,
     )
 
@@ -354,6 +381,286 @@ def test_duplicate_schedules_by_schedule_key():
 
     dups = _by_code(issues, RULE_DUPLICATE_SCHEDULE_ID)
     assert len(dups) == 1
+
+
+# ---------------------------------------------------------------------------
+# Schedule validity (CONTRACT_V2 §3.7 / §18)
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_schedule_type_on_enabled_row():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [
+        _schedule(schedule_type="every_seconds", every_seconds=60),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCHEDULE_TYPE)
+    assert len(bad) == 1
+    assert bad[0].sheet == "schedules"
+    assert bad[0].rule_id == "SCHED-1"
+    assert bad[0].field == "schedule_type"
+    assert bad[0].severity == ValidationSeverity.ERROR
+    assert _by_code(issues, RULE_INVALID_SCHEDULE) == []
+
+
+def test_invalid_interval_every_seconds_zero():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [_schedule(every_seconds=0)]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCHEDULE)
+    assert len(bad) == 1
+    assert bad[0].field == "every_seconds"
+    assert bad[0].severity == ValidationSeverity.ERROR
+
+
+def test_invalid_interval_every_seconds_none():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [_schedule(every_seconds=None)]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCHEDULE)
+    assert len(bad) == 1
+    assert bad[0].details["every_seconds"] is None
+
+
+def test_invalid_cron_empty_expression():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [
+        _schedule(schedule_type="cron", every_seconds=None, cron_expr="  "),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCHEDULE)
+    assert len(bad) == 1
+    assert bad[0].field == "cron"
+    assert bad[0].severity == ValidationSeverity.ERROR
+
+
+def test_disabled_invalid_schedule_is_ignored():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [
+        _schedule(schedule_type="bogus", enabled=False),
+        _schedule(every_seconds=0, enabled=False),
+        _schedule(schedule_type="cron", cron_expr="", enabled=False),
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_SCHEDULE_TYPE) == []
+    assert _by_code(issues, RULE_INVALID_SCHEDULE) == []
+
+
+def test_schedule_validity_strict_vs_legacy_downgrade():
+    snapshot = _empty_snapshot()
+    snapshot.schedule_rules = [_schedule(schedule_type="every_seconds", every_seconds=60)]
+
+    legacy = validate_snapshot(snapshot, strict=False)
+    strict = validate_snapshot(snapshot, strict=True)
+
+    assert {(i.code, i.rule_id) for i in legacy} == {(i.code, i.rule_id) for i in strict}
+    assert all(i.severity == ValidationSeverity.WARN for i in legacy)
+    assert all(i.severity == ValidationSeverity.ERROR for i in strict)
+    assert has_blocking_errors(strict)
+    assert not has_blocking_errors(legacy)
+
+
+def test_strict_publish_blocked_on_invalid_schedule_type(tmp_path: Path) -> None:
+    """End-to-end: C4 publish gate blocks strict when C3 emits schedule errors."""
+
+    import pandas as pd
+
+    from core.rules_v2.contract_schema import SHEET_SCHEMAS
+
+    frames = {
+        name: pd.DataFrame(columns=sorted(schema.required_columns | schema.optional_columns))
+        for name, schema in SHEET_SCHEMAS.items()
+    }
+    frames["meta"] = pd.DataFrame(
+        [
+            {"key": "version", "value": 2},
+            {"key": "updated_at", "value": "15.05.2026 00:00:00"},
+            {"key": "updated_by", "value": "test"},
+        ]
+    )
+    frames["access"] = pd.DataFrame(
+        [{"chat_id": "1", "user_id": "1", "level": 1, "enabled": 1, "note": ""}]
+    )
+    frames["commands"] = pd.DataFrame(
+        [
+            {
+                "command": "/start",
+                "required_level": 1,
+                "allow_private": 1,
+                "allow_groups": 1,
+                "enabled": 1,
+                "note": "",
+            }
+        ]
+    )
+    frames["schedules"] = pd.DataFrame(
+        [
+            {
+                "id": "SCHED-BAD",
+                "enabled": 1,
+                "job_type": "wallet",
+                "schedule_type": "every_seconds",
+                "every_seconds": 60,
+                "cron": "",
+                "jitter_sec": 0,
+                "max_runtime_sec": 0,
+                "coalesce": 1,
+            }
+        ]
+    )
+
+    path = tmp_path / "sched_invalid.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for sheet, df in frames.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
+
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+
+    assert decision.publish_allowed is False
+    assert RULE_INVALID_SCHEDULE_TYPE in decision.blocking_issue_codes
+    legacy = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.LEGACY)
+    assert legacy.publish_allowed is True
+    assert not has_blocking_errors(legacy.contract_issues)
+
+
+# ---------------------------------------------------------------------------
+# Scope type validity (CONTRACT_V2 §3.4 / §5.6 / §18)
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_scope_on_enabled_limit():
+    snapshot = _empty_snapshot()
+    snapshot.limit_rules = [_limit(rule_key="LIM-1", scope_type="bogus")]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCOPE)
+    assert len(bad) == 1
+    assert bad[0].sheet == "wallet_limits"
+    assert bad[0].rule_id == "LIM-1"
+    assert bad[0].field == "scope_type"
+    assert bad[0].severity == ValidationSeverity.ERROR
+    assert _by_code(issues, RULE_ORPHAN_PARTNER) == []
+
+
+def test_invalid_scope_on_threshold_job_param_exclusion():
+    snapshot = _empty_snapshot()
+    snapshot.threshold_rules = [_threshold(rule_key="THR-1", scope_type="invalid")]
+    snapshot.job_params = [_job_param(scope_type="nope")]
+    snapshot.exclusion_rules = [
+        ExclusionRule(
+            exclusion_key="EXC-1",
+            job_key="wallet",
+            scope_type="bad_scope",
+            scope_key="p1",
+            start_dt=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_dt=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            reason="test",
+            enabled=True,
+        )
+    ]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    bad = _by_code(issues, RULE_INVALID_SCOPE)
+    assert len(bad) == 3
+    assert {i.sheet for i in bad} == {
+        "thresholds_partner",
+        "job_params",
+        "exclude_time",
+    }
+
+
+def test_disabled_invalid_scope_is_ignored():
+    snapshot = _empty_snapshot()
+    snapshot.limit_rules = [_limit(rule_key="LIM-1", scope_type="bogus", enabled=False)]
+    snapshot.job_params = [_job_param(scope_type="nope", enabled=False)]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_SCOPE) == []
+
+
+def test_valid_scope_types_emit_nothing():
+    snapshot = _empty_snapshot()
+    snapshot.limit_rules = [
+        _limit(rule_key="LIM-P", scope_type="partner"),
+        _limit(rule_key="LIM-G", scope_type="group", scope_key="g1"),
+    ]
+    snapshot.job_params = [_job_param(scope_type="global", scope_key="*")]
+
+    issues = validate_snapshot(snapshot, strict=True)
+
+    assert _by_code(issues, RULE_INVALID_SCOPE) == []
+
+
+def test_strict_publish_blocked_on_invalid_scope(tmp_path: Path) -> None:
+    import pandas as pd
+
+    from core.rules_v2.contract_schema import SHEET_SCHEMAS
+
+    frames = {
+        name: pd.DataFrame(columns=sorted(schema.required_columns | schema.optional_columns))
+        for name, schema in SHEET_SCHEMAS.items()
+    }
+    frames["meta"] = pd.DataFrame(
+        [
+            {"key": "version", "value": 2},
+            {"key": "updated_at", "value": "15.05.2026 00:00:00"},
+            {"key": "updated_by", "value": "test"},
+        ]
+    )
+    frames["access"] = pd.DataFrame(
+        [{"chat_id": "1", "user_id": "1", "level": 1, "enabled": 1, "note": ""}]
+    )
+    frames["commands"] = pd.DataFrame(
+        [
+            {
+                "command": "/start",
+                "required_level": 1,
+                "allow_private": 1,
+                "allow_groups": 1,
+                "enabled": 1,
+                "note": "",
+            }
+        ]
+    )
+    frames["wallet_limits"] = pd.DataFrame(
+        [
+            {
+                "id": "LIM-BAD",
+                "enabled": 1,
+                "analyzers": "wallet",
+                "scope": "not_a_valid_scope",
+                "scope_value": "P1",
+                "limit_type": "daily_max_amount",
+                "limit_value": 1000,
+                "reason": "",
+                "method": "",
+                "comment": "",
+            }
+        ]
+    )
+
+    path = tmp_path / "scope_invalid.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for sheet, df in frames.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
+
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+
+    assert decision.publish_allowed is False
+    assert RULE_INVALID_SCOPE in decision.blocking_issue_codes
 
 
 # ---------------------------------------------------------------------------

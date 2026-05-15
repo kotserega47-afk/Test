@@ -20,14 +20,21 @@ What it detects (see CONTRACT_V2 §18 for codes):
    * ``RULE_DUPLICATE_ACCESS``
    * ``RULE_DUPLICATE_COMMAND``
    * ``RULE_DUPLICATE_SCHEDULE_ID``
-2. Orphan scope references in rules:
+2. Enabled schedule row validity (CONTRACT_V2 §3.7):
+   * ``RULE_INVALID_SCHEDULE_TYPE`` — ``schedule_type`` ∉ {``interval``, ``cron``}
+   * ``RULE_INVALID_SCHEDULE`` — interval without ``every_seconds`` > 0;
+     cron without non-empty ``cron_expr``
+3. Invalid ``scope_type`` on enabled scoped rules (CONTRACT_V2 §3.4 / §5.6):
+   * ``RULE_INVALID_SCOPE`` — ``scope_type`` ∉ {``global``, ``group``, ``partner``}
+     on ``wallet_limits``, ``thresholds_partner``, ``job_params``, ``exclude_time``
+4. Orphan scope references in rules:
    * ``RULE_ORPHAN_PARTNER`` (limit / threshold / job_param / exclusion
      with ``scope_type=partner`` and ``scope_key`` not in
      ``snapshot.partners``)
    * ``RULE_ORPHAN_GROUP`` (same for ``scope_type=group``)
-3. Overlap of exclusion intervals (CONTRACT_V2 §8.4):
+5. Overlap of exclusion intervals (CONTRACT_V2 §8.4):
    * ``RULE_OVERLAPPING_EXCLUSION``
-4. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
+6. Non-deterministic collisions (CONTRACT_V2 §13, §8.3):
    * ``RULE_NON_DETERMINISTIC_ORDER`` — multiple memberships per
      (job, partner) without resolvable ``is_primary`` / ``group_priority``;
      conflicting ``is_primary``; tied minimum ``group_priority``;
@@ -63,6 +70,9 @@ from .contract_errors import (
     RULE_DUPLICATE_LIMIT,
     RULE_DUPLICATE_SCHEDULE_ID,
     RULE_DUPLICATE_THRESHOLD,
+    RULE_INVALID_SCHEDULE,
+    RULE_INVALID_SCHEDULE_TYPE,
+    RULE_INVALID_SCOPE,
     RULE_NON_DETERMINISTIC_ORDER,
     RULE_ORPHAN_GROUP,
     RULE_ORPHAN_PARTNER,
@@ -97,11 +107,19 @@ _LEGACY_DOWNGRADE_TO_WARN: frozenset[str] = frozenset(
         RULE_DUPLICATE_ACCESS,
         RULE_DUPLICATE_COMMAND,
         RULE_DUPLICATE_SCHEDULE_ID,
+        RULE_INVALID_SCHEDULE,
+        RULE_INVALID_SCHEDULE_TYPE,
         RULE_ORPHAN_PARTNER,
         RULE_ORPHAN_GROUP,
         RULE_OVERLAPPING_EXCLUSION,
     }
 )
+
+# CONTRACT_V2 §3.7 — allowed ``schedule_type`` values on enabled rows.
+_VALID_SCHEDULE_TYPES: frozenset[str] = frozenset({"interval", "cron"})
+
+# CONTRACT_V2 §3.4 / §5.6 — allowed ``scope_type`` values on scoped snapshot rows.
+_VALID_SCOPE_TYPES: frozenset[str] = frozenset({"global", "group", "partner"})
 
 
 def _severity_for(code: str, *, strict: bool) -> ValidationSeverity | None:
@@ -157,6 +175,8 @@ def validate_snapshot(
     issues.extend(_check_duplicate_access(snapshot, strict=strict))
     issues.extend(_check_duplicate_commands(snapshot, strict=strict))
     issues.extend(_check_duplicate_schedules(snapshot, strict=strict))
+    issues.extend(_check_schedule_validity(snapshot, strict=strict))
+    issues.extend(_check_invalid_scope_types(snapshot, strict=strict))
 
     issues.extend(_check_orphan_scope_refs_in_limits(snapshot, strict=strict))
     issues.extend(_check_orphan_scope_refs_in_thresholds(snapshot, strict=strict))
@@ -363,6 +383,190 @@ def _check_duplicate_schedules(
             )
         )
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Schedule validity (CONTRACT_V2 §3.7 / §18)
+# ---------------------------------------------------------------------------
+
+
+def _check_schedule_validity(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Validate enabled schedule rows against §3.7 (read-only diagnostics)."""
+
+    issues: list[ValidationIssue] = []
+    for rule in sorted(snapshot.schedule_rules, key=lambda r: r.schedule_key):
+        if not rule.enabled:
+            continue
+
+        schedule_type = str(rule.schedule_type or "").strip().lower()
+        if schedule_type not in _VALID_SCHEDULE_TYPES:
+            issues.append(
+                make_issue(
+                    RULE_INVALID_SCHEDULE_TYPE,
+                    (
+                        f"Invalid schedule_type '{rule.schedule_type}' "
+                        f"for schedule '{rule.schedule_key}' "
+                        f"(allowed: interval, cron)"
+                    ),
+                    severity=_severity_for(RULE_INVALID_SCHEDULE_TYPE, strict=strict),
+                    sheet="schedules",
+                    rule_id=rule.schedule_key,
+                    field="schedule_type",
+                    details={"schedule_type": rule.schedule_type},
+                )
+            )
+            continue
+
+        if schedule_type == "interval":
+            every = rule.every_seconds
+            if every is None or every <= 0:
+                issues.append(
+                    make_issue(
+                        RULE_INVALID_SCHEDULE,
+                        (
+                            f"Interval schedule '{rule.schedule_key}' requires "
+                            f"every_seconds > 0 (got {every!r})"
+                        ),
+                        severity=_severity_for(RULE_INVALID_SCHEDULE, strict=strict),
+                        sheet="schedules",
+                        rule_id=rule.schedule_key,
+                        field="every_seconds",
+                        details={"every_seconds": every},
+                    )
+                )
+            continue
+
+        # schedule_type == "cron"
+        cron = (rule.cron_expr or "").strip()
+        if not cron:
+            issues.append(
+                make_issue(
+                    RULE_INVALID_SCHEDULE,
+                    f"Cron schedule '{rule.schedule_key}' requires non-empty cron",
+                    severity=_severity_for(RULE_INVALID_SCHEDULE, strict=strict),
+                    sheet="schedules",
+                    rule_id=rule.schedule_key,
+                    field="cron",
+                    details={"cron_expr": rule.cron_expr},
+                )
+            )
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Scope type validity (CONTRACT_V2 §3.4 / §5.6 / §18)
+# ---------------------------------------------------------------------------
+
+
+def _normalized_scope_type(scope_type: str) -> str:
+    """Lowercase trim for comparison only — does not mutate snapshot rows."""
+
+    return str(scope_type or "").strip().lower()
+
+
+def _is_valid_scope_type(scope_type: str) -> bool:
+    return _normalized_scope_type(scope_type) in _VALID_SCOPE_TYPES
+
+
+def _check_invalid_scope_types(
+    snapshot: RulesSnapshotV2, *, strict: bool
+) -> list[ValidationIssue]:
+    """Emit ``RULE_INVALID_SCOPE`` for enabled rows with unknown ``scope_type``."""
+
+    issues: list[ValidationIssue] = []
+
+    for rule in sorted(snapshot.limit_rules, key=lambda r: r.rule_key):
+        if not rule.enabled:
+            continue
+        if _is_valid_scope_type(rule.scope_type):
+            continue
+        issues.append(
+            _make_invalid_scope_issue(
+                rule.scope_type,
+                sheet="wallet_limits",
+                rule_id=rule.rule_key,
+                strict=strict,
+            )
+        )
+
+    for rule in sorted(snapshot.threshold_rules, key=lambda r: r.rule_key):
+        if not rule.enabled:
+            continue
+        if _is_valid_scope_type(rule.scope_type):
+            continue
+        issues.append(
+            _make_invalid_scope_issue(
+                rule.scope_type,
+                sheet="thresholds_partner",
+                rule_id=rule.rule_key,
+                strict=strict,
+            )
+        )
+
+    for param in sorted(
+        snapshot.job_params,
+        key=lambda p: (p.job_key, p.scope_type, p.scope_key, p.param_key),
+    ):
+        if not param.enabled:
+            continue
+        if _is_valid_scope_type(param.scope_type):
+            continue
+        issues.append(
+            _make_invalid_scope_issue(
+                param.scope_type,
+                sheet="job_params",
+                rule_id=None,
+                strict=strict,
+                extra_details={
+                    "job_key": param.job_key,
+                    "param_key": param.param_key,
+                },
+            )
+        )
+
+    for rule in sorted(snapshot.exclusion_rules, key=lambda r: r.exclusion_key):
+        if not rule.enabled:
+            continue
+        if _is_valid_scope_type(rule.scope_type):
+            continue
+        issues.append(
+            _make_invalid_scope_issue(
+                rule.scope_type,
+                sheet="exclude_time",
+                rule_id=rule.exclusion_key,
+                strict=strict,
+            )
+        )
+
+    return issues
+
+
+def _make_invalid_scope_issue(
+    scope_type: str,
+    *,
+    sheet: str,
+    rule_id: str | None,
+    strict: bool,
+    extra_details: dict[str, object] | None = None,
+) -> ValidationIssue:
+    details: dict[str, object] = {"scope_type": scope_type}
+    if extra_details:
+        details.update(extra_details)
+    return make_issue(
+        RULE_INVALID_SCOPE,
+        (
+            f"Invalid scope_type '{scope_type}' on '{sheet}' "
+            f"(allowed: global, group, partner)"
+        ),
+        severity=_severity_for(RULE_INVALID_SCOPE, strict=strict),
+        sheet=sheet,
+        rule_id=rule_id,
+        field="scope_type",
+        details=details,
+    )
 
 
 # ---------------------------------------------------------------------------
