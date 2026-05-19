@@ -316,14 +316,52 @@
 
 ### 4.6 Immutable после создания правила (политика V2)
 
-Чтобы не «подменять» сущность под тем же `id`, для **одной и той же строки** (тем же `id` на листе) считается **недопустимым менять семантику идентичности** без осознанного bump контракта:
+Чтобы не «подменять» сущность под тем же `id`, для **одной и той же строки** (тем же `id` на листе) считается **недопустимым менять семантику идентичности** без осознанного bump контракта или governed re-baseline (§12.6).
+
+#### 4.6.1 Источник истины и baseline
+
+| Артефакт | Роль |
+|----------|------|
+| **`rules.xlsx` (канонический workbook)** | **Primary SoT** — содержимое правил. |
+| **Identity registry** (`rules_identity_registry.v1.json`, §17.7) | **Derived baseline** — снимок immutable-осей по `(sheet, id)` для **последнего успешного publish commit** (§17.7). |
+| **`RulesSnapshotV2`** | Производный runtime-объект; **не** заменяет registry для drift (одна строка Excel может fan-out в несколько snapshot-сущностей; часть листов не сохраняет Excel `id` в модели). |
+
+**Сравнение drift (C3.5):** текущий workbook → **identity manifest**; manifest сравнивается с registry **по ключу `(sheet, id)`** (после `trim` `id`). Нормализованный бизнес-ключ индекса (§4.2) используется для дубликатов (`RULE_DUPLICATE_*`, C3), но **не** подменяет `(sheet, id)` для immutable policy.
+
+#### 4.6.2 Листы в scope (колонка `id` обязательна в §3)
+
+| Sheet | Ключ строки | Immutable axes (после нормализации §5) |
+|-------|-------------|----------------------------------------|
+| `wallet_limits` | `id` | `sorted(job_keys)` из `analyzers`, `scope_type`, `scope_key`, `metric_key` (`limit_type`), `method_key` (nullable) |
+| `thresholds_partner` | `id` | `job_key` (`analyzer`), `partner_key`, `metric_key` |
+| `job_params` | `id` | `job_key`, `scope_type`, `scope_key`, `param_key` |
+| `schedules` | `id` | `job_key` (`job_type`), `schedule_type` |
+| `exclude_time` | `id` | `sorted(job_keys)` из `analyzers`, `partner_key` |
+| `partner_groups` | `id` | `job_key`, `group_key`, `partner_key` |
+| `ui_layout` | `id` | `report_key` (`view`), `section_key`, `line_key` (`key`) |
+
+**Вне scope C3.5 v1:** листы без стабильного `id` (`access`, `commands`, `hourly_*`) — отдельная политика при появлении колонки `id` или composite-key registry.
+
+**Пустой / отсутствующий `id`:** строка **не участвует** в immutable compare; валидатор может выдавать отдельный WARN о нестабильной идентичности (вне `RULE_IMMUTABLE_ID_VIOLATION`).
+
+#### 4.6.3 Mutable vs immutable (общее)
 
 | Класс полей | Политика |
 |-------------|----------|
-| **Immutable (не менять произвольно)** | Нормализованный **тип** правила и ключевые оси: `job` / `analyzer`, `scope` + `scope_value` (после нормализации), `metric`, `param_key`, `partner` / `group_name` в роли ключа привязки, `command` как ключ команды, `schedule_type` + идентичность job для schedule. Смена этих полей = **новое правило** (новый `id` или явная процедура миграции в changelog). |
-| **Mutable (допускается)** | `limit_value`, `threshold_*`, `enabled`, `reason`/`comment`, `title`/`display_name` там, где не входит в индексный ключ, `default_method`, приоритеты (`group_priority`), временные окна exclusion (если не нарушают политику overlap §8.4). |
+| **Immutable (не менять произвольно)** | Оси из таблицы §4.6.2; смена при том же `(sheet, id)` = **подмена сущности** → `RULE_IMMUTABLE_ID_VIOLATION` (§18). |
+| **Mutable (допускается без смены `id`)** | `limit_value`, `threshold_min` / `threshold_max`, `min_events`, `value` / `value_type` в `job_params`, `enabled`, `reason` / `comment`, `title` / `display_name` (где не ось), `default_method`, `group_priority`, `is_primary`, интервалы `exclude_time` (`start_dt`, `end_dt`), поля расписания кроме `schedule_type` + job identity, `order` / `style` в `ui_layout`. |
 
-**Связь с версиями:** смена immutable-осей при том же `id` в strict → MUST FAIL или требование `deprecated_since` / новой строки (§12).
+#### 4.6.4 Семантика жизненного цикла строки
+
+| Событие | Политика C3.5 |
+|---------|----------------|
+| **Новый `id`** | Нет записи в registry → **не** violation; строка попадает в manifest; после publish commit registry обновляется (§17.7). |
+| **Удалённый `id`** (есть в registry, нет в workbook) | **Не** `RULE_IMMUTABLE_ID_VIOLATION` (retirement); опционально INFO/WARN в diagnostics. |
+| **`enabled` 1→0** | **Допустимо**; mutable. |
+| **`enabled` 0→1** при тех же immutable axes | **Допустимо**. |
+| **Изменение immutable axis** при том же `(sheet, id)` | **Violation** (§18); исправление: **новый `id`** или governed re-baseline (§12.6), не правка оси «тихо». |
+
+**Связь с версиями:** смена immutable-осей при том же `id` в strict audit → MUST FAIL (`RULE_IMMUTABLE_ID_VIOLATION`); в legacy → WARN, publish allowed (§18). Bump `meta.version` **не** отменяет требование нового `id` или re-baseline для осей (§12.6).
 
 ---
 
@@ -601,6 +639,20 @@
 | **Разработчик** | Синхронизация валидатора, bridge (только нормализация), тестов; не менять precedence в analyzers без §6. |
 | **Оператор** | Обновление prod `rules.xlsx`, прохождение валидатора до merge в Dropbox/источник. |
 
+### 12.6 Identity drift и намеренная смена immutable-осей
+
+Изменение immutable-осей (§4.6.2) при сохранении того же `(sheet, id)` **не** является миграцией `meta.version` само по себе.
+
+**Допустимые пути:**
+
+1. **Новая строка** — новый `id`, старая строка `enabled=0` или удалена; changelog фиксирует замену.
+2. **Governed re-baseline** — удаление/архивация `rules_identity_registry.v1.json` (§17.7) и успешный publish commit с записью нового registry для **текущего** `rules.xlsx`; требуется ticket и approver (owner контракта / on-call).
+3. **`deprecated_since` / новая строка** (§12.2) — если в шаблоне появятся поля deprecation для строки; до появления колонок — только п.1–2.
+
+**Запрещено:** re-baseline для сокрытия несанкционированных правок без review.
+
+**Откат workbook без registry:** откат `rules.xlsx` **должен** сопровождаться откатом registry или re-baseline (§17.6, §17.7); иначе ложные `RULE_IMMUTABLE_ID_VIOLATION` при включённом enforce.
+
 ---
 
 ## 13. Deterministic ordering rule
@@ -733,8 +785,27 @@
 ### 17.6 Rollback snapshot behavior
 
 - **Откат файла:** возврат предыдущего `rules.xlsx` + **invalidate** кэша → следующий load строит снимок из откатанного файла.
+- **Откат identity registry:** при откате workbook — **парный** откат `rules_identity_registry.v1.json` (§17.7) или governed re-baseline (§12.6); registry-only откат без workbook — break-glass.
 - **Откат кода:** предыдущий бинарь/ветка с другим диапазоном `meta.version` — при несовместимости файла новый снимок не строится (§19).
 - Опционально хранить **последний известный good** snapshot read-only для диагностики (не для автоматического прод-исполнения без явного переключения).
+
+### 17.7 Identity registry (C3.5 sidecar)
+
+**Назначение:** хранить последний согласованный набор immutable-осей по `(sheet, id)` для drift detection (§4.6). Registry — **sidecar**, не часть `RulesSnapshotV2`.
+
+**Расположение (нормативное):** `{RULES_FOLDER}/state/rules_identity_registry.v1.json` (рядом с `state/state.json`, см. §21). Локальный mirror в cache допустим; канон для fleet — общее хранилище правил.
+
+**Read-only validation:** `evaluate_snapshot_publish` (C4) **может загружать** registry и выполнять compare (C3.5), но **не записывает** registry и **не мутирует** workbook. См. §6 (Validators).
+
+**Publish commit (запись registry):** только после **`publish_allowed=True`** в **publish hooks** вне C4 (например успешный `get_snapshot_v2`, upload path после валидации). Запись registry **best-effort**: сбой сохранения **не откатывает** publish snapshot (§17.1).
+
+**Содержимое header (минимум):** `schema_version`, `workbook_sha256`, `stat_key`, `meta.version`, `published_at_utc`, provenance instance.
+
+**Bootstrap:** отсутствующий или пустой registry → compare **не** выдаёт `RULE_IMMUTABLE_ID_VIOLATION`; первый успешный publish commit создаёт baseline.
+
+**Stale registry:** `registry.workbook_sha256` ≠ hash текущего workbook → diagnostics WARN (`registry_stale`); по умолчанию **не** blocking (bounded окно eventual consistency, §17.7 / ops runbook).
+
+**Связь с atomic swap (§17.4):** swap указателя `(snapshot, indexes)` в процессе **не включает** registry. Job pin (§17.3) закрепляет snapshot/indexes, **не** registry. Stage 2+ atomic swap semantics **не** требуют атомарности workbook+registry в одной транзакции.
 
 ---
 
@@ -767,7 +838,7 @@
 | `RULE_INVALID_SCOPE` | error | `scope` / `scope_type` не из разрешённого набора (§5.6, §3.4). | MUST FAIL. | MUST FAIL или WARN по политике листа. |
 | `RULE_INVALID_SCHEDULE_TYPE` | error | `schedule_type` ∉ {`interval`, `cron`}. | MUST FAIL. | WARN + skip (deprecated). |
 | `RULE_INVALID_META_VERSION` | error / warn | `meta.version` вне поддерживаемого диапазона для данного runtime (§19). | error: не публиковать / не стартовать. | warn: допускается только при явном risk acceptance. |
-| `RULE_IMMUTABLE_ID_VIOLATION` | error | Смена immutable-осей при том же `id` без миграции (§4.6). | MUST FAIL в strict audit. | WARN. |
+| `RULE_IMMUTABLE_ID_VIOLATION` | error | **C3.5** identity drift: смена immutable-осей (§4.6.2) при том же `(sheet, id)` относительно identity registry baseline (§4.6.1, §17.7) без нового `id` / governed re-baseline (§12.6). Compare по Excel-строке, не по snapshot fan-out. | **Strict / enforce:** `severity=error`, blocking → `publish_allowed=false` (§17.1). **Bootstrap** (registry отсутствует/пуст): код **не** выдаётся. | **Legacy:** `severity=warn`, publish allowed (§17.1). |
 | `RULE_NON_DETERMINISTIC_ORDER` | warn | Разрешение зависит от порядка строк без явного priority (§13). | WARN (обязательно в strict validation pass). | WARN. |
 | `RULE_VALIDATION_INFO` | info | Информационные сообщения (например «файл валиден», счётчики). | Не блокирует. | Не блокирует. |
 
@@ -911,3 +982,4 @@ production-resolve **не меняется** C11; только контракт�
 | V2 design | 2026-05-13 | Hourly presentation flags: `job_params.hide_inactive_rows` (bool, default false, presentation-only) + section spacing (одна пустая строка перед payouts/payins в тексте hourly без смены порядка `ui_layout`) — §3.8.1–§3.8.2. |
 | V2 design | 2026-05-13 | §3.13 / §8.3 / §13.3: явный инвариант legacy — без `is_primary` / `group_priority` порядок membership в runtime = порядок вставки в snapshot; регрессионные тесты против silent stable sort; таблица §3.13 дополнена опциональными колонками. |
 | V2 design | 2026-05-16 | Stage 1 gap closure / P0 validator codes: §7.1, §15, §18 — добавлены `RULE_EMPTY_JOBS`, `RULE_ORPHAN_JOB`, `RULE_UNSUPPORTED_JOB_PARAM`, `RULE_INVALID_THRESHOLD` (C3 snapshot validation; strict MUST FAIL / no publish; legacy WARN + deprecated publish allowed). Семантика runtime, schema, precedence, lifecycle, C11 и migration policy не меняются. |
+| V2 design | 2026-05-19 | C3.5 identity registry (docs only, PR-1): §4.6 — registry baseline, compare `(sheet, id)`, per-sheet immutable axes, lifecycle new/delete/enabled; §12.6 re-baseline governance; §17.7 sidecar registry + read-only C4 vs publish commit hooks; §17.4/§17.6 уточнены (registry вне atomic swap); §18 `RULE_IMMUTABLE_ID_VIOLATION` — источник C3.5, strict/legacy/bootstrap. **Код, runtime, C11, precedence не меняются.** |

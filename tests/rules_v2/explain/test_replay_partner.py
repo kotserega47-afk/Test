@@ -118,7 +118,8 @@ def test_replay_import_boundary_subprocess() -> None:
         f"sys.path.insert(0, {str(repo)!r})\n"
         "import core.rules_v2.explain.replay as r\n"
         "for m in ('openpyxl', 'core.rules_provider', "
-        "'core.rules_v2.ops_rules_validate_summary', 'core.rules_v2.rules_validate_audit'):\n"
+        "'core.rules_v2.ops_rules_validate_summary', 'core.rules_v2.rules_validate_audit', "
+        "'core.rules_v2.identity_drift', 'core.rules_v2.identity_registry_io'):\n"
         "    assert m not in sys.modules, m\n"
         "print('ok')\n"
     )

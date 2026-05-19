@@ -130,6 +130,24 @@ def _blocking_codes(issues: Iterable[ValidationIssue]) -> tuple[str, ...]:
     return tuple(sorted({i.code for i in issues if is_blocking(i)}))
 
 
+def _identity_compare_enabled() -> bool:
+    """Whether C3.5 identity drift issues are merged (default off)."""
+
+    if _env_truthy("RULES_IDENTITY_DISABLED"):
+        return False
+    mode = (os.getenv("RULES_IDENTITY_COMPARE") or "").strip().lower()
+    return mode in {"on", "enforce"}
+
+
+def _identity_drift_issues(workbook_path: Path, *, strict: bool) -> list[ValidationIssue]:
+    from core.rules_v2.identity_drift import compare_identity_registry, extract_identity_manifest
+    from core.rules_v2.identity_registry_io import load_identity_registry
+
+    registry = load_identity_registry()
+    manifest = extract_identity_manifest(workbook_path)
+    return list(compare_identity_registry(manifest, registry, strict=strict))
+
+
 def evaluate_snapshot_publish(
     workbook_path: str | Path,
     *,
@@ -188,6 +206,9 @@ def evaluate_snapshot_publish(
                     }
                 },
             )
+
+    if _identity_compare_enabled() and load_error is None and build_error is None:
+        issues.extend(_identity_drift_issues(path, strict=v_strict))
 
     contract_tuple = tuple(issues)
     has_blocking = has_blocking_errors(contract_tuple)
