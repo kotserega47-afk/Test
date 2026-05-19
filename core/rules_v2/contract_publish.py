@@ -90,6 +90,7 @@ class SnapshotPublishDecision:
     load_error: str | None = None
     build_error: str | None = None
     validation_crash: str | None = None
+    identity_shadow_issues: tuple[ValidationIssue, ...] = ()
 
     def to_log_dict(self) -> dict[str, Any]:
         """Structured payload for application logging."""
@@ -110,6 +111,7 @@ class SnapshotPublishDecision:
             "build_error": self.build_error,
             "validation_crash": self.validation_crash,
             "contract_issue_total": len(self.contract_issues),
+            "identity_shadow_issue_total": len(self.identity_shadow_issues),
         }
 
 
@@ -130,13 +132,21 @@ def _blocking_codes(issues: Iterable[ValidationIssue]) -> tuple[str, ...]:
     return tuple(sorted({i.code for i in issues if is_blocking(i)}))
 
 
-def _identity_compare_enabled() -> bool:
-    """Whether C3.5 identity drift issues are merged (default off)."""
+def _identity_compare_mode() -> Literal["off", "shadow", "enforce"]:
+    """C3.5 compare rollout mode (``RULES_IDENTITY_COMPARE`` / ``RULES_IDENTITY_DISABLED``)."""
 
     if _env_truthy("RULES_IDENTITY_DISABLED"):
-        return False
+        return "off"
     mode = (os.getenv("RULES_IDENTITY_COMPARE") or "").strip().lower()
-    return mode in {"on", "enforce"}
+    if mode in {"on", "enforce"}:
+        return "enforce"
+    if mode == "shadow":
+        return "shadow"
+    return "off"
+
+
+def _identity_compare_active() -> bool:
+    return _identity_compare_mode() != "off"
 
 
 def _identity_drift_issues(workbook_path: Path, *, strict: bool) -> list[ValidationIssue]:
@@ -207,8 +217,13 @@ def evaluate_snapshot_publish(
                 },
             )
 
-    if _identity_compare_enabled() and load_error is None and build_error is None:
-        issues.extend(_identity_drift_issues(path, strict=v_strict))
+    identity_shadow: tuple[ValidationIssue, ...] = ()
+    if _identity_compare_active() and load_error is None and build_error is None:
+        drift_issues = tuple(_identity_drift_issues(path, strict=v_strict))
+        if _identity_compare_mode() == "shadow":
+            identity_shadow = drift_issues
+        else:
+            issues.extend(drift_issues)
 
     contract_tuple = tuple(issues)
     has_blocking = has_blocking_errors(contract_tuple)
@@ -245,6 +260,7 @@ def evaluate_snapshot_publish(
         load_error=load_error,
         build_error=build_error,
         validation_crash=validation_crash,
+        identity_shadow_issues=identity_shadow,
     )
 
     payload = decision.to_log_dict()

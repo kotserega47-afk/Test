@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 from core.config_manager import clear_rules_caches
 from core.event_log import append_event
@@ -35,7 +38,44 @@ def _format_contract_issue_line(issue: ValidationIssue) -> str:
     return f"{where}: {' | '.join(parts)}"
 
 
-def _validate_rules_file(local_path: Path) -> None:
+def _try_sync_identity_registry_after_workbook_upload(
+    local_workbook: Path,
+    *,
+    meta_version: str,
+) -> None:
+    """Best-effort identity registry local save + Dropbox upload (§17.7); never raises."""
+
+    try:
+        from core.rules_v2.identity_drift import extract_identity_manifest
+        from core.rules_v2.identity_registry_io import (
+            build_registry_from_manifest,
+            identity_registry_dropbox_path,
+            resolve_identity_registry_path,
+            save_identity_registry,
+        )
+
+        manifest = extract_identity_manifest(local_workbook)
+        registry = build_registry_from_manifest(
+            manifest,
+            workbook_path=local_workbook,
+            meta_version=meta_version,
+        )
+        local_registry_path = resolve_identity_registry_path()
+        save_identity_registry(registry, path=local_registry_path)
+        db_registry_path = identity_registry_dropbox_path()
+        if not upload_file(str(local_registry_path), db_registry_path):
+            log.warning(
+                "identity registry: Dropbox upload failed (workbook upload preserved): %s",
+                db_registry_path,
+            )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "identity registry: sync after workbook upload failed (ignored)",
+            extra={"workbook_path": str(local_workbook.resolve())},
+        )
+
+
+def _validate_rules_file(local_path: Path) -> str:
     """
     Pre-upload validation via the contract pipeline (C2 + C2.5 + C3) in STRICT mode.
 
@@ -73,7 +113,9 @@ def _validate_rules_file(local_path: Path) -> None:
     )
 
     if not blocked:
-        return
+        if decision.snapshot is not None:
+            return str(decision.snapshot.meta.ruleset_version)
+        return "legacy"
 
     details_lines = [f"- {x}" for x in errors[:30]]
     if len(errors) > 30:
@@ -128,12 +170,14 @@ def update_sheet(
         df2.to_excel(writer, sheet_name=sheet_name, index=False)
 
     # 5. validate changed workbook
-    _validate_rules_file(local_path)
+    meta_version = _validate_rules_file(local_path)
 
     # 6. upload overwrite
     up_ok = upload_file(str(local_path), db_path)
     if not up_ok:
         raise RuntimeError(f"Failed to upload rules.xlsx to Dropbox: {db_path}")
+
+    _try_sync_identity_registry_after_workbook_upload(local_path, meta_version=meta_version)
 
     # 7. clear local caches
     clear_rules_caches()

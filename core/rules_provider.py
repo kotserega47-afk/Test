@@ -10,12 +10,14 @@ here — bridge and snapshot layout stay unchanged.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from integrations.dropbox_watcher import download_file
 
@@ -153,6 +155,66 @@ def _try_local_workbook_path() -> Path | None:
     return None
 
 
+def _env_truthy(name: str) -> bool:
+    v = (os.getenv(name) or "").strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+
+def _identity_save_enabled() -> bool:
+    """Whether C3.5 registry baseline is written after publish (default off)."""
+
+    return _env_truthy("RULES_IDENTITY_SAVE")
+
+
+_identity_registry_save_suppressed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "identity_registry_save_suppressed",
+    default=False,
+)
+
+
+@contextmanager
+def suppress_identity_registry_save() -> Iterator[None]:
+    """Read-only ``get_snapshot_v2`` (diagnostics) must not persist identity registry."""
+
+    token = _identity_registry_save_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _identity_registry_save_suppressed.reset(token)
+
+
+def _try_save_identity_registry_after_publish(
+    workbook_path: Path,
+    decision: SnapshotPublishDecision,
+) -> None:
+    """Best-effort registry baseline after ``publish_allowed`` (§17.7); never raises."""
+
+    if _identity_registry_save_suppressed.get() or not _identity_save_enabled():
+        return
+    snap = decision.snapshot
+    if snap is None:
+        return
+    try:
+        from core.rules_v2.identity_drift import extract_identity_manifest
+        from core.rules_v2.identity_registry_io import (
+            build_registry_from_manifest,
+            save_identity_registry,
+        )
+
+        manifest = extract_identity_manifest(workbook_path)
+        registry = build_registry_from_manifest(
+            manifest,
+            workbook_path=workbook_path,
+            meta_version=str(snap.meta.ruleset_version),
+        )
+        save_identity_registry(registry)
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "identity registry: save after publish failed (ignored)",
+            extra={"workbook_path": str(workbook_path.resolve())},
+        )
+
+
 def invalidate_rules_v2_cache() -> None:
     """Drop cached workbook metadata, published snapshot, and ``RulesIndexes`` (C4)."""
 
@@ -281,6 +343,7 @@ def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
         raise ContractPublishRejected(decision)
 
     assert decision.snapshot is not None
+    _try_save_identity_registry_after_publish(path, decision)
     _last_v2_stat = st
     _last_v2_snapshot = decision.snapshot
     _last_v2_decision = decision
@@ -331,5 +394,6 @@ __all__ = [
     "get_indexes_v2",
     "_rules_dropbox_path",
     "invalidate_rules_v2_cache",
+    "suppress_identity_registry_save",
     "ContractPublishRejected",
 ]

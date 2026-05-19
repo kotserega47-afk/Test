@@ -15,7 +15,8 @@ from core.rules_provider import (
     get_snapshot_v2,
     invalidate_rules_v2_cache,
 )
-from core.rules_v2.contract_errors import RULE_DUPLICATE_LIMIT, make_issue
+from core.rules_v2.contract_errors import RULE_DUPLICATE_LIMIT, RULE_IMMUTABLE_ID_VIOLATION, make_issue
+from tests.rules_v2.test_contract_publish_identity import _drift_workbook_and_registry
 from core.rules_v2.contract_publish import ContractValidationMode, evaluate_snapshot_publish
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_payload_for_publish_audit
 from core.rules_v2.rules_validate_audit import (
@@ -148,6 +149,33 @@ def test_try_append_publish_audit_trail_swallows_errors(
             legacy_errors=[],
             legacy_warnings=[],
         )
+
+
+def test_audit_json_includes_identity_shadow_issues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logf = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("RULES_VALIDATE_AUDIT_JSONL", str(logf))
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    monkeypatch.setenv("RULES_XLSX_PATH", str(path))
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+
+    wb = get_rules_snapshot(force_sync=False)
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.LEGACY)
+    assert decision.publish_allowed is True
+    leg_e, leg_w = rules_validate_all(force_sync=False)
+    payload = build_rules_validate_payload_for_publish_audit(wb, decision, list(leg_e), list(leg_w))
+    append_rules_validate_audit_record(rules_validate_audit_envelope("publish_allowed", payload))
+
+    rec = json.loads(logf.read_text(encoding="utf-8").strip())
+    pl = rec["payload"]
+    assert pl["identity_shadow_issue_total"] >= 1
+    assert pl["identity_shadow_issues"]
+    assert any(i["code"] == RULE_IMMUTABLE_ID_VIOLATION for i in pl["identity_shadow_issues"])
+    assert RULE_IMMUTABLE_ID_VIOLATION not in pl["blocking_issue_codes"]
+    assert pl["publish_allowed"] is True
+    assert pl["has_blocking_contract"] is False
 
 
 def test_json_payload_stable_keys(rules_xlsx_baseline: Path) -> None:

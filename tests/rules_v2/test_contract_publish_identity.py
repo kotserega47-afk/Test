@@ -158,6 +158,54 @@ def test_load_error_skips_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     drift_m.assert_not_called()
 
 
+def test_shadow_drift_publish_signature_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    baseline = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+    with_shadow = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    assert _decision_signature(baseline) == _decision_signature(with_shadow)
+    assert len(with_shadow.identity_shadow_issues) >= 1
+    assert RULE_IMMUTABLE_ID_VIOLATION in {i.code for i in with_shadow.identity_shadow_issues}
+
+
+def test_shadow_drift_not_in_contract_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.LEGACY)
+    assert not [i for i in decision.contract_issues if i.code == RULE_IMMUTABLE_ID_VIOLATION]
+    assert decision.identity_shadow_issues
+
+
+def test_shadow_legacy_publish_allowed_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    baseline = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.LEGACY)
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+    with_shadow = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.LEGACY)
+    assert baseline.publish_allowed is True
+    assert with_shadow.publish_allowed is True
+    assert _decision_signature(baseline) == _decision_signature(with_shadow)
+
+
+def test_shadow_calls_identity_compare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    with patch(_IDENTITY_DRIFT_FN) as drift_m:
+        drift_m.return_value = []
+        evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    drift_m.assert_called_once()
+
+
+def test_enforce_still_merges_into_contract_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "enforce")
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    assert [i for i in decision.contract_issues if i.code == RULE_IMMUTABLE_ID_VIOLATION]
+    assert decision.identity_shadow_issues == ()
+
+
 def test_build_error_skips_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RULES_IDENTITY_COMPARE", "on")
     path = tmp_path / "ok.xlsx"

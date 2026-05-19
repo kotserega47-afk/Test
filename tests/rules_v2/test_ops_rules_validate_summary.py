@@ -9,8 +9,11 @@ import json
 import pytest
 
 from core.rules_provider import get_snapshot_v2, invalidate_rules_v2_cache
-from core.rules_v2.contract_errors import RULE_DUPLICATE_LIMIT, make_issue
+from core.rules_provider import get_rules_snapshot
+from core.rules_v2.contract_errors import RULE_DUPLICATE_LIMIT, RULE_IMMUTABLE_ID_VIOLATION, make_issue
+from core.rules_v2.contract_publish import ContractValidationMode, evaluate_snapshot_publish
 from core.rules_v2.ops_rules_validate_summary import (
+    assemble_rules_validate_payload,
     build_rules_validate_diagnostics,
     build_rules_validate_payload,
     build_rules_validate_telegram_chunks,
@@ -19,6 +22,7 @@ from core.rules_v2.ops_rules_validate_summary import (
     rules_validate_payload_json_dumps,
     rules_validate_payload_to_jsonable,
 )
+from tests.rules_v2.test_contract_publish_identity import _drift_workbook_and_registry
 from core.rules_v2.validation_issues import ValidationSeverity
 from core.rules_v2.validation_snapshot import validate_snapshot as real_validate_snapshot
 
@@ -193,3 +197,75 @@ def test_chunk_split_makes_multiple_messages() -> None:
     body = "\n".join([f"line-{i}-{'x' * 40}" for i in range(400)])
     chunks = chunk_telegram_text(body, limit=120)
     assert len(chunks) >= 2
+
+
+def _shadow_drift_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    monkeypatch.setenv("RULES_XLSX_PATH", str(path))
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "shadow")
+    wb = get_rules_snapshot(force_sync=False)
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    assert decision.identity_shadow_issues
+    published = decision.snapshot if decision.publish_allowed else None
+    active_mode = "published" if published is not None else "rejected_audit"
+    payload = assemble_rules_validate_payload(
+        wb,
+        decision,
+        [],
+        [],
+        active_mode=active_mode,
+        published_snapshot=published,
+    )
+    return path, decision, payload
+
+
+def test_shadow_findings_in_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _path, decision, p = _shadow_drift_payload(tmp_path, monkeypatch)
+    assert p.identity_shadow_issue_total >= 1
+    assert p.identity_shadow_issues
+    assert RULE_IMMUTABLE_ID_VIOLATION in {r.code for r in p.identity_shadow_issues}
+    exported = rules_validate_payload_to_jsonable(p)
+    assert exported["identity_shadow_issue_total"] >= 1
+    assert exported["identity_shadow_issues"]
+    assert RULE_IMMUTABLE_ID_VIOLATION not in {i.code for i in decision.contract_issues}
+
+
+def test_shadow_findings_do_not_affect_blocking_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _path, decision, p = _shadow_drift_payload(tmp_path, monkeypatch)
+    assert RULE_IMMUTABLE_ID_VIOLATION not in p.blocking_issue_codes
+    assert p.has_blocking_contract == decision.has_blocking_contract
+    assert p.contract_error_count == decision.error_count
+    assert p.contract_warning_count == decision.warning_count
+    assert p.contract_info_count == decision.info_count
+    assert p.publish_allowed == decision.publish_allowed
+
+
+def test_shadow_telegram_section_separate_from_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _path, _decision, p = _shadow_drift_payload(tmp_path, monkeypatch)
+    text = format_rules_validate_telegram(p)
+    assert "— Identity shadow findings —" in text
+    assert p.identity_shadow_issues[0].message in text
+    contract_section = text.split("— Identity shadow findings —")[0]
+    assert RULE_IMMUTABLE_ID_VIOLATION not in contract_section or "identity_shadow" in contract_section
+
+
+def test_enforce_mode_payload_merges_identity_into_contract_not_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _drift_workbook_and_registry(tmp_path, monkeypatch)
+    monkeypatch.setenv("RULES_XLSX_PATH", str(path))
+    monkeypatch.setenv("RULES_IDENTITY_COMPARE", "enforce")
+    wb = get_rules_snapshot(force_sync=False)
+    decision = evaluate_snapshot_publish(path, policy_mode=ContractValidationMode.STRICT)
+    p = assemble_rules_validate_payload(
+        wb,
+        decision,
+        [],
+        [],
+        active_mode="published" if decision.snapshot else "rejected_audit",
+        published_snapshot=decision.snapshot,
+    )
+    assert RULE_IMMUTABLE_ID_VIOLATION in {r.code for r in p.contract_top_blocking + p.contract_top_warnings}
+    assert p.identity_shadow_issue_total == 0
+    assert p.identity_shadow_issues == ()

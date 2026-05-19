@@ -82,6 +82,19 @@ def _top_contract_issue_records(
     return tuple(out)
 
 
+def _top_identity_shadow_records(
+    decision: SnapshotPublishDecision,
+    *,
+    limit: int = 8,
+) -> tuple[ContractIssueRecord, ...]:
+    out: list[ContractIssueRecord] = []
+    for issue in decision.identity_shadow_issues:
+        out.append(_issue_record(issue))
+        if len(out) >= limit:
+            break
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class ContractIssueRecord:
     """One contract validation finding (JSON-safe, immutable)."""
@@ -126,6 +139,8 @@ class RulesValidatePayload:
     blocking_issue_codes: tuple[str, ...]
     contract_top_blocking: tuple[ContractIssueRecord, ...]
     contract_top_warnings: tuple[ContractIssueRecord, ...]
+    identity_shadow_issue_total: int
+    identity_shadow_issues: tuple[ContractIssueRecord, ...]
     top_legacy_errors: tuple[str, ...]
     top_legacy_warnings: tuple[str, ...]
     active_runtime_readable: bool
@@ -187,6 +202,7 @@ def _resolve_active_fields(
         )
     # runtime_get — lazy import avoids import cycles with optional audit hooks in ``rules_provider``.
     from core.rules_provider import get_snapshot_v2 as _get_snapshot_v2
+    from core.rules_provider import suppress_identity_registry_save
 
     active_runtime_readable = False
     active_ruleset_version: str | None = None
@@ -196,7 +212,8 @@ def _resolve_active_fields(
     active_failure_detail: str | None = None
     fp_match: bool | None = None
     try:
-        snap = _get_snapshot_v2(force_sync=False)
+        with suppress_identity_registry_save():
+            snap = _get_snapshot_v2(force_sync=False)
         active_runtime_readable = True
         active_ruleset_version = str(snap.meta.ruleset_version)
         active_fp = rules_snapshot_fingerprint(snap)
@@ -299,6 +316,8 @@ def assemble_rules_validate_payload(
             predicate=lambda i: i.severity == ValidationSeverity.WARN,
             limit=8,
         ),
+        identity_shadow_issue_total=len(decision.identity_shadow_issues),
+        identity_shadow_issues=_top_identity_shadow_records(decision, limit=8),
         top_legacy_errors=top_legacy_errors,
         top_legacy_warnings=top_legacy_warnings,
         active_runtime_readable=active_runtime_readable,
@@ -449,6 +468,18 @@ def format_rules_validate_telegram(p: RulesValidatePayload) -> str:
     lines.extend(["", "— top warnings (contract) —"])
     if p.contract_top_warnings:
         lines.extend(f"• {rec.message}" for rec in p.contract_top_warnings)
+    else:
+        lines.append("—")
+
+    lines.extend(
+        [
+            "",
+            "— Identity shadow findings —",
+            f"identity_shadow_issue_total: {p.identity_shadow_issue_total}",
+        ]
+    )
+    if p.identity_shadow_issues:
+        lines.extend(f"• {rec.message}" for rec in p.identity_shadow_issues)
     else:
         lines.append("—")
 
