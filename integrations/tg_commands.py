@@ -5,6 +5,7 @@ import asyncio
 import os
 import traceback
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
@@ -15,6 +16,8 @@ from utils.log_profiles import LOG_PROFILES
 from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
+from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
+from core.scheduler_health import get_scheduler_health_snapshot
 
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
@@ -35,7 +38,64 @@ def _mk(profile_key: str):
 
 log = _mk("MAIN")
 
+MSK = ZoneInfo("Europe/Moscow")
+
 RULES = AccessRules(os.getenv("RULES_XLSX_PATH", "").strip())
+
+
+def _observation_enabled() -> bool:
+    return os.getenv("OBSERVATION_ENABLED", "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _format_observation_status() -> str:
+    lines = ["📊 Status"]
+
+    try:
+        health = get_scheduler_health_snapshot()
+        tick_ts = health.get("scheduler_last_tick_ts", "unknown")
+        tick_age = health.get("scheduler_last_tick_age_sec", "unknown")
+        last_error = health.get("scheduler_last_error", "unknown")
+        active_count = health.get("scheduler_active_schedules_count", "unknown")
+
+        if isinstance(tick_ts, (int, float)):
+            tick_human = datetime.fromtimestamp(tick_ts, tz=MSK).strftime("%Y-%m-%d %H:%M:%S MSK")
+        else:
+            tick_human = "unknown"
+
+        lines.append(f"scheduler: tick_age={tick_age}s last_tick={tick_human}")
+        lines.append(f"scheduler: active_schedules={active_count} last_error={last_error}")
+    except Exception:
+        lines.append("scheduler: unknown")
+
+    lines.append("")
+    lines.append("locks:")
+    try:
+        locks = get_lock_status_for_job_types(KNOWN_JOB_TYPES)
+        for jt in KNOWN_JOB_TYPES:
+            info = locks.get(jt, {})
+            pid = info.get("lock_pid", "unknown")
+            age = info.get("lock_age_sec", "unknown")
+            lines.append(f"- {jt}: pid={pid} age={age}s")
+    except Exception:
+        lines.append("- unknown")
+
+    lines.append("")
+    lines.append("jobs:")
+    try:
+        st = get_status()
+        if not st:
+            lines.append("🟢 idle")
+        else:
+            lines.append("🟠 running:")
+            for jt, info in st.items():
+                started = datetime.fromtimestamp(info["started_ts"], tz=MSK).strftime("%Y-%m-%d %H:%M:%S")
+                lines.append(
+                    f"- {jt}: job_id={info['job_id']} runtime={info['runtime_sec']}s старт={started}"
+                )
+    except Exception:
+        lines.append("unknown")
+
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -145,6 +205,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "status"):
+        return
+
+    if _observation_enabled():
+        try:
+            await update.message.reply_text(_format_observation_status())
+        except Exception:
+            log.exception("cmd_status observation format failed")
+            await update.message.reply_text("⚠️ Status partially unavailable")
         return
 
     st = get_status()

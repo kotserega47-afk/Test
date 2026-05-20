@@ -16,6 +16,7 @@ from utils.log_profiles import LOG_PROFILES
 
 from core.schedules import load_schedules, Schedule
 from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
+from core.scheduler_health import record_error, record_schedules_loaded, record_tick
 from core.job_runner import request_job, Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
@@ -170,13 +171,17 @@ def schedule_loop() -> None:
 
     while True:
         _apply_scheduler_clock_reset_if_requested(next_every, next_cron, logger=log)
+        record_tick()
 
         try:
             schedules = load_schedules(force_sync=False)
         except Exception as e:
+            record_error(str(e))
             log.warning(f"⚠️ schedules load failed: {e}")
             time.sleep(10)
             continue
+
+        record_schedules_loaded(len(schedules))
 
         active = {s.job_type for s in schedules}
         for k in list(next_every.keys()):
