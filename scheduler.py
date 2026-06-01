@@ -17,7 +17,8 @@ from utils.log_profiles import LOG_PROFILES
 from core.schedules import load_schedules, Schedule
 from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
 from core.scheduler_health import record_error, record_schedules_loaded, record_tick
-from core.job_runner import request_job, Actor
+from core.job_dispatch import dispatch_job_sync
+from core.job_runner import Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
 
@@ -214,9 +215,9 @@ def schedule_loop() -> None:
 
                     actor = Actor(kind="scheduler")
                     try:
-                        request_job(jt, actor)
+                        dispatch_job_sync(jt, actor)
                     except Exception as e:
-                        # request_job already appends job_failed; here only log
+                        # dispatch_job_sync / request_job already appends job_failed; here only log
                         log.exception(f"❌ scheduled job failed: {jt}: {e}")
 
                     next_every[jt] = ts_now + max(1, int(s.every_seconds))
@@ -243,7 +244,7 @@ def schedule_loop() -> None:
 
                     actor = Actor(kind="scheduler")
                     try:
-                        request_job(jt, actor)
+                        dispatch_job_sync(jt, actor)
                     except Exception as e:
                         log.exception(f"❌ scheduled job failed: {jt}: {e}")
 
@@ -263,7 +264,7 @@ def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
     for h in get_handlers():
         app.add_handler(h)

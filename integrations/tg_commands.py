@@ -15,7 +15,8 @@ from utils.log_profiles import LOG_PROFILES
 
 from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
-from core.job_runner import request_job, get_status, Actor, JOB_REGISTRY
+from core.job_dispatch import dispatch_job_async
+from core.job_runner import get_status, Actor, JOB_REGISTRY
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
 
@@ -176,9 +177,8 @@ async def _run_job_async(update: Update, job_type: str) -> None:
     actor = Actor(kind="tg", chat_id=int(update.effective_chat.id), user_id=int(update.effective_user.id))
     await update.message.reply_text(f"🚀 Запускаю: {job_type}")
 
-    loop = asyncio.get_running_loop()
     try:
-        job_id = await loop.run_in_executor(None, lambda: request_job(job_type, actor))
+        job_id = await dispatch_job_async(job_type, actor)
         await update.message.reply_text(f"✅ Принято: {job_type}\njob_id={job_id}")
     except Exception:
         err = traceback.format_exc()
