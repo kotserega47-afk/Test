@@ -55,6 +55,92 @@ def test_is_wallet_editor_chat_allowed_member() -> None:
     assert is_wallet_editor_chat_allowed(999, allowed=allowed) is False
 
 
+def test_wallet_editor_uses_dedicated_allowlist_env() -> None:
+    with patch.dict(
+        "os.environ",
+        {"WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011,42"},
+        clear=True,
+    ):
+        assert parse_allowed_chat_ids() == frozenset({-5102627011, 42})
+        assert is_wallet_editor_chat_allowed(-5102627011) is True
+        assert is_wallet_editor_chat_allowed(999) is False
+
+
+def test_telegram_allowed_chat_ids_does_not_affect_wallet_editor() -> None:
+    with patch.dict(
+        "os.environ",
+        {
+            "TELEGRAM_ALLOWED_CHAT_IDS": "-999,111",
+            "WALLET_EDITOR_ALLOWED_CHAT_IDS": "",
+        },
+        clear=True,
+    ):
+        assert parse_allowed_chat_ids() == frozenset()
+        assert is_wallet_editor_chat_allowed(-999) is False
+
+
+def test_empty_wallet_editor_allowlist_is_fail_closed() -> None:
+    with patch.dict("os.environ", {}, clear=True):
+        assert parse_allowed_chat_ids() == frozenset()
+        assert is_wallet_editor_chat_allowed(-5102627011) is False
+
+
+def test_startup_warning_when_allowlist_empty(caplog) -> None:
+    import integrations.wallet_editor_tg as mod
+
+    mod._ALLOWLIST_STARTUP_LOGGED = False
+    with patch.dict("os.environ", {}, clear=True):
+        with caplog.at_level("WARNING"):
+            mod.log_wallet_editor_allowlist_startup_warning()
+
+    assert "WALLET_EDITOR_ALLOWED_CHAT_IDS" in caplog.text
+    assert "fail-closed" in caplog.text
+
+
+def test_disallowed_chat_rejected_via_allowlist() -> None:
+    async def run() -> None:
+        update = _make_document_update(chat_id=999)
+        context = MagicMock()
+
+        with patch.dict(
+            "os.environ",
+            {"WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
+            clear=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        add_task.assert_not_called()
+        update.message.reply_text.assert_awaited_once_with(
+            "⛔ Чат не разрешён для WalletEditor."
+        )
+
+    asyncio.run(run())
+
+
+def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
+    async def run() -> None:
+        update = _make_document_update(chat_id=-5102627011)
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        tg_file.download_to_drive = AsyncMock()
+
+        with patch.dict(
+            "os.environ",
+            {"WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
+            clear=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("integrations.wallet_editor_tg.task_queue") as queue:
+                    queue.qsize.return_value = 1
+                    await handle_wallet_editor_document(update, context)
+
+        add_task.assert_called_once()
+
+    asyncio.run(run())
+
+
 def test_xlsx_document_queues_task() -> None:
     async def run() -> None:
         update = _make_document_update()

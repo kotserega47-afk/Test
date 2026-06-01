@@ -13,17 +13,36 @@ from automation.worker import add_task, task_queue
 
 ALLOWED_EXTENSION = ".xlsx"
 TMP_DIR = Path("/tmp/wallet_editor")
+_WALLET_EDITOR_ALLOWED_CHAT_IDS_ENV = "WALLET_EDITOR_ALLOWED_CHAT_IDS"
+_ALLOWLIST_STARTUP_LOGGED = False
 
 
 def parse_allowed_chat_ids(env_value: str | None = None) -> frozenset[int]:
     raw = (
         env_value
         if env_value is not None
-        else os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
+        else os.getenv(_WALLET_EDITOR_ALLOWED_CHAT_IDS_ENV, "")
     ).strip()
     if not raw:
         return frozenset()
     return frozenset(int(part.strip()) for part in raw.split(",") if part.strip())
+
+
+def log_wallet_editor_allowlist_startup_warning() -> None:
+    global _ALLOWLIST_STARTUP_LOGGED
+    if _ALLOWLIST_STARTUP_LOGGED:
+        return
+    _ALLOWLIST_STARTUP_LOGGED = True
+
+    ids = parse_allowed_chat_ids()
+    if not ids:
+        log.warning(
+            "⚠️ [WalletEditor] WALLET_EDITOR_ALLOWED_CHAT_IDS пуст или не задан — "
+            "ingest .xlsx отключён (fail-closed)"
+        )
+        return
+
+    log.info(f"🟢 [WalletEditor] allowed chats configured: {sorted(ids)}")
 
 
 def is_wallet_editor_chat_allowed(
@@ -33,9 +52,6 @@ def is_wallet_editor_chat_allowed(
 ) -> bool:
     ids = allowed if allowed is not None else parse_allowed_chat_ids()
     if not ids:
-        log.warning(
-            "⚠️ [WalletEditor] TELEGRAM_ALLOWED_CHAT_IDS пуст — доступ запрещён (fail-closed)"
-        )
         return False
     return chat_id in ids
 
@@ -96,3 +112,6 @@ async def handle_wallet_editor_document(
     except Exception as e:
         log.exception(f"❌ [WalletEditor] ingest failed chat_id={chat_id}: {e}")
         await message.reply_text(f"❌ Ошибка при приёме файла: {e}")
+
+
+log_wallet_editor_allowlist_startup_warning()
