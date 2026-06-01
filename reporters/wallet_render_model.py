@@ -49,9 +49,8 @@ def _payin_line(p: WalletPartnerStats) -> str:
     elif p.limit_warn:
         icon = "🟡"
 
-    suffix = f" ({p.daily_limit_comment})" if p.daily_limit_comment else ""
     pct = f"{p.percent_filled}%" if p.percent_filled is not None else "—"
-    return f"  Поступления: {amount} / {limit} ({pct}) — {icon}{suffix}"
+    return f"  Поступления: {amount} / {limit} ({pct}) — {icon}"
 
 
 def _api_line(p: WalletPartnerStats) -> str:
