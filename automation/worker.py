@@ -4,6 +4,7 @@ import os
 import traceback
 import threading
 import time
+from dataclasses import dataclass, field
 from queue import Queue
 
 from utils.loggers import get_logger
@@ -16,33 +17,52 @@ from transport.telegram_transport import send_text, send_document
 icon, name = LOG_PROFILES["AUTOMATION"]
 log = get_logger(name, icon)
 
-task_queue: Queue[WalletEditorTask] = Queue()
+_registry_lock = threading.Lock()
 
-_worker_started = False
-_worker_start_lock = threading.Lock()
+
+@dataclass
+class _ProfileWorker:
+    queue: Queue[WalletEditorTask] = field(default_factory=Queue)
+    thread: threading.Thread | None = None
+
+
+_profile_workers: dict[str, _ProfileWorker] = {}
 
 
 def ensure_worker_started() -> None:
-    """Start WalletEditor worker daemon once per process."""
-    global _worker_started
-    with _worker_start_lock:
-        if _worker_started:
-            return
-        threading.Thread(
+    """Legacy bootstrap for scheduler.py — workers start lazily per profile on add_task."""
+    log.debug("🟢 [Worker] ensure_worker_started() — lazy per-profile workers")
+
+
+def _ensure_profile_worker(profile_key: str) -> _ProfileWorker:
+    with _registry_lock:
+        worker = _profile_workers.get(profile_key)
+        if worker is not None:
+            return worker
+
+        worker = _ProfileWorker()
+        thread = threading.Thread(
             target=worker_loop,
+            args=(profile_key, worker.queue),
             daemon=True,
-            name="wallet-editor-worker",
-        ).start()
-        _worker_started = True
-        log.info("🟢 [Worker] daemon thread registered")
+            name=f"wallet-editor-worker-{profile_key}",
+        )
+        thread.start()
+        worker.thread = thread
+        _profile_workers[profile_key] = worker
+        log.info(f"🟢 [Worker] profile={profile_key} daemon thread registered")
+        return worker
 
 
-def add_task(task: WalletEditorTask) -> None:
+def add_task(task: WalletEditorTask) -> int:
+    worker = _ensure_profile_worker(task.operator_profile)
+    worker.queue.put(task)
+    queue_size = worker.queue.qsize()
     log.info(
-        f"📥 [Queue] profile={task.operator_profile} chat_id={task.chat_id} "
-        f"user_id={task.telegram_user_id} file={task.file_path}"
+        f"📥 [Queue] profile={task.operator_profile} queue_size={queue_size} "
+        f"chat_id={task.chat_id} user_id={task.telegram_user_id} file={task.file_path}"
     )
-    task_queue.put(task)
+    return queue_size
 
 
 def delayed_cleanup(result_path: str, input_path: str, delay: int = 30):
@@ -62,13 +82,13 @@ def delayed_cleanup(result_path: str, input_path: str, delay: int = 30):
         log.warning(f"⚠️ [Cleanup] Не удалось удалить входной файл: {e}")
 
 
-def worker_loop():
-    log.info("🟢 [Worker] Запущен worker_loop")
+def worker_loop(profile_key: str, task_queue: Queue[WalletEditorTask]) -> None:
+    log.info(f"🟢 [Worker] profile={profile_key} worker_loop started")
 
     while True:
         task = task_queue.get()
         log.info(
-            f"🚀 [Worker] Взята задача profile={task.operator_profile} file={task.file_path}"
+            f"🚀 [Worker] profile={profile_key} file={task.file_path}"
         )
 
         try:
@@ -78,18 +98,18 @@ def worker_loop():
                 auth_state_path=task.auth_state_path,
             )
 
-            log.info("📊 [Worker] Запуск engine.run()")
+            log.info(f"📊 [Worker] profile={profile_key} engine.run()")
             result_file, stats = run(task.file_path, cfg)
 
             summary = stats.summary()
-            log.info(f"✅ [Worker] Готово: {summary}")
+            log.info(f"✅ [Worker] profile={profile_key} done: {summary}")
 
             send_text(
                 chat_id=str(task.chat_id),
                 text=f"📊 {summary}"
             )
 
-            log.info(f"📤 [Worker] Отправка файла: {result_file}")
+            log.info(f"📤 [Worker] profile={profile_key} sending file: {result_file}")
             send_document(
                 path=result_file,
                 chat_id=str(task.chat_id),
@@ -103,7 +123,7 @@ def worker_loop():
             ).start()
 
         except Exception as e:
-            log.error(f"❌ [Worker] Ошибка: {e}")
+            log.error(f"❌ [Worker] profile={profile_key} error: {e}")
             log.error(traceback.format_exc())
 
             send_text(

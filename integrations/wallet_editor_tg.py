@@ -15,7 +15,7 @@ from automation.runtime import (
     WalletEditorTask,
     resolve_operator_for_user,
 )
-from automation.worker import add_task, task_queue
+from automation.worker import add_task
 
 ALLOWED_EXTENSION = ".xlsx"
 TMP_DIR = Path("/tmp/wallet_editor")
@@ -128,7 +128,7 @@ async def handle_wallet_editor_document(
         tg_file = await context.bot.get_file(document.file_id)
         await tg_file.download_to_drive(custom_path=str(local_path))
 
-        add_task(
+        queue_size = add_task(
             WalletEditorTask(
                 file_path=str(local_path),
                 chat_id=chat_id,
@@ -139,15 +139,15 @@ async def handle_wallet_editor_document(
                 auth_state_path=operator.auth_state_path,
             )
         )
-        position = task_queue.qsize()
 
         log.info(
             f"📌 [WalletEditor] queued profile={operator.profile_key} "
             f"user_id={telegram_user_id} chat_id={chat_id} "
-            f"queue_size={position} file={local_path}"
+            f"queue_size={queue_size} file={local_path}"
         )
         await message.reply_text(
-            f"📌 Файл добавлен в очередь. Текущий размер очереди: {position}"
+            f"📌 Файл добавлен в очередь профиля {operator.profile_key}. "
+            f"Текущий размер очереди: {queue_size}"
         )
     except Exception as e:
         log.exception(f"❌ [WalletEditor] ingest failed chat_id={chat_id}: {e}")

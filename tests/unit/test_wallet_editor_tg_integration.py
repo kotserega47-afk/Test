@@ -160,10 +160,8 @@ def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
             {**_operator_env(), "WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
             clear=True,
         ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                with patch("integrations.wallet_editor_tg.task_queue") as queue:
-                    queue.qsize.return_value = 1
-                    await handle_wallet_editor_document(update, context)
+            with patch("integrations.wallet_editor_tg.add_task", return_value=1) as add_task:
+                await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
 
@@ -286,9 +284,7 @@ def test_xlsx_document_queues_task() -> None:
                     "integrations.wallet_editor_tg.parse_allowed_chat_ids",
                     return_value=allowed,
                 ):
-                    with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                        with patch("integrations.wallet_editor_tg.task_queue") as queue:
-                            queue.qsize.return_value = 1
+                    with patch("integrations.wallet_editor_tg.add_task", return_value=1) as add_task:
                             await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
@@ -306,7 +302,7 @@ def test_xlsx_document_queues_task() -> None:
         tg_file.download_to_drive.assert_awaited_once()
         texts = [c.args[0] for c in update.message.reply_text.await_args_list]
         assert "📥 Файл получен" in texts
-        assert any("очередь" in t for t in texts)
+        assert any("очередь профиля DENIS" in t for t in texts)
 
     asyncio.run(run())
 
@@ -376,17 +372,13 @@ def test_handler_does_not_call_engine_run_directly() -> None:
     asyncio.run(run())
 
 
-def test_ensure_worker_started_only_once() -> None:
+def test_ensure_worker_started_is_no_op_for_scheduler_compat() -> None:
     import automation.worker as worker_mod
 
-    worker_mod._worker_started = False
     with patch.object(worker_mod.threading, "Thread") as mock_thread:
         ensure_worker_started()
         ensure_worker_started()
-        assert mock_thread.call_count == 1
-        assert mock_thread.call_args.kwargs.get("daemon") is True
-        assert mock_thread.call_args.kwargs.get("name") == "wallet-editor-worker"
-    worker_mod._worker_started = False
+        mock_thread.assert_not_called()
 
 
 def test_scheduler_starts_wallet_editor_worker_once() -> None:
@@ -553,6 +545,32 @@ def test_handler_does_not_fallback_to_wallet_editor_antares_login() -> None:
     src = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
     assert "WALLET_EDITOR_ANTARES_LOGIN" not in src
     assert "wallet_editor_antares_login" not in src
+
+
+def test_handler_uses_profile_queue_size_from_add_task() -> None:
+    async def run() -> None:
+        update = _make_document_update()
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        tg_file.download_to_drive = AsyncMock()
+
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task", return_value=3) as add_task:
+                    await handle_wallet_editor_document(update, context)
+
+        add_task.assert_called_once()
+        texts = [c.args[0] for c in update.message.reply_text.await_args_list]
+        assert any(
+            "📌 Файл добавлен в очередь профиля DENIS. Текущий размер очереди: 3" in t
+            for t in texts
+        )
+
+    asyncio.run(run())
 
 
 def test_import_safe_without_operator_map() -> None:
