@@ -294,6 +294,7 @@ def test_xlsx_document_queues_task() -> None:
         assert task.chat_id == update.effective_chat.id
         assert task.telegram_user_id == DEFAULT_USER_ID
         assert task.operator_profile == DEFAULT_PROFILE
+        assert task.source_file_name == "batch.xlsx"
         assert task.login == "denis-login"
         assert task.password == "denis-pass"
         assert task.auth_state_path == operator_auth_state_path(DEFAULT_PROFILE)

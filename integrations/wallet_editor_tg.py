@@ -134,6 +134,7 @@ async def handle_wallet_editor_document(
                 chat_id=chat_id,
                 telegram_user_id=telegram_user_id,
                 operator_profile=operator.profile_key,
+                source_file_name=document.file_name or "input.xlsx",
                 login=operator.login,
                 password=operator.password,
                 auth_state_path=operator.auth_state_path,

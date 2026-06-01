@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import os
 import re
 import time
+from pathlib import Path
 from typing import Callable, TypeVar
 
 from automation.audit import log
@@ -17,6 +18,10 @@ _WALLET_EDITOR_ANTARES_LOGIN_ENV = "WALLET_EDITOR_ANTARES_LOGIN"
 _WALLET_EDITOR_ANTARES_PASSWORD_ENV = "WALLET_EDITOR_ANTARES_PASSWORD"
 _WALLET_EDITOR_OPERATOR_MAP_ENV = "WALLET_EDITOR_OPERATOR_MAP"
 _PROFILE_KEY_RE = re.compile(r"^[A-Z0-9_]+$")
+_INPUT_NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_\-.]+")
+WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
+MAX_INPUT_NAME_LEN = 80
+RESULT_NAME_PREFIX = "wallet_editor_result_"
 
 MSG_OPERATOR_UNMAPPED = "⛔ Для вашего Telegram user_id не настроен профиль WalletEditor."
 MSG_OPERATOR_INCOMPLETE = (
@@ -88,6 +93,48 @@ def operator_auth_state_path(profile_key: str) -> str:
     return f"/tmp/auth_state_wallet_editor_{profile_key}.json"
 
 
+def sanitize_input_name(file_name: str, *, max_len: int = MAX_INPUT_NAME_LEN) -> str:
+    name = (file_name or "").strip()
+    name = os.path.basename(name.replace("\\", "/"))
+    if name.lower().endswith(".xlsx"):
+        name = name[:-5]
+    name = name.replace(" ", "_")
+    name = _INPUT_NAME_SAFE_RE.sub("_", name)
+    name = re.sub(r"_+", "_", name).strip("._")
+    if not name or name in {".", ".."}:
+        name = "input"
+    if len(name) > max_len:
+        name = name[:max_len].rstrip("._") or "input"
+    return name
+
+
+def build_wallet_editor_result_path(
+    source_file_name: str,
+    operator_profile: str,
+    *,
+    base_dir: str = WALLET_EDITOR_RESULT_DIR,
+) -> str:
+    input_name = sanitize_input_name(source_file_name)
+    operator = normalize_profile_key(operator_profile) or "UNKNOWN"
+    file_name = f"{RESULT_NAME_PREFIX}{input_name}_{operator}.xlsx"
+    directory = Path(base_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / file_name
+
+    if not path.exists():
+        return str(path)
+
+    stem = path.stem
+    for suffix in range(2, 100):
+        candidate = directory / f"{stem}_{suffix}.xlsx"
+        if not candidate.exists():
+            return str(candidate)
+
+    from uuid import uuid4
+
+    return str(directory / f"{stem}_{uuid4().hex[:8]}.xlsx")
+
+
 @dataclass(frozen=True)
 class OperatorCredentials:
     profile_key: str
@@ -102,6 +149,7 @@ class WalletEditorTask:
     chat_id: int
     telegram_user_id: int
     operator_profile: str
+    source_file_name: str
     login: str
     password: str
     auth_state_path: str
@@ -137,6 +185,7 @@ class RunConfig:
     auth_state_path: str = field(default_factory=wallet_editor_auth_state_path)
     login: str = field(default_factory=wallet_editor_antares_login)
     password: str = field(default_factory=wallet_editor_antares_password)
+    result_file_path: str | None = None
 
 
 def require_wallet_editor_antares_credentials(cfg: RunConfig) -> None:

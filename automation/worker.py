@@ -11,7 +11,7 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
 from automation.engine import run, RunConfig
-from automation.runtime import WalletEditorTask
+from automation.runtime import WalletEditorTask, build_wallet_editor_result_path
 from transport.telegram_transport import send_text, send_document
 
 icon, name = LOG_PROFILES["AUTOMATION"]
@@ -96,6 +96,10 @@ def worker_loop(profile_key: str, task_queue: Queue[WalletEditorTask]) -> None:
                 login=task.login,
                 password=task.password,
                 auth_state_path=task.auth_state_path,
+                result_file_path=build_wallet_editor_result_path(
+                    task.source_file_name,
+                    task.operator_profile,
+                ),
             )
 
             log.info(f"📊 [Worker] profile={profile_key} engine.run()")

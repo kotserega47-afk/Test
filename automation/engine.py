@@ -1009,9 +1009,12 @@ def _group_actions(df: pd.DataFrame):
     return grouped
 
 
-def _write_result(df: pd.DataFrame) -> str:
-    fd, out_path = tempfile.mkstemp(prefix="wallet_editor_result_", suffix=".xlsx", dir=BASE_DIR)
-    os.close(fd)
+def _write_result(df: pd.DataFrame, out_path: str | None = None) -> str:
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(prefix="wallet_editor_result_", suffix=".xlsx", dir=BASE_DIR)
+        os.close(fd)
+    else:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(out_path, index=False)
     log.info(f"📤 [Output] result file written path={out_path}")
     return out_path
@@ -1161,7 +1164,7 @@ def run(file_path: str, cfg: RunConfig):
         browser.close()
         log.info("🛑 [Browser] browser closed")
 
-    out_path = _write_result(df)
+    out_path = _write_result(df, cfg.result_file_path)
 
     log.info(f"🏁 [Run] completed summary={stats.summary()}")
 
