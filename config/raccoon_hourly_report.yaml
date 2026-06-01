@@ -1,0 +1,133 @@
+# Трафик-Мониторинг
+
+
+# -------------------------
+# PAYIN (Одиночные)
+# -------------------------
+# Структура:
+# payin:
+#   "<оригинальное имя партнёра из PayIn>":
+#       title: "<как писать в отчёте>"
+#       limit: <число или null>
+#       vilka: "<текст или null>"
+
+payin:
+
+  "Cat.Casino (207)":
+    title: "Cat.Casino (207)"
+    comment:
+
+  "R7.Casino (212)":
+    title: "R7.Casino (212)"
+    comment:
+
+  "Arkada.Casino (214)":
+    title: "Arkada.Casino (214)"
+    comment:
+
+  "Gama.Casino (208)":
+    title: "Gama.Casino (208)"
+    comment:
+
+  "Atom (216)":
+    title: "Atom (216)"
+    comment:
+
+  "Kent.Casino (210)":
+    title: "Kent.Casino (210)"
+    comment:
+
+  "Kometa.Casino (213)":
+    title: "Kometa.Casino (213)"
+    comment:
+
+  "Daddy.Casino (209)":
+    title: "Daddy.Casino (209)"
+    comment:
+
+  "Mers.Casino (211)":
+    title: "Mers.Casino (211)"
+    comment:
+
+  "Motor (215)":
+    title: "Motor (215)"
+    comment:
+
+  "Billion_pay (206)":
+    title: "Billion_pay (206)"
+    comment:
+
+# -------------------------
+# PAYIN GROUPS (суммарные)
+# ---------------------------
+# Структура:
+# payin_groups:
+#   <код группы>:
+#       title: "<как писать в отчёте>"
+#       combine:
+#         - "<оригинальное имя партнера 1>"
+#         - "<оригинальное имя партнера 2>"
+#       limit: <число или null>
+#       vilka: "<текст или null>"
+
+
+# --------------------------
+# PAYIN LAYOUT
+# --------------------------
+# Формат подписей, как в title:
+# payin:
+# payin_groups:
+
+payin_layout:
+
+  - group:
+      - "Cat.Casino (207)"
+    spacing: 1
+
+  - group:
+      - "R7.Casino (212)"
+    spacing: 1
+
+  - group:
+      - "Arkada.Casino (214)"
+    spacing: 1
+
+  - group:
+      - "Gama.Casino (208)"
+    spacing: 1
+
+  - group:
+      - "Atom (216)"
+    spacing: 1
+
+  - group:
+      - "Kent.Casino (210)"
+    spacing: 1
+
+  - group:
+      - "Kometa.Casino (213)"
+    spacing: 1
+
+  - group:
+      - "Daddy.Casino (209)"
+    spacing: 1
+
+  - group:
+      - "Mers.Casino (211)"
+    spacing: 1
+
+  - group:
+      - "Motor (215)"
+    spacing: 1
+
+  - group:
+      - "Billion_pay (206)"
+    spacing: 1
+
+
+    columns:
+      payin:
+        dt: "Дата/Время создания"
+        partner: "Партнер"
+        status: "Статус"
+        amount: "Сумма"

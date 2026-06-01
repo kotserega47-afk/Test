@@ -13,7 +13,15 @@ PidField = Union[int, Literal["none", "unknown"]]
 _DEFAULT_STATE_DIR = "/config/state"
 _STATE_DIR_ENV_KEYS = ("STATE_DIR", "CONFIG_STATE_DIR", "DROPBOX_STATE_DIR")
 
-KNOWN_JOB_TYPES: Tuple[str, ...] = ("wallet", "hourly", "rate", "download")
+KNOWN_JOB_TYPES: Tuple[str, ...] = (
+    "wallet",
+    "hourly",
+    "rate",
+    "download",
+    "raccoon_wallet",
+    "raccoon_hourly",
+    "raccoon_daily_conversion",
+)
 
 
 def _state_dir() -> Path:

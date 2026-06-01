@@ -1,0 +1,63 @@
+#  Бот-Аналитика
+#=== ОБЩИЕ НАСТРОЙКИ ОКНА ===
+window_minutes: 60             # ширина окна анализа
+offset_minutes: 0             # смещение окна
+success_window_minutes: 0      # окно подсчёта успехов
+min_events: 5                 # анти-шум
+
+# Минуты для выставления окна по зависшим операциям
+# Дни для выставления периода скачивания файлов
+pending_thresholds:
+  payin_minutes: 10       # Поступления — более 10 минут
+  payout_minutes: 180     # Выплаты — более 3 часов
+
+download_periods:
+  payin_days_back: 0      # сегодня − 2
+  payout_days_back: 0     # выплаты за неделю
+
+# === ГРУППЫ ПАРТНЁРОВ (общий дневной лимит для группы) ===
+
+# === ИНДИВИДУАЛЬНЫЕ ПАРТНЁРЫ (всё, что не принадлежит группам) ===
+partners:
+
+  "Cat.Casino (207)":
+    api_cancel_keyword: "Отмена по API"
+
+  "R7.Casino (212)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Arkada.Casino (214)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Gama.Casino (208)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Atom (216)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Kent.Casino (210)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Kometa.Casino (213)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Daddy.Casino (209)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Mers.Casino (211)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Motor (215)":
+    api_cancel_keyword: "Отмена по API"
+
+  "Billion_pay (206)":
+    api_cancel_keyword: "Отмена по API"
+
+
+columns:
+  payin:
+    dt: "Дата/Время создания"
+    partner: "Партнер"
+    status: "Статус"
+    info: "Инфо"
+    amount: "Сумма"
