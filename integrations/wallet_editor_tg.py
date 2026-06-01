@@ -56,13 +56,11 @@ def is_wallet_editor_chat_allowed(
     return chat_id in ids
 
 
-def document_extension(file_name: str | None, file_path: str | None = None) -> str:
-    for candidate in (file_name, file_path):
-        if candidate:
-            ext = Path(candidate).suffix.lower()
-            if ext:
-                return ext
-    return ""
+def is_xlsx_file_name(file_name: str | None) -> bool:
+    name = (file_name or "").strip()
+    if not name:
+        return False
+    return name.lower().endswith(".xlsx")
 
 
 def _ensure_tmp_dir() -> None:
@@ -85,9 +83,10 @@ async def handle_wallet_editor_document(
         await message.reply_text("⛔ Чат не разрешён для WalletEditor.")
         return
 
-    ext = document_extension(document.file_name, document.file_path)
-    if ext != ALLOWED_EXTENSION:
-        log.info(f"❌ [WalletEditor] rejected extension={ext!r} chat_id={chat_id}")
+    if not is_xlsx_file_name(document.file_name):
+        log.info(
+            f"❌ [WalletEditor] rejected file_name={document.file_name!r} chat_id={chat_id}"
+        )
         await message.reply_text("❌ Принимаются только файлы .xlsx")
         return
 

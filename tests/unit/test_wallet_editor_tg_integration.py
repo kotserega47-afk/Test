@@ -14,6 +14,7 @@ from integrations.tg_commands import cmd_status, get_handlers
 from integrations.wallet_editor_tg import (
     handle_wallet_editor_document,
     is_wallet_editor_chat_allowed,
+    is_xlsx_file_name,
     parse_allowed_chat_ids,
 )
 
@@ -22,15 +23,13 @@ def _make_document_update(
     *,
     chat_id: int = -5102627011,
     file_name: str = "batch.xlsx",
-    file_path: str | None = None,
     file_id: str = "file-123",
 ) -> MagicMock:
     update = MagicMock()
     update.message.reply_text = AsyncMock()
     update.effective_chat.id = chat_id
-    document = MagicMock()
+    document = MagicMock(spec=["file_name", "file_id"])
     document.file_name = file_name
-    document.file_path = file_path
     document.file_id = file_id
     update.message.document = document
     return update
@@ -141,6 +140,100 @@ def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
     asyncio.run(run())
 
 
+def test_is_xlsx_file_name() -> None:
+    assert is_xlsx_file_name("batch.xlsx") is True
+    assert is_xlsx_file_name("batch.XLSX") is True
+    assert is_xlsx_file_name("notes.pdf") is False
+    assert is_xlsx_file_name("") is False
+    assert is_xlsx_file_name(None) is False
+    assert is_xlsx_file_name("   ") is False
+
+
+def test_document_without_file_path_does_not_crash() -> None:
+    async def run() -> None:
+        update = _make_document_update()
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        tg_file.download_to_drive = AsyncMock()
+
+        with patch(
+            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+            return_value=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        assert not hasattr(update.message.document, "file_path")
+        add_task.assert_called_once()
+
+    asyncio.run(run())
+
+
+def test_non_xlsx_rejected_before_get_file() -> None:
+    async def run() -> None:
+        update = _make_document_update(file_name="notes.pdf")
+        context = MagicMock()
+        context.bot.get_file = AsyncMock()
+
+        with patch(
+            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+            return_value=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        context.bot.get_file.assert_not_called()
+        add_task.assert_not_called()
+        update.message.reply_text.assert_awaited_once_with(
+            "❌ Принимаются только файлы .xlsx"
+        )
+
+    asyncio.run(run())
+
+
+def test_empty_file_name_rejected_before_get_file() -> None:
+    async def run() -> None:
+        update = _make_document_update(file_name="")
+        context = MagicMock()
+        context.bot.get_file = AsyncMock()
+
+        with patch(
+            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+            return_value=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        context.bot.get_file.assert_not_called()
+        add_task.assert_not_called()
+        update.message.reply_text.assert_awaited_once_with(
+            "❌ Принимаются только файлы .xlsx"
+        )
+
+    asyncio.run(run())
+
+
+def test_xlsx_calls_get_file_with_document_file_id() -> None:
+    async def run() -> None:
+        update = _make_document_update(file_id="doc-file-abc")
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        tg_file.download_to_drive = AsyncMock()
+
+        with patch(
+            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+            return_value=True,
+        ):
+            with patch("integrations.wallet_editor_tg.add_task"):
+                await handle_wallet_editor_document(update, context)
+
+        context.bot.get_file.assert_awaited_once_with("doc-file-abc")
+
+    asyncio.run(run())
+
+
 def test_xlsx_document_queues_task() -> None:
     async def run() -> None:
         update = _make_document_update()
@@ -164,6 +257,7 @@ def test_xlsx_document_queues_task() -> None:
                         await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
+        context.bot.get_file.assert_awaited_once_with("file-123")
         file_path, chat_id = add_task.call_args.args
         assert chat_id == update.effective_chat.id
         assert file_path.endswith(".xlsx")
@@ -180,6 +274,7 @@ def test_non_xlsx_document_rejected() -> None:
     async def run() -> None:
         update = _make_document_update(file_name="notes.pdf")
         context = MagicMock()
+        context.bot.get_file = AsyncMock()
 
         with patch(
             "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
@@ -188,6 +283,7 @@ def test_non_xlsx_document_rejected() -> None:
             with patch("integrations.wallet_editor_tg.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
+        context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
         update.message.reply_text.assert_awaited_once_with(
             "❌ Принимаются только файлы .xlsx"
