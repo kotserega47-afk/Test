@@ -83,9 +83,11 @@ def test_request_job_raccoon_hourly_calls_chain(monkeypatch: pytest.MonkeyPatch)
         lambda **kwargs: events.append(kwargs.get("type") or ""),
     )
     with patch("integrations.raccoon_jobs.run_hourly_raccoon_cycle") as dl:
-        with patch("integrations.raccoon_jobs.run_raccoon_hourly_report_fn") as report:
-            request_job("raccoon_hourly", Actor(kind="scheduler"))
+        with patch("integrations.raccoon_jobs.run_conversion_monitor_from_payin") as monitor:
+            with patch("integrations.raccoon_jobs.run_raccoon_hourly_report_fn") as report:
+                request_job("raccoon_hourly", Actor(kind="scheduler"))
     dl.assert_called_once()
+    monitor.assert_called_once()
     report.assert_called_once()
     assert "job_finished" in events
 
