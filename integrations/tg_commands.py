@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes
+from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -27,6 +27,7 @@ from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job ty
 
 from analyzers.hourly_report import run_hourly_report
 from transport.telegram_transport import send_text
+from integrations.wallet_editor_tg import handle_wallet_editor_document
 from core.state_store import state_update
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
@@ -344,4 +345,5 @@ def get_handlers():
         CommandHandler("run_raccoon", cmd_run_raccoon),
         CommandHandler("run_hourly_raccoon", cmd_run_hourly_raccoon),
         CommandHandler("rules_validate", cmd_rules_validate),
+        MessageHandler(filters.Document.ALL, handle_wallet_editor_document),
     ]

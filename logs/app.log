@@ -1722,3 +1722,4 @@ Traceback (most recent call last):
     raise RuntimeError(f"Не удалось загрузить {local_path} в {dropbox_path}")
 RuntimeError: Не удалось загрузить /tmp\downloads\card_19.51.xlsx в /Ostin/platform/input/card_19.51.xlsx
 2026-03-13 19:56:07,237 [INFO] 📨 Добавлено в очередь сообщение (-1003429793111): ❌ Downloader завершился с ошибкой: Не удалось загрузить /tmp
+2026-06-01 20:23:37,795 [INFO] 🤖 [WalletEditor] 📡 [Receiver] polling telegram offset=None

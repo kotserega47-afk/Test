@@ -8,4 +8,5 @@ LOG_PROFILES = {
     "CONVERT":   ("🔁", "ConversionAnalyzer"),
     "DROPBOX":   ("☁️", "Dropbox"),
     "DOWNLOADER":("⬇️", "Downloader"),
+    "AUTOMATION":("🤖", "WalletEditor"),
 }

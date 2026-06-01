@@ -21,6 +21,7 @@ from core.job_dispatch import dispatch_job_sync
 from core.job_runner import Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
+from automation.worker import ensure_worker_started
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -272,9 +273,10 @@ def main() -> None:
     # прогреваем rules (fail-fast): если rules битые — лучше упасть сразу
     RULES.get_snapshot(force_sync=True)
 
+    ensure_worker_started()
     threading.Thread(target=schedule_loop, daemon=True).start()
 
-    log.info("🟢 Telegram started (polling + schedules)")
+    log.info("🟢 Telegram started (polling + schedules + wallet editor worker)")
     app.run_polling(close_loop=False)
 
 
