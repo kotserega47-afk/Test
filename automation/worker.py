@@ -10,13 +10,13 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
 from automation.engine import run, RunConfig
+from automation.runtime import WalletEditorTask
 from transport.telegram_transport import send_text, send_document
 
 icon, name = LOG_PROFILES["AUTOMATION"]
 log = get_logger(name, icon)
 
-# очередь задач (file_path, chat_id)
-task_queue: Queue = Queue()
+task_queue: Queue[WalletEditorTask] = Queue()
 
 _worker_started = False
 _worker_start_lock = threading.Lock()
@@ -37,9 +37,12 @@ def ensure_worker_started() -> None:
         log.info("🟢 [Worker] daemon thread registered")
 
 
-def add_task(file_path: str, chat_id: int):
-    log.info(f"📥 [Queue] Добавлена задача: {file_path}, chat_id={chat_id}")
-    task_queue.put((file_path, chat_id))
+def add_task(task: WalletEditorTask) -> None:
+    log.info(
+        f"📥 [Queue] profile={task.operator_profile} chat_id={task.chat_id} "
+        f"user_id={task.telegram_user_id} file={task.file_path}"
+    )
+    task_queue.put(task)
 
 
 def delayed_cleanup(result_path: str, input_path: str, delay: int = 30):
@@ -63,36 +66,39 @@ def worker_loop():
     log.info("🟢 [Worker] Запущен worker_loop")
 
     while True:
-        file_path, chat_id = task_queue.get()
-        log.info(f"🚀 [Worker] Взята задача: {file_path}")
+        task = task_queue.get()
+        log.info(
+            f"🚀 [Worker] Взята задача profile={task.operator_profile} file={task.file_path}"
+        )
 
         try:
-            cfg = RunConfig()
+            cfg = RunConfig(
+                login=task.login,
+                password=task.password,
+                auth_state_path=task.auth_state_path,
+            )
 
             log.info("📊 [Worker] Запуск engine.run()")
-            result_file, stats = run(file_path, cfg)
+            result_file, stats = run(task.file_path, cfg)
 
             summary = stats.summary()
             log.info(f"✅ [Worker] Готово: {summary}")
 
-            # отправка summary
             send_text(
-                chat_id=str(chat_id),
+                chat_id=str(task.chat_id),
                 text=f"📊 {summary}"
             )
 
-            # отправка файла
             log.info(f"📤 [Worker] Отправка файла: {result_file}")
             send_document(
                 path=result_file,
-                chat_id=str(chat_id),
+                chat_id=str(task.chat_id),
                 caption="Результат обработки"
             )
 
-            # cleanup в фоне (ВАЖНО)
             threading.Thread(
                 target=delayed_cleanup,
-                args=(result_file, file_path),
+                args=(result_file, task.file_path),
                 daemon=True
             ).start()
 
@@ -101,7 +107,7 @@ def worker_loop():
             log.error(traceback.format_exc())
 
             send_text(
-                chat_id=str(chat_id),
+                chat_id=str(task.chat_id),
                 text=f"❌ Ошибка: {e}"
             )
 

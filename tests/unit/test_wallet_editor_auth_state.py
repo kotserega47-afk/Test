@@ -8,6 +8,7 @@ from unittest.mock import patch
 from automation.runtime import (
     DEFAULT_WALLET_EDITOR_AUTH_STATE_PATH,
     RunConfig,
+    operator_auth_state_path,
     wallet_editor_auth_state_path,
 )
 
@@ -29,6 +30,12 @@ def test_env_wallet_editor_auth_state_path_overrides_default() -> None:
     with patch.dict("os.environ", {"WALLET_EDITOR_AUTH_STATE_PATH": custom}, clear=True):
         assert wallet_editor_auth_state_path() == custom
         assert RunConfig().auth_state_path == custom
+
+
+def test_operator_auth_state_path_per_profile() -> None:
+    assert operator_auth_state_path("DENIS") == "/tmp/auth_state_wallet_editor_DENIS.json"
+    assert operator_auth_state_path("IVAN") == "/tmp/auth_state_wallet_editor_IVAN.json"
+    assert operator_auth_state_path("DENIS") != operator_auth_state_path("IVAN")
 
 
 def test_downloader_wallets_auth_path_unchanged() -> None:

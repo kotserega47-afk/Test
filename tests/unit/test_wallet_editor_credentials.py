@@ -10,6 +10,7 @@ import pytest
 from automation.runtime import (
     RunConfig,
     require_wallet_editor_antares_credentials,
+    resolve_operator_for_user,
     wallet_editor_antares_login,
     wallet_editor_antares_password,
 )
@@ -55,7 +56,7 @@ def test_missing_credentials_import_safe() -> None:
 def test_missing_credentials_runtime_error() -> None:
     with patch.dict("os.environ", {}, clear=True):
         cfg = RunConfig()
-        with pytest.raises(RuntimeError, match="WALLET_EDITOR_ANTARES_LOGIN"):
+        with pytest.raises(RuntimeError, match="credentials оператора"):
             require_wallet_editor_antares_credentials(cfg)
 
 
@@ -66,7 +67,7 @@ def test_missing_password_runtime_error() -> None:
         clear=True,
     ):
         cfg = RunConfig()
-        with pytest.raises(RuntimeError, match="WALLET_EDITOR_ANTARES_PASSWORD"):
+        with pytest.raises(RuntimeError, match="credentials оператора"):
             require_wallet_editor_antares_credentials(cfg)
 
 
@@ -76,6 +77,27 @@ def test_engine_no_shared_antares_constants() -> None:
     assert "ANTARES_PASSWORD" not in src
     assert "cfg.login" in src
     assert "cfg.password" in src
+
+
+def test_handler_does_not_use_legacy_antares_env_as_fallback() -> None:
+    src = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
+    assert "WALLET_EDITOR_ANTARES_LOGIN" not in src
+    assert "ANTARES_LOGIN" not in src
+
+
+def test_resolve_operator_does_not_use_legacy_wallet_editor_antares_env() -> None:
+    env = {
+        "WALLET_EDITOR_ANTARES_LOGIN": "legacy-login",
+        "WALLET_EDITOR_ANTARES_PASSWORD": "legacy-pass",
+        "WALLET_EDITOR_OPERATOR_MAP": "555:DENIS",
+        "WALLET_EDITOR_OPERATOR_DENIS_LOGIN": "denis-login",
+        "WALLET_EDITOR_OPERATOR_DENIS_PASSWORD": "denis-pass",
+    }
+    with patch.dict("os.environ", env, clear=True):
+        creds, _ = resolve_operator_for_user(555)
+    assert creds is not None
+    assert creds.login == "denis-login"
+    assert creds.password == "denis-pass"
 
 
 def test_downloader_wallets_still_uses_shared_antares_env() -> None:

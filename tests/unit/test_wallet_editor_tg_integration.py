@@ -11,6 +11,15 @@ from telegram.ext import CommandHandler, MessageHandler
 from automation import engine
 from automation.worker import ensure_worker_started
 from integrations.tg_commands import cmd_status, get_handlers
+from automation.runtime import (
+    MSG_OPERATOR_INCOMPLETE,
+    MSG_OPERATOR_UNMAPPED,
+    WalletEditorTask,
+    normalize_profile_key,
+    operator_auth_state_path,
+    parse_operator_map,
+    resolve_operator_for_user,
+)
 from integrations.wallet_editor_tg import (
     handle_wallet_editor_document,
     is_wallet_editor_chat_allowed,
@@ -18,16 +27,37 @@ from integrations.wallet_editor_tg import (
     parse_allowed_chat_ids,
 )
 
+DEFAULT_USER_ID = 123456789
+DEFAULT_PROFILE = "DENIS"
+
+
+def _operator_env(
+    *,
+    user_id: int = DEFAULT_USER_ID,
+    profile: str = DEFAULT_PROFILE,
+    login: str = "denis-login",
+    password: str = "denis-pass",
+) -> dict[str, str]:
+    profile_key = profile.upper()
+    return {
+        "WALLET_EDITOR_OPERATOR_MAP": f"{user_id}:{profile_key}",
+        f"WALLET_EDITOR_OPERATOR_{profile_key}_LOGIN": login,
+        f"WALLET_EDITOR_OPERATOR_{profile_key}_PASSWORD": password,
+    }
+
 
 def _make_document_update(
     *,
     chat_id: int = -5102627011,
     file_name: str = "batch.xlsx",
     file_id: str = "file-123",
+    user_id: int = DEFAULT_USER_ID,
 ) -> MagicMock:
     update = MagicMock()
     update.message.reply_text = AsyncMock()
     update.effective_chat.id = chat_id
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
     document = MagicMock(spec=["file_name", "file_id"])
     document.file_name = file_name
     document.file_id = file_id
@@ -127,7 +157,7 @@ def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
 
         with patch.dict(
             "os.environ",
-            {"WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
+            {**_operator_env(), "WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
             clear=True,
         ):
             with patch("integrations.wallet_editor_tg.add_task") as add_task:
@@ -157,12 +187,13 @@ def test_document_without_file_path_does_not_crash() -> None:
         context.bot.get_file = AsyncMock(return_value=tg_file)
         tg_file.download_to_drive = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    await handle_wallet_editor_document(update, context)
 
         assert not hasattr(update.message.document, "file_path")
         add_task.assert_called_once()
@@ -176,12 +207,13 @@ def test_non_xlsx_rejected_before_get_file() -> None:
         context = MagicMock()
         context.bot.get_file = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
@@ -198,12 +230,13 @@ def test_empty_file_name_rejected_before_get_file() -> None:
         context = MagicMock()
         context.bot.get_file = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
@@ -222,12 +255,13 @@ def test_xlsx_calls_get_file_with_document_file_id() -> None:
         context.bot.get_file = AsyncMock(return_value=tg_file)
         tg_file.download_to_drive = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task"):
-                await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task"):
+                    await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_awaited_once_with("doc-file-abc")
 
@@ -243,25 +277,32 @@ def test_xlsx_document_queues_task() -> None:
         tg_file.download_to_drive = AsyncMock()
 
         allowed = frozenset({update.effective_chat.id})
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
+        with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.parse_allowed_chat_ids",
-                return_value=allowed,
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                    with patch("integrations.wallet_editor_tg.task_queue") as queue:
-                        queue.qsize.return_value = 1
-                        await handle_wallet_editor_document(update, context)
+                with patch(
+                    "integrations.wallet_editor_tg.parse_allowed_chat_ids",
+                    return_value=allowed,
+                ):
+                    with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                        with patch("integrations.wallet_editor_tg.task_queue") as queue:
+                            queue.qsize.return_value = 1
+                            await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
         context.bot.get_file.assert_awaited_once_with("file-123")
-        file_path, chat_id = add_task.call_args.args
-        assert chat_id == update.effective_chat.id
-        assert file_path.endswith(".xlsx")
-        assert Path(file_path).name.startswith("wallet_editor_")
+        task = add_task.call_args.args[0]
+        assert isinstance(task, WalletEditorTask)
+        assert task.chat_id == update.effective_chat.id
+        assert task.telegram_user_id == DEFAULT_USER_ID
+        assert task.operator_profile == DEFAULT_PROFILE
+        assert task.login == "denis-login"
+        assert task.password == "denis-pass"
+        assert task.auth_state_path == operator_auth_state_path(DEFAULT_PROFILE)
+        assert task.file_path.endswith(".xlsx")
+        assert Path(task.file_path).name.startswith("wallet_editor_")
         tg_file.download_to_drive.assert_awaited_once()
         texts = [c.args[0] for c in update.message.reply_text.await_args_list]
         assert "📥 Файл получен" in texts
@@ -276,12 +317,13 @@ def test_non_xlsx_document_rejected() -> None:
         context = MagicMock()
         context.bot.get_file = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
@@ -320,13 +362,14 @@ def test_handler_does_not_call_engine_run_directly() -> None:
         context.bot.get_file = AsyncMock(return_value=tg_file)
         tg_file.download_to_drive = AsyncMock()
 
-        with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
-            return_value=True,
-        ):
-            with patch("integrations.wallet_editor_tg.add_task"):
-                with patch.object(engine, "run") as engine_run:
-                    await handle_wallet_editor_document(update, context)
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task"):
+                    with patch.object(engine, "run") as engine_run:
+                        await handle_wallet_editor_document(update, context)
 
         engine_run.assert_not_called()
 
@@ -418,3 +461,107 @@ def test_single_polling_loop_only() -> None:
     tg_commands_src = Path("integrations/tg_commands.py").read_text(encoding="utf-8")
     assert "run_receiver" not in tg_commands_src
     assert "getUpdates" not in tg_commands_src
+
+
+def test_mapped_user_queues_task_with_operator_credentials() -> None:
+    async def run() -> None:
+        update = _make_document_update(user_id=111, chat_id=-1003429793111)
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        tg_file.download_to_drive = AsyncMock()
+        env = {
+            **_operator_env(user_id=111, profile="DENIS", login="d-login", password="d-pass"),
+            "WALLET_EDITOR_ALLOWED_CHAT_IDS": "-1003429793111",
+        }
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        task = add_task.call_args.args[0]
+        assert task.operator_profile == "DENIS"
+        assert task.login == "d-login"
+        assert task.password == "d-pass"
+        assert task.auth_state_path == "/tmp/auth_state_wallet_editor_DENIS.json"
+
+    asyncio.run(run())
+
+
+def test_unmapped_user_rejected_before_get_file() -> None:
+    async def run() -> None:
+        update = _make_document_update(user_id=999999)
+        context = MagicMock()
+        context.bot.get_file = AsyncMock()
+        env = {
+            **_operator_env(user_id=111),
+            "WALLET_EDITOR_ALLOWED_CHAT_IDS": str(update.effective_chat.id),
+        }
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        context.bot.get_file.assert_not_called()
+        add_task.assert_not_called()
+        update.message.reply_text.assert_awaited_with(MSG_OPERATOR_UNMAPPED)
+
+    asyncio.run(run())
+
+
+def test_mapped_user_missing_credentials_rejected() -> None:
+    async def run() -> None:
+        update = _make_document_update(user_id=222)
+        context = MagicMock()
+        context.bot.get_file = AsyncMock()
+        env = {
+            "WALLET_EDITOR_OPERATOR_MAP": "222:IVAN",
+            "WALLET_EDITOR_ALLOWED_CHAT_IDS": str(update.effective_chat.id),
+        }
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                await handle_wallet_editor_document(update, context)
+
+        context.bot.get_file.assert_not_called()
+        add_task.assert_not_called()
+        update.message.reply_text.assert_awaited_with(MSG_OPERATOR_INCOMPLETE)
+
+    asyncio.run(run())
+
+
+def test_invalid_profile_key_in_map_is_ignored_fail_closed() -> None:
+    assert parse_operator_map("333:bad/profile") == {}
+    with patch.dict("os.environ", {"WALLET_EDITOR_OPERATOR_MAP": "333:bad/profile"}, clear=True):
+        creds, msg = resolve_operator_for_user(333)
+    assert creds is None
+    assert msg == MSG_OPERATOR_UNMAPPED
+
+
+def test_normalize_profile_key_rejects_path_traversal() -> None:
+    assert normalize_profile_key("../DENIS") is None
+    assert normalize_profile_key("denis") == "DENIS"
+    assert operator_auth_state_path("DENIS") == "/tmp/auth_state_wallet_editor_DENIS.json"
+    assert ".." not in operator_auth_state_path("DENIS")
+
+
+def test_different_users_get_different_auth_state_paths() -> None:
+    assert operator_auth_state_path("DENIS") != operator_auth_state_path("IVAN")
+
+
+def test_handler_does_not_fallback_to_wallet_editor_antares_login() -> None:
+    src = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
+    assert "WALLET_EDITOR_ANTARES_LOGIN" not in src
+    assert "wallet_editor_antares_login" not in src
+
+
+def test_import_safe_without_operator_map() -> None:
+    with patch.dict("os.environ", {}, clear=True):
+        import importlib
+        import automation.runtime as runtime_mod
+
+        importlib.reload(runtime_mod)
+        assert runtime_mod.parse_operator_map() == {}
+        creds, msg = runtime_mod.resolve_operator_for_user(123)
+        assert creds is None
+        assert msg == MSG_OPERATOR_UNMAPPED
