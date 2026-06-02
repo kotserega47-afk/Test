@@ -142,6 +142,7 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `integrations/conversion_pipeline.py` | Conversion lifecycle orchestrator (download, fp, run, move, observability) | `downloader.run_download`, `main.process_file` (conversion) |
 | `integrations/conversion_fingerprint.py` | Passive conversion input fingerprint (conv/card/rules/special_cards) | `conversion_pipeline.py` |
 | `observability/conversion_fp_observation.py` | Phase 1B diagnostic JSONL (full hashes, retention 14d) | hook from `conversion_pipeline.py` terminal paths |
+| `integrations/conversion_wallet_editor_bridge.py` | Conversion `problem_cards` → Wallet Editor Excel + enqueue (best-effort) | `analyzers/conversion.py` `run()` after reports |
 | `run_once_guard.py` | `/tmp/dropbox_pipeline.lock` | `main.py`, `downloader.py` |
 | `analyzers/hourly_report.py` | Hourly pipeline orchestration | `run_hourly_job` |
 | `analyzers/hourly_analyzer.py` | Hourly DTO | hourly chain |
@@ -326,6 +327,30 @@ state_store (jobs.conversion — last_status, last_fingerprint, last_fingerprint
 
 **CLI delegation:** `main.process_file` with conversion analyzer → same `run_conversion_pipeline` path as downloader.
 
+### Conversion → Wallet Editor hook (P3 sub-path)
+
+Best-effort bridge after conversion analysis completes in `analyzers/conversion.py` `run()`.
+
+```
+ConversionAnalyzer.analyze()
+    ↓
+problem_cards (DataFrame)
+    ↓
+analyzers/conversion.py run() — after conversion reports / TG
+    ↓
+integrations/conversion_wallet_editor_bridge.py
+    ↓ filter valid rows (card + original_partner)
+    ↓ limit first 10 cards (rollout)
+    ↓ build Excel (card, action=remove_partner, value=original_partner)
+    ↓ info message → CONVERSION_WALLET_EDITOR chat
+    ↓
+WalletEditorTask (profile CONVERSION_AUTO, direct login/password env)
+    ↓
+automation/worker.py add_task → engine.run → result xlsx → Telegram
+```
+
+**Constraints:** hook never raises; missing env → skip; does not use `WALLET_EDITOR_OPERATOR_MAP`; `ConversionAnalyzer.analyze()` unchanged.
+
 ### P-WE — WalletEditor (Telegram Excel ingest → Antares card editing)
 
 | | |
@@ -451,3 +476,4 @@ Database: not present in active runtime chain.
 | 2026-05-31 | G5 Data Contracts cross-ref — TASK-2026-05-31-03 |
 | 2026-06-01 | **P-WE WalletEditor** — integrated WE-0…WE-6; production via `scheduler.py` |
 | 2026-06-02 | **Conversion Modernization** — layered analyzer/reporter/DTO; `run_conversion_pipeline` orchestrator; observability + passive fingerprint Phase 1A + Phase 1B observation JSONL |
+| 2026-06-02 | **Conversion → Wallet Editor hook** — `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run |

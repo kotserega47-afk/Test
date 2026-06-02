@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.2 |
-| **Последнее обновление** | 2026-06-01 |
+| **KB версия** | v1.3 |
+| **Последнее обновление** | 2026-06-02 |
 
 ---
 
@@ -75,6 +75,26 @@
 | `WALLET_EDITOR_ANTARES_PASSWORD` | нет | `""` | same | **не** используется production handler (WE-5) | OPTIONAL | CONFIRMED |
 | `TELEGRAM_HEALTH_DEGRADED_THRESHOLD` | нет | `3` | `integrations/telegram_bot.py` | consecutive delivery failures → DEGRADED status/log | IMPORTANT | CONFIRMED |
 | `TELEGRAM_HEALTH_LOG_INTERVAL_SECONDS` | нет | `600` | `integrations/telegram_bot.py`, `scheduler.py` | periodic `[TelegramSender/health]` log | OPTIONAL | CONFIRMED |
+| `CONVERSION_WALLET_EDITOR` | нет (hook disabled if unset) | — | `integrations/conversion_wallet_editor_bridge.py` | Telegram chat for conversion→WE info/errors + WE result delivery | OPTIONAL | CONFIRMED |
+| `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN` | да (hook enabled) | — | `integrations/conversion_wallet_editor_bridge.py` | scheduled conversion WE credentials (direct env, not operator map) | IMPORTANT | CONFIRMED |
+| `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_PASSWORD` | да (hook enabled) | — | same | scheduled conversion WE credentials | IMPORTANT | CONFIRMED |
+
+### Conversion → Wallet Editor hook (scheduled)
+
+| Variable | Format | Example |
+|----------|--------|---------|
+| `CONVERSION_WALLET_EDITOR` | Telegram chat id (int string) | `-1001234567890` |
+| `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN` | Antares login for scheduled hook | `we-scheduled-login` |
+| `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_PASSWORD` | Antares password for scheduled hook | `(secret)` |
+
+Rules:
+
+- Hook is **best-effort** — missing any env → skip; conversion pipeline never fails
+- Does **not** use `WALLET_EDITOR_OPERATOR_MAP` or Telegram user id routing
+- Operator profile for queue/worker: `CONVERSION_AUTO` (system profile)
+- Auth-state path: `/tmp/auth_state_wallet_editor_CONVERSION_AUTO.json`
+- Input Excel contract: columns `card`, `action`=`remove_partner`, `value`=`original_partner` from `problem_cards`
+- Rollout limit: max **10** cards per run (`MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN`); preserves `problem_cards` order
 
 ### WalletEditor operator map format
 
@@ -289,6 +309,7 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 | F9 | `config/payout_config.yaml` | error phrase match | `payout.py` filtering | IN/check lists → TG | IMPORTANT | CONFIRMED |
 | F10 | Dropbox `special_cards.xlsx` | optional merge | `conversion.py` special rules | filtered conversion | OPTIONAL | CONFIRMED |
 | F11 | Telegram `.xlsx` document | allowlist + operator map → `WalletEditorTask` | `automation/engine.py` → Antares UI | result xlsx → Telegram | IMPORTANT | CONFIRMED |
+| F12 | `ConversionAnalyzer.problem_cards` | bridge builds Excel (`card`, `action`, `value`) → `WalletEditorTask` | `integrations/conversion_wallet_editor_bridge.py` → `automation/worker.py` → Antares UI | rollout info TG + result xlsx → `CONVERSION_WALLET_EDITOR` chat | OPTIONAL | CONFIRMED |
 
 ---
 

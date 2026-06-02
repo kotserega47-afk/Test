@@ -47,6 +47,7 @@
 - Tests in `tests/` (pytest).
 - **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-6 complete).
 - **Conversion Modernization Program** complete — layered architecture, orchestrator, observability, passive fingerprint Phase 1A deployed in code.
+- **Conversion → Wallet Editor hook** active in code — best-effort bridge from `problem_cards` after `conversion.run()`; requires `CONVERSION_WALLET_EDITOR*` env; max 10 cards per run (initial rollout).
 
 ---
 
@@ -149,6 +150,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Fingerprint** | Passive only — `CONVERSION_FINGERPRINT_ENABLED` (default on); no skip yet |
 | **Phase 1B Observation** | **IMPLEMENTED** — diagnostic JSONL; flag `CONVERSION_FP_OBSERVATION_ENABLED` (default off); 14-day retention |
 | **Phase 1B Dedup Skip** | **NOT STARTED** — real dedup skip when fingerprint matches |
+| **Conversion → Wallet Editor** | **IMPLEMENTED** — `integrations/conversion_wallet_editor_bridge.py`; env-gated; max 10 cards/run; best-effort |
 
 ### WalletEditor (S8) — operational snapshot
 
@@ -225,3 +227,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-01 | Telegram outbound sender health (Option B) |
 | 2026-06-02 | Conversion Modernization + Observability + Fingerprint Phase 1A — S9 ACTIVE; Phase 1B Observation Layer implemented (dedup skip NOT STARTED) |
 | 2026-06-02 | STATE_DIR Volume Migration Phase A — default `/data/state` (E-INFRA-01) |
+| 2026-06-02 | Conversion → Wallet Editor hook — `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run |

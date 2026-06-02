@@ -7,6 +7,9 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from integrations.dropbox_watcher import download_file
+from integrations.conversion_wallet_editor_bridge import (
+    maybe_enqueue_wallet_editor_from_problem_cards,
+)
 from core.datetime_utils import now_msk
 from core.rules_provider import get_snapshot_v2
 
@@ -160,6 +163,11 @@ def run(
                 logger.info(f"[run] Файл отчёта отправлен в Telegram: {report_path}")
             except Exception as e:
                 logger.exception(f"[run] Ошибка при отправке отчёта в Telegram: {e}")
+
+    try:
+        maybe_enqueue_wallet_editor_from_problem_cards(problem, conv_file=conv_file)
+    except Exception as e:
+        logger.exception(f"[run] Conversion → Wallet Editor bridge error (ignored): {e}")
 
     return {
         "summary": summary,

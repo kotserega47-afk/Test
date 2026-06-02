@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started); CONV-WE-HOOK (complete) |
 
 ---
 
@@ -116,6 +116,15 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | Conversion Observability Phase 2 | **DONE** | Downloader tiered final TG; failure propagation fixed |
 | Conversion Fingerprint Phase 1A | **DONE** | Passive fingerprint — compute/compare/store; no dedup skip |
 | Conversion Fingerprint Phase 1B Observation | **DONE** | Diagnostic JSONL — full hashes, changed_components, would_skip; flag default off |
+| Conversion → Wallet Editor hook | **DONE** | `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run; direct scheduled credentials env |
+
+---
+
+## Follow-up (open)
+
+| ID | Goal | Status |
+|----|------|--------|
+| CONV-WE-LIMIT-REMOVAL | Remove 10-card rollout limit; process all valid `problem_cards` | open — future |
 
 ---
 
@@ -138,6 +147,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | TASK-2026-05-31-03 | complete | Close G5 Data Contracts |
 | WALLET_EDITOR WE-0…WE-6 | complete | Integrate WalletEditor into main runtime |
 | TELEGRAM-SENDER-HEALTH-B | complete | Option B outbound delivery health + periodic log |
+| CONV-WE-HOOK | complete | ConversionAnalyzer problem_cards → Wallet Editor bridge |
 
 ---
 
@@ -166,3 +176,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-01 | WalletEditor WE-0…WE-6 closed; R-WE-* risks added |
 | 2026-06-01 | Telegram sender health Option B; R-TG-01 mitigated |
 | 2026-06-02 | Conversion Modernization Program closed (12 items DONE); Phase 1B Observation Layer DONE; CONV-OPTIMIZATION-PHASE-1B dedup skip open (READY) |
+| 2026-06-02 | CONV-WE-HOOK complete — Conversion → Wallet Editor bridge; follow-up CONV-WE-LIMIT-REMOVAL |
