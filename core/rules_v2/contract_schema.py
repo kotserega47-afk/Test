@@ -87,7 +87,7 @@ _UNNAMED_PATTERN: Final[re.Pattern[str]] = re.compile(r"Unnamed:\s*\d+")
 _CRON_DUPLICATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"cron\.\d+")
 
 
-# Per-sheet schemas. Mirror of CONTRACT_V2 §3.1 … §3.13.
+# Per-sheet schemas. Mirror of CONTRACT_V2 §3.1 … §3.15.
 SHEET_SCHEMAS: Final[dict[str, SheetSchema]] = {
     # §3.1
     "meta": SheetSchema(
@@ -232,6 +232,20 @@ SHEET_SCHEMAS: Final[dict[str, SheetSchema]] = {
                 "is_primary",
             }
         ),
+    ),
+    # §3.14 — payout error phrase rules (substring match; mirrors
+    # ``config/payout_config.yaml`` ``PayoutsErrors``).
+    "payout_info_rules": SheetSchema(
+        sheet="payout_info_rules",
+        required_columns=frozenset(
+            {"id", "enabled", "info_phrase", "threshold", "reason"}
+        ),
+    ),
+    # §3.15 — payout ignore phrases (substring match; mirrors
+    # ``config/payout_config.yaml`` ``IgnoreErrors``).
+    "payout_ignore_phrases": SheetSchema(
+        sheet="payout_ignore_phrases",
+        required_columns=frozenset({"id", "enabled", "info_phrase", "reason"}),
     ),
 }
 

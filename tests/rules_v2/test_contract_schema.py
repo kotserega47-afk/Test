@@ -4,7 +4,7 @@ The catalog is read-only data, but it must stay synchronized with the
 contract — these tests pin a few critical invariants so an accidental
 change is caught immediately:
 
-* All 13 sheets named in CONTRACT_V2 §3 are present in ``SHEET_SCHEMAS``.
+* All 15 sheets named in CONTRACT_V2 §3 are present in ``SHEET_SCHEMAS``.
 * ``REQUIRED_SHEETS`` is a subset of ``KNOWN_SHEETS``.
 * No column is simultaneously required and deprecated for the same sheet.
 * Trim normalization matches §5.1 (strip ASCII / Unicode whitespace).
@@ -37,6 +37,8 @@ _CONTRACT_V2_SHEETS = {
     "hourly_payout_methods",
     "hourly_payouts",
     "partner_groups",
+    "payout_info_rules",
+    "payout_ignore_phrases",
 }
 
 

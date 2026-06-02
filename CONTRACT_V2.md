@@ -272,6 +272,30 @@
 
 **Инвариант legacy (runtime):** *If no explicit primary metadata is provided, membership ordering must remain identical to snapshot insertion order* — порядок элементов, который видят `get_group_memberships` и «primary = первый элемент», совпадает с порядком списка `partner_group_members` в `RulesSnapshotV2` после bridge (в prod сегодня это порядок строк Excel). Автоматический stable sort без явных колонок **не допускается** — иначе меняется primary group без явного признака в данных. Регрессии: ``tests/rules_v2/test_membership_order_legacy.py``.
 
+### 3.14 `payout_info_rules`
+
+| | |
+|--|--|
+| **Назначение** | Правила сопоставления фраз из столбца Info payout-файла с порогом подряд идущих ошибок (аналог `PayoutsErrors` в `config/payout_config.yaml`). |
+| **Обязательные колонки** | `id`, `enabled`, `info_phrase`, `threshold`, `reason` |
+| **Опциональные** | — |
+| **Deprecated / ignored** | — |
+| **Пустые строки** | Без `info_phrase` — skip. |
+| **`enabled`** | `0` — правило не участвует в runtime. |
+| **Matching** | Substring match: `info_phrase.lower()` in `info.lower()` (как в `analyzers/payout.py`). |
+
+### 3.15 `payout_ignore_phrases`
+
+| | |
+|--|--|
+| **Назначение** | Фразы Info, полностью игнорируемые payout-анализом (аналог `IgnoreErrors` в `config/payout_config.yaml`). |
+| **Обязательные колонки** | `id`, `enabled`, `info_phrase`, `reason` |
+| **Опциональные** | — |
+| **Deprecated / ignored** | — |
+| **Пустые строки** | Без `info_phrase` — skip. |
+| **`enabled`** | `0` — фраза не игнорируется. |
+| **Matching** | Substring match: `info_phrase.lower()` in `info.lower()`. |
+
 ## 4. Entity identity contract
 
 Этот раздел фиксирует, **что является идентичностью сущности** в контракте и что может меняться без смены «той же» строки правила.

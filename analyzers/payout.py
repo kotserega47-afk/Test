@@ -1,6 +1,6 @@
 # analyzers/payout.py
 import os
-import yaml
+from analyzers.payout_config_loader import resolve_payout_config
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 import pandas as pd
@@ -16,14 +16,6 @@ logger = get_logger(name, icon)
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_ANALIZ")
 if not CHAT_ID:
     raise RuntimeError("Не задан TELEGRAM_CHAT_ID_ANALIZ")
-
-# путь к конфигу
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "payout_config.yaml")
-
-# загрузка конфига
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    CONFIG = yaml.safe_load(f) or {}
 
 def run(payout_file: str, card_files: list, *args, **kwargs):
     logger.info(f"[payout] 🚀 Начало анализа: {os.path.basename(payout_file)}")
@@ -91,13 +83,8 @@ def run(payout_file: str, card_files: list, *args, **kwargs):
     else:
         logger.warning("[payout] ⚠️ В cd-файле отсутствуют нужные колонки: 'Карта' и 'Направление'.")
 
-    # === 5️⃣ Загружаем настройки из YAML ===
-    payouts_errors = CONFIG.get("PayoutsErrors", {}) or {}
-    ignore_errors = CONFIG.get("IgnoreErrors", []) or []
-
-    # Преобразуем в нижний регистр для удобства поиска
-    payouts_errors_norm = {k.lower().strip(): v for k, v in payouts_errors.items()}
-    ignore_errors_norm = [x.lower().strip() for x in ignore_errors]
+    # === 5️⃣ Загружаем настройки (YAML или Rules V2) ===
+    payouts_errors_norm, ignore_errors_norm, _config_source = resolve_payout_config(logger)
 
     logger.info(f"[payout] 📘 Загружено {len(payouts_errors_norm)} известных ошибок и {len(ignore_errors_norm)} игнорируемых.")
 
