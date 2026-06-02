@@ -58,7 +58,6 @@
 | `RULES_CONTRACT_STRICT` | нет | off | `contract_publish.py` L56 | strict publish policy | OPTIONAL | CONFIRMED |
 | `RULES_CONTRACT_SHADOW` | нет | off | `contract_publish.py` L58 | shadow validation | OPTIONAL | CONFIRMED |
 | `PAYOUT_CONFIG_FROM_RULES_V2` | нет | `0` | `analyzers/payout_config_loader.py`, `analyzers/payout.py` | `0`: YAML primary + rules shadow compare; `1`: Rules V2 primary, YAML fallback | OPTIONAL | CONFIRMED |
-| `RACCOON_WALLET_CONFIG_FROM_RULES_V2` | нет | `0` | `analyzers/raccoon_wallet_config_loader.py`, `raccoon_wallet_analyzer.py`, `raccoon_wallet_downloader.py` | `0`: YAML primary (scalars + roster + groups); rules shadow; `1`: Rules V2 primary for scalars + roster + groups with YAML fallback when rules incomplete | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_SAVE` | нет | off | `rules_provider.py` L166 | save registry after publish | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_COMPARE` | нет | — | `contract_publish.py` L140 | identity drift mode | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_DISABLED` | нет | off | `contract_publish.py` L138 | disable identity compare | OPTIONAL | CONFIRMED |
@@ -121,7 +120,7 @@ Rules:
 |---------------------|--------|--------|-------|----------------|------------------|-------------|--------|
 | `rules.xlsx` (Dropbox → `/tmp/rules_cache/rules.xlsx`) | xlsx | `rules_provider`, `loader`, `access_rules`, `schedules`, `config_manager` | `rules_writer` (TG admin flows) | да (startup) | fail-fast at startup / sync error | CRITICAL | CONFIRMED |
 | `config/payout_config.yaml` | yaml | `payout.py` via `payout_config_loader.py` (YAML default; Rules V2 optional) | — | да (payout job) | empty CONFIG; analysis degraded; Rules V2 fallback when flag=1 | IMPORTANT | CONFIRMED |
-| `config/raccoon_wallet_config.yaml` | yaml | `raccoon_wallet_config_loader.py` → analyzer/downloader (partial); thresholds/limits/exclude via rules overlay | — | да (raccoon_wallet job) | fail if missing; scalars shadow via `RACCOON_WALLET_CONFIG_FROM_RULES_V2` | IMPORTANT | CONFIRMED |
+| ~~`config/raccoon_wallet_config.yaml`~~ | — | **REMOVED** (Phase 3B-6) | — | — | — | REMOVED | CONFIRMED |
 | `{RULES_FOLDER}/state/state.json` (Dropbox) | json | `state_store`, `state_provider` | `state_store`, `state_provider` | нет (bootstrap `{}`) | fp dedup reset; new state | IMPORTANT | CONFIRMED |
 | `/tmp/state_store/state.json` | json | local cache `state_store` | `state_store` | transient | fallback local | IMPORTANT | CONFIRMED |
 | `/tmp/state_cache/state.json` | json | `state_provider` cache | download cache | transient | re-download | OPTIONAL | CONFIRMED |
@@ -251,22 +250,21 @@ Active prod path uses **xlsx** from Antares/Dropbox; CSV support exists in code 
 
 Rules V2 sheets ``payout_info_rules`` / ``payout_ignore_phrases`` mirror the same semantics when ``PAYOUT_CONFIG_FROM_RULES_V2=1`` (see env table §1). Production rows — по E-CONFIG-02, после завершения всех migration phases.
 
-### `config/raccoon_wallet_config.yaml` (partial — Phase 3A)
+### Raccoon Wallet configuration (Rules V2 only — Phase 3B-6)
 
-| Section / keys | Consumer | Rules V2 target | Статус |
+**Source:** Rules V2 only. Legacy `config/raccoon_wallet_config.yaml` removed.
+
+| Section / keys | Consumer | Rules V2 source | Статус |
 |----------------|----------|-----------------|--------|
-| `window_minutes`, `offset_minutes`, `min_events` | analyzer via loader | `job_params` (`job=raccoon_wallet`) — shadow-ready | IMPORTANT | CONFIRMED |
+| `window_minutes`, `offset_minutes`, `min_events` | analyzer/downloader via loader | `job_params` (`job=raccoon_wallet`) | IMPORTANT | CONFIRMED |
 | `pending_thresholds.payin_minutes` | analyzer | `job_params` `pending_payin_minutes` | IMPORTANT | CONFIRMED |
 | `download_periods.payin_days_back` | downloader | `job_params` `payin_days_back` | IMPORTANT | CONFIRMED |
-| `partners` roster | analyzer whitelist loop | **YAML primary** (`=0`); **Rules V2 primary** (`=1`) via roster union; YAML fallback if rules roster incomplete | IMPORTANT | CONFIRMED |
-| `groups` | analyzer group membership | **YAML primary** (`=0`); **Rules V2 primary** (`=1`) via `partner_groups`; YAML fallback on load error | IMPORTANT | CONFIRMED |
-| `columns.payin.*` | analyzer | **code constants** (`analyzers/raccoon_wallet_columns.py`); YAML legacy/shadow only | IMPORTANT | CONFIRMED |
-| `success_window_minutes`, `partners.*.api_cancel_keyword`, `pending_thresholds.payout_minutes`, `download_periods.payout_days_back` | — | **REMOVED** (Phase 3B-3 dead-field cleanup; never had runtime effect or path inactive) | REMOVED | CONFIRMED |
+| `partners` roster | analyzer whitelist loop | roster union: `thresholds_partner` + `wallet_limits` + `partner_groups` | IMPORTANT | CONFIRMED |
+| `groups` | analyzer group membership | `partner_groups` sheet | IMPORTANT | CONFIRMED |
+| `columns.payin.*` | analyzer | **code constants** (`analyzers/raccoon_wallet_columns.py`) | IMPORTANT | CONFIRMED |
 | thresholds / limits / exclude | analyzer overlay | `thresholds_partner`, `wallet_limits`, `exclude_time` | IMPORTANT | CONFIRMED |
 
-**Future Rules V2 roster source (shadow today):** union of enabled `thresholds_partner` (`analyzer=raccoon_wallet`) + `wallet_limits` (`scope=partner`, `analyzers` ∋ `raccoon_wallet`) + `partner_groups` (`analyzers` ∋ `raccoon_wallet`). Builder: `core/rules_v2/raccoon_wallet_rules_accessor.py`. `yaml_only` roster mismatch blocks final YAML removal.
-
-**Groups membership (shadow today):** YAML `groups` vs Rules V2 `partner_groups` (`analyzer=raccoon_wallet`); compared on every resolve. Runtime group limits/membership stay YAML-primary. `yaml_only_groups` mismatch blocks final YAML removal.
+**Roster union:** enabled `thresholds_partner` (`analyzer=raccoon_wallet`) + `wallet_limits` (`scope=partner`, `analyzers` ∋ `raccoon_wallet`) + `partner_groups` (`analyzers` ∋ `raccoon_wallet`). Builder: `core/rules_v2/raccoon_wallet_rules_accessor.py`.
 
 **API-cancel detection:** hardcoded substring `API_CANCEL_INFO_KEYWORD` in `raccoon_wallet_analyzer.py` (not YAML-configurable).
 

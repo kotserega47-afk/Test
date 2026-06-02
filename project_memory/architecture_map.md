@@ -156,10 +156,9 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `reporters/conversion_reporter.py` | Render conversion Excel + Telegram | `analyzers/conversion.py` |
 | `core/rules_v2/accessors.py` | `ConversionRulesAccessor` — rules snapshot access for conversion | conversion analyzer |
 | `config/payout_config.yaml` | Payout analyzer config | `analyzers/payout.py` via `payout_config_loader.py` |
-| `config/raccoon_wallet_config.yaml` | Raccoon wallet partial config (partners YAML; PayIn columns legacy/shadow; scalars shadow via loader) | `raccoon_wallet_config_loader.py` |
 | `analyzers/raccoon_wallet_columns.py` | PayIn Excel column mapping constants (runtime source) | `raccoon_wallet_analyzer`, `raccoon_wallet_config_loader` |
-| `analyzers/raccoon_wallet_config_loader.py` | YAML + `job_params` scalar resolve + scalar/roster/columns shadow compare | `raccoon_wallet_analyzer`, `raccoon_wallet_downloader` |
-| `core/rules_v2/raccoon_wallet_rules_accessor.py` | Rules V2 partner roster union (shadow) | `raccoon_wallet_config_loader` |
+| `analyzers/raccoon_wallet_config_loader.py` | Rules V2 config resolve (scalars + roster + groups) | `raccoon_wallet_analyzer`, `raccoon_wallet_downloader` |
+| `core/rules_v2/raccoon_wallet_rules_accessor.py` | Rules V2 partner roster union + groups cfg | `raccoon_wallet_config_loader` |
 | `analyzers/raccoon_wallet_analyzer.py` | Raccoon PayIn analysis + TG | `raccoon_wallet_downloader`, `raccoon_jobs` |
 | `integrations/raccoon_wallet_downloader.py` | Raccoon Playwright PayIn download | job `raccoon_wallet` |
 | `integrations/raccoon_jobs.py` | Raccoon job registry bindings | `JOB_REGISTRY` |
@@ -420,18 +419,17 @@ Telegram document reply
 |---|---|
 | **Trigger** | Schedule `raccoon_wallet` or TG `/run_raccoon` |
 | **Entry** | `integrations/raccoon_jobs.run_raccoon_wallet_job()` → `run_raccoon_wallet_cycle()` |
-| **Config path** | `raccoon_wallet_config_loader.resolve_raccoon_wallet_config()` — mode `0`: YAML primary; mode `1`: Rules V2 primary (scalars + roster + groups) with YAML fallback; always shadow compare when YAML present; columns from code constants |
+| **Config path** | `raccoon_wallet_config_loader.resolve_raccoon_wallet_config()` — **Rules V2 only**; scalars from `job_params`; roster from rules union; groups from `partner_groups`; columns from code constants |
 | **Input** | Raccoon PayIn export via Playwright → `/tmp/raccoon_wallet/payin_*.xlsx` |
 | **Output** | Telegram `TELEGRAM_CHAT_ID_RACCOON_WALLET` |
 | **Статус** | CONFIRMED |
 
 ```
 raccoon_wallet_downloader
-  → resolve_raccoon_wallet_config (YAML scalars + roster shadow)
+  → resolve_raccoon_wallet_config (Rules V2: job_params + roster + groups)
   → Playwright download (payin_days_back)
   → raccoon_wallet_analyzer.analyze_raccoon_wallets
-       → resolve config (loader; roster still YAML partners.*)
-       → shadow: rules roster union vs YAML (log only)
+       → resolve config (loader; Rules V2 only)
        → overlay thresholds_partner / wallet_limits
        → exclude_time from rules
        → TG report

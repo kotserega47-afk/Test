@@ -55,13 +55,11 @@
 
 | Aspect | State |
 |--------|-------|
-| **Status** | `PROD_OBSERVATION` |
-| **Completed** | Rules V2 runtime cutover implemented; local mode=1 verification passed; local report-output verification passed; production rules workbook deployed; Railway `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1` enabled |
-| **Pending** | Production observation period; final YAML removal (Phase 3B-6) |
+| **Status** | **COMPLETE** — Rules V2 only, no feature flag |
+| **Completed** | YAML removed; fallback and shadow retired; `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag removed |
+| **Config source** | `job_params` (scalars), roster union, `partner_groups` (groups), code constants (columns) |
 
-**Runtime path (mode=1):** `resolve_raccoon_wallet_config()` → Rules V2 primary for scalars + roster + groups; YAML fallback when rules incomplete; columns from code constants.
-
-**Phase 3B-6 gate:** clean production logs (`source=rules_v2`), at least one successful TG report, no regressions — see `tasks.md` § CONFIG-MIGRATION-PHASE-3B-6.
+**Runtime path:** `resolve_raccoon_wallet_config()` always loads Rules V2; logs `[raccoon_wallet_config] source=rules_v2`; no env gate.
 
 ---
 
@@ -243,3 +241,5 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-02 | STATE_DIR Volume Migration Phase A — default `/data/state` (E-INFRA-01) |
 | 2026-06-02 | Conversion → Wallet Editor hook — `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run |
 | 2026-06-02 | Raccoon Wallet Rules V2 — production cutover (`RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`); status `PROD_OBSERVATION`; Phase 3B-6 waiting for prod observation |
+| 2026-06-02 | Raccoon Wallet config migration complete — YAML removed; Rules V2 only (E-CONFIG-10) |
+| 2026-06-02 | Raccoon Wallet feature flag removed — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |

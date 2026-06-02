@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONFIG-MIGRATION-PHASE-3B-6 (WAITING_FOR_PROD_OBSERVATION); CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
 
 ---
 
@@ -156,6 +156,8 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | CONFIG-MIGRATION-PHASE-3B-3 | complete | Groups membership shadow + dead YAML fields cleanup |
 | CONFIG-MIGRATION-PHASE-3B-4 | complete | Cutover readiness audit + manual rules prep checklist |
 | CONFIG-MIGRATION-PHASE-3B-5 | complete | Rules V2 runtime cutover for roster/groups (`RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`) |
+| CONFIG-MIGRATION-PHASE-3B-6 | complete | Delete `raccoon_wallet_config.yaml`; remove YAML fallback; retire shadow compares |
+| CONFIG-MIGRATION-PHASE-3B-7 | complete | Remove `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag; Rules V2 unconditional |
 
 ---
 
@@ -163,35 +165,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
 | Task ID | Status | Goal (1 line) | Prerequisite |
 |---------|--------|---------------|--------------|
-| **CONFIG-MIGRATION-PHASE-3B-6** | **WAITING_FOR_PROD_OBSERVATION** | Delete `raccoon_wallet_config.yaml`; remove YAML fallback; retire shadow compares | Production observation period with clean logs and successful report (see gate criteria below) |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
-
-### CONFIG-MIGRATION-PHASE-3B-6 — detail
-
-**Status:** `WAITING_FOR_PROD_OBSERVATION`
-
-**Completed:**
-
-- ✅ rules.xlsx uploaded to production Dropbox
-- ✅ `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1` enabled in Railway
-- ✅ Local mode=1 config resolve verification passed
-- ✅ Local mode=1 report-output verification passed
-
-**Gate criteria (remaining):**
-
-1. Production observation period completed
-   - minimum 24h
-   - preferred 2–3 days
-2. Production logs confirm:
-   `[raccoon_wallet_config] source=rules_v2 fields=groups,roster,scalars`
-3. Production logs do not contain:
-   `source=yaml`, `source=mixed`, `rules_roster_missing_or_incomplete`, `rules_scalars_missing_or_incomplete`
-4. At least one successful Raccoon Wallet Telegram report generated in production
-5. No detected regressions in:
-   - partner coverage
-   - thresholds
-   - limits
-   - conversion reporting
 
 **Phase 1B scope (planned, not started):**
 
@@ -222,3 +196,5 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-3 complete — groups membership shadow + dead fields cleanup; Phase 3B-4: cutover readiness + YAML removal plan |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-5 complete — Rules V2 runtime cutover for roster/groups; Phase 3B-6: YAML deletion |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-6 — production cutover deployed; status `WAITING_FOR_PROD_OBSERVATION`; YAML removal gated on prod observation |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-6 complete — `raccoon_wallet_config.yaml` removed; Rules V2 only; shadow/fallback retired |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-7 complete — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag removed; Rules V2 unconditional |

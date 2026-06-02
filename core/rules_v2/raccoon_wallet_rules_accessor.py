@@ -1,4 +1,4 @@
-"""Rules V2 accessors for Raccoon Wallet config migration (Phase 3B-1 roster)."""
+"""Rules V2 accessors for Raccoon Wallet configuration."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ RaccoonWalletGroupsMembership = dict[str, tuple[str, ...]]
 
 @dataclass(frozen=True, slots=True)
 class RaccoonWalletRoster:
-    """Partner roster: normalized key → display name (Excel/YAML label)."""
+    """Partner roster: normalized key → display name (Excel label)."""
 
     norm_to_display: dict[str, str]
 
@@ -56,19 +56,6 @@ def _add_partner(roster: dict[str, str], display_name: str) -> None:
     if not norm:
         return
     roster.setdefault(norm, name)
-
-
-def build_roster_from_yaml(cfg: dict[str, Any]) -> RaccoonWalletRoster:
-    partners = cfg.get("partners") or {}
-    roster: dict[str, str] = {}
-    if isinstance(partners, dict):
-        for display_name in partners.keys():
-            _add_partner(roster, str(display_name))
-    return RaccoonWalletRoster(norm_to_display=roster)
-
-
-def _enabled_series(df: pd.DataFrame) -> pd.Series:
-    return pd.to_numeric(df.get("enabled"), errors="coerce").fillna(0).astype(int).eq(1)
 
 
 def _partners_from_thresholds(df: pd.DataFrame | None, roster: dict[str, str]) -> None:
@@ -157,37 +144,6 @@ def _normalize_group_name(name: str) -> str:
     return str(name or "").strip().lower()
 
 
-def _sorted_partner_norms(partners: Any) -> tuple[str, ...]:
-    if not partners:
-        return ()
-    norms = {
-        normalize_partner_name(str(p))
-        for p in partners
-        if str(p).strip() and normalize_partner_name(str(p))
-    }
-    return tuple(sorted(norms))
-
-
-def build_groups_from_yaml(cfg: dict[str, Any]) -> RaccoonWalletGroupsMembership:
-    """YAML groups membership: group_name -> sorted normalized partner keys."""
-
-    groups_raw = cfg.get("groups") or {}
-    membership: RaccoonWalletGroupsMembership = {}
-    if not isinstance(groups_raw, dict):
-        return membership
-
-    for gname, gdata in groups_raw.items():
-        group_key = _normalize_group_name(str(gname))
-        if not group_key:
-            continue
-        partners = ()
-        if isinstance(gdata, dict):
-            partners = _sorted_partner_norms(gdata.get("partners"))
-        membership[group_key] = partners
-
-    return membership
-
-
 def _groups_from_partner_groups_sheet(
     df: pd.DataFrame | None,
 ) -> RaccoonWalletGroupsMembership:
@@ -240,17 +196,6 @@ def load_groups_from_rules(
         return None
 
     return build_groups_from_sheets(sheets)
-
-
-def roster_covers_yaml(
-    yaml_roster: RaccoonWalletRoster,
-    rules_roster: RaccoonWalletRoster,
-) -> bool:
-    """True when Rules roster is non-empty and covers every YAML partner."""
-
-    if not rules_roster.norm_to_display:
-        return False
-    return yaml_roster.normalized_keys <= rules_roster.normalized_keys
 
 
 def partners_cfg_from_roster(roster: RaccoonWalletRoster) -> dict[str, dict[str, Any]]:
@@ -313,78 +258,15 @@ def load_groups_cfg_from_rules(
     return build_groups_cfg_from_sheets(sheets)
 
 
-def groups_diff(
-    yaml_groups: RaccoonWalletGroupsMembership,
-    rules_groups: RaccoonWalletGroupsMembership,
-) -> dict[str, Any]:
-    """Compare YAML vs Rules V2 group membership; empty dict if identical."""
-
-    yaml_keys = set(yaml_groups.keys())
-    rules_keys = set(rules_groups.keys())
-
-    yaml_only_groups = sorted(yaml_keys - rules_keys)
-    rules_only_groups = sorted(rules_keys - yaml_keys)
-
-    membership_diff: dict[str, dict[str, list[str]]] = {}
-    for group_key in sorted(yaml_keys & rules_keys):
-        yaml_members = yaml_groups[group_key]
-        rules_members = rules_groups[group_key]
-        if yaml_members == rules_members:
-            continue
-        yaml_only = sorted(set(yaml_members) - set(rules_members))
-        rules_only = sorted(set(rules_members) - set(yaml_members))
-        membership_diff[group_key] = {
-            "yaml_only": yaml_only,
-            "rules_only": rules_only,
-        }
-
-    if not yaml_only_groups and not rules_only_groups and not membership_diff:
-        return {}
-
-    return {
-        "yaml_only_groups": yaml_only_groups,
-        "rules_only_groups": rules_only_groups,
-        "membership_diff": membership_diff,
-    }
-
-
-def roster_diff(
-    yaml_roster: RaccoonWalletRoster,
-    rules_roster: RaccoonWalletRoster,
-) -> dict[str, Any]:
-    yaml_norms = yaml_roster.normalized_keys
-    rules_norms = rules_roster.normalized_keys
-
-    yaml_only = sorted(yaml_norms - rules_norms)
-    rules_only = sorted(rules_norms - yaml_norms)
-
-    if not yaml_only and not rules_only:
-        return {}
-
-    return {
-        "yaml_only": yaml_only,
-        "rules_only": rules_only,
-        "yaml_count": len(yaml_norms),
-        "rules_count": len(rules_norms),
-        "yaml_display": {k: yaml_roster.norm_to_display[k] for k in yaml_only},
-        "rules_display": {k: rules_roster.norm_to_display[k] for k in rules_only},
-    }
-
-
 __all__ = [
     "ANALYZER_KEY",
     "RaccoonWalletGroupsMembership",
     "RaccoonWalletRoster",
     "build_groups_cfg_from_sheets",
     "build_groups_from_sheets",
-    "build_groups_from_yaml",
     "build_roster_from_sheets",
-    "build_roster_from_yaml",
-    "groups_diff",
     "load_groups_cfg_from_rules",
     "load_groups_from_rules",
     "load_roster_from_rules",
     "partners_cfg_from_roster",
-    "roster_covers_yaml",
-    "roster_diff",
 ]
