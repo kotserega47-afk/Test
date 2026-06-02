@@ -20,6 +20,8 @@ from core.job_runner import get_status, Actor, JOB_REGISTRY
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
 
+from integrations.telegram_bot import get_telegram_sender_health_snapshot
+
 from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 from integrations.downloader import run_download
@@ -69,6 +71,24 @@ def _format_observation_status() -> str:
         lines.append(f"scheduler: active_schedules={active_count} last_error={last_error}")
     except Exception:
         lines.append("scheduler: unknown")
+
+    lines.append("")
+    lines.append("telegram_sender:")
+    try:
+        tg = get_telegram_sender_health_snapshot()
+        lines.append(
+            f"- status={tg.get('status', 'unknown')} "
+            f"sent={tg.get('total_sent', 'unknown')} "
+            f"failed={tg.get('total_failed', 'unknown')} "
+            f"queue_depth={tg.get('queue_depth', 'unknown')} "
+            f"consecutive={tg.get('consecutive_failures', 'unknown')}"
+        )
+        lines.append(
+            f"- last_success_age={tg.get('last_success_age_sec', 'unknown')}s "
+            f"last_error={tg.get('last_error_class', 'none')}"
+        )
+    except Exception:
+        lines.append("- unknown")
 
     lines.append("")
     lines.append("locks:")

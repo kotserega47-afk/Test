@@ -21,6 +21,7 @@ from core.job_dispatch import dispatch_job_sync
 from core.job_runner import Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
+from integrations.telegram_bot import log_telegram_health_if_due
 from automation.worker import ensure_worker_started
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -174,6 +175,7 @@ def schedule_loop() -> None:
     while True:
         _apply_scheduler_clock_reset_if_requested(next_every, next_cron, logger=log)
         record_tick()
+        log_telegram_health_if_due()
 
         try:
             schedules = load_schedules(force_sync=False)
