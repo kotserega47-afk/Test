@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -524,6 +524,104 @@ class HourlyRulesAccessor(BaseRulesAccessor):
             partner_key=partner_key,
             group_key=group_key,
         )
+
+
+@dataclass(slots=True)
+class ConversionRulesAccessor(BaseRulesAccessor):
+    """Rules-reading layer for conversion job (legacy inline semantics preserved)."""
+
+    job_key: str = "conversion"
+    DEFAULT_THRESHOLD: int = 4
+    ERROR_STREAK_METRIC: str = "error_streak"
+    VALID_STATUS_PARAM: str = "valid_status"
+
+    @classmethod
+    def from_snapshot(cls, snapshot: RulesSnapshotV2) -> ConversionRulesAccessor:
+        from core.rules_v2.indexes import build_indexes
+
+        return cls(snapshot=snapshot, indexes=build_indexes(snapshot))
+
+    def get_valid_statuses(self) -> set[str]:
+        valid_statuses: set[str] = set()
+
+        for param in self.snapshot.job_params:
+            if not param.enabled:
+                continue
+            if param.job_key != self.job_key:
+                continue
+            if param.param_key != self.VALID_STATUS_PARAM:
+                continue
+
+            value = str(param.value).strip().lower()
+            if value:
+                valid_statuses.add(value)
+
+        if not valid_statuses:
+            valid_statuses = {"готов к работе", "активный вход"}
+        return valid_statuses
+
+    def get_error_streak_threshold_map(
+        self,
+        normalize_partner: Callable[[str], str],
+    ) -> dict[str, int]:
+        threshold_map: dict[str, int] = {}
+
+        for rule in self.snapshot.threshold_rules:
+            if not rule.enabled:
+                continue
+            if rule.job_key != self.job_key:
+                continue
+            if rule.scope_type != "partner":
+                continue
+            if rule.metric_key != self.ERROR_STREAK_METRIC:
+                continue
+
+            partner = self.snapshot.partners.get(rule.scope_key)
+            if not partner:
+                continue
+
+            partner_norm = normalize_partner(partner.display_name or partner.source_name or "")
+            if not partner_norm:
+                continue
+
+            threshold_value = rule.threshold_max
+            if threshold_value is None:
+                continue
+
+            threshold_map[partner_norm] = int(threshold_value)
+
+        return threshold_map
+
+    def get_default_threshold(self) -> int:
+        return self.DEFAULT_THRESHOLD
+
+    def get_partner_exclusion_rules(self) -> list[ExclusionRule]:
+        result: list[ExclusionRule] = []
+
+        for rule in self.snapshot.exclusion_rules:
+            if not rule.enabled:
+                continue
+            if rule.job_key != self.job_key:
+                continue
+            if rule.scope_type != "partner":
+                continue
+            result.append(rule)
+
+        return result
+
+    def resolve_exclusion_partner_norm(
+        self,
+        rule: ExclusionRule,
+        normalize_partner: Callable[[str], str],
+    ) -> str | None:
+        partner = self.snapshot.partners.get(rule.scope_key)
+        if not partner:
+            return None
+
+        partner_norm = normalize_partner(partner.display_name or partner.source_name or "")
+        if not partner_norm:
+            return None
+        return partner_norm
 
 
 @dataclass(slots=True)

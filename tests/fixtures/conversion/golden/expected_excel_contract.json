@@ -1,0 +1,34 @@
+{
+  "sheet_names": [
+    "Отключить",
+    "Карт в работе",
+    "Карт в работе (Пулы)"
+  ],
+  "sheets": {
+    "Отключить": {
+      "required_columns": [
+        "card",
+        "partner",
+        "original_partner",
+        "max_consecutive_errors",
+        "threshold",
+        "status",
+        "partner_list"
+      ],
+      "problem_card": "card001",
+      "min_streak": 3
+    },
+    "Карт в работе": {
+      "required_columns": [
+        "Партнёр",
+        "Карт в работе"
+      ]
+    },
+    "Карт в работе (Пулы)": {
+      "required_columns": [
+        "Пул",
+        "Карт в работе"
+      ]
+    }
+  }
+}

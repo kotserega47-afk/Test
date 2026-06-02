@@ -1,0 +1,14 @@
+{
+  "problem_message_fragments": [
+    "🚫 Карты на отключение",
+    "card001",
+    "test partner",
+    "3"
+  ],
+  "summary_message_fragments": [
+    "conversion_test.xlsx",
+    "Карт в работе по партнёрам",
+    "На отключение: 1"
+  ],
+  "special_cards_missing_fragment": "special_cards.xlsx не найден"
+}
