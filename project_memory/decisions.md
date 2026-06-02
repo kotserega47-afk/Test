@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-05** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-09** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -118,6 +118,7 @@
 | E-CONFIG-06 | 2026-06-02 | Phase 3B-2: Raccoon PayIn `columns.payin.*` moved to code constants (`RACCOON_PAYIN_COLUMN_MAP`); no Rules V2 sheet for static export headers; YAML columns retained for shadow compare only; runtime always uses constants | CONFIRMED | `analyzers/raccoon_wallet_columns.py`; CONFIG-MIGRATION-PHASE-3B-2 |
 | E-CONFIG-07 | 2026-06-02 | Phase 3B-3: groups membership shadow (YAML vs `partner_groups`); dead YAML fields removed (`success_window_minutes`, `api_cancel_keyword`, payout dead paths); API-cancel detection stays hardcoded `API_CANCEL_INFO_KEYWORD` | CONFIRMED | `raccoon_wallet_rules_accessor.py`; CONFIG-MIGRATION-PHASE-3B-3 |
 | E-CONFIG-08 | 2026-06-02 | Phase 3B-5: Rules V2 runtime cutover for roster + groups when `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`; roster requires `yaml_norms ⊆ rules_norms` or YAML fallback; groups fallback on load error; YAML file retained | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-5 |
+| E-CONFIG-09 | 2026-06-02 | Production cutover to `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1` completed — production `rules.xlsx` deployed to Dropbox; Railway env enabled. Remaining requirement before YAML removal: production observation with clean logs (`source=rules_v2`) and successful Raccoon Wallet Telegram report generation | CONFIRMED | CONFIG-MIGRATION-PHASE-3B-6; `tasks.md` gate criteria |
 
 ---
 
@@ -167,3 +168,4 @@
 | 2026-06-01 | WalletEditor E-WE-01…E-WE-06 |
 | 2026-06-02 | Conversion E-CONV-01…E-CONV-05; I12 passive fingerprint invariant; I13 observation best-effort invariant |
 | 2026-06-02 | CONV-WE-HOOK — E-CONV-06…E-CONV-08 |
+| 2026-06-02 | Raccoon Wallet production cutover — E-CONFIG-09; Phase 3B-6 `WAITING_FOR_PROD_OBSERVATION` |
