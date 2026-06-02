@@ -16,21 +16,14 @@ from typing import Any, Dict, Optional
 #   - events are append-only JSONL in <STATE_DIR>/events/events_YYYY-MM-DD.jsonl
 #   - no /tmp usage
 #
-# STATE_DIR defaults to /config/state (Railway persistent volume / Dropbox-synced)
+# STATE_DIR defaults to /data/state (Railway Volume mount)
 # -----------------------------------------------------------------------------
-
-_DEFAULT_STATE_DIR = "/config/state"
-_STATE_DIR_ENV_KEYS = ("STATE_DIR", "CONFIG_STATE_DIR", "DROPBOX_STATE_DIR")
 
 _lock = threading.Lock()
 
 
 def _state_dir() -> Path:
-    for k in _STATE_DIR_ENV_KEYS:
-        v = os.getenv(k, "").strip()
-        if v:
-            return Path(v)
-    return Path(_DEFAULT_STATE_DIR)
+    return Path(os.getenv("STATE_DIR", "/data/state"))
 
 
 def _events_dir() -> Path:

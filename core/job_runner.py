@@ -42,16 +42,9 @@ _RUNNING: Dict[str, Tuple[str, float, Dict[str, Any]]] = {}
 # Locks (NO /tmp) — stored in STATE_DIR/locks
 # =============================================================================
 
-_DEFAULT_STATE_DIR = "/config/state"
-_STATE_DIR_ENV_KEYS = ("STATE_DIR", "CONFIG_STATE_DIR", "DROPBOX_STATE_DIR")
-
 
 def _state_dir() -> Path:
-    for k in _STATE_DIR_ENV_KEYS:
-        v = os.getenv(k, "").strip()
-        if v:
-            return Path(v)
-    return Path(_DEFAULT_STATE_DIR)
+    return Path(os.getenv("STATE_DIR", "/data/state"))
 
 
 def _lock_dir() -> Path:
