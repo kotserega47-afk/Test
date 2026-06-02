@@ -2,12 +2,16 @@ import os
 import sys
 from datetime import datetime, timedelta
 import pandas as pd
-import yaml
 from zoneinfo import ZoneInfo
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from analyzers.raccoon_wallet_config_loader import resolve_raccoon_wallet_config
+from analyzers.raccoon_wallet_columns import (
+    RACCOON_PAYIN_REQUIRED_COLUMNS,
+    get_raccoon_payin_column_map,
+)
 from integrations.telegram_bot import send_message_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -23,13 +27,6 @@ def _wallet_chat_id() -> str:
     if not chat_id:
         raise RuntimeError("Не задан TELEGRAM_CHAT_ID_RACCOON_WALLET")
     return chat_id
-
-CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "config",
-    "raccoon_wallet_config.yaml"
-)
-
 
 # === Статусы ===============================================================
 
@@ -83,19 +80,7 @@ def _in_window(hour: int, start: int, end: int) -> bool:
     return (hour >= start) or (hour <= end)
 
 def _load_cfg():
-    if not os.path.exists(CONFIG_PATH):
-        raise RuntimeError("raccoon_wallet_config.yaml не найден")
-
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    cfg.setdefault("window_minutes", 8)
-    cfg.setdefault("offset_minutes", 8)
-    cfg.setdefault("min_events", 10)
-    cfg.setdefault("partners", {})
-    cfg.setdefault("groups", {})
-
-    return cfg
+    return resolve_raccoon_wallet_config(logger)
 def _parse_analyzers_csv(val: str) -> list[str]:
     return sorted(set(
         p.strip().lower()
@@ -106,6 +91,9 @@ def _parse_analyzers_csv(val: str) -> list[str]:
 # === rules.xlsx (thresholds_partner) ========================================
 
 ANALYZER_KEY = "raccoon_wallet"
+
+# Hardcoded PayIn info substring for API-cancel detection (not YAML-configurable).
+API_CANCEL_INFO_KEYWORD = "отмена по api"
 
 def _apply_wallet_limits_from_rules(cfg: dict) -> dict:
     """
@@ -351,9 +339,14 @@ def analyze_raccoon_wallets(payin_path: str, payout_path: str | None = None):
         logger.info("[Analyzer] PayIn пуст — выходим")
         return
 
-    payin_map = _get_mapping(cfg, "payin")
-    _require_mapping(payin_map, required=["dt", "partner", "status", "amount"], kind="payin")
-    df = _apply_mapping(df, payin_map, required=["dt", "partner", "status", "amount"], kind="payin")
+    payin_map = get_raccoon_payin_column_map()
+    _require_mapping(payin_map, required=list(RACCOON_PAYIN_REQUIRED_COLUMNS), kind="payin")
+    df = _apply_mapping(
+        df,
+        payin_map,
+        required=list(RACCOON_PAYIN_REQUIRED_COLUMNS),
+        kind="payin",
+    )
 
     COL_DT = "dt"
     COL_PARTNER = "partner"
@@ -503,7 +496,7 @@ def analyze_raccoon_wallets(payin_path: str, payout_path: str | None = None):
             )
 
         # API ошибки за час
-        error_keyword = "отмена по api"
+        error_keyword = API_CANCEL_INFO_KEYWORD
         one_hour_ago = now - timedelta(hours=1)
 
         last_hour = df[
@@ -626,7 +619,6 @@ def analyze_raccoon_wallets(payin_path: str, payout_path: str | None = None):
 
     pending_cfg = cfg.get("pending_thresholds", {})
     payin_limit = pending_cfg.get("payin_minutes", 10)
-    payout_limit = pending_cfg.get("payout_minutes", 180)
 
      #PayIn зависшие
     df_pending_payin = df[

@@ -40,6 +40,13 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
         "pending_payin_minutes": "int",
         "pending_payout_minutes": "int",
     },
+    "raccoon_wallet": {
+        "window_minutes": "int",
+        "offset_minutes": "int",
+        "min_events": "int",
+        "pending_payin_minutes": "int",
+        "payin_days_back": "int",
+    },
     "ttl_clean": {
         "interval_minutes": "int",
     },

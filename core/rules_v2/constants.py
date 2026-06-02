@@ -44,6 +44,13 @@ ALLOWED_JOB_PARAMS: dict[str, dict[str, str]] = {
         "payin_days_back": "int",
         "payout_days_back": "int",
     },
+    "raccoon_wallet": {
+        "window_minutes": "int",
+        "offset_minutes": "int",
+        "min_events": "int",
+        "pending_payin_minutes": "int",
+        "payin_days_back": "int",
+    },
     "hourly": {
         "intraday_interval_minutes": "int",
         "final_daily_time": "time",

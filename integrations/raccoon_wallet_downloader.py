@@ -5,11 +5,11 @@ import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
-import yaml
 
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from analyzers.raccoon_wallet_config_loader import resolve_raccoon_wallet_config
 from integrations.telegram_bot import send_message_sync, send_file_sync
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -148,13 +148,9 @@ def run_raccoon_wallet_cycle():
     ts = datetime.now(MSK_TZ).strftime("%H.%M")
     logger.info(f"🕒 WalletHandler стартовал (ts={ts})")
 
-    # Загружаем конфиг для таймингов и периодов выгрузки
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "raccoon_wallet_config.yaml")
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-
+    # Загружаем конфиг для таймингов и периодов выгрузки (Phase 3A scalars via loader)
+    cfg = resolve_raccoon_wallet_config(logger)
     payin_days = cfg.get("download_periods", {}).get("payin_days_back", 2)
-    payout_days = cfg.get("download_periods", {}).get("payout_days_back", 7)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
