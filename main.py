@@ -53,6 +53,19 @@ def process_file(filename: str, aux_filename: str | None = None) -> bool:
         _safe_send(msg)
         return False
 
+    if "conversion" in analyzer_func.__module__:
+        from integrations.conversion_pipeline import run_conversion_pipeline
+
+        card_local_path = None
+        if not aux_filename and last_card_path:
+            card_local_path = last_card_path
+
+        return run_conversion_pipeline(
+            filename,
+            card_filename=aux_filename,
+            card_local_path=card_local_path,
+        )
+
     local_path = os.path.join(LOCAL_TMP_PATH, filename)
     dropbox_path = f"{DROPBOX_INPUT_PATH}/{filename}"
 
@@ -113,7 +126,7 @@ def process_file(filename: str, aux_filename: str | None = None) -> bool:
     try:
         logger.info(f"🚀 Запуск анализа {analyzer_func.__module__}.run()...")
 
-        arg_name = "conv_file" if "conversion" in analyzer_func.__module__ else "payout_file"
+        arg_name = "payout_file"
         pair_path = aux_local_path or last_card_path
 
         if requires_card and not pair_path:
@@ -126,10 +139,6 @@ def process_file(filename: str, aux_filename: str | None = None) -> bool:
             arg_name: local_path,
             "card_files": [pair_path] if requires_card else [],
         }
-
-        # Критично: conversion.run(...) требует col_mapping
-        if "conversion" in analyzer_func.__module__:
-            kwargs["col_mapping"] = CONVERSION_COLUMNS
 
         result = analyzer_func(**kwargs)
         summary = result.get("summary", {}) if isinstance(result, dict) else {}

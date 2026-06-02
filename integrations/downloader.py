@@ -13,6 +13,7 @@ from playwright.sync_api import sync_playwright
 
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+from integrations.conversion_pipeline import run_conversion_pipeline
 from integrations.dropbox_watcher import upload_file
 from integrations.telegram_bot import send_message_sync
 from main import process_file
@@ -283,6 +284,23 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
     return local_paths
 
 
+def _build_downloader_final_message(*, conv_ok: bool, payout_ok: bool, payout_attempted: bool) -> str:
+    conv_line = f"Conversion: {'OK' if conv_ok else 'FAILED'}"
+    if payout_attempted:
+        payout_line = f"Payout: {'OK' if payout_ok else 'FAILED'}"
+    else:
+        payout_line = "Payout: not attempted"
+
+    if conv_ok and payout_ok:
+        headline = "✅ Downloader завершил цикл успешно"
+    elif not conv_ok and payout_attempted and not payout_ok:
+        headline = "❌ Downloader завершил цикл с ошибками"
+    else:
+        headline = "⚠️ Downloader завершил цикл с частичной ошибкой"
+
+    return f"{headline}\n{conv_line}\n{payout_line}"
+
+
 def run_download():
     if not LOGIN or not PASSWORD:
         raise RuntimeError("ANTARES_LOGIN/ANTARES_PASSWORD не заданы в .env")
@@ -348,11 +366,17 @@ def run_download():
             )
             return
 
-        analysis_ok = False
+        conv_ok = False
+        payout_ok = True
+        payout_attempted = False
         try:
             logger.info(f"▶️ Старт обработки Conversion: {conv_name} + aux={card_name}")
             send_message_sync(f"🚀 Запущен анализ Conversion ({conv_name})", chat_id=CHAT_ID)
-            process_file(conv_name, aux_filename=card_name)
+            conv_ok = run_conversion_pipeline(
+                conv_name,
+                card_filename=card_name,
+                source="downloader",
+            )
 
             if any(s.startswith("cd_") for s in uploaded_extra) and any(
                     s.startswith("payout_") for s in uploaded_extra
@@ -362,7 +386,8 @@ def run_download():
 
                 logger.info(f"▶️ Старт обработки Payout: {payout_name} + aux={cd_name}")
                 send_message_sync(f"🚀 Запущен анализ Payout ({payout_name})", chat_id=CHAT_ID)
-                process_file(payout_name, aux_filename=cd_name)
+                payout_attempted = True
+                payout_ok = process_file(payout_name, aux_filename=cd_name)
             else:
                 logger.info("ℹ️ Файлы cd_/payout_ не найдены — Payout пропущен.")
                 send_message_sync(
@@ -370,13 +395,17 @@ def run_download():
                     chat_id=CHAT_ID,
                 )
 
-            analysis_ok = True
-
         finally:
             release_lock()
 
-        if analysis_ok:
-            send_message_sync("✅ Downloader завершил цикл успешно.", chat_id=CHAT_ID)
+        send_message_sync(
+            _build_downloader_final_message(
+                conv_ok=conv_ok,
+                payout_ok=payout_ok,
+                payout_attempted=payout_attempted,
+            ),
+            chat_id=CHAT_ID,
+        )
 
     except Exception as e:
         msg = f"❌ Ошибка при загрузке или анализе: {e}"
