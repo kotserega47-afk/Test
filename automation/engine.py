@@ -11,6 +11,7 @@ from playwright.sync_api import Page, sync_playwright
 
 from automation.audit import Stats, log
 from automation.runtime import RunConfig, require_wallet_editor_antares_credentials, retry
+from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
 
 
 BASE_DIR = "/tmp"
@@ -1024,8 +1025,6 @@ def run(file_path: str, cfg: RunConfig):
     log.info(f"🚀 [Run] wallet editor started file={file_path}")
     require_wallet_editor_antares_credentials(cfg)
 
-    from datetime import datetime
-
     stats = Stats()
     df = _prepare_df(file_path)
 
@@ -1076,8 +1075,8 @@ def run(file_path: str, cfg: RunConfig):
                 for idx, action, value in actions:
                     log.info(f"➡️ [Card] processing row={idx} card={card} action={action} value={value}")
 
-                    # 🔥 единая точка времени
-                    now_str = datetime.now().strftime("%d.%m.%Y")
+                    # 🔥 единая точка времени (MSK, время обработки строки)
+                    now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
 
                     try:
                         if action == "remove_partner":
@@ -1146,7 +1145,7 @@ def run(file_path: str, cfg: RunConfig):
 
                 log.exception(f"❌ [Card] fatal failure card={card}: {e}")
 
-                now_str = datetime.now().strftime("%d.%m.%Y")
+                now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
 
                 for idx, _, _ in actions:
                     if not str(df.at[idx, "status"]).strip():
