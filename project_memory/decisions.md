@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-12** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -122,6 +122,7 @@
 | E-CONFIG-10 | 2026-06-02 | Raccoon Wallet YAML fully retired — `config/raccoon_wallet_config.yaml` removed; `resolve_raccoon_wallet_config()` is Rules V2 only; shadow compares and YAML fallback removed | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-6 |
 | E-CONFIG-11 | 2026-06-02 | Raccoon Wallet Rules V2 flag retired — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env removed; no alternative runtime mode; Rules V2 is the unconditional config source | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-7 |
 | E-CONFIG-12 | 2026-06-02 | Raccoon Wallet configuration migration completed — Rules V2 is the only supported configuration source; legacy YAML configuration path is retired and must not be reintroduced | CONFIRMED | CONFIG-MIGRATION-RACCOON-WALLET epic; Phases 3A, 3B-1…3B-7 |
+| E-CONFIG-13 | 2026-06-02 | Payout runtime switched to Rules V2 in production — `PAYOUT_CONFIG_FROM_RULES_V2=1` on Railway; prod `rules.xlsx` with `payout_info_rules` / `payout_ignore_phrases` deployed to Dropbox; logs `[payout_config] source=rules_v2`; YAML retained as fallback; rollback via `PAYOUT_CONFIG_FROM_RULES_V2=0` | CONFIRMED | CONFIG-MIGRATION-PHASE-4C; `analyzers/payout_config_loader.py` |
 
 ---
 
@@ -175,3 +176,4 @@
 | 2026-06-02 | Raccoon Wallet YAML retired — E-CONFIG-10; CONFIG-MIGRATION-PHASE-3B-6 complete |
 | 2026-06-02 | Raccoon Wallet feature flag retired — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — E-CONFIG-12 |
+| 2026-06-02 | Payout Rules V2 production cutover — E-CONFIG-13; CONFIG-MIGRATION-PHASE-4C complete |

@@ -81,6 +81,24 @@
 
 ---
 
+## Payout Rules V2
+
+| Aspect | State |
+|--------|-------|
+| **Status** | `PROD_MODE_1` |
+| **Current source** | Rules V2 |
+| **Rollback** | `PAYOUT_CONFIG_FROM_RULES_V2=0` |
+
+**Rules V2 sheets:** `payout_info_rules` (10 error phrases + thresholds), `payout_ignore_phrases` (5 ignore phrases).
+
+**Runtime path:** `resolve_payout_config()` with `PAYOUT_CONFIG_FROM_RULES_V2=1` → logs `[payout_config] source=rules_v2`; YAML retained as fallback only.
+
+**Production cutover (2026-06-02):** prod `rules.xlsx` deployed to Dropbox; Railway env enabled; payout report verified; rollback not required.
+
+**YAML:** `config/payout_config.yaml` retained — removal gated on CONFIG-MIGRATION-PHASE-4D observation period.
+
+---
+
 ## Conversion modernization (completed)
 
 | Phase | Deliverable | Status |
@@ -262,3 +280,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-02 | Raccoon Wallet config migration complete — YAML removed; Rules V2 only (E-CONFIG-10) |
 | 2026-06-02 | Raccoon Wallet feature flag removed — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — E-CONFIG-12; Rules V2 sole config source |
+| 2026-06-02 | Payout Rules V2 production cutover — `PAYOUT_CONFIG_FROM_RULES_V2=1`; status `PROD_MODE_1` (E-CONFIG-13) |

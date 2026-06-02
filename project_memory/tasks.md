@@ -159,6 +159,9 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | CONFIG-MIGRATION-PHASE-3B-6 | complete | Delete `raccoon_wallet_config.yaml`; remove YAML fallback; retire shadow compares |
 | CONFIG-MIGRATION-PHASE-3B-7 | complete | Remove `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag; Rules V2 unconditional |
 | **CONFIG-MIGRATION-RACCOON-WALLET** | **complete** | Epic: Raccoon Wallet config YAML → Rules V2 (Phases 3A, 3B-1…3B-7) |
+| CONFIG-MIGRATION-PHASE-4A | complete | Payout rules workbook prep (`payout_info_rules`, `payout_ignore_phrases`) |
+| CONFIG-MIGRATION-PHASE-4B | complete | Validate Payout Rules V2 mode=1 — semantic equality + shadow clean |
+| CONFIG-MIGRATION-PHASE-4C | complete | Payout Rules V2 production cutover (`PAYOUT_CONFIG_FROM_RULES_V2=1`) |
 
 ---
 
@@ -185,6 +188,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
 | Task ID | Status | Goal (1 line) | Prerequisite |
 |---------|--------|---------------|--------------|
+| **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 
 **Phase 1B scope (planned, not started):**
@@ -219,3 +223,5 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-6 complete — `raccoon_wallet_config.yaml` removed; Rules V2 only; shadow/fallback retired |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-7 complete — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag removed; Rules V2 unconditional |
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — Raccoon Wallet Rules V2 migration complete (E-CONFIG-12) |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-4A/4B complete — payout rules workbook + mode=1 validation |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-4C complete — Payout Rules V2 production cutover (E-CONFIG-13); Phase 4D observation open |
