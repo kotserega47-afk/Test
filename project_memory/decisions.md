@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-05** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-05** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -105,6 +105,19 @@
 | E-CONV-07 | 2026-06-02 | Initial rollout: max **10** problem cards per conversion run forwarded to Wallet Editor; preserve `problem_cards` order; skip invalid rows | CONFIRMED | `MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN` |
 | E-CONV-08 | 2026-06-02 | Scheduled conversion WE credentials via direct env (`CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN/PASSWORD`); profile `CONVERSION_AUTO`; no `WALLET_EDITOR_OPERATOR_MAP` | CONFIRMED | `integrations/conversion_wallet_editor_bridge.py` |
 | E-INFRA-01 | 2026-06-02 | `STATE_DIR` default `/data/state` (Railway Volume); local persistent state (locks, events, observation JSONL) — no `/config/state` default | CONFIRMED | `job_runner.py`, `event_log.py`, `lock_status.py`, `conversion_fp_observation.py` |
+
+### Config migration decisions (E-CONFIG-*)
+
+| ID | Дата | Решение | Статус | Источник |
+|----|------|---------|--------|----------|
+| E-CONFIG-01 | 2026-06-02 | Config → Rules V2 migration uses shadow-first rollout: default `PAYOUT_CONFIG_FROM_RULES_V2=0` keeps YAML as source of truth; Rules V2 loaded in shadow and compared on each payout run; runtime switch `=1` promotes Rules V2 with YAML fallback | CONFIRMED | `analyzers/payout_config_loader.py`; `core/rules_v2/payout_rules_accessor.py` |
+| E-CONFIG-02 | 2026-06-02 | **`rules.xlsx` — конечная точка миграции.** Во время CONFIG-MIGRATION-PHASE-1…N разрешены только изменения кода: schema, accessors, shadow compare, feature flags. **Production `rules.xlsx` не изменяется** до завершения всех этапов миграции и явного подтверждения готовности к переключению runtime на Rules V2 | CONFIRMED | `project_memory/decisions.md`; CONFIG-MIGRATION program |
+| E-CONFIG-03 | 2026-06-02 | Analyzer routing moved from `analysis_map.yaml` to explicit code constants in `analyzers/selector.py` (`CONVERSION_FILE_PATTERN`, `PAYOUT_FILE_PATTERN`); `config/analysis_map.yaml` removed — routing **не** переносится в Rules V2 | CONFIRMED | `analyzers/selector.py`; CONFIG-MIGRATION-PHASE-2 |
+| E-CONFIG-04 | 2026-06-02 | Raccoon wallet config migration Phase 3A: only scalar params (`window_minutes`, `offset_minutes`, `min_events`, `pending_payin_minutes`, `payin_days_back`) move to `job_params` with shadow-first env `RACCOON_WALLET_CONFIG_FROM_RULES_V2`; partner roster, group membership, column mapping remain YAML until Phase 3B | CONFIRMED | `analyzers/raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3A |
+| E-CONFIG-05 | 2026-06-02 | Phase 3B-1: partner roster shadow only — Rules V2 roster union compared to YAML on every resolve; **does not switch runtime roster**; non-empty `yaml_only` roster mismatch blocks final YAML removal | CONFIRMED | `core/rules_v2/raccoon_wallet_rules_accessor.py`; CONFIG-MIGRATION-PHASE-3B-1 |
+| E-CONFIG-06 | 2026-06-02 | Phase 3B-2: Raccoon PayIn `columns.payin.*` moved to code constants (`RACCOON_PAYIN_COLUMN_MAP`); no Rules V2 sheet for static export headers; YAML columns retained for shadow compare only; runtime always uses constants | CONFIRMED | `analyzers/raccoon_wallet_columns.py`; CONFIG-MIGRATION-PHASE-3B-2 |
+| E-CONFIG-07 | 2026-06-02 | Phase 3B-3: groups membership shadow (YAML vs `partner_groups`); dead YAML fields removed (`success_window_minutes`, `api_cancel_keyword`, payout dead paths); API-cancel detection stays hardcoded `API_CANCEL_INFO_KEYWORD` | CONFIRMED | `raccoon_wallet_rules_accessor.py`; CONFIG-MIGRATION-PHASE-3B-3 |
+| E-CONFIG-08 | 2026-06-02 | Phase 3B-5: Rules V2 runtime cutover for roster + groups when `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`; roster requires `yaml_norms ⊆ rules_norms` or YAML fallback; groups fallback on load error; YAML file retained | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-5 |
 
 ---
 

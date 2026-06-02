@@ -147,7 +147,7 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `analyzers/hourly_report.py` | Hourly pipeline orchestration | `run_hourly_job` |
 | `analyzers/hourly_analyzer.py` | Hourly DTO | hourly chain |
 | `analyzers/wallet_analyzer.py` | Wallet DTO | wallet chain |
-| `analyzers/selector.py` | Route payout file → analyzer; conversion routed explicitly | `main.process_file` (payout path) |
+| `analyzers/selector.py` | Route conversion/payout files → analyzer via code constants | `main.process_file` |
 | `analyzers/conversion.py` | Conversion facade → `ConversionAnalyzer` + reporter | `conversion_pipeline`, CLI delegation |
 | `analyzers/conversion_analyzer.py` | Conversion business logic | `analyzers/conversion.py` |
 | `analyzers/conversion_dto.py` | Conversion DTO / result types | analyzer + reporter |
@@ -155,9 +155,14 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `reporters/hourly_reporter.py`, `reporters/wallet_reporter.py` | Render hourly/wallet reports | job chains |
 | `reporters/conversion_reporter.py` | Render conversion Excel + Telegram | `analyzers/conversion.py` |
 | `core/rules_v2/accessors.py` | `ConversionRulesAccessor` — rules snapshot access for conversion | conversion analyzer |
-| `config/analysis_map.yaml` | Payout analyzer routing (conversion section deprecated) | `selector.py` |
-| `config/payout_config.yaml` | Payout analyzer config | `analyzers/payout.py` L22 |
-| `utils/*` | Logging, normalization, excel | transitive |
+| `config/payout_config.yaml` | Payout analyzer config | `analyzers/payout.py` via `payout_config_loader.py` |
+| `config/raccoon_wallet_config.yaml` | Raccoon wallet partial config (partners YAML; PayIn columns legacy/shadow; scalars shadow via loader) | `raccoon_wallet_config_loader.py` |
+| `analyzers/raccoon_wallet_columns.py` | PayIn Excel column mapping constants (runtime source) | `raccoon_wallet_analyzer`, `raccoon_wallet_config_loader` |
+| `analyzers/raccoon_wallet_config_loader.py` | YAML + `job_params` scalar resolve + scalar/roster/columns shadow compare | `raccoon_wallet_analyzer`, `raccoon_wallet_downloader` |
+| `core/rules_v2/raccoon_wallet_rules_accessor.py` | Rules V2 partner roster union (shadow) | `raccoon_wallet_config_loader` |
+| `analyzers/raccoon_wallet_analyzer.py` | Raccoon PayIn analysis + TG | `raccoon_wallet_downloader`, `raccoon_jobs` |
+| `integrations/raccoon_wallet_downloader.py` | Raccoon Playwright PayIn download | job `raccoon_wallet` |
+| `integrations/raccoon_jobs.py` | Raccoon job registry bindings | `JOB_REGISTRY` |
 | `integrations/wallet_editor_tg.py` | WalletEditor: TG document ingest, allowlist, operator routing | `tg_commands` MessageHandler |
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
 | `automation/engine.py` | WalletEditor Playwright business logic (Antares UI) | `automation/worker` |
@@ -175,7 +180,7 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 
 | Модуль | Почему | Активация |
 |--------|--------|-----------|
-| `analyzers/transactions.py` | Нет в `config/analysis_map.yaml`; нет imports из active chain | `decisions.md` + Impact |
+| `analyzers/transactions.py` | DORMANT; нет imports из active chain; stale ref to removed `analysis_map.yaml` | `decisions.md` + Impact |
 
 ### DEV_ONLY
 
@@ -270,7 +275,7 @@ CLI / legacy entry:
 | Reporter | `reporters/conversion_reporter.py` | Excel + Telegram render |
 | Rules access | `core/rules_v2/accessors.py` | `ConversionRulesAccessor` |
 
-Routing: conversion no longer depends on `config/analysis_map.yaml` (explicit in `selector.py` / pipeline). Payout still uses selector + YAML.
+Routing: conversion and payout use explicit constants in `analyzers/selector.py` (`CONVERSION_FILE_PATTERN`, `PAYOUT_FILE_PATTERN`). No YAML routing config (E-CONFIG-03).
 
 ### P4 — Bakai rate monitor
 
@@ -290,7 +295,7 @@ Routing: conversion no longer depends on `config/analysis_map.yaml` (explicit in
 |---|---|
 | **Trigger** | Called from P3 (payout) or standalone CLI `python main.py <file>` | 
 | **Entry** | `main.process_file(filename, aux_filename?)` — conversion files delegate to `run_conversion_pipeline()` | 
-| **Input** | Dropbox paths via `DROPBOX_INPUT_PATH`; payout routing via `config/analysis_map.yaml` | 
+| **Input** | Dropbox paths via `DROPBOX_INPUT_PATH`; analyzer routing via `selector.py` code constants | 
 | **Output** | Telegram via analyzer modules; file moved to processed | 
 | **Happy path (conversion)** | `process_file` detects conversion → `run_conversion_pipeline` → passive fingerprint → `conversion.run` → move to processed | 
 | **Happy path (payout)** | download from Dropbox → selector → `payout.run` → move to processed | 
@@ -409,6 +414,31 @@ Telegram document reply
 
 ---
 
+### P-RW — Raccoon Wallet (PayIn monitor)
+
+| | |
+|---|---|
+| **Trigger** | Schedule `raccoon_wallet` or TG `/run_raccoon` |
+| **Entry** | `integrations/raccoon_jobs.run_raccoon_wallet_job()` → `run_raccoon_wallet_cycle()` |
+| **Config path** | `raccoon_wallet_config_loader.resolve_raccoon_wallet_config()` — mode `0`: YAML primary; mode `1`: Rules V2 primary (scalars + roster + groups) with YAML fallback; always shadow compare when YAML present; columns from code constants |
+| **Input** | Raccoon PayIn export via Playwright → `/tmp/raccoon_wallet/payin_*.xlsx` |
+| **Output** | Telegram `TELEGRAM_CHAT_ID_RACCOON_WALLET` |
+| **Статус** | CONFIRMED |
+
+```
+raccoon_wallet_downloader
+  → resolve_raccoon_wallet_config (YAML scalars + roster shadow)
+  → Playwright download (payin_days_back)
+  → raccoon_wallet_analyzer.analyze_raccoon_wallets
+       → resolve config (loader; roster still YAML partners.*)
+       → shadow: rules roster union vs YAML (log only)
+       → overlay thresholds_partner / wallet_limits
+       → exclude_time from rules
+       → TG report
+```
+
+---
+
 ## Background / scheduled work
 
 | Job / loop | Trigger | Function | Lock / single-flight | Side effects | Failure behavior | Статус |
@@ -418,6 +448,7 @@ Telegram document reply
 | `hourly` | rules schedule (+ job_params gate) or TG | `run_hourly_job` | `{STATE_DIR}/locks/hourly.lock` | Antares DL, TG hourly chat, state | skip events; exception → `job_failed` | CONFIRMED |
 | `download` | rules schedule or TG | `run_download` | job lock + `/tmp/dropbox_pipeline.lock` | Antares DL, Dropbox, analyze, TG analiz chat | TG notify + raise | CONFIRMED |
 | `rate` | rules schedule or TG | `run_rate_monitor_safe` | `{STATE_DIR}/locks/rate.lock` | Playwright scrape, TG rate chats | 3 retries; final TG alert | CONFIRMED |
+| `raccoon_wallet` | rules schedule or TG | `run_raccoon_wallet_cycle` | `{STATE_DIR}/locks/raccoon_wallet.lock` | Raccoon PayIn DL, analyzer, TG | exception → `job_failed` | CONFIRMED |
 
 Hourly gating: `intraday_interval_minutes`, `final_daily_time` from rules job_params — `scheduler.py` L120–148.
 
@@ -448,8 +479,7 @@ Database: not present in active runtime chain.
 | Данные | Источник | Потребители | Критичность | Статус |
 |--------|----------|-------------|-------------|--------|
 | `rules.xlsx` | Dropbox `RULES_XLSX_PATH` → `/tmp/rules_cache/rules.xlsx` | schedules, access, job_params, analyzers | CRITICAL | CONFIRMED |
-| `config/analysis_map.yaml` | repo `config/` | `selector.py` (payout); conversion section deprecated | IMPORTANT | CONFIRMED |
-| `config/payout_config.yaml` | repo `config/` | `payout.py` | IMPORTANT | CONFIRMED |
+| `config/payout_config.yaml` | repo `config/` | `payout.py` via `payout_config_loader.py` | IMPORTANT | CONFIRMED |
 | `state.json` | Dropbox `{rules_folder}/state/state.json` | hourly/wallet fingerprints | IMPORTANT | CONFIRMED |
 | Event log | `{STATE_DIR}/events/events_*.jsonl` | observability | OPTIONAL | CONFIRMED |
 | Antares xlsx exports | Playwright → `/tmp/*` | hourly, wallet, download | IMPORTANT | CONFIRMED |

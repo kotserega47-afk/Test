@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started); CONV-WE-HOOK (complete) |
+| **Active workflow tasks** | CONFIG-MIGRATION-PHASE-3B-6 (READY); CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
 
 ---
 
@@ -56,7 +56,7 @@
 |----|-------------|-----|----------|--------|
 | S1 | Two lock systems | `run_once_guard.py` vs `job_runner.py` | med | Impact before unification |
 | S2 | Raccoon in docs, absent in code | `EXPERT_REVIEW.md` | low | DOCS_ONLY |
-| S3 | Partner column spelling yaml vs main | `analysis_map.yaml` vs `main.py` | low | align or document |
+| S3 | Partner column spelling in conversion mapping | resolved — single source `main.py` `CONVERSION_COLUMNS` (`Партнёр`) | low | closed (E-CONFIG-03) |
 
 ---
 
@@ -148,6 +148,10 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | WALLET_EDITOR WE-0…WE-6 | complete | Integrate WalletEditor into main runtime |
 | TELEGRAM-SENDER-HEALTH-B | complete | Option B outbound delivery health + periodic log |
 | CONV-WE-HOOK | complete | ConversionAnalyzer problem_cards → Wallet Editor bridge |
+| CONFIG-MIGRATION-PHASE-1 | complete | `payout_config.yaml` → Rules V2 sheets + shadow compare + runtime switch |
+| CONFIG-MIGRATION-PHASE-2 | complete | Remove `analysis_map.yaml`; explicit routing in `selector.py` |
+| CONFIG-MIGRATION-PHASE-3A | complete | Raccoon wallet scalar params → `job_params` + shadow compare |
+| CONFIG-MIGRATION-PHASE-3B-1 | complete | Raccoon wallet partner roster shadow (YAML primary unchanged) |
 
 ---
 
@@ -155,6 +159,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
 | Task ID | Status | Goal (1 line) | Prerequisite |
 |---------|--------|---------------|--------------|
+| **CONFIG-MIGRATION-PHASE-3B-6** | **READY** | Delete `raccoon_wallet_config.yaml`; remove YAML fallback; retire shadow compares | Phase 3B-5 prod validation with `RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`; E-CONFIG-02 GO |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 
 **Phase 1B scope (planned, not started):**
@@ -177,3 +182,11 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-01 | Telegram sender health Option B; R-TG-01 mitigated |
 | 2026-06-02 | Conversion Modernization Program closed (12 items DONE); Phase 1B Observation Layer DONE; CONV-OPTIMIZATION-PHASE-1B dedup skip open (READY) |
 | 2026-06-02 | CONV-WE-HOOK complete — Conversion → Wallet Editor bridge; follow-up CONV-WE-LIMIT-REMOVAL |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-1 complete — payout_config.yaml → Rules V2 (shadow-first); Phase 2 candidate: analysis_map.yaml |
+| 2026-06-02 | E-CONFIG-02 — prod `rules.xlsx` changes deferred until all CONFIG-MIGRATION phases complete |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-2 complete — `analysis_map.yaml` removed; routing in `selector.py` (E-CONFIG-03); Phase 3 candidate: raccoon_wallet_config.yaml |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3A complete — Raccoon wallet scalar params shadow-ready via `job_params`; Phase 3B: roster/groups/columns |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-1 complete — partner roster shadow; Phase 3B-2: columns + groups |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-2 complete — PayIn columns code constants + YAML shadow; Phase 3B-3: groups shadow + dead fields |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-3 complete — groups membership shadow + dead fields cleanup; Phase 3B-4: cutover readiness + YAML removal plan |
+| 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-5 complete — Rules V2 runtime cutover for roster/groups; Phase 3B-6: YAML deletion |

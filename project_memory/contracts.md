@@ -57,6 +57,8 @@
 | `STATE_SYNC_MIN_INTERVAL_SEC` | нет | `30` | `state_provider.py` L85 | state cache TTL | OPTIONAL | CONFIRMED |
 | `RULES_CONTRACT_STRICT` | нет | off | `contract_publish.py` L56 | strict publish policy | OPTIONAL | CONFIRMED |
 | `RULES_CONTRACT_SHADOW` | нет | off | `contract_publish.py` L58 | shadow validation | OPTIONAL | CONFIRMED |
+| `PAYOUT_CONFIG_FROM_RULES_V2` | нет | `0` | `analyzers/payout_config_loader.py`, `analyzers/payout.py` | `0`: YAML primary + rules shadow compare; `1`: Rules V2 primary, YAML fallback | OPTIONAL | CONFIRMED |
+| `RACCOON_WALLET_CONFIG_FROM_RULES_V2` | нет | `0` | `analyzers/raccoon_wallet_config_loader.py`, `raccoon_wallet_analyzer.py`, `raccoon_wallet_downloader.py` | `0`: YAML primary (scalars + roster + groups); rules shadow; `1`: Rules V2 primary for scalars + roster + groups with YAML fallback when rules incomplete | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_SAVE` | нет | off | `rules_provider.py` L166 | save registry after publish | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_COMPARE` | нет | — | `contract_publish.py` L140 | identity drift mode | OPTIONAL | CONFIRMED |
 | `RULES_IDENTITY_DISABLED` | нет | off | `contract_publish.py` L138 | disable identity compare | OPTIONAL | CONFIRMED |
@@ -118,8 +120,8 @@ Rules:
 | Файл / path pattern | Формат | Читает | Пишет | Обязательность | Если отсутствует | Критичность | Статус |
 |---------------------|--------|--------|-------|----------------|------------------|-------------|--------|
 | `rules.xlsx` (Dropbox → `/tmp/rules_cache/rules.xlsx`) | xlsx | `rules_provider`, `loader`, `access_rules`, `schedules`, `config_manager` | `rules_writer` (TG admin flows) | да (startup) | fail-fast at startup / sync error | CRITICAL | CONFIRMED |
-| `config/analysis_map.yaml` | yaml | `selector.py` (import time) | — | да (P3/P5 routing) | `get_analyzer` returns None | IMPORTANT | CONFIRMED |
-| `config/payout_config.yaml` | yaml | `payout.py` (import time) | — | да (payout job) | empty CONFIG; analysis degraded | IMPORTANT | CONFIRMED |
+| `config/payout_config.yaml` | yaml | `payout.py` via `payout_config_loader.py` (YAML default; Rules V2 optional) | — | да (payout job) | empty CONFIG; analysis degraded; Rules V2 fallback when flag=1 | IMPORTANT | CONFIRMED |
+| `config/raccoon_wallet_config.yaml` | yaml | `raccoon_wallet_config_loader.py` → analyzer/downloader (partial); thresholds/limits/exclude via rules overlay | — | да (raccoon_wallet job) | fail if missing; scalars shadow via `RACCOON_WALLET_CONFIG_FROM_RULES_V2` | IMPORTANT | CONFIRMED |
 | `{RULES_FOLDER}/state/state.json` (Dropbox) | json | `state_store`, `state_provider` | `state_store`, `state_provider` | нет (bootstrap `{}`) | fp dedup reset; new state | IMPORTANT | CONFIRMED |
 | `/tmp/state_store/state.json` | json | local cache `state_store` | `state_store` | transient | fallback local | IMPORTANT | CONFIRMED |
 | `/tmp/state_cache/state.json` | json | `state_provider` cache | download cache | transient | re-download | OPTIONAL | CONFIRMED |
@@ -166,8 +168,12 @@ Wallet Editor **result** xlsx columns (output): `Дата отключения` 
 | `hourly_payins` | `display_name` | `group_code`, `source_partners`, … | `hourly_analyzer` | IMPORTANT | CONFIRMED |
 | `hourly_payouts` | `group_code`, `enabled`, `sort_order` | `display_name`, … | `hourly_analyzer` | IMPORTANT | CONFIRMED |
 | `hourly_payout_methods` | `group_code`, `enabled`, `sort_order` | `method_code`, … | `hourly_analyzer` | IMPORTANT | CONFIRMED |
+| `payout_info_rules` | `id`, `enabled`, `info_phrase`, `threshold`, `reason` | — | `payout_config_loader.py`, `payout_rules_accessor.py` | OPTIONAL | CONFIRMED |
+| `payout_ignore_phrases` | `id`, `enabled`, `info_phrase`, `reason` | — | same | OPTIONAL | CONFIRMED |
 
 **REQUIRED_SHEETS** (отсутствие = structural fail): `meta`, `exclude_time`, `access`, `commands` — `contract_schema.py` L251–253.
+
+**Migration policy (E-CONFIG-02):** `rules.xlsx` — конечная точка миграции config → Rules V2. Новые листы/строки в **production** workbook добавляются только после завершения всех этапов CONFIG-MIGRATION-PHASE-* и подтверждения готовности к runtime switch. Во время фаз разрешены изменения schema/accessors/shadow/flags в коде; test fixtures (`tests/fixtures/payout/`) не являются prod workbook.
 
 Row-level validation rules: **UNKNOWN** (см. `validators.py`, не полностью inventory).
 
@@ -188,18 +194,16 @@ Row-level validation rules: **UNKNOWN** (см. `validators.py`, не полно�
 | payin xlsx | `дата/время создания`, `партнер`, `статус`, `инфо`, `сумма` (aliases via `_find_col`) | `wallet_analyzer.py` L462–471 | CONFIRMED |
 | payout xlsx | `partner`/`партнер`, `amount`/`сумма`; optional method column | `wallet_analyzer.py` L267–274 | CONFIRMED |
 
-### 3.4 Conversion input (via `analysis_map.yaml`)
+### 3.4 Conversion input (explicit code mapping)
 
-Mapping keys → expected headers (`config/analysis_map.yaml`):
+Column mapping for conversion loads — `main.py` `CONVERSION_COLUMNS` and `analyzers/conversion.py` `load_data` (E-CONFIG-03: no YAML routing config):
 
 | Key | Expected header | Required in `load_data` | Статус |
 |-----|-----------------|-------------------------|--------|
 | `card` | `Карта` | да (with status, datetime) | CONFIRMED |
 | `status` | `Статус` | да | CONFIRMED |
 | `datetime` | `Дата/Время создания` | да | CONFIRMED |
-| `partner` | `Партнер` | mapped if present | CONFIRMED |
-
-Also passed from `main.py` `CONVERSION_COLUMNS` with key `partner`: `Партнёр` — **STALE_RISK** vs yaml `Партнер`.
+| `partner` | `Партнёр` (`main.py`) | mapped if present | CONFIRMED |
 
 ### 3.5 Payout input
 
@@ -220,7 +224,7 @@ Statuses used: `ошибка`, `оплачен` — L107.
 
 ### 3.7 DORMANT: `transactions` analyzer
 
-Not in `analysis_map.yaml`; column `Amount` from missing yaml section — **DORMANT**, not active contract.
+Not in active routing; hardcoded fallback column `Amount` — **DORMANT**, not active contract. Still references removed `analysis_map.yaml` on import — activation requires code fix.
 
 ---
 
@@ -228,7 +232,7 @@ Not in `analysis_map.yaml`; column `Amount` from missing yaml section — **DORM
 
 | Context | Required fields | Module | Критичность | Статус |
 |---------|-----------------|--------|-------------|--------|
-| Conversion/payout via `load_data` | Columns from `col_mapping` / yaml (`card`, `status`, `datetime`, …) | `conversion.py` L53–71 | IMPORTANT (if CSV input used) | CONFIRMED |
+| Conversion/payout via `load_data` | Columns from `col_mapping` / `CONVERSION_COLUMNS` (`card`, `status`, `datetime`, …) | `conversion.py` L53–71 | IMPORTANT (if CSV input used) | CONFIRMED |
 | Encoding | `utf-8`; sep auto (`python` engine) | `conversion.py` L61 | — | CONFIRMED |
 | DORMANT `transactions` | column from yaml `transactions.column` default `Amount` | `transactions.py` | — | DORMANT |
 
@@ -238,20 +242,33 @@ Active prod path uses **xlsx** from Antares/Dropbox; CSV support exists in code 
 
 ## 5. YAML contracts
 
-### `config/analysis_map.yaml`
-
-| Section | Required keys | Consumer | Критичность | Статус |
-|---------|---------------|----------|-------------|--------|
-| `conversion` | `file_pattern`, `columns` (`card`, `status`, `datetime`, `partner`) | `selector.py` | IMPORTANT | CONFIRMED |
-| `payout` | `file_pattern` | `selector.py` | IMPORTANT | CONFIRMED |
-| `payout.description` | — | none in code | OPTIONAL | CONFIRMED |
-
 ### `config/payout_config.yaml`
 
 | Section | Required keys | Consumer | Критичность | Статус |
 |---------|---------------|----------|-------------|--------|
-| `PayoutsErrors` | error phrase → `{threshold: int}` | `payout.py` L95–99 | IMPORTANT | CONFIRMED |
-| `IgnoreErrors` | list of phrases | `payout.py` L96 | IMPORTANT | CONFIRMED |
+| `PayoutsErrors` | error phrase → `{threshold: int}` | `payout_config_loader.py` → `payout.py` | IMPORTANT | CONFIRMED |
+| `IgnoreErrors` | list of phrases | same | IMPORTANT | CONFIRMED |
+
+Rules V2 sheets ``payout_info_rules`` / ``payout_ignore_phrases`` mirror the same semantics when ``PAYOUT_CONFIG_FROM_RULES_V2=1`` (see env table §1). Production rows — по E-CONFIG-02, после завершения всех migration phases.
+
+### `config/raccoon_wallet_config.yaml` (partial — Phase 3A)
+
+| Section / keys | Consumer | Rules V2 target | Статус |
+|----------------|----------|-----------------|--------|
+| `window_minutes`, `offset_minutes`, `min_events` | analyzer via loader | `job_params` (`job=raccoon_wallet`) — shadow-ready | IMPORTANT | CONFIRMED |
+| `pending_thresholds.payin_minutes` | analyzer | `job_params` `pending_payin_minutes` | IMPORTANT | CONFIRMED |
+| `download_periods.payin_days_back` | downloader | `job_params` `payin_days_back` | IMPORTANT | CONFIRMED |
+| `partners` roster | analyzer whitelist loop | **YAML primary** (`=0`); **Rules V2 primary** (`=1`) via roster union; YAML fallback if rules roster incomplete | IMPORTANT | CONFIRMED |
+| `groups` | analyzer group membership | **YAML primary** (`=0`); **Rules V2 primary** (`=1`) via `partner_groups`; YAML fallback on load error | IMPORTANT | CONFIRMED |
+| `columns.payin.*` | analyzer | **code constants** (`analyzers/raccoon_wallet_columns.py`); YAML legacy/shadow only | IMPORTANT | CONFIRMED |
+| `success_window_minutes`, `partners.*.api_cancel_keyword`, `pending_thresholds.payout_minutes`, `download_periods.payout_days_back` | — | **REMOVED** (Phase 3B-3 dead-field cleanup; never had runtime effect or path inactive) | REMOVED | CONFIRMED |
+| thresholds / limits / exclude | analyzer overlay | `thresholds_partner`, `wallet_limits`, `exclude_time` | IMPORTANT | CONFIRMED |
+
+**Future Rules V2 roster source (shadow today):** union of enabled `thresholds_partner` (`analyzer=raccoon_wallet`) + `wallet_limits` (`scope=partner`, `analyzers` ∋ `raccoon_wallet`) + `partner_groups` (`analyzers` ∋ `raccoon_wallet`). Builder: `core/rules_v2/raccoon_wallet_rules_accessor.py`. `yaml_only` roster mismatch blocks final YAML removal.
+
+**Groups membership (shadow today):** YAML `groups` vs Rules V2 `partner_groups` (`analyzer=raccoon_wallet`); compared on every resolve. Runtime group limits/membership stay YAML-primary. `yaml_only_groups` mismatch blocks final YAML removal.
+
+**API-cancel detection:** hardcoded substring `API_CANCEL_INFO_KEYWORD` in `raccoon_wallet_analyzer.py` (not YAML-configurable).
 
 ---
 
@@ -304,10 +321,9 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 | F2 | Antares (Playwright) | download xlsx | `/tmp/hourly/` | `hourly_analyzer` → `hourly_reporter` → Telegram | IMPORTANT | CONFIRMED |
 | F3 | Antares (Playwright) | download payin/payout | `wallet_analyzer` → `wallet_reporter` → Telegram | wallet job | IMPORTANT | CONFIRMED |
 | F4 | Antares (Playwright) | download → Dropbox upload | `main.process_file` → conversion/payout analyzers → Telegram + report xlsx | download job | IMPORTANT | CONFIRMED |
-| F5 | Dropbox input files | `selector` + analyzer | conversion/payout modules | TG + processed move | IMPORTANT | CONFIRMED |
+| F5 | Dropbox input files | `selector.get_analyzer` (code constants) + analyzer | conversion/payout modules | TG + processed move | IMPORTANT | CONFIRMED |
 | F6 | Bakai web | Playwright scrape | rate compare → Telegram | rate job | IMPORTANT | CONFIRMED |
 | F7 | `state.json` fingerprints | sha256 file meta | skip unchanged hourly/wallet | reduced noise | OPTIONAL | CONFIRMED |
-| F8 | `config/analysis_map.yaml` | filename pattern match | `get_analyzer` | route to module | IMPORTANT | CONFIRMED |
 | F9 | `config/payout_config.yaml` | error phrase match | `payout.py` filtering | IN/check lists → TG | IMPORTANT | CONFIRMED |
 | F10 | Dropbox `special_cards.xlsx` | optional merge | `conversion.py` special rules | filtered conversion | OPTIONAL | CONFIRMED |
 | F11 | Telegram `.xlsx` document | allowlist + operator map → `WalletEditorTask` | `automation/engine.py` → Antares UI | result xlsx → Telegram | IMPORTANT | CONFIRMED |

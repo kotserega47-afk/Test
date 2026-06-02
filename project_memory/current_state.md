@@ -61,7 +61,7 @@
 | Reporter extraction | `reporters/conversion_reporter.py` | **DONE** |
 | RulesAccessor extraction | `ConversionRulesAccessor` in `core/rules_v2/accessors.py` | **DONE** |
 | Original Partner Name | Column preserved in conversion output | **DONE** |
-| Explicit routing | Conversion no longer depends on `analysis_map.yaml` | **DONE** |
+| Explicit routing | Conversion + payout routing in `selector.py` code constants; `analysis_map.yaml` removed (E-CONFIG-03) | **DONE** |
 | Orchestrator B1 | `integrations/conversion_pipeline.py` | **DONE** |
 | Orchestrator B2 | Downloader wired to `run_conversion_pipeline` | **DONE** |
 | Orchestrator B3 | `main.process_file` delegates conversion to pipeline | **DONE** |
@@ -210,7 +210,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | Item | Почему не в prod |
 |------|------------------|
 | Raccoon data source | Нет в `.py`; только `EXPERT_REVIEW.md` |
-| `analyzers/transactions.py` | DORMANT — не в `analysis_map.yaml` |
+| `analyzers/transactions.py` | DORMANT — stale import of removed `analysis_map.yaml` |
 | `automation/main.py`, `automation/tg_receiver.py` | Legacy WalletEditor standalone path |
 
 ---
