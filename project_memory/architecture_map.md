@@ -419,17 +419,24 @@ Telegram document reply
 |---|---|
 | **Trigger** | Schedule `raccoon_wallet` or TG `/run_raccoon` |
 | **Entry** | `integrations/raccoon_jobs.run_raccoon_wallet_job()` → `run_raccoon_wallet_cycle()` |
-| **Config path** | `raccoon_wallet_config_loader.resolve_raccoon_wallet_config()` — **Rules V2 only**; scalars from `job_params`; roster from rules union; groups from `partner_groups`; columns from code constants |
+| **Config path** | `raccoon_wallet_config_loader.resolve_raccoon_wallet_config()` — **Rules V2 only** (`rules.xlsx`) |
+| **Config hierarchy** | Raccoon Wallet → Rules V2 → `job_params` · `thresholds_partner` · `wallet_limits` · `partner_groups` (+ columns: code constants) |
 | **Input** | Raccoon PayIn export via Playwright → `/tmp/raccoon_wallet/payin_*.xlsx` |
 | **Output** | Telegram `TELEGRAM_CHAT_ID_RACCOON_WALLET` |
 | **Статус** | CONFIRMED |
 
 ```
+Raccoon Wallet (job / analyzer / downloader)
+  ↓
+Rules V2 (rules.xlsx)
+  ↓
+job_params · thresholds_partner · wallet_limits · partner_groups
+  (+ PayIn columns: code constants)
+
 raccoon_wallet_downloader
-  → resolve_raccoon_wallet_config (Rules V2: job_params + roster + groups)
-  → Playwright download (payin_days_back)
+  → resolve_raccoon_wallet_config
+  → Playwright download (payin_days_back from job_params)
   → raccoon_wallet_analyzer.analyze_raccoon_wallets
-       → resolve config (loader; Rules V2 only)
        → overlay thresholds_partner / wallet_limits
        → exclude_time from rules
        → TG report

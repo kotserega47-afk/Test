@@ -51,15 +51,33 @@
 
 ---
 
-## Raccoon Wallet Rules V2 Migration
+## Raccoon Wallet Configuration
 
 | Aspect | State |
 |--------|-------|
-| **Status** | **COMPLETE** — Rules V2 only, no feature flag |
-| **Completed** | YAML removed; fallback and shadow retired; `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag removed |
-| **Config source** | `job_params` (scalars), roster union, `partner_groups` (groups), code constants (columns) |
+| **Status** | `RULES_V2_ONLY` |
+| **Source of truth** | `rules.xlsx` |
+| **Epic** | CONFIG-MIGRATION-RACCOON-WALLET — **COMPLETE** |
 
-**Runtime path:** `resolve_raccoon_wallet_config()` always loads Rules V2; logs `[raccoon_wallet_config] source=rules_v2`; no env gate.
+**Removed:**
+
+- Legacy YAML configuration file
+- YAML loader path
+- YAML runtime fallback
+- YAML shadow compare
+- Feature flag env (retired)
+
+**Current runtime sources:**
+
+| Config area | Rules V2 sheet / source |
+|-------------|-------------------------|
+| Scalars (`window_minutes`, `offset_minutes`, `min_events`, `pending_payin_minutes`, `payin_days_back`) | `job_params` |
+| Partner roster | `thresholds_partner` ∪ `wallet_limits` ∪ `partner_groups` |
+| Group membership | `partner_groups` |
+| PayIn column mapping | code constants (`raccoon_wallet_columns.py`) |
+| Thresholds / limits / exclude overlay | `thresholds_partner`, `wallet_limits`, `exclude_time` |
+
+**Runtime path:** `resolve_raccoon_wallet_config()` → Rules V2 only; logs `[raccoon_wallet_config] source=rules_v2`.
 
 ---
 
@@ -243,3 +261,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-02 | Raccoon Wallet Rules V2 — production cutover (`RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`); status `PROD_OBSERVATION`; Phase 3B-6 waiting for prod observation |
 | 2026-06-02 | Raccoon Wallet config migration complete — YAML removed; Rules V2 only (E-CONFIG-10) |
 | 2026-06-02 | Raccoon Wallet feature flag removed — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |
+| 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — E-CONFIG-12; Rules V2 sole config source |

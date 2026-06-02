@@ -158,6 +158,26 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | CONFIG-MIGRATION-PHASE-3B-5 | complete | Rules V2 runtime cutover for roster/groups (`RACCOON_WALLET_CONFIG_FROM_RULES_V2=1`) |
 | CONFIG-MIGRATION-PHASE-3B-6 | complete | Delete `raccoon_wallet_config.yaml`; remove YAML fallback; retire shadow compares |
 | CONFIG-MIGRATION-PHASE-3B-7 | complete | Remove `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag; Rules V2 unconditional |
+| **CONFIG-MIGRATION-RACCOON-WALLET** | **complete** | Epic: Raccoon Wallet config YAML → Rules V2 (Phases 3A, 3B-1…3B-7) |
+
+---
+
+## Closed epics
+
+### CONFIG-MIGRATION-RACCOON-WALLET
+
+**Status:** COMPLETE
+
+**Outcome:**
+
+- Raccoon Wallet migrated from YAML to Rules V2
+- YAML configuration removed
+- Runtime fallback removed
+- Shadow compare removed
+- Feature flag removed
+- Rules V2 is sole source of truth
+
+**Phases:** 3A, 3B-1, 3B-2, 3B-3, 3B-4, 3B-5, 3B-6, 3B-7 — all COMPLETE
 
 ---
 
@@ -198,3 +218,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-6 — production cutover deployed; status `WAITING_FOR_PROD_OBSERVATION`; YAML removal gated on prod observation |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-6 complete — `raccoon_wallet_config.yaml` removed; Rules V2 only; shadow/fallback retired |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-3B-7 complete — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env flag removed; Rules V2 unconditional |
+| 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — Raccoon Wallet Rules V2 migration complete (E-CONFIG-12) |

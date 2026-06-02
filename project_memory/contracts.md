@@ -120,7 +120,6 @@ Rules:
 |---------------------|--------|--------|-------|----------------|------------------|-------------|--------|
 | `rules.xlsx` (Dropbox → `/tmp/rules_cache/rules.xlsx`) | xlsx | `rules_provider`, `loader`, `access_rules`, `schedules`, `config_manager` | `rules_writer` (TG admin flows) | да (startup) | fail-fast at startup / sync error | CRITICAL | CONFIRMED |
 | `config/payout_config.yaml` | yaml | `payout.py` via `payout_config_loader.py` (YAML default; Rules V2 optional) | — | да (payout job) | empty CONFIG; analysis degraded; Rules V2 fallback when flag=1 | IMPORTANT | CONFIRMED |
-| ~~`config/raccoon_wallet_config.yaml`~~ | — | **REMOVED** (Phase 3B-6) | — | — | — | REMOVED | CONFIRMED |
 | `{RULES_FOLDER}/state/state.json` (Dropbox) | json | `state_store`, `state_provider` | `state_store`, `state_provider` | нет (bootstrap `{}`) | fp dedup reset; new state | IMPORTANT | CONFIRMED |
 | `/tmp/state_store/state.json` | json | local cache `state_store` | `state_store` | transient | fallback local | IMPORTANT | CONFIRMED |
 | `/tmp/state_cache/state.json` | json | `state_provider` cache | download cache | transient | re-download | OPTIONAL | CONFIRMED |
@@ -250,19 +249,17 @@ Active prod path uses **xlsx** from Antares/Dropbox; CSV support exists in code 
 
 Rules V2 sheets ``payout_info_rules`` / ``payout_ignore_phrases`` mirror the same semantics when ``PAYOUT_CONFIG_FROM_RULES_V2=1`` (see env table §1). Production rows — по E-CONFIG-02, после завершения всех migration phases.
 
-### Raccoon Wallet configuration (Rules V2 only — Phase 3B-6)
+### Raccoon Wallet configuration (Rules V2 only)
 
-**Source:** Rules V2 only. Legacy `config/raccoon_wallet_config.yaml` removed.
+**Source of truth:** `rules.xlsx` — no legacy YAML config file; no feature flag.
 
-| Section / keys | Consumer | Rules V2 source | Статус |
-|----------------|----------|-----------------|--------|
-| `window_minutes`, `offset_minutes`, `min_events` | analyzer/downloader via loader | `job_params` (`job=raccoon_wallet`) | IMPORTANT | CONFIRMED |
-| `pending_thresholds.payin_minutes` | analyzer | `job_params` `pending_payin_minutes` | IMPORTANT | CONFIRMED |
-| `download_periods.payin_days_back` | downloader | `job_params` `payin_days_back` | IMPORTANT | CONFIRMED |
-| `partners` roster | analyzer whitelist loop | roster union: `thresholds_partner` + `wallet_limits` + `partner_groups` | IMPORTANT | CONFIRMED |
-| `groups` | analyzer group membership | `partner_groups` sheet | IMPORTANT | CONFIRMED |
-| `columns.payin.*` | analyzer | **code constants** (`analyzers/raccoon_wallet_columns.py`) | IMPORTANT | CONFIRMED |
-| thresholds / limits / exclude | analyzer overlay | `thresholds_partner`, `wallet_limits`, `exclude_time` | IMPORTANT | CONFIRMED |
+| Config area | Consumer | Rules V2 source | Статус |
+|-------------|----------|-----------------|--------|
+| Scalars (`window_minutes`, `offset_minutes`, `min_events`, `pending_payin_minutes`, `payin_days_back`) | analyzer/downloader via loader | `job_params` (`job=raccoon_wallet`) | IMPORTANT | CONFIRMED |
+| Partner roster | analyzer whitelist loop | roster union: `thresholds_partner` + `wallet_limits` + `partner_groups` | IMPORTANT | CONFIRMED |
+| Group membership | analyzer | `partner_groups` sheet | IMPORTANT | CONFIRMED |
+| PayIn column mapping | analyzer | **code constants** (`analyzers/raccoon_wallet_columns.py`) | IMPORTANT | CONFIRMED |
+| Thresholds / limits / exclude overlay | analyzer | `thresholds_partner`, `wallet_limits`, `exclude_time` | IMPORTANT | CONFIRMED |
 
 **Roster union:** enabled `thresholds_partner` (`analyzer=raccoon_wallet`) + `wallet_limits` (`scope=partner`, `analyzers` ∋ `raccoon_wallet`) + `partner_groups` (`analyzers` ∋ `raccoon_wallet`). Builder: `core/rules_v2/raccoon_wallet_rules_accessor.py`.
 
