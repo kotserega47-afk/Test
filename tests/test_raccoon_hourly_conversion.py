@@ -38,13 +38,16 @@ def _conv_df(rows: list[dict]) -> pd.DataFrame:
     for i, r in enumerate(rows):
         partner = r["Партнер"]
         dt = r.get("Дата/Время создания", BASE_DT + timedelta(minutes=i))
-        out.append({
+        row = {
             "Партнер": partner,
             "norm": r.get("norm", normalize_partner_name(partner)),
             "Статус": r["Статус"],
             "Сумма": r.get("Сумма", 0),
             "Дата/Время создания": dt,
-        })
+        }
+        if "method_display" in r:
+            row["method_display"] = r["method_display"]
+        out.append(row)
     return pd.DataFrame(out)
 
 
@@ -246,8 +249,13 @@ def test_missing_threshold_warning_uses_wallet_chat_id(tmp_state):
 
 def test_payin_report_uses_hourly_raccoon_chat_id():
     paid_rows = [
-        {"Партнер": "A (1)", "Сумма": 100, "Статус": "оплачен",
-         "Дата/Время создания": BASE_DT + timedelta(minutes=i)}
+        {
+            "Партнер": "A (1)",
+            "Сумма": 100,
+            "Статус": "оплачен",
+            "method_display": "SBP",
+            "Дата/Время создания": BASE_DT + timedelta(minutes=i),
+        }
         for i in range(2)
     ]
     window = _conv_df(paid_rows)
@@ -257,12 +265,12 @@ def test_payin_report_uses_hourly_raccoon_chat_id():
         sent.append((text, chat_id))
 
     with patch.object(mod, "send_message_sync", side_effect=_capture):
-        with patch.object(mod, "prepare_data", return_value=window):
-            with patch.object(mod, "_load_last_state", return_value={}):
-                with patch.object(mod, "_save_last_state"):
-                    with patch.object(mod, "_calc_fingerprint", return_value={"hash": "new"}):
-                        with patch.object(mod, "load_cfg", return_value={"payin": {}, "payin_groups": {}, "payin_layout": []}):
-                            with patch.object(mod, "aggregate_payin", return_value=[]):
+        with patch.object(mod, "get_time_window", return_value=(BASE_DT, NOW, NOW.date())):
+            with patch.object(mod, "_load_payin_window", return_value=window):
+                with patch.object(mod, "run_conversion_monitor"):
+                    with patch.object(mod, "_load_last_state", return_value={}):
+                        with patch.object(mod, "_save_last_state"):
+                            with patch.object(mod, "_calc_fingerprint", return_value={"hash": "new"}):
                                 run_hourly_report()
 
     report_calls = [c for c in sent if "Итого поступления" in c[0]]
@@ -296,13 +304,12 @@ def test_drop_is_percentage_points():
     assert not (51 <= threshold - CONVERSION_DROP_PP)
 
 
-def test_raccoon_hourly_job_chain_calls_monitor():
+def test_raccoon_hourly_job_chain_single_report_step():
+    """Conversion monitor runs inside run_hourly_report (Platform parity)."""
     import integrations.raccoon_jobs as jobs
 
     with patch.object(jobs, "run_hourly_raccoon_cycle") as dl:
-        with patch.object(jobs, "run_conversion_monitor_from_payin") as monitor:
-            with patch.object(jobs, "run_raccoon_hourly_report_fn") as report:
-                jobs.run_raccoon_hourly_job()
+        with patch.object(jobs, "run_raccoon_hourly_report_fn") as report:
+            jobs.run_raccoon_hourly_job()
     dl.assert_called_once()
-    monitor.assert_called_once()
     report.assert_called_once()

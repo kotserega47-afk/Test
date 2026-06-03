@@ -1,12 +1,12 @@
 # coding: utf-8
 """
-Hourly Report — рефакторинг с нормализацией методов и разделением логики.
+Raccoon 10-min PayIn report (WalletReporter) — by-method layout from PayIn data;
+conversion thresholds from rules.xlsx (thresholds_partner).
 """
 
 import os
 from datetime import datetime, timedelta
 import pandas as pd
-import yaml
 from zoneinfo import ZoneInfo
 import json
 import hashlib
@@ -18,7 +18,7 @@ from integrations.telegram_bot import send_message_sync
 from utils.normalization import normalize_partner_name
 from core.rules_provider import get_rules_snapshot
 
-icon, name = LOG_PROFILES["HOURLY"]
+icon, name = LOG_PROFILES["WALLET_REPORTER"]
 logger = get_logger(name, icon)
 
 # ---------------------------------------
@@ -27,8 +27,8 @@ logger = get_logger(name, icon)
 MSK = ZoneInfo("Europe/Moscow")
 BASE_DIR = "/tmp/hourly_raccoon"
 STATE_PATH = os.path.join(BASE_DIR, "last_sent.json")
-CONFIG_PATH = "config/raccoon_hourly_report.yaml"
-
+METHOD_COLUMN = "Метод пополнения"
+METHOD_EMPTY_LABEL = "Без метода"
 SUCCESS_STATUS = "оплачен"
 PENDING_STATUS = "ожидает оплаты"
 CONVERSION_MIN_OPS = 10
@@ -38,9 +38,10 @@ WARN_DEDUP_PATH = os.path.join(BASE_DIR, "conversion_warn_dedup.json")
 CONVERSION_ALERT_STATE_PATH = os.path.join(BASE_DIR, "conversion_alert_state.json")
 CONVERSION_ALERT_STATE_VERSION = "conv_alert_new_op_v1"
 
-# Payin cumulative report chat (TELEGRAM_CHAT_ID_HOURLY_RACCOON).
+# Версия входа в SHA256 fingerprint: bump при изменении семантики отчёта/состояния skip-send.
+FINGERPRINT_VERSION = "unknown_partners_v2"
+
 PAYIN_REPORT_CHAT_ENV = "TELEGRAM_CHAT_ID_HOURLY_RACCOON"
-# Conversion monitor warnings/alerts (TELEGRAM_CHAT_ID_RACCOON_WALLET).
 CONVERSION_ALERT_CHAT_ENV = "TELEGRAM_CHAT_ID_RACCOON_WALLET"
 
 
@@ -67,20 +68,22 @@ def fmt_int(v):
     try:
         v = int(round(float(v)))
         return f"{v:,}".replace(",", " ")
-    except:
+    except Exception:
         return "0"
 
 
-def normalize_method(v):  # NEW
-    """Универсальная нормализация enum метода."""
-    if not isinstance(v, str):
-        return ""
-    return v.strip().upper()
+def _method_display(val) -> str:
+    """Display value для метода пополнения: trim; пусто/NaN → «Без метода»."""
+    try:
+        if val is None or pd.isna(val):
+            return METHOD_EMPTY_LABEL
+    except Exception:
+        pass
+    s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return METHOD_EMPTY_LABEL
+    return s
 
-
-def load_cfg():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
 
 def _safe_dt_iso(x) -> str:
     try:
@@ -156,54 +159,142 @@ def _has_new_operations(current_keys: set[str], last_alert_keys: list[str] | set
     return bool(current_keys - last)
 
 
-def _hour_bucket(now: datetime) -> str:
-    n = now.astimezone(MSK) if now.tzinfo else now.replace(tzinfo=MSK)
-    return n.strftime("%Y-%m-%dT%H")
+def _payin_rows_signature(df: pd.DataFrame) -> str:
+    """
+    Детерминированная подпись набора оплаченных строк PayIn.
+    Нужна, чтобы не считать «без изменений» случаи, когда rows/total/max_dt совпали, а состав строк другой.
+    """
+    if df.empty:
+        return "empty"
+    d = df.copy()
+    if "norm" not in d.columns and "Партнер" in d.columns:
+        d["norm"] = d["Партнер"].astype(str).apply(normalize_partner_name)
+    if "norm" not in d.columns:
+        return "no_norm"
+    amt = pd.to_numeric(d["Сумма"], errors="coerce").fillna(0.0)
+    d = d.assign(_amt=amt)
+    dt_col = "Дата/Время создания"
+    if dt_col not in d.columns:
+        return "no_dt"
+    lines: list[str] = []
+    sub = d[["norm", "_amt", dt_col]].sort_values(["norm", dt_col, "_amt"])
+    for _, r in sub.iterrows():
+        lines.append(f"{r['norm']}|{round(float(r['_amt']), 2)}|{_safe_dt_iso(r[dt_col])}")
+    raw = "\n".join(lines).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
-def _load_warn_dedup_state() -> dict:
+def _calc_fingerprint(df_payin: pd.DataFrame, df_payout: pd.DataFrame | None, header_date) -> dict:
+    def payout_block(df: pd.DataFrame | None) -> dict:
+        if df is None or df.empty:
+            return {"rows": 0, "total": 0.0, "max_dt": ""}
+        max_dt = df["Дата/Время создания"].max() if "Дата/Время создания" in df.columns else None
+        total = float(df["Сумма"].sum()) if "Сумма" in df.columns else 0.0
+        return {
+            "rows": int(len(df)),
+            "total": round(total, 2),
+            "max_dt": _safe_dt_iso(max_dt),
+        }
+
+    if df_payin is None or df_payin.empty:
+        payin_block = {"rows": 0, "total": 0.0, "max_dt": "", "rows_sig": "empty"}
+    else:
+        max_dt = df_payin["Дата/Время создания"].max() if "Дата/Время создания" in df_payin.columns else None
+        total = float(df_payin["Сумма"].sum()) if "Сумма" in df_payin.columns else 0.0
+        payin_block = {
+            "rows": int(len(df_payin)),
+            "total": round(total, 2),
+            "max_dt": _safe_dt_iso(max_dt),
+            "rows_sig": _payin_rows_signature(df_payin),
+        }
+
+    payload = {
+        "day": str(header_date),
+        "payin": payin_block,
+        "payout": payout_block(df_payout),
+    }
+
+    hash_input = {"fingerprint_version": FINGERPRINT_VERSION, **payload}
+    raw = json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload["hash"] = hashlib.sha256(raw).hexdigest()
+    return payload
+
+
+def _load_last_state() -> dict:
     try:
-        if not os.path.exists(WARN_DEDUP_PATH):
+        if not os.path.exists(STATE_PATH):
             return {}
-        with open(WARN_DEDUP_PATH, "r", encoding="utf-8") as f:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
             return json.load(f) or {}
     except Exception:
         return {}
 
 
-def _save_warn_dedup_state(state: dict) -> None:
+def _save_last_state(state: dict) -> None:
     try:
         Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
-        with open(WARN_DEDUP_PATH, "w", encoding="utf-8") as f:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.warning(f"[conversion_monitor] warn dedup save failed: {e}")
+        logger.warning(f"[wallet_report] failed to save state: {e}")
 
 
-def _get_warn_sent_norms(hour_bucket: str) -> set[str]:
-    st = _load_warn_dedup_state()
-    if st.get("hour") != hour_bucket:
-        return set()
-    return set(st.get("sent") or [])
+def filter_dt(df, col, start_dt, end_dt):
+    df = df.copy()
+    s = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    if getattr(s.dt, "tz", None) is None:
+        s = s.dt.tz_localize(MSK)
+    else:
+        s = s.dt.tz_convert(MSK)
+
+    df[col] = s
+    return df[(df[col] >= start_dt) & (df[col] <= end_dt)]
 
 
-def _format_conversion_alert(partner: str, conv: float, threshold: float) -> str:
-    return (
-        f"🔴 Падение конверсии: {partner}\n"
-        f"Конверсия последних {CONVERSION_MIN_OPS} операций: {conv:.1f}%\n"
-        f"Порог: {threshold:.1f}%"
-    )
+def load_hourly_files():
+    payin_p = os.path.join(BASE_DIR, "payin.xlsx")
+
+    if not os.path.exists(payin_p):
+        raise FileNotFoundError(payin_p)
+
+    return pd.read_excel(payin_p, dtype=str)
 
 
-def _format_missing_threshold_warning(partner: str, ops: int) -> str:
-    return (
-        f"⚠️ Нет порога конверсии: {partner}\n"
-        f"Операций: {ops}"
-    )
+def get_time_window(now: datetime | None = None):
+    now = now or datetime.now(MSK)
+    today = now.date()
+
+    end_now = now.replace(second=0, microsecond=0)
+
+    if now.hour == 0 and now.minute <= 2:
+        day = today - timedelta(days=1)
+        start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
+        end = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK)
+        header_date = day
+        return start, end, header_date
+
+    start = datetime(today.year, today.month, today.day, 0, 0, tzinfo=MSK)
+    end = end_now.replace(tzinfo=MSK) if end_now.tzinfo is None else end_now.astimezone(MSK)
+    header_date = today
+    return start, end, header_date
 
 
 def _conversion_status_norm(s) -> str:
     return str(s).strip().lower()
+
+
+def _load_payin_window(start_dt, end_dt) -> pd.DataFrame:
+    """PayIn за окно: все статусы (для conversion monitor + база для отчёта)."""
+    df_payin = load_hourly_files()
+    df_payin["norm"] = df_payin["Партнер"].astype(str).apply(normalize_partner_name)
+    df_payin = filter_dt(df_payin, "Дата/Время создания", start_dt, end_dt)
+    df_payin["Сумма"] = pd.to_numeric(df_payin["Сумма"], errors="coerce").fillna(0)
+    if METHOD_COLUMN in df_payin.columns:
+        df_payin["method_display"] = df_payin[METHOD_COLUMN].map(_method_display)
+    else:
+        df_payin["method_display"] = METHOD_EMPTY_LABEL
+    return df_payin
 
 
 def load_partner_conversion_thresholds() -> dict[str, float]:
@@ -290,8 +381,54 @@ def build_conversion_facts(df: pd.DataFrame) -> list[dict]:
     return facts
 
 
+def _hour_bucket(now: datetime) -> str:
+    n = now.astimezone(MSK) if now.tzinfo else now.replace(tzinfo=MSK)
+    return n.strftime("%Y-%m-%dT%H")
+
+
+def _load_warn_dedup_state() -> dict:
+    try:
+        if not os.path.exists(WARN_DEDUP_PATH):
+            return {}
+        with open(WARN_DEDUP_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _save_warn_dedup_state(state: dict) -> None:
+    try:
+        Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
+        with open(WARN_DEDUP_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"[conversion_monitor] warn dedup save failed: {e}")
+
+
+def _get_warn_sent_norms(hour_bucket: str) -> set[str]:
+    st = _load_warn_dedup_state()
+    if st.get("hour") != hour_bucket:
+        return set()
+    return set(st.get("sent") or [])
+
+
+def _format_conversion_alert(partner: str, conv: float, threshold: float) -> str:
+    return (
+        f"🔴 Падение конверсии: {partner}\n"
+        f"Конверсия последних {CONVERSION_MIN_OPS} операций: {conv:.1f}%\n"
+        f"Порог: {threshold:.1f}%"
+    )
+
+
+def _format_missing_threshold_warning(partner: str, ops: int) -> str:
+    return (
+        f"⚠️ Нет порога конверсии: {partner}\n"
+        f"Операций: {ops}"
+    )
+
+
 def run_conversion_monitor(df_window: pd.DataFrame, now: datetime | None = None) -> None:
-    """Проверка конверсии после обновления payin; dedup по новым операциям."""
+    """Проверка конверсии после обновления payin; conversion alert dedup по новым операциям."""
     facts = build_conversion_facts(df_window)
     if not facts:
         return
@@ -300,11 +437,11 @@ def run_conversion_monitor(df_window: pd.DataFrame, now: datetime | None = None)
     now = now or datetime.now(MSK)
     hour_bucket = _hour_bucket(now)
     sent_warn_norms = _get_warn_sent_norms(hour_bucket)
+    alert_chat_id = _conversion_alert_chat_id()
 
     partner_keys = _collect_partner_operation_keys(df_window)
     alert_state = _conversion_alert_state_for_day(_load_conversion_alert_state(), now.date())
     alert_state_dirty = False
-    alert_chat_id = _conversion_alert_chat_id()
 
     for fact in facts:
         norm = fact["norm"]
@@ -366,259 +503,81 @@ def run_conversion_monitor(df_window: pd.DataFrame, now: datetime | None = None)
     _save_warn_dedup_state({"hour": hour_bucket, "sent": sorted(sent_warn_norms)})
 
 
-def run_conversion_monitor_from_payin(now: datetime | None = None) -> None:
-    """Load today's payin window and run conversion monitor (post-download hook)."""
-    start_dt, end_dt, _ = get_time_window(now)
-    try:
-        df_window = _load_payin_window(start_dt, end_dt)
-    except FileNotFoundError:
-        logger.warning("[conversion_monitor] payin.xlsx missing, skip")
-        return
-    run_conversion_monitor(df_window, now=now)
+def aggregate_payin_by_method(df_payin: pd.DataFrame) -> list[dict]:
+    """Группировка: method_display → партнёры (по norm), суммы, сортировка по убыванию."""
+    if df_payin.empty:
+        return []
 
-def _calc_fingerprint(df_payin: pd.DataFrame, df_payout: pd.DataFrame | None, header_date) -> dict:
-    def block(df: pd.DataFrame | None) -> dict:
-        if df is None or df.empty:
-            return {"rows": 0, "total": 0.0, "max_dt": ""}
-        max_dt = df["Дата/Время создания"].max() if "Дата/Время создания" in df.columns else None
-        total = float(df["Сумма"].sum()) if "Сумма" in df.columns else 0.0
-        return {
-            "rows": int(len(df)),
-            "total": round(total, 2),
-            "max_dt": _safe_dt_iso(max_dt),
-        }
+    agg = df_payin.groupby(["method_display", "norm"], as_index=False).agg(
+        amount=("Сумма", "sum"),
+        partner_label=("Партнер", lambda s: str(s.dropna().astype(str).iloc[0]) if len(s) else "?"),
+    )
+    method_totals = agg.groupby("method_display")["amount"].sum()
+    methods_sorted = method_totals.sort_values(ascending=False).index.tolist()
 
-    payload = {
-        "day": str(header_date),        # фиксируем сутки
-        "payin": block(df_payin),
-        "payout": block(df_payout),
-    }
-
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    payload["hash"] = hashlib.sha256(raw).hexdigest()
-    return payload
-
-def _load_last_state() -> dict:
-    try:
-        if not os.path.exists(STATE_PATH):
-            return {}
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
-
-def _save_last_state(state: dict) -> None:
-    try:
-        Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"[hourly_report] failed to save state: {e}")
-
-def filter_dt(df, col, start_dt, end_dt):
-    df = df.copy()
-    s = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
-
-    # если tz-naive → локализуем; если tz-aware → конвертим
-    if getattr(s.dt, "tz", None) is None:
-        s = s.dt.tz_localize(MSK)
-    else:
-        s = s.dt.tz_convert(MSK)
-
-    df[col] = s
-    return df[(df[col] >= start_dt) & (df[col] <= end_dt)]
-
-
-def load_hourly_files():
-    payin_p = os.path.join(BASE_DIR, "payin.xlsx")
-
-    if not os.path.exists(payin_p):
-        raise FileNotFoundError(payin_p)
-
-
-    df1 = pd.read_excel(payin_p, dtype=str)
-
-    return df1
-
-
-def get_time_window(now: datetime | None = None):
-    now = now or datetime.now(MSK)
-    today = now.date()
-
-    # округляем end до минуты (чтобы окно красиво писалось)
-    end_now = now.replace(second=0, microsecond=0)
-
-    # финальный отчёт за вчера в 00:00–00:02 (опционально)
-    if now.hour == 0 and now.minute <= 2:
-        day = today - timedelta(days=1)
-        start = datetime(day.year, day.month, day.day, 0, 0, tzinfo=MSK)
-        end = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK)
-        header_date = day
-        return start, end, header_date
-
-    # каждые 5 минут: сегодня 00:00–сейчас
-    start = datetime(today.year, today.month, today.day, 0, 0, tzinfo=MSK)
-    end = end_now.replace(tzinfo=MSK) if end_now.tzinfo is None else end_now.astimezone(MSK)
-    header_date = today
-    return start, end, header_date
-
-
-# ======================================================
-#                 ПОДГОТОВКА ДАННЫХ (NEW)
-# ======================================================
-
-def prepare_data(start_dt, end_dt):  # NEW
-    """Загрузка файлов + нормализация + фильтрация (только оплаченные для отчёта)."""
-    df_payin = _load_payin_window(start_dt, end_dt)
-    return df_payin[df_payin["Статус"].map(_conversion_status_norm) == SUCCESS_STATUS].copy()
-
-
-def _load_payin_window(start_dt, end_dt) -> pd.DataFrame:
-    """PayIn за окно: все статусы (для conversion monitor + база для отчёта)."""
-    df_payin = load_hourly_files()
-    df_payin["norm"] = df_payin["Партнер"].astype(str).apply(normalize_partner_name)
-    df_payin = filter_dt(df_payin, "Дата/Время создания", start_dt, end_dt)
-    df_payin["Сумма"] = pd.to_numeric(df_payin["Сумма"], errors="coerce").fillna(0)
-    return df_payin
-
-
-# ======================================================
-#                 АГРЕГАЦИЯ PAYIN (NEW)
-# ======================================================
-
-def aggregate_payin(df_payin, payin_cfg, payin_groups):
-    result = []
-
-    payin_amounts = {}
-    for partner_key in payin_cfg:
-        norm = normalize_partner_name(partner_key)
-        df_p = df_payin[df_payin["norm"] == norm]
-        payin_amounts[partner_key] = df_p["Сумма"].sum()
-
-    printed_groups = set()
-
-    for partner_key, pdata in payin_cfg.items():
-        result.append({
-            "title": pdata.get("title", partner_key),
-            "amount": payin_amounts.get(partner_key, 0),
-            "comment": pdata.get("comment"),
-            "is_group": False,
+    blocks: list[dict] = []
+    for method in methods_sorted:
+        sub = agg[agg["method_display"] == method].sort_values("amount", ascending=False)
+        blocks.append({
+            "method": method,
+            "total": float(method_totals[method]),
+            "partners": [
+                {"title": str(row["partner_label"]), "amount": float(row["amount"])}
+                for _, row in sub.iterrows()
+            ],
         })
+    return blocks
 
-        for gkey, gdata in payin_groups.items():
-            if gkey in printed_groups:
-                continue
 
-            if partner_key not in gdata.get("combine", []):
-                continue
-
-            total = sum(payin_amounts.get(x, 0) for x in gdata["combine"])
-
-            result.append({
-                "title": gdata.get("title", gkey),
-                "amount": total,
-                "comment": gdata.get("comment"),  # ← фикс
-                "is_group": True,
-            })
-
-            printed_groups.add(gkey)
-
-    return result
-
-# ======================================================
-#                    ФОРМАТИРОВАНИЕ (NEW)
-# ======================================================
-def format_section_with_layout(lines, title, data, layout):
-    lines.append(title)
-    counter = 1
-
-    data_by_title = {item["title"]: item for item in data}
-
-    for block in layout:
-        group = block.get("group", [])
-        spacing = block.get("spacing", 0)
-
-        for key in group:
-            item = data_by_title.get(key)
-            if not item:
-                continue
-
-            if "methods" in item:  # PAYOUT
-                lines.append(f"{counter}) {item['title']}:")
-                for m in item["methods"]:
-                    # комментарий метода
-                    comment = f" {m['comment']}" if m.get("comment") else ""
-                    lines.append(f" - {m['title']} – {fmt_int(m['amount'])}{comment}")
-            else:  # PAYIN или группа
-                comment = f" {item['comment']}" if item.get("comment") else ""
-                lines.append(f"{counter}) {item['title']} – {fmt_int(item['amount'])}{comment}")
-
-            counter += 1
-
-        for _ in range(spacing):
-            lines.append("")
-
-def format_report(payin_data, header_date, end_dt, total_payin):
-    cfg = load_cfg()
+def format_report(method_blocks, header_date, end_dt, total_payin):
     lines = []
     lines.append(f"Итого поступления: {fmt_int(total_payin)}")
     lines.append("")
-
     lines.append(f"📊 {header_date.strftime('%d.%m')} | 00:00–{end_dt.strftime('%H:%M')} (накопительно)")
     lines.append("")
-
-
-    # PAYIN
-    payin_layout = cfg.get("payin_layout", [])
     lines.append("_______________________")
     lines.append("")
-    format_section_with_layout(lines, "Поступления:", payin_data, payin_layout)
+
+    for i, block in enumerate(method_blocks):
+        lines.append(f"{block['method']} — {fmt_int(block['total'])}")
+        lines.append("")
+        for p in block["partners"]:
+            lines.append(f"{p['title']} — {fmt_int(p['amount'])}")
+        if i < len(method_blocks) - 1:
+            lines.append("")
 
     return "\n".join(lines)
 
 
-# ======================================================
-#                 ОСНОВНАЯ ФУНКЦИЯ (REFACTORED)
-# ======================================================
-
 def run_hourly_report():
-
-    cfg = load_cfg()
     start_dt, end_dt, header_date = get_time_window()
 
-    # 1) подготовка
-    df_payin = prepare_data(start_dt, end_dt)
+    df_window = _load_payin_window(start_dt, end_dt)
+    run_conversion_monitor(df_window)
 
-    # --- Guard №1: если за интервал нет операций вообще — не отправляем ---
+    df_payin = df_window[df_window["Статус"].map(_conversion_status_norm) == SUCCESS_STATUS].copy()
+
     if df_payin.empty:
-        logger.info(f"[hourly_report] interval empty ({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) -> skip send")
+        logger.info(f"[wallet_report] interval empty ({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) -> skip send")
         return None
 
-    # --- Guard №2: если отчёт за этот интервал уже отправляли и данные не изменились — не отправляем ---
     cur_state = _calc_fingerprint(df_payin, None, header_date)
     last_state = _load_last_state()
 
     if last_state.get("hash") == cur_state.get("hash"):
         logger.info(
-            f"[hourly_report] no changes since last send "
-            f"({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) hash={cur_state.get('hash', '')[:8]} -> skip"
+            f"[wallet_report] no changes since last send "
+            f"({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) hash={cur_state.get('hash', '')[:8]} -> skip report"
         )
         return None
 
-
-    # 2) агрегация
-    payin_data = aggregate_payin(df_payin, cfg.get("payin", {}), cfg.get("payin_groups", {}))
-
+    method_blocks = aggregate_payin_by_method(df_payin)
     total_payin = df_payin["Сумма"].sum()
 
-    # 3) форматирование
-    txt = format_report( payin_data, header_date, end_dt, total_payin)
+    txt = format_report(method_blocks, header_date, end_dt, total_payin)
 
-
-
-    # 4) отправка
     send_message_sync(txt, chat_id=_hourly_chat_id())
-    logger.info("[hourly_report] Отчёт отправлен")
+    logger.info("[wallet_report] Отчёт отправлен")
     _save_last_state(cur_state)
 
     return txt

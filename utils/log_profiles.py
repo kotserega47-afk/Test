@@ -1,6 +1,7 @@
 LOG_PROFILES = {
     "MAIN":      ("🚀", "MainDownloader"),
     "WALLET":    ("💼", "WalletDownloader"),
+    "WALLET_REPORTER": ("💼", "WalletReporter"),  # Raccoon: накопительный PayIn, каждые N мин
     "HOURLY":    ("🕒", "HourlyReporter"),
     "RATE":      ("📈", "RateMonitor"),
     "ANALYZER":  ("📦", "Analyzer"),

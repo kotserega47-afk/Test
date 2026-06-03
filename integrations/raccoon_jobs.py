@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from analyzers.raccoon_daily_conversion import run_daily_conversion_report
-from analyzers.raccoon_hourly_report import (
-    run_conversion_monitor_from_payin,
-    run_hourly_report as run_raccoon_hourly_report_fn,
-)
+from analyzers.raccoon_hourly_report import run_hourly_report as run_raccoon_hourly_report_fn
 from core.job_runner import JOB_REGISTRY
 from integrations.raccoon_hourly_downloader import run_hourly_raccoon_cycle
 from integrations.raccoon_wallet_downloader import run_raccoon_wallet_cycle
@@ -20,7 +17,6 @@ def run_raccoon_wallet_job() -> None:
 
 def run_raccoon_hourly_job() -> None:
     run_hourly_raccoon_cycle()
-    run_conversion_monitor_from_payin()
     run_raccoon_hourly_report_fn()
 
 
