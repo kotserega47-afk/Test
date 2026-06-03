@@ -491,7 +491,7 @@ Database: not present in active runtime chain.
 | Данные | Источник | Потребители | Критичность | Статус |
 |--------|----------|-------------|-------------|--------|
 | `rules.xlsx` | Dropbox `RULES_XLSX_PATH` → `/tmp/rules_cache/rules.xlsx` | schedules, access, job_params, analyzers | CRITICAL | CONFIRMED |
-| `rules.xlsx` → `telegram_routes` (optional) | same workbook | Phase 2 shadow; Phase 3A/3B: `platform_hourly_report`, `platform_wallet_download_report` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` | OPTIONAL | CONFIRMED |
+| `rules.xlsx` → `telegram_routes` (optional) | same workbook | Phase 2 shadow; Phase 3A–3C: `platform_hourly_report`, `platform_wallet_download_report`, `conversion_wallet_editor` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` | OPTIONAL | CONFIRMED |
 | `config/payout_config.yaml` | repo `config/` | `payout.py` via `payout_config_loader.py` | IMPORTANT | CONFIRMED |
 | `state.json` | Dropbox `{rules_folder}/state/state.json` | hourly/wallet fingerprints | IMPORTANT | CONFIRMED |
 | Event log | `{STATE_DIR}/events/events_*.jsonl` | observability | OPTIONAL | CONFIRMED |

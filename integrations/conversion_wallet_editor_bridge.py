@@ -13,6 +13,12 @@ import pandas as pd
 from automation.runtime import WalletEditorTask, operator_auth_state_path
 from automation.worker import add_task
 from integrations.telegram_bot import send_message_sync
+from integrations.telegram_routes import (
+    ROUTE_CONVERSION_WALLET_EDITOR,
+    routes_from_rules_v2_enabled,
+    resolve_route_chat_id,
+    send_message_to_route,
+)
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -116,15 +122,24 @@ def _parse_chat_id(raw: str | None) -> int | None:
         return None
 
 
+def _resolve_notification_chat_id() -> int | None:
+    if routes_from_rules_v2_enabled():
+        resolution = resolve_route_chat_id(ROUTE_CONVERSION_WALLET_EDITOR)
+        return _parse_chat_id(resolution.chat_id)
+    return _parse_chat_id(os.getenv(ENV_CHAT_ID, ""))
+
+
 def resolve_conversion_we_config() -> tuple[ConversionWEConfig | None, str | None]:
-    chat_raw = os.getenv(ENV_CHAT_ID, "")
     login = os.getenv(ENV_LOGIN, "").strip()
     password = os.getenv(ENV_PASSWORD, "").strip()
-    chat_id = _parse_chat_id(chat_raw)
+    chat_id = _resolve_notification_chat_id()
 
     missing: list[str] = []
     if chat_id is None:
-        missing.append(ENV_CHAT_ID)
+        if routes_from_rules_v2_enabled():
+            missing.append(ROUTE_CONVERSION_WALLET_EDITOR)
+        else:
+            missing.append(ENV_CHAT_ID)
     if not login:
         missing.append(ENV_LOGIN)
     if not password:
@@ -137,6 +152,10 @@ def resolve_conversion_we_config() -> tuple[ConversionWEConfig | None, str | Non
 
 
 def _send_telegram_best_effort(chat_id: int | None, text: str) -> None:
+    if routes_from_rules_v2_enabled():
+        send_message_to_route(ROUTE_CONVERSION_WALLET_EDITOR, text)
+        return
+
     if chat_id is None:
         logger.info("[conversion_we] telegram skipped (no chat_id): %s", text.replace("\n", " | "))
         return
@@ -174,7 +193,7 @@ def maybe_enqueue_wallet_editor_from_problem_cards(
         config, config_error = resolve_conversion_we_config()
         if config is None:
             logger.warning("[conversion_we] Wallet Editor hook skipped: %s", config_error)
-            chat_only = _parse_chat_id(os.getenv(ENV_CHAT_ID))
+            chat_only = _resolve_notification_chat_id()
             if chat_only is not None:
                 _send_telegram_best_effort(
                     chat_only,
@@ -223,8 +242,7 @@ def maybe_enqueue_wallet_editor_from_problem_cards(
     except Exception as exc:
         logger.error("[conversion_we] hook failed: %s", exc)
         logger.debug(traceback.format_exc())
-        chat_id = _parse_chat_id(os.getenv(ENV_CHAT_ID))
         _send_telegram_best_effort(
-            chat_id,
+            _resolve_notification_chat_id(),
             f"❌ Conversion → Wallet Editor ошибка: {exc}",
         )

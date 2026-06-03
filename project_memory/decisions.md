@@ -130,6 +130,7 @@
 | E-TG-ROUTES-01 | 2026-06-03 | Telegram **delivery** destinations migrate via optional Rules V2 sheet `telegram_routes`; Phase 2 = model + validator + index + accessor + ENV↔rules shadow compare only; **no** `send_message` switch; `TELEGRAM_CHAT_ID_EMERGENCY` ENV-only (never business fallback); `access_rules.chat_id` ≠ delivery route | CONFIRMED | `core/rules_v2/*`; `integrations/telegram_routes.py`; Phase 3 = `send_to_route` cutover |
 | E-TG-ROUTES-02 | 2026-06-03 | Phase 3A: first runtime route — `platform_hourly_report` behind `TELEGRAM_ROUTES_FROM_RULES_V2` (default `0`); `send_message_to_route` / `resolve_route_chat_id`; hourly job only; missing/disabled → skip (no emergency) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/tg_commands.py` `run_hourly_job` |
 | E-TG-ROUTES-03 | 2026-06-03 | Phase 3B: second runtime route — `platform_wallet_download_report` / `TELEGRAM_CHAT_ID_WALLET`; `downloader_wallets.run_wallet_cycle` → `send_message_to_route`; same flag; text reports (not files) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/downloader_wallets.py` |
+| E-TG-ROUTES-04 | 2026-06-03 | Phase 3C: `conversion_wallet_editor` / `CONVERSION_WALLET_EDITOR`; bridge notifications + config chat via `send_message_to_route` when flag on; WE `task.chat_id` unchanged semantically | CONFIRMED | `integrations/telegram_routes.py`; `integrations/conversion_wallet_editor_bridge.py` |
 
 ---
 
@@ -191,3 +192,4 @@
 | 2026-06-03 | Telegram routes Phase 2 — E-TG-ROUTES-01; shadow-only infrastructure |
 | 2026-06-03 | Telegram routes Phase 3A — E-TG-ROUTES-02; `platform_hourly_report` behind feature flag |
 | 2026-06-03 | Telegram routes Phase 3B — E-TG-ROUTES-03; `platform_wallet_download_report` / wallet download cycle |
+| 2026-06-03 | Telegram routes Phase 3C — E-TG-ROUTES-04; `conversion_wallet_editor` / Conversion→WE bridge |

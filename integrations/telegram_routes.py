@@ -3,6 +3,7 @@
 Phase 2: ENV vs rules shadow (default).
 Phase 3A: ``platform_hourly_report`` may use Rules V2 when ``TELEGRAM_ROUTES_FROM_RULES_V2=1``.
 Phase 3B: ``platform_wallet_download_report`` (wallet download text reports).
+Phase 3C: ``conversion_wallet_editor`` (Conversion → Wallet Editor notifications).
 """
 
 from __future__ import annotations
@@ -29,18 +30,22 @@ log = logging.getLogger(__name__)
 ENV_TELEGRAM_ROUTES_FROM_RULES_V2 = "TELEGRAM_ROUTES_FROM_RULES_V2"
 ROUTE_PLATFORM_HOURLY_REPORT = "platform_hourly_report"
 ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT = "platform_wallet_download_report"
+ROUTE_CONVERSION_WALLET_EDITOR = "conversion_wallet_editor"
 ENV_PLATFORM_HOURLY_LEGACY = "TELEGRAM_CHAT_ID_HOURLY"
 ENV_PLATFORM_WALLET_LEGACY = "TELEGRAM_CHAT_ID_WALLET"
+ENV_CONVERSION_WALLET_EDITOR_LEGACY = "CONVERSION_WALLET_EDITOR"
 
-# Phase 3A/3B — routes that read Rules V2 when ``TELEGRAM_ROUTES_FROM_RULES_V2=1``.
+# Phase 3A/3B/3C — routes that read Rules V2 when ``TELEGRAM_ROUTES_FROM_RULES_V2=1``.
 MIGRATED_RUNTIME_ROUTES: frozenset[str] = frozenset({
     ROUTE_PLATFORM_HOURLY_REPORT,
     ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT,
+    ROUTE_CONVERSION_WALLET_EDITOR,
 })
 
 LEGACY_ENV_BY_ROUTE_KEY: dict[str, str] = {
     ROUTE_PLATFORM_HOURLY_REPORT: ENV_PLATFORM_HOURLY_LEGACY,
     ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT: ENV_PLATFORM_WALLET_LEGACY,
+    ROUTE_CONVERSION_WALLET_EDITOR: ENV_CONVERSION_WALLET_EDITOR_LEGACY,
 }
 
 RouteSource = Literal[
@@ -390,6 +395,7 @@ def get_telegram_routes_status_dict(
                 "migrated_routes": sorted(MIGRATED_RUNTIME_ROUTES),
                 "source_for_platform_hourly_report": "unknown",
                 "source_for_platform_wallet_download_report": "unknown",
+                "source_for_conversion_wallet_editor": "unknown",
                 "loaded": "unknown",
                 "missing_sheet": "unknown",
                 "invalid_routes": "unknown",
@@ -415,6 +421,9 @@ def get_telegram_routes_status_dict(
         ),
         "source_for_platform_wallet_download_report": _status_source_label(
             ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT
+        ),
+        "source_for_conversion_wallet_editor": _status_source_label(
+            ROUTE_CONVERSION_WALLET_EDITOR
         ),
         "loaded": f"{enabled}/{total} enabled/total",
         "missing_sheet": "yes" if not routes else "no",
@@ -449,6 +458,10 @@ def format_telegram_routes_status_lines() -> list[str]:
             "- source_for_platform_wallet_download_report="
             f"{status.get('source_for_platform_wallet_download_report', 'unknown')}"
         ),
+        (
+            "- source_for_conversion_wallet_editor="
+            f"{status.get('source_for_conversion_wallet_editor', 'unknown')}"
+        ),
         f"- loaded={status.get('loaded', 'unknown')}",
         f"- missing_sheet={status.get('missing_sheet', 'unknown')}",
         f"- invalid_routes={status.get('invalid_routes', 'unknown')}",
@@ -472,7 +485,9 @@ __all__ = [
     "ENV_TELEGRAM_ROUTES_FROM_RULES_V2",
     "ROUTE_PLATFORM_HOURLY_REPORT",
     "ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT",
+    "ROUTE_CONVERSION_WALLET_EDITOR",
     "ENV_PLATFORM_WALLET_LEGACY",
+    "ENV_CONVERSION_WALLET_EDITOR_LEGACY",
     "MIGRATED_RUNTIME_ROUTES",
     "RouteResolution",
     "RouteSource",

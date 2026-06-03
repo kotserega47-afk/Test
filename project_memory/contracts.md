@@ -44,6 +44,8 @@
 
 **Runtime (Phase 3B):** same flag `1` → `downloader_wallets.run_wallet_cycle` sends via `send_message_to_route("platform_wallet_download_report")`. Flag `0` → `TELEGRAM_CHAT_ID_WALLET` + `send_text` unchanged. Requires `telegram_routes` row with numeric `chat_id` before cutover.
 
+**Runtime (Phase 3C):** same flag `1` → Conversion→WE bridge info/error TG via `send_message_to_route("conversion_wallet_editor")`; `resolve_conversion_we_config()` reads chat from rules when flag on. Flag `0` → `CONVERSION_WALLET_EDITOR` unchanged. Worker `task.chat_id` remains enqueue reply destination (same resolved chat). Login/password env unchanged.
+
 **Status (Phase 3A.1):** Shadow compare still logs ENV↔rules for all mapped routes. `/status` fields: `shadow_mismatches` — warning count for routes **not** yet runtime-migrated; `migrated_route_differences` — informational count when a runtime-migrated route’s legacy ENV differs from rules (not a warning).
 
 ---

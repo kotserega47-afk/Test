@@ -64,7 +64,6 @@ def _clear_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_wallet_route_in_migrated_registry() -> None:
     assert ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT in MIGRATED_RUNTIME_ROUTES
     assert ROUTE_PLATFORM_HOURLY_REPORT in MIGRATED_RUNTIME_ROUTES
-    assert len(MIGRATED_RUNTIME_ROUTES) == 2
 
 
 def test_flag_off_wallet_uses_legacy_env(monkeypatch: pytest.MonkeyPatch) -> None:
