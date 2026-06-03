@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 from typing import Callable, TypeVar
+from uuid import uuid4
 
 from automation.audit import log
 
@@ -153,6 +154,7 @@ class WalletEditorTask:
     login: str
     password: str
     auth_state_path: str
+    run_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 def resolve_operator_for_user(telegram_user_id: int) -> tuple[OperatorCredentials | None, str | None]:

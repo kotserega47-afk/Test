@@ -12,6 +12,8 @@ from utils.log_profiles import LOG_PROFILES
 
 from automation.engine import run, RunConfig
 from automation.runtime import WalletEditorTask, build_wallet_editor_result_path
+from core.datetime_utils import now_msk
+from integrations.wallet_editor_registry import append_run_to_dropbox_registry
 from transport.telegram_transport import send_text, send_document
 
 icon, name = LOG_PROFILES["AUTOMATION"]
@@ -92,6 +94,7 @@ def worker_loop(profile_key: str, task_queue: Queue[WalletEditorTask]) -> None:
         )
 
         try:
+            run_started_at = now_msk()
             cfg = RunConfig(
                 login=task.login,
                 password=task.password,
@@ -104,6 +107,15 @@ def worker_loop(profile_key: str, task_queue: Queue[WalletEditorTask]) -> None:
 
             log.info(f"📊 [Worker] profile={profile_key} engine.run()")
             result_file, stats = run(task.file_path, cfg)
+            run_finished_at = now_msk()
+
+            append_run_to_dropbox_registry(
+                task,
+                result_file,
+                stats,
+                run_started_at=run_started_at,
+                run_finished_at=run_finished_at,
+            )
 
             summary = stats.summary()
             log.info(f"✅ [Worker] profile={profile_key} done: {summary}")
