@@ -6,22 +6,21 @@ from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.telegram_bot import send_message_sync
+from integrations.telegram_routes import (
+    ENV_BAKAI_RATE_ALERT_LEGACY,
+    ENV_BAKAI_RATE_CURRENT_LEGACY,
+    ROUTE_BAKAI_RATE_ALERT,
+    ROUTE_BAKAI_RATE_CURRENT,
+    routes_from_rules_v2_enabled,
+    send_file_to_route,
+    send_message_to_route,
+)
 from zoneinfo import ZoneInfo
 import time as time_module
 import random
 
 icon, name = LOG_PROFILES["RATE"]
 logger = get_logger(name, icon)
-
-# Текущий курс
-CHAT_ID = os.getenv("CURRENT_RATE_BAKAI_CHAT_ID")
-if not CHAT_ID:
-    raise RuntimeError("Не задан CURRENT_RATE_BAKAI_CHAT_ID")
-
-# Новый курс
-ALERT_CHAT_ID = os.getenv("NEW_RATE_BAKAI_CHAT_ID")
-if not ALERT_CHAT_ID:
-    raise RuntimeError("Не задан NEW_RATE_BAKAI_CHAT_ID")
 
 URL = "https://bakai.kg/ru/"
 LAST_RATE_FILE = "/tmp/bakai_last_buy_rate.txt"
@@ -33,6 +32,58 @@ UA = (
 )
 
 MSK = ZoneInfo("Europe/Moscow")
+
+
+def _legacy_env_chat(env_name: str) -> str | None:
+    raw = os.getenv(env_name, "").strip()
+    return raw if raw else None
+
+
+def _send_to_current_route(text: str, *, override_chat_id: str | None = None) -> None:
+    if override_chat_id and not routes_from_rules_v2_enabled():
+        send_message_sync(text, chat_id=override_chat_id)
+        return
+    if routes_from_rules_v2_enabled():
+        send_message_to_route(ROUTE_BAKAI_RATE_CURRENT, text)
+        return
+    chat_id = _legacy_env_chat(ENV_BAKAI_RATE_CURRENT_LEGACY)
+    if not chat_id:
+        logger.warning(
+            "[rate_monitor] %s not set — skip current-rate send",
+            ENV_BAKAI_RATE_CURRENT_LEGACY,
+        )
+        return
+    send_message_sync(text, chat_id=chat_id)
+
+
+def _send_to_alert_route(text: str) -> None:
+    if routes_from_rules_v2_enabled():
+        send_message_to_route(ROUTE_BAKAI_RATE_ALERT, text)
+        return
+    chat_id = _legacy_env_chat(ENV_BAKAI_RATE_ALERT_LEGACY)
+    if not chat_id:
+        logger.warning(
+            "[rate_monitor] %s not set — skip rate-alert send",
+            ENV_BAKAI_RATE_ALERT_LEGACY,
+        )
+        return
+    send_message_sync(text, chat_id=chat_id)
+
+
+def _send_file_to_current_route(path: str, caption: str | None) -> None:
+    if routes_from_rules_v2_enabled():
+        send_file_to_route(ROUTE_BAKAI_RATE_CURRENT, path, caption)
+        return
+    chat_id = _legacy_env_chat(ENV_BAKAI_RATE_CURRENT_LEGACY)
+    if not chat_id:
+        logger.warning(
+            "[rate_monitor] %s not set — skip screenshot send",
+            ENV_BAKAI_RATE_CURRENT_LEGACY,
+        )
+        return
+    from integrations.telegram_bot import send_file_sync
+
+    send_file_sync(path, caption, chat_id=chat_id)
 
 
 # ------------------------ вспомогательные ------------------------
@@ -68,9 +119,7 @@ def _in_time_window() -> bool:
 
 # -------------------------- основной мониторинг --------------------------
 
-def check_bakai_rate(chat_id: str = None):
-    chat_id = chat_id or CHAT_ID
-
+def check_bakai_rate(chat_id: str | None = None):
     if not _in_time_window():
         logger.info("[rate_monitor] Вне окна 08:00–23:55 — пропускаем.")
         return
@@ -148,7 +197,7 @@ def check_bakai_rate(chat_id: str = None):
 
     if last is None:
         msg = f"💱 Текущий курс покупки RUB: {buy_rate}"
-        send_message_sync(msg, chat_id=chat_id)
+        _send_to_current_route(msg, override_chat_id=chat_id)
         _save_rate(buy_rate)
         return
 
@@ -159,13 +208,11 @@ def check_bakai_rate(chat_id: str = None):
             f"⚡ *Внимание!* Новый курс покупки RUB: {buy_rate}\n"
             f"{arrow} Было: {last} (Δ {diff:+.3f})"
         )
-        # 👇 отправляем в ALERT чат, если задан
-        target_chat = ALERT_CHAT_ID or chat_id
-        send_message_sync(msg, chat_id=target_chat)
+        _send_to_alert_route(msg)
         _save_rate(buy_rate)
     else:
         msg = f"💤 Курс без изменений: {buy_rate}"
-        send_message_sync(msg, chat_id=chat_id)
+        _send_to_current_route(msg, override_chat_id=chat_id)
         logger.info(f"[rate_monitor] Курс без изменений ({buy_rate}).")
 
 def run_rate_monitor_safe():
@@ -192,19 +239,14 @@ def run_rate_monitor_safe():
             # ===== ПОСЛЕДНЯЯ ПОПЫТКА =====
             logger.error("[rate_monitor] ❌ Все попытки исчерпаны")
 
-            # одно сообщение в Telegram
-            send_message_sync(
+            _send_to_current_route(
                 f"⚠️ RateMonitor недоступен после {attempts} попыток.\nОшибка: {e}",
-                chat_id=CHAT_ID
             )
 
-            # отправляем скриншот, если он был сделан
             if e.screenshot_path and os.path.exists(e.screenshot_path):
-                from integrations.telegram_bot import send_file_sync
-                send_file_sync(
+                _send_file_to_current_route(
                     e.screenshot_path,
                     caption="📸 Скриншот ошибки RateMonitor",
-                    chat_id=CHAT_ID
                 )
 
             return

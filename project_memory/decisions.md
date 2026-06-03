@@ -131,6 +131,7 @@
 | E-TG-ROUTES-02 | 2026-06-03 | Phase 3A: first runtime route — `platform_hourly_report` behind `TELEGRAM_ROUTES_FROM_RULES_V2` (default `0`); `send_message_to_route` / `resolve_route_chat_id`; hourly job only; missing/disabled → skip (no emergency) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/tg_commands.py` `run_hourly_job` |
 | E-TG-ROUTES-03 | 2026-06-03 | Phase 3B: second runtime route — `platform_wallet_download_report` / `TELEGRAM_CHAT_ID_WALLET`; `downloader_wallets.run_wallet_cycle` → `send_message_to_route`; same flag; text reports (not files) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/downloader_wallets.py` |
 | E-TG-ROUTES-04 | 2026-06-03 | Phase 3C: `conversion_wallet_editor` / `CONVERSION_WALLET_EDITOR`; bridge notifications + config chat via `send_message_to_route` when flag on; WE `task.chat_id` unchanged semantically | CONFIRMED | `integrations/telegram_routes.py`; `integrations/conversion_wallet_editor_bridge.py` |
+| E-TG-ROUTES-05 | 2026-06-03 | Phase 3D: `bakai_rate_current` / `bakai_rate_alert`; `bakai_monitor_playwright` route send helpers; lazy ENV (no import-time raise) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/bakai_monitor_playwright.py` |
 
 ---
 
@@ -193,3 +194,4 @@
 | 2026-06-03 | Telegram routes Phase 3A — E-TG-ROUTES-02; `platform_hourly_report` behind feature flag |
 | 2026-06-03 | Telegram routes Phase 3B — E-TG-ROUTES-03; `platform_wallet_download_report` / wallet download cycle |
 | 2026-06-03 | Telegram routes Phase 3C — E-TG-ROUTES-04; `conversion_wallet_editor` / Conversion→WE bridge |
+| 2026-06-03 | Telegram routes Phase 3D — E-TG-ROUTES-05; Bakai rate routes |

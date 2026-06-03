@@ -46,6 +46,8 @@
 
 **Runtime (Phase 3C):** same flag `1` → Conversion→WE bridge info/error TG via `send_message_to_route("conversion_wallet_editor")`; `resolve_conversion_we_config()` reads chat from rules when flag on. Flag `0` → `CONVERSION_WALLET_EDITOR` unchanged. Worker `task.chat_id` remains enqueue reply destination (same resolved chat). Login/password env unchanged.
 
+**Runtime (Phase 3D):** same flag `1` → Bakai rate monitor: `bakai_rate_current` (current/unchanged/errors/screenshot), `bakai_rate_alert` (rate change alert). Flag `0` → `CURRENT_RATE_BAKAI_CHAT_ID` / `NEW_RATE_BAKAI_CHAT_ID`. No import-time ENV raise (lazy at send).
+
 **Status (Phase 3A.1):** Shadow compare still logs ENV↔rules for all mapped routes. `/status` fields: `shadow_mismatches` — warning count for routes **not** yet runtime-migrated; `migrated_route_differences` — informational count when a runtime-migrated route’s legacy ENV differs from rules (not a warning).
 
 ---
@@ -65,8 +67,8 @@
 | `TELEGRAM_CHAT_ID_ANALIZ` | да (module import) | — | `main.py`, `downloader.py`, `payout.py`, `conversion.py` | import-time or notify fail | IMPORTANT | CONFIRMED |
 | `TELEGRAM_CHAT_ID_EMERGENCY` | нет (Phase 2+) | — | reserved; **не** fallback для business routes | ops-only channel (Phase 3+) | OPTIONAL | CONFIRMED |
 | `TELEGRAM_ROUTES_FROM_RULES_V2` | нет | `0` | `integrations/telegram_routes.py` | `0`: legacy ENV for all sends; `1`: `platform_hourly_report` reads `telegram_routes` sheet | OPTIONAL | CONFIRMED |
-| `CURRENT_RATE_BAKAI_CHAT_ID` | да (module import) | — | `bakai_monitor_playwright.py` L17 | `RuntimeError` at import | IMPORTANT | CONFIRMED |
-| `NEW_RATE_BAKAI_CHAT_ID` | да (module import) | — | `bakai_monitor_playwright.py` L22 | `RuntimeError` at import | IMPORTANT | CONFIRMED |
+| `CURRENT_RATE_BAKAI_CHAT_ID` | нет | — | `bakai_monitor_playwright.py` | current/unchanged rate + error screenshot when flag `0` | IMPORTANT | CONFIRMED |
+| `NEW_RATE_BAKAI_CHAT_ID` | нет | — | `bakai_monitor_playwright.py` | rate-change alert when flag `0` | IMPORTANT | CONFIRMED |
 | `DROPBOX_INPUT_PATH` | да (P3/P5) | — | `main.py`, `downloader.py`, `payout.py` | analyze/download fail | IMPORTANT | CONFIRMED |
 | `DROPBOX_PROCESSED_PATH` | да (P3/P5 moves) | — | `main.py`, `payout.py` | move after analyze fail | IMPORTANT | CONFIRMED |
 | `DROPBOX_ACCESS_TOKEN` | да* | — | `dropbox_watcher._get_dbx()` | Dropbox IO fail | IMPORTANT | CONFIRMED |

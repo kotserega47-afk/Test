@@ -75,7 +75,7 @@ def _clear_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_conversion_route_in_migrated_registry() -> None:
     assert ROUTE_CONVERSION_WALLET_EDITOR in MIGRATED_RUNTIME_ROUTES
-    assert len(MIGRATED_RUNTIME_ROUTES) == 3
+    assert len(MIGRATED_RUNTIME_ROUTES) >= 3
 
 
 def test_flag_off_uses_legacy_env(monkeypatch: pytest.MonkeyPatch) -> None:

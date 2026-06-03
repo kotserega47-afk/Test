@@ -15,7 +15,7 @@
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
 | **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
-| **Telegram routes** | Phase 3A–3C **done** (`platform_hourly_report`, `platform_wallet_download_report`, `conversion_wallet_editor`); Phase 3D+ routes pending |
+| **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 
 ---

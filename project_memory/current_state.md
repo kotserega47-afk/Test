@@ -54,6 +54,7 @@
 - **Telegram routes Phase 3B** — `platform_wallet_download_report` in `MIGRATED_RUNTIME_ROUTES`; `downloader_wallets.run_wallet_cycle` uses `send_message_to_route` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` (E-TG-ROUTES-03).
 - **Job lock stale recovery** — persistent `{STATE_DIR}/locks/*.lock` cleared when PID dead, ghost PID-1 after redeploy (lock pid == process but job not in `_RUNNING`), or lock age > `JOB_LOCK_STALE_SEC` (default 600).
 - **Telegram routes Phase 3C** — `conversion_wallet_editor` in `MIGRATED_RUNTIME_ROUTES`; `conversion_wallet_editor_bridge` notifications via `send_message_to_route` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` (E-TG-ROUTES-04). `WalletEditorTask.chat_id` still from resolved route/config (not `access_rules`).
+- **Telegram routes Phase 3D** — `bakai_rate_current` / `bakai_rate_alert` in `MIGRATED_RUNTIME_ROUTES`; `bakai_monitor_playwright` uses route helpers when flag `1` (E-TG-ROUTES-05).
 
 ---
 
