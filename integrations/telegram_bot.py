@@ -469,3 +469,11 @@ def send_message_direct(text: str, chat_id: str):
 
     resp.raise_for_status()
     return resp.json()
+
+
+# Phase 3A — route-first delivery helpers (resolution in ``telegram_routes``).
+from integrations.telegram_routes import (  # noqa: E402
+    resolve_route_chat_id,
+    send_file_to_route,
+    send_message_to_route,
+)

@@ -10,6 +10,7 @@ from .models import (
     LimitRule,
     RulesSnapshotV2,
     ScheduleRule,
+    TelegramRoute,
     ThresholdRule,
 )
 
@@ -31,6 +32,7 @@ class RulesIndexes:
     commands_by_text: dict[str, CommandDef] = field(default_factory=dict)
     command_policy_by_command_key: dict[str, CommandPolicy] = field(default_factory=dict)
     schedule_rules_by_job: dict[str, list[ScheduleRule]] = field(default_factory=dict)
+    telegram_routes_by_key: dict[str, TelegramRoute] = field(default_factory=dict)
 
 
 def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
@@ -137,5 +139,11 @@ def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
             continue
 
         idx.schedule_rules_by_job.setdefault(rule.job_key, []).append(rule)
+
+    # ------------------------------------------------------------------
+    # telegram delivery routes (Phase 2 — read-only; not used for send yet)
+    # ------------------------------------------------------------------
+    for route_key, route in snapshot.telegram_routes.items():
+        idx.telegram_routes_by_key[route_key] = route
 
     return idx

@@ -127,6 +127,8 @@
 | E-CONFIG-11 | 2026-06-02 | Raccoon Wallet Rules V2 flag retired — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env removed; no alternative runtime mode; Rules V2 is the unconditional config source | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-7 |
 | E-CONFIG-12 | 2026-06-02 | Raccoon Wallet configuration migration completed — Rules V2 is the only supported configuration source; legacy YAML configuration path is retired and must not be reintroduced | CONFIRMED | CONFIG-MIGRATION-RACCOON-WALLET epic; Phases 3A, 3B-1…3B-7 |
 | E-CONFIG-13 | 2026-06-02 | Payout runtime switched to Rules V2 in production — `PAYOUT_CONFIG_FROM_RULES_V2=1` on Railway; prod `rules.xlsx` with `payout_info_rules` / `payout_ignore_phrases` deployed to Dropbox; logs `[payout_config] source=rules_v2`; YAML retained as fallback; rollback via `PAYOUT_CONFIG_FROM_RULES_V2=0` | CONFIRMED | CONFIG-MIGRATION-PHASE-4C; `analyzers/payout_config_loader.py` |
+| E-TG-ROUTES-01 | 2026-06-03 | Telegram **delivery** destinations migrate via optional Rules V2 sheet `telegram_routes`; Phase 2 = model + validator + index + accessor + ENV↔rules shadow compare only; **no** `send_message` switch; `TELEGRAM_CHAT_ID_EMERGENCY` ENV-only (never business fallback); `access_rules.chat_id` ≠ delivery route | CONFIRMED | `core/rules_v2/*`; `integrations/telegram_routes.py`; Phase 3 = `send_to_route` cutover |
+| E-TG-ROUTES-02 | 2026-06-03 | Phase 3A: first runtime route — `platform_hourly_report` behind `TELEGRAM_ROUTES_FROM_RULES_V2` (default `0`); `send_message_to_route` / `resolve_route_chat_id`; hourly job only; missing/disabled → skip (no emergency) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/tg_commands.py` `run_hourly_job` |
 
 ---
 
@@ -185,3 +187,5 @@
 | 2026-06-02 | Raccoon Wallet feature flag retired — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — E-CONFIG-12 |
 | 2026-06-02 | Payout Rules V2 production cutover — E-CONFIG-13; CONFIG-MIGRATION-PHASE-4C complete |
+| 2026-06-03 | Telegram routes Phase 2 — E-TG-ROUTES-01; shadow-only infrastructure |
+| 2026-06-03 | Telegram routes Phase 3A — E-TG-ROUTES-02; `platform_hourly_report` behind feature flag |

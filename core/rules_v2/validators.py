@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .constants import (
     ALLOWED_JOB_PARAMS,
+    ALLOWED_TELEGRAM_ROUTE_KEYS,
     ITEM_TYPES,
     LIMIT_TYPES,
     MEMBER_TYPES,
@@ -11,7 +12,7 @@ from .constants import (
     SCHEDULE_TYPES,
     SCOPE_TYPES,
 )
-from .models import RulesSnapshotV2
+from .models import RulesSnapshotV2, TelegramRoute
 
 
 @dataclass(slots=True)
@@ -42,8 +43,54 @@ def validate_snapshot(snapshot: RulesSnapshotV2) -> ValidationResult:
     _validate_limits(snapshot, result)
     _validate_thresholds(snapshot, result)
     _validate_reports(snapshot, result)
+    _validate_telegram_routes(snapshot, result)
 
     return result
+
+
+def is_valid_telegram_chat_id(chat_id: str) -> bool:
+    """Int-like Telegram chat id string (negative group ids allowed)."""
+
+    s = str(chat_id or "").strip()
+    if not s:
+        return False
+    if s.startswith("-"):
+        body = s[1:]
+        return body.isdigit() and len(body) > 0
+    return s.isdigit()
+
+
+def validate_telegram_routes_dict(routes: dict[str, TelegramRoute]) -> list[str]:
+    """Row-level validation for ``telegram_routes`` when the sheet is present."""
+
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    for route_key in sorted(routes.keys()):
+        route = routes[route_key]
+        if route.route_key != route_key:
+            errors.append(f"route_key mismatch: index={route_key!r} row={route.route_key!r}")
+        if not route.route_key:
+            errors.append("empty route_key")
+            continue
+        if route.route_key in seen:
+            errors.append(f"duplicate route_key: {route.route_key!r}")
+        seen.add(route.route_key)
+        if route.route_key not in ALLOWED_TELEGRAM_ROUTE_KEYS:
+            errors.append(f"unknown route_key: {route.route_key!r}")
+        if not is_valid_telegram_chat_id(route.chat_id):
+            errors.append(f"invalid chat_id for route {route.route_key!r}")
+        if not str(route.description or "").strip():
+            errors.append(f"empty description for route {route.route_key!r}")
+
+    return errors
+
+
+def _validate_telegram_routes(snapshot: RulesSnapshotV2, result: ValidationResult) -> None:
+    if not snapshot.telegram_routes:
+        return
+    for msg in validate_telegram_routes_dict(snapshot.telegram_routes):
+        result.errors.append(ValidationIssue("error", msg, "telegram_routes"))
 
 
 def _validate_jobs(snapshot: RulesSnapshotV2, result: ValidationResult) -> None:

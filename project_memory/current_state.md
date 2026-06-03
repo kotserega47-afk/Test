@@ -48,6 +48,8 @@
 - **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-8 complete).
 - **Conversion Modernization Program** complete — layered architecture, orchestrator, observability, passive fingerprint Phase 1A deployed in code.
 - **Conversion → Wallet Editor hook** active in code — best-effort bridge from `problem_cards` after `conversion.run()`; requires `CONVERSION_WALLET_EDITOR*` env; all valid cards per run (10-card rollout limit removed).
+- **Telegram routes Phase 2** — optional `rules.xlsx` sheet `telegram_routes` parsed into snapshot; ENV↔rules shadow compare on `/status` (E-TG-ROUTES-01).
+- **Telegram routes Phase 3A** — `TELEGRAM_ROUTES_FROM_RULES_V2=0` (default): hourly → `TELEGRAM_CHAT_ID_HOURLY`. `=1`: hourly → `platform_hourly_report` from rules; other routes unchanged (E-TG-ROUTES-02).
 
 ---
 

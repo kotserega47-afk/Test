@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-02 |
+| **Последнее обновление** | 2026-06-03 |
 
 ---
 
@@ -27,6 +27,21 @@
 
 **G5** закрыт TASK-2026-05-31-03. Остаточные UNKNOWN — в § Remaining UNKNOWN.
 
+### `telegram_routes` sheet (Rules V2 Phase 2 — shadow only)
+
+| Column | Required | Notes |
+|--------|----------|-------|
+| `route_key` | да | stable slug; must be in `ALLOWED_TELEGRAM_ROUTE_KEYS` (`core/rules_v2/constants.py`) |
+| `chat_id` | да | string (negative group ids preserved) |
+| `enabled` | да | 0/1/true/false |
+| `description` | да | human label; not used by send path |
+
+**Not in sheet:** `TELEGRAM_BOT_TOKEN`, secrets, `access_rules.chat_id` (authorization), WalletEditor `task.chat_id` (dynamic reply), `WALLET_EDITOR_ALLOWED_CHAT_IDS`.
+
+**Runtime (Phase 2):** legacy `TELEGRAM_CHAT_ID_*` / `CONVERSION_WALLET_EDITOR` / Bakai env remain **primary** for delivery. Accessor `get_telegram_chat_id(route_key)` reads rules only (no ENV, no emergency). Shadow: `integrations/telegram_routes.py` → log `[telegram_routes][shadow] …`.
+
+**Runtime (Phase 3A):** `TELEGRAM_ROUTES_FROM_RULES_V2=1` → job `hourly` sends via `send_message_to_route("platform_hourly_report")` → Rules V2 `chat_id`. Missing/disabled route → skip send + log (no emergency). Flag `0` (default) → `TELEGRAM_CHAT_ID_HOURLY` unchanged.
+
 ---
 
 ## 1. Environment variables (полный inventory)
@@ -42,6 +57,8 @@
 | `TELEGRAM_CHAT_ID_HOURLY` | да (send path) | — | `tg_commands.run_hourly_job` L116 | `RuntimeError` if send needed | IMPORTANT | CONFIRMED |
 | `TELEGRAM_CHAT_ID_WALLET` | нет | `""` | `downloader_wallets.py` L242 | skip send if empty | IMPORTANT | CONFIRMED |
 | `TELEGRAM_CHAT_ID_ANALIZ` | да (module import) | — | `main.py`, `downloader.py`, `payout.py`, `conversion.py` | import-time or notify fail | IMPORTANT | CONFIRMED |
+| `TELEGRAM_CHAT_ID_EMERGENCY` | нет (Phase 2+) | — | reserved; **не** fallback для business routes | ops-only channel (Phase 3+) | OPTIONAL | CONFIRMED |
+| `TELEGRAM_ROUTES_FROM_RULES_V2` | нет | `0` | `integrations/telegram_routes.py` | `0`: legacy ENV for all sends; `1`: `platform_hourly_report` reads `telegram_routes` sheet | OPTIONAL | CONFIRMED |
 | `CURRENT_RATE_BAKAI_CHAT_ID` | да (module import) | — | `bakai_monitor_playwright.py` L17 | `RuntimeError` at import | IMPORTANT | CONFIRMED |
 | `NEW_RATE_BAKAI_CHAT_ID` | да (module import) | — | `bakai_monitor_playwright.py` L22 | `RuntimeError` at import | IMPORTANT | CONFIRMED |
 | `DROPBOX_INPUT_PATH` | да (P3/P5) | — | `main.py`, `downloader.py`, `payout.py` | analyze/download fail | IMPORTANT | CONFIRMED |
@@ -120,6 +137,7 @@ Rules:
 | Файл / path pattern | Формат | Читает | Пишет | Обязательность | Если отсутствует | Критичность | Статус |
 |---------------------|--------|--------|-------|----------------|------------------|-------------|--------|
 | `rules.xlsx` (Dropbox → `/tmp/rules_cache/rules.xlsx`) | xlsx | `rules_provider`, `loader`, `access_rules`, `schedules`, `config_manager` | `rules_writer` (TG admin flows) | да (startup) | fail-fast at startup / sync error | CRITICAL | CONFIRMED |
+| `rules.xlsx` sheet `telegram_routes` (optional) | xlsx rows | `bridge_legacy`, `accessors.get_telegram_*`, shadow compare | — (Phase 2: no runtime send switch) | нет | ENV delivery unchanged; shadow logs `sheet_missing` | OPTIONAL | CONFIRMED |
 | `config/payout_config.yaml` | yaml | `payout.py` via `payout_config_loader.py` (YAML default; Rules V2 optional) | — | да (payout job) | empty CONFIG; analysis degraded; Rules V2 fallback when flag=1 | IMPORTANT | CONFIRMED |
 | `{RULES_FOLDER}/state/state.json` (Dropbox) | json | `state_store`, `state_provider` | `state_store`, `state_provider` | нет (bootstrap `{}`) | fp dedup reset; new state | IMPORTANT | CONFIRMED |
 | `/tmp/state_store/state.json` | json | local cache `state_store` | `state_store` | transient | fallback local | IMPORTANT | CONFIRMED |

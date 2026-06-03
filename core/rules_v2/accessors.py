@@ -14,6 +14,7 @@ from core.rules_v2.models import (
     PartnerDef,
     PartnerGroupMember,
     RulesSnapshotV2,
+    TelegramRoute,
     ThresholdRule,
 )
 from core.rules_v2.normalizers import extract_partner_code, normalize_key
@@ -384,6 +385,23 @@ class BaseRulesAccessor:
             )
             is not None
         )
+
+    def get_telegram_route(self, route_key: str) -> TelegramRoute | None:
+        """Read-only delivery route from published snapshot index (no ENV fallback)."""
+
+        key = normalize_key(route_key)
+        if not key:
+            return None
+        return self.indexes.telegram_routes_by_key.get(key)
+
+    def get_telegram_chat_id(self, route_key: str) -> str | None:
+        """Return chat_id when route exists and is enabled; otherwise ``None``."""
+
+        route = self.get_telegram_route(route_key)
+        if route is None or not route.enabled:
+            return None
+        chat_id = str(route.chat_id or "").strip()
+        return chat_id if chat_id else None
 
 
 @dataclass(slots=True)

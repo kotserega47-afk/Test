@@ -28,7 +28,7 @@ from integrations.downloader import run_download
 from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job types
 
 from analyzers.hourly_report import run_hourly_report
-from transport.telegram_transport import send_text
+from integrations.telegram_routes import ROUTE_PLATFORM_HOURLY_REPORT, send_message_to_route
 from integrations.wallet_editor_tg import handle_wallet_editor_document
 from core.state_store import state_get, state_update
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
@@ -120,6 +120,15 @@ def _format_observation_status() -> str:
         lines.append("- unknown")
 
     lines.append("")
+    try:
+        from integrations.telegram_routes import format_telegram_routes_status_lines
+
+        lines.extend(format_telegram_routes_status_lines())
+    except Exception:
+        lines.append("telegram_routes:")
+        lines.append("- unknown")
+
+    lines.append("")
     lines.append("locks:")
     try:
         locks = get_lock_status_for_job_types(KNOWN_JOB_TYPES)
@@ -168,11 +177,8 @@ def run_hourly_job() -> None:
     if res.skipped_no_changes or not res.text:
         return
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID_HOURLY", "").strip()
-    if not chat_id:
-        raise RuntimeError("TELEGRAM_CHAT_ID_HOURLY is not set")
-
-    send_text(text=res.text, chat_id=chat_id)
+    if not send_message_to_route(ROUTE_PLATFORM_HOURLY_REPORT, res.text):
+        return
 
     if res.fingerprint:
         state_update("hourly", {

@@ -32,8 +32,11 @@ from core.rules_v2.models import (
     RoleDef,
     RulesSnapshotV2,
     ScheduleRule,
+    TelegramRoute,
     ThresholdRule,
 )
+from core.rules_v2.constants import TELEGRAM_ROUTES_REQUIRED_COLUMNS, TELEGRAM_ROUTES_SHEET
+from core.rules_v2.validators import validate_telegram_routes_dict
 
 
 DEFAULT_TIMEZONE = "Europe/Moscow"
@@ -72,6 +75,14 @@ def build_snapshot_v2_from_legacy(path: str | Path) -> RulesSnapshotV2:
     reports = _build_reports(sheets)
     report_sections = _build_report_sections(sheets, reports)
     report_items, report_item_members = _build_report_items(sheets, reports)
+    telegram_routes, telegram_routes_sheet_present = _build_telegram_routes(sheets)
+    if telegram_routes_sheet_present:
+        route_errors = validate_telegram_routes_dict(telegram_routes)
+        if route_errors:
+            raise ValueError(
+                "telegram_routes validation failed: " + "; ".join(route_errors[:8])
+                + (f" (+{len(route_errors) - 8} more)" if len(route_errors) > 8 else "")
+            )
 
     return RulesSnapshotV2(
         meta=meta,
@@ -93,6 +104,7 @@ def build_snapshot_v2_from_legacy(path: str | Path) -> RulesSnapshotV2:
         report_sections=report_sections,
         report_items=report_items,
         report_item_members=report_item_members,
+        telegram_routes=telegram_routes,
     )
 
 
@@ -1087,3 +1099,60 @@ def _build_exclusion_rules(
             )
 
     return rules
+
+
+def _telegram_chat_id_as_str(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            iv = int(value)
+            if float(value) == float(iv):
+                return str(iv)
+        except (TypeError, ValueError):
+            pass
+    return str(value).strip()
+
+
+def _build_telegram_routes(
+    sheets: dict[str, pd.DataFrame],
+) -> tuple[dict[str, TelegramRoute], bool]:
+    """Parse optional ``telegram_routes`` sheet. Missing sheet → empty dict."""
+
+    if TELEGRAM_ROUTES_SHEET not in sheets:
+        return {}, False
+
+    df = sheets[TELEGRAM_ROUTES_SHEET]
+    if df is None or df.empty:
+        return {}, True
+
+    df = df.rename(columns=lambda c: str(c).strip())
+    missing_cols = TELEGRAM_ROUTES_REQUIRED_COLUMNS - set(df.columns)
+    if missing_cols:
+        raise ValueError(
+            f"telegram_routes missing required columns: {sorted(missing_cols)}"
+        )
+
+    routes: dict[str, TelegramRoute] = {}
+    for _, row in df.iterrows():
+        raw_key = _as_str(row.get("route_key"))
+        if not raw_key:
+            continue
+        route_key = normalize_key(raw_key)
+        if not route_key:
+            continue
+        chat_id = _telegram_chat_id_as_str(row.get("chat_id"))
+        description = _as_str(row.get("description"))
+        enabled = _is_enabled(row.get("enabled", 1))
+        if route_key in routes:
+            raise ValueError(f"telegram_routes duplicate route_key: {route_key!r}")
+        routes[route_key] = TelegramRoute(
+            route_key=route_key,
+            chat_id=chat_id,
+            enabled=enabled,
+            description=description,
+        )
+
+    return routes, True

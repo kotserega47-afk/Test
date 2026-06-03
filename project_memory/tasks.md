@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-02 |
+| **Последнее обновление** | 2026-06-03 |
 
 ---
 
@@ -15,6 +15,7 @@
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
 | **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
+| **Telegram routes** | Phase 2 done; Phase 3A `platform_hourly_report` **done** (flag, 2026-06-03); Phase 3B+ routes pending |
 
 ---
 

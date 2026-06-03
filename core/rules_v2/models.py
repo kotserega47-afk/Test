@@ -79,6 +79,14 @@ class CommandDef:
 
 
 @dataclass(slots=True)
+class TelegramRoute:
+    route_key: str
+    chat_id: str
+    enabled: bool
+    description: str
+
+
+@dataclass(slots=True)
 class AccessRule:
     chat_id: str
     user_id: str
@@ -225,3 +233,4 @@ class RulesSnapshotV2:
     report_sections: list[ReportSection] = field(default_factory=list)
     report_items: list[ReportItem] = field(default_factory=list)
     report_item_members: list[ReportItemMember] = field(default_factory=list)
+    telegram_routes: dict[str, TelegramRoute] = field(default_factory=dict)
