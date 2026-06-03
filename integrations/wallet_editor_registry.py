@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 import pandas as pd
@@ -27,6 +29,10 @@ from integrations.wallet_editor_registry_lifecycle import (
     run_id_already_processed,
     save_warned_partners,
     sync_warned_partners_after_otlezka,
+)
+from integrations.wallet_editor_registry_settings import (
+    RegistrySettings,
+    load_registry_settings,
 )
 from integrations.wallet_editor_registry_xlsx import (
     card_as_text,
@@ -51,7 +57,29 @@ REV_CONFLICT_MESSAGE = (
     "Wallet Editor результат отправлен отдельно."
 )
 
+SLOW_APPEND_MESSAGE = (
+    "⚠️ Wallet Editor registry долго обновляется\n\n"
+    "Файл:\nwallet_editor.xlsx\n\n"
+    "Возможная причина:\nфайл открыт или редактируется пользователем.\n\n"
+    "Ожидание продолжается."
+)
+
+TIMEOUT_MESSAGE = (
+    "⚠️ Wallet Editor registry не обновлён\n\n"
+    "Файл:\nwallet_editor.xlsx\n\n"
+    "Причина:\nпревышено время ожидания обновления.\n\n"
+    "Результат Wallet Editor отправлен отдельно."
+)
+
 _lock = threading.Lock()
+
+
+class _AppendOutcome(str, Enum):
+    SUCCESS = "success"
+    DUPLICATE = "duplicate"
+    REV_CONFLICT = "rev_conflict"
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
 
 
 def wallet_editor_dropbox_path() -> str | None:
@@ -65,11 +93,23 @@ def resolve_source(operator_profile: str) -> str:
     return SOURCE_TELEGRAM_MANUAL
 
 
-def _send_rev_conflict_warning(chat_id: int) -> None:
+def _send_chat_warning(chat_id: int, text: str) -> None:
     try:
-        send_message_sync(REV_CONFLICT_MESSAGE, chat_id=str(chat_id))
+        send_message_sync(text, chat_id=str(chat_id))
     except Exception:
-        log.exception("[WalletEditorRegistry] failed to send rev conflict warning")
+        log.exception("[WalletEditorRegistry] failed to send warning")
+
+
+def _send_rev_conflict_warning(chat_id: int) -> None:
+    _send_chat_warning(chat_id, REV_CONFLICT_MESSAGE)
+
+
+def _send_slow_append_warning(chat_id: int) -> None:
+    _send_chat_warning(chat_id, SLOW_APPEND_MESSAGE)
+
+
+def _send_timeout_warning(chat_id: int) -> None:
+    _send_chat_warning(chat_id, TIMEOUT_MESSAGE)
 
 
 def _send_missing_otlezka_warnings(chat_id: int, partners: list[str]) -> None:
@@ -113,10 +153,12 @@ def append_run_to_dropbox_registry(
     *,
     run_started_at: datetime,
     run_finished_at: datetime,
+    settings: RegistrySettings | None = None,
 ) -> None:
     """
     Download registry from Dropbox, append this run, upload back.
     Best-effort: never raises; logs errors only.
+    Retries transient/rev conflicts until registry_timeout_seconds.
     """
     dropbox_path = wallet_editor_dropbox_path()
     if not dropbox_path:
@@ -126,16 +168,64 @@ def append_run_to_dropbox_registry(
         )
         return
 
+    if not os.path.isfile(result_path):
+        log.error(
+            "[WalletEditorRegistry] result file missing run_id=%s path=%s",
+            task.run_id,
+            result_path,
+        )
+        return
+
+    settings = settings or load_registry_settings()
+    started = time.monotonic()
+    deadline = started + settings.registry_timeout_seconds
+    slow_warning_sent = False
+
     try:
-        with _lock:
-            _append_under_lock(
-                task,
-                result_path,
-                stats,
-                dropbox_path=dropbox_path,
-                run_started_at=run_started_at,
-                run_finished_at=run_finished_at,
-            )
+        while time.monotonic() < deadline:
+            elapsed = time.monotonic() - started
+            if not slow_warning_sent and elapsed >= settings.registry_warning_seconds:
+                _send_slow_append_warning(task.chat_id)
+                slow_warning_sent = True
+
+            try:
+                with _lock:
+                    outcome = _append_attempt(
+                        task,
+                        result_path,
+                        stats,
+                        dropbox_path=dropbox_path,
+                        run_started_at=run_started_at,
+                        run_finished_at=run_finished_at,
+                    )
+            except Exception:
+                log.exception(
+                    "[WalletEditorRegistry] append attempt failed run_id=%s",
+                    task.run_id,
+                )
+                outcome = _AppendOutcome.TRANSIENT
+
+            if outcome in (_AppendOutcome.SUCCESS, _AppendOutcome.DUPLICATE):
+                return
+
+            if outcome == _AppendOutcome.PERMANENT:
+                return
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            sleep_for = min(settings.registry_retry_interval_seconds, remaining)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+        log.warning(
+            "[WalletEditorRegistry] timeout after %ss run_id=%s path=%s",
+            settings.registry_timeout_seconds,
+            task.run_id,
+            dropbox_path,
+        )
+        _send_timeout_warning(task.chat_id)
     except Exception:
         log.exception(
             "[WalletEditorRegistry] append failed run_id=%s profile=%s",
@@ -144,7 +234,7 @@ def append_run_to_dropbox_registry(
         )
 
 
-def _append_under_lock(
+def _append_attempt(
     task: WalletEditorTask,
     result_path: str,
     stats: Stats,
@@ -152,7 +242,7 @@ def _append_under_lock(
     dropbox_path: str,
     run_started_at: datetime,
     run_finished_at: datetime,
-) -> None:
+) -> _AppendOutcome:
     output_file = os.path.basename(result_path)
 
     with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
@@ -165,7 +255,7 @@ def _append_under_lock(
                 dropbox_path,
                 status,
             )
-            return
+            return _AppendOutcome.TRANSIENT
 
         is_new_file = status == "not_found"
         all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
@@ -178,7 +268,7 @@ def _append_under_lock(
                 task.run_id,
                 dropbox_path,
             )
-            return
+            return _AppendOutcome.DUPLICATE
 
         result_df = pd.read_excel(
             result_path,
@@ -223,15 +313,14 @@ def _append_under_lock(
                 task.run_id,
                 dropbox_path,
             )
-            _send_rev_conflict_warning(task.chat_id)
-            return
+            return _AppendOutcome.REV_CONFLICT
         if upload_status != "uploaded":
             log.error(
                 "[WalletEditorRegistry] upload failed run_id=%s path=%s",
                 task.run_id,
                 dropbox_path,
             )
-            return
+            return _AppendOutcome.TRANSIENT
 
         mark_run_processed(task.run_id)
         _process_missing_otlezka_warnings(task, missing_partners, otlezka_df)
@@ -242,3 +331,4 @@ def _append_under_lock(
             input_rows,
             dropbox_path,
         )
+        return _AppendOutcome.SUCCESS

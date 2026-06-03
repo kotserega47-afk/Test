@@ -160,7 +160,22 @@ Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py
 
 **Rules:** `partner` from row or migrated from legacy `value` when `action=remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). `Включено` OK/SKIP/FAIL overrides lifecycle status. Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
 
-**Dropbox rev protection:** download stores `rev`; upload via `upload_file_if_rev` only if remote `rev` unchanged; on conflict — skip upload, TG warning to `task.chat_id`, per-run WE result unchanged.
+**Dropbox rev protection:** download stores `rev`; upload via `upload_file_if_rev` only if remote `rev` unchanged; on conflict — retry until timeout; per-run WE TG result never blocked.
+
+**Runtime order (worker):** `engine.run()` → Telegram summary + result file → async registry append (daemon thread). Registry does **not** delay Telegram.
+
+**Registry staging:** per-run result xlsx copied to temp (`we_registry_result_*`) before async append; `delayed_cleanup` (30s) may delete original result path without losing registry data.
+
+**`job_params` (`job=wallet_editor`, global scope):**
+
+| key | default | purpose |
+|-----|---------|---------|
+| `registry_warning_seconds` | `60` | TG warning if append still running |
+| `registry_timeout_seconds` | `180` | stop retries; TG timeout warning |
+| `registry_retry_interval_seconds` | `10` | sleep between retries (rev conflict / transient Dropbox) |
+
+Invariant: `registry_warning_seconds < registry_timeout_seconds` (auto-adjusted if violated). Reader: `integrations/wallet_editor_registry_settings.py` via `BaseRulesAccessor.get_job_param`.
+
 | `/tmp/auth_state_wallet_editor_<PROFILE>.json` | json (Playwright) | `automation/engine.py` | Playwright per operator | нет | re-login for profile | IMPORTANT | CONFIRMED |
 | `/tmp/auth_state_wallet_editor.json` | json (Playwright) | `RunConfig` default only | legacy default path | нет | legacy / tests | OPTIONAL | CONFIRMED |
 

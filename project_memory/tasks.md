@@ -98,6 +98,7 @@
 | WE-7 | **complete** | Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results`, `runs`; E-WE-07 |
 | WE-8 | **complete** | Registry lifecycle: `hold`, `Отлёжка`, re-enable date/status, warnings; E-WE-08 |
 | WE-9 | **complete** | Registry format-safe write + Dropbox rev conflict protection; E-WE-09 |
+| WE-10 | **complete** | Registry async append after TG; job_params timeout/warning/retry; E-WE-10 |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 

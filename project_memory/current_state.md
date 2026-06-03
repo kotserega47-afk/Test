@@ -210,7 +210,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
-| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; sheets `all_results`, `runs`, `hold`, `Отлёжка`; openpyxl in-place write preserves formatting; `hold`/`Отлёжка` user-owned if present; `value` not in `all_results`; `card` text; rev conflict skip + TG warning (E-WE-08, E-WE-09) |
+| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe write; async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10) |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
 | **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
 | **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production |
@@ -276,6 +276,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-03 | WalletEditor Dropbox cumulative registry (WE-7 / E-WE-07) |
 | 2026-06-03 | Registry lifecycle hold/Отлёжка/re-enable (WE-8 / E-WE-08) |
 | 2026-06-03 | Registry format-safe openpyxl + Dropbox rev protection (E-WE-09) |
+| 2026-06-03 | Registry async append + job_params timeout (E-WE-10) |
 | 2026-06-03 | Conversion → Wallet Editor: 10-card rollout limit removed (CONV-WE-LIMIT-REMOVAL) |
 | 2026-06-01 | Telegram outbound sender health (Option B) |
 | 2026-06-02 | Conversion Modernization + Observability + Fingerprint Phase 1A — S9 ACTIVE; Phase 1B Observation Layer implemented (dedup skip NOT STARTED) |

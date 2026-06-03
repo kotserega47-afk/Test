@@ -166,7 +166,9 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
 | `automation/engine.py` | WalletEditor Playwright business logic (Antares UI) | `automation/worker` |
 | `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming, `run_id` | worker, handler |
-| `integrations/wallet_editor_registry.py` | Dropbox registry orchestration (download/append/upload, rev conflict) | `automation/worker` after `engine.run` |
+| `integrations/wallet_editor_registry.py` | Dropbox registry append with retry/timeout/rev conflict | `wallet_editor_registry_async` (daemon) |
+| `integrations/wallet_editor_registry_async.py` | Stage result copy + schedule async append | `automation/worker` after TG send |
+| `integrations/wallet_editor_registry_settings.py` | `wallet_editor` job_params (`registry_*_seconds`) | `wallet_editor_registry` |
 | `integrations/wallet_editor_registry_lifecycle.py` | Lifecycle recalc (`hold`, `Отлёжка`, re-enable dates/status) | `wallet_editor_registry` |
 | `integrations/wallet_editor_registry_xlsx.py` | Format-preserving openpyxl read/write for registry sheets | `wallet_editor_registry` |
 | `automation/audit.py` | WalletEditor logging/stats helpers | engine, worker |
@@ -391,9 +393,9 @@ automation/engine.py (Playwright → Antares UI)
         ↓
 result xlsx (wallet_editor_result_<INPUT>_<OPERATOR>.xlsx)
         ↓
-Dropbox registry append (DROPBOX_WALLET_EDITOR_PATH, best-effort)
-        ↓
 Telegram summary + document reply
+        ↓
+Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort; job_params timeout)
 ```
 
 **Архитектурные ограничения:**
@@ -406,7 +408,7 @@ Telegram summary + document reply
 | Per-operator isolation | Отдельные credentials, auth-state, queue, worker на `operator_profile` |
 | Sequential per profile | Задачи одного профиля — последовательно; разные профили — параллельно |
 
-**Happy path:** allowlist OK → operator mapped → download to `/tmp/wallet_editor/` → `add_task(WalletEditorTask)` → profile worker → `engine.run()` → result file → TG summary + document.
+**Happy path:** allowlist OK → operator mapped → download to `/tmp/wallet_editor/` → `add_task(WalletEditorTask)` → profile worker → `engine.run()` → result file → TG summary + document → async registry append.
 
 **Failure path:** chat denied / non-xlsx / unmapped user / incomplete credentials → reply с отказом, `get_file` не вызывается; engine error → TG error text.
 
@@ -520,3 +522,4 @@ Database: not present in active runtime chain.
 | 2026-06-03 | **Wallet Editor Dropbox registry** — `wallet_editor_registry.py`; `DROPBOX_WALLET_EDITOR_PATH`; E-WE-07 |
 | 2026-06-03 | **Registry lifecycle** — `hold`, `Отлёжка`, re-enable calc; E-WE-08 |
 | 2026-06-03 | **Registry format-safe** — openpyxl in-place; rev conflict; E-WE-09 |
+| 2026-06-03 | **Registry async + timeout** — job_params; TG before registry; E-WE-10 |

@@ -14,10 +14,11 @@ import pytest
 from automation.audit import Stats
 from automation.runtime import WalletEditorTask
 from integrations.wallet_editor_registry import (
-    REV_CONFLICT_MESSAGE,
+    TIMEOUT_MESSAGE,
     append_run_to_dropbox_registry,
     resolve_source,
 )
+from integrations.wallet_editor_registry_settings import RegistrySettings
 from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
@@ -719,12 +720,21 @@ def test_registry_rev_conflict_skips_upload(registry_env, tmp_path):
     store[DROPBOX_PATH] = styled.read_bytes()
     before = store[DROPBOX_PATH]
     revs[DROPBOX_PATH] = "rev-at-download"
+    fast = RegistrySettings(
+        registry_warning_seconds=30,
+        registry_timeout_seconds=2,
+        registry_retry_interval_seconds=1,
+    )
 
     with patch(
         "integrations.dropbox_watcher.get_dropbox_file_rev",
         return_value="rev-changed-by-user",
     ):
-        _append_once(registry_env, tmp_path, run_id="rev-skip")
+        with patch(
+            "integrations.wallet_editor_registry.load_registry_settings",
+            return_value=fast,
+        ):
+            _append_once(registry_env, tmp_path, run_id="rev-skip")
 
     assert store[DROPBOX_PATH] == before
 
@@ -738,6 +748,12 @@ def test_registry_rev_conflict_warns_telegram(registry_env, tmp_path):
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path)
     messages: list[str] = []
+
+    fast = RegistrySettings(
+        registry_warning_seconds=30,
+        registry_timeout_seconds=2,
+        registry_retry_interval_seconds=1,
+    )
 
     with patch(
         "integrations.dropbox_watcher.get_dropbox_file_rev",
@@ -753,9 +769,10 @@ def test_registry_rev_conflict_warns_telegram(registry_env, tmp_path):
                 Stats(ok=1, fail=0, skip=0),
                 run_started_at=RUN_STARTED,
                 run_finished_at=RUN_FINISHED,
+                settings=fast,
             )
 
-    assert any(REV_CONFLICT_MESSAGE in m for m in messages)
+    assert any(TIMEOUT_MESSAGE in m for m in messages)
 
 
 def test_registry_open_without_rev_change_allows_upload(registry_env, tmp_path):
