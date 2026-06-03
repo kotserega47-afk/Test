@@ -45,7 +45,7 @@
 - Prod process model: single long-running `scheduler.py` with Telegram polling + background schedule loop.
 - Active job types in code: `wallet`, `hourly`, `rate`, `download`.
 - Tests in `tests/` (pytest).
-- **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-7 complete).
+- **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-8 complete).
 - **Conversion Modernization Program** complete — layered architecture, orchestrator, observability, passive fingerprint Phase 1A deployed in code.
 - **Conversion → Wallet Editor hook** active in code — best-effort bridge from `problem_cards` after `conversion.run()`; requires `CONVERSION_WALLET_EDITOR*` env; all valid cards per run (10-card rollout limit removed).
 
@@ -210,7 +210,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
-| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH` (e.g. `wallet_editor.xlsx`); sheets `all_results`, `runs`; append after each successful run (best-effort) |
+| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; sheets `all_results`, `runs`, `hold`, `Отлёжка`; full recalc on append; re-enable dates + lifecycle status; missing-Отлёжка warning (E-WE-08) |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
 | **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
 | **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production |
@@ -274,6 +274,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-05-31 | G5 — TASK-2026-05-31-03 |
 | 2026-06-01 | WalletEditor WE-0…WE-6 integrated — S8 ACTIVE |
 | 2026-06-03 | WalletEditor Dropbox cumulative registry (WE-7 / E-WE-07) |
+| 2026-06-03 | Registry lifecycle hold/Отлёжка/re-enable (WE-8 / E-WE-08) |
 | 2026-06-03 | Conversion → Wallet Editor: 10-card rollout limit removed (CONV-WE-LIMIT-REMOVAL) |
 | 2026-06-01 | Telegram outbound sender health (Option B) |
 | 2026-06-02 | Conversion Modernization + Observability + Fingerprint Phase 1A — S9 ACTIVE; Phase 1B Observation Layer implemented (dedup skip NOT STARTED) |

@@ -143,14 +143,20 @@ Rules:
 
 Wallet Editor **result** xlsx columns (output): `Дата отключения` (MSK `ДД.ММ.ГГГГ ЧЧ:ММ:СС`, row processing time via `now_msk()`), `card`, `action`, `value`, `status`, `comment` — `automation/engine.py`.
 
-Wallet Editor **Dropbox registry** xlsx sheets (`integrations/wallet_editor_registry.py`):
+Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_lifecycle.py`):
 
-| Sheet | Purpose | Key columns |
-|-------|---------|-------------|
-| `all_results` | one row per result row + run metadata | `run_id`, `run_started_at`, `run_finished_at`, `operator_profile`, `source`, `input_file`, `output_file`, `telegram_chat_id`, `telegram_user_id`, `row_index`, + result columns |
-| `runs` | one row per Wallet Editor run | `run_id`, `started_at`, `finished_at`, `source`, `operator_profile`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`, `telegram_chat_id`, `telegram_user_id` |
+| Sheet | Purpose |
+|-------|---------|
+| `all_results` | lifecycle table per result row (recalculated on every append) |
+| `runs` | one row per WE run |
+| `hold` | card+partner pairs excluded from re-enable |
+| `Отлёжка` | partner → full days before re-enable |
 
-`source`: `conversion_auto` if `operator_profile == CONVERSION_AUTO`, else `telegram_manual`. Idempotency: skip append if `run_id` already in `runs`.
+**`all_results` columns (order):** `Дата отключения`, `Дата включения`, `Статус включения`, `Включено`, `Комментарий включения`, `card`, `partner`, `action`, `value`, `status`, `comment`, `hold`
+
+**`runs` columns:** `started_at`, `finished_at`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`
+
+**Rules:** `partner` = `value` when `action=remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
 | `/tmp/auth_state_wallet_editor_<PROFILE>.json` | json (Playwright) | `automation/engine.py` | Playwright per operator | нет | re-login for profile | IMPORTANT | CONFIRMED |
 | `/tmp/auth_state_wallet_editor.json` | json (Playwright) | `RunConfig` default only | legacy default path | нет | legacy / tests | OPTIONAL | CONFIRMED |
 

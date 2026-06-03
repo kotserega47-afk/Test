@@ -166,7 +166,8 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
 | `automation/engine.py` | WalletEditor Playwright business logic (Antares UI) | `automation/worker` |
 | `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming, `run_id` | worker, handler |
-| `integrations/wallet_editor_registry.py` | Dropbox cumulative registry (`all_results`, `runs`) | `automation/worker` after `engine.run` |
+| `integrations/wallet_editor_registry.py` | Dropbox registry orchestration (download/append/upload) | `automation/worker` after `engine.run` |
+| `integrations/wallet_editor_registry_lifecycle.py` | Lifecycle recalc (`hold`, `Отлёжка`, re-enable dates/status) | `wallet_editor_registry` |
 | `automation/audit.py` | WalletEditor logging/stats helpers | engine, worker |
 
 ### LEGACY (не production)
@@ -516,3 +517,4 @@ Database: not present in active runtime chain.
 | 2026-06-02 | **Conversion Modernization** — layered analyzer/reporter/DTO; `run_conversion_pipeline` orchestrator; observability + passive fingerprint Phase 1A + Phase 1B observation JSONL |
 | 2026-06-02 | **Conversion → Wallet Editor hook** — `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run |
 | 2026-06-03 | **Wallet Editor Dropbox registry** — `wallet_editor_registry.py`; `DROPBOX_WALLET_EDITOR_PATH`; E-WE-07 |
+| 2026-06-03 | **Registry lifecycle** — `hold`, `Отлёжка`, re-enable calc; E-WE-08 |

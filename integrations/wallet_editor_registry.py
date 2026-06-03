@@ -7,7 +7,6 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import pandas as pd
 
@@ -15,6 +14,29 @@ from automation.audit import Stats
 from automation.runtime import WalletEditorTask
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, ensure_aware_msk
 from integrations.dropbox_watcher import download_file_status, upload_file
+from integrations.telegram_bot import send_message_sync
+from integrations.wallet_editor_registry_lifecycle import (
+    ALL_RESULTS_COLUMNS,
+    HOLD_COLUMNS,
+    OTLEZKA_COLUMNS,
+    RUNS_COLUMNS,
+    SHEET_HOLD,
+    SHEET_OTLEZKA,
+    WARN_MESSAGE_TEMPLATE,
+    apply_missing_otlezka_red_fill,
+    build_runs_row,
+    load_warned_partners,
+    mark_run_processed,
+    migrate_legacy_runs,
+    normalize_all_results,
+    normalize_sheet,
+    partners_to_warn,
+    recalculate_all_results,
+    rows_from_result_excel,
+    run_id_already_processed,
+    save_warned_partners,
+    sync_warned_partners_after_otlezka,
+)
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -28,42 +50,6 @@ SOURCE_TELEGRAM_MANUAL = "telegram_manual"
 
 SHEET_ALL_RESULTS = "all_results"
 SHEET_RUNS = "runs"
-
-ALL_RESULTS_COLUMNS = [
-    "run_id",
-    "run_started_at",
-    "run_finished_at",
-    "operator_profile",
-    "source",
-    "input_file",
-    "output_file",
-    "telegram_chat_id",
-    "telegram_user_id",
-    "row_index",
-    "Дата отключения",
-    "card",
-    "action",
-    "value",
-    "status",
-    "comment",
-]
-
-RUNS_COLUMNS = [
-    "run_id",
-    "started_at",
-    "finished_at",
-    "source",
-    "operator_profile",
-    "input_rows",
-    "success_rows",
-    "failed_rows",
-    "skipped_rows",
-    "output_file",
-    "telegram_chat_id",
-    "telegram_user_id",
-]
-
-RESULT_ROW_COLUMNS = ["Дата отключения", "card", "action", "value", "status", "comment"]
 
 _lock = threading.Lock()
 
@@ -79,135 +65,97 @@ def resolve_source(operator_profile: str) -> str:
     return SOURCE_TELEGRAM_MANUAL
 
 
-def new_run_id() -> str:
-    return uuid4().hex
-
-
-def _format_dt(dt: datetime) -> str:
-    return ensure_aware_msk(dt).strftime(EXCEL_DATETIME_FORMAT)
-
-
-def _cell_str(value: object) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.strftime(EXCEL_DATETIME_FORMAT)
-        return ensure_aware_msk(value).strftime(EXCEL_DATETIME_FORMAT)
-    return str(value).strip()
-
-
-def _empty_sheet(columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(columns=columns)
-
-
-def _normalize_sheet(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    if df is None or df.empty:
-        return _empty_sheet(columns)
-    out = df.copy()
-    for col in columns:
-        if col not in out.columns:
-            out[col] = ""
-    return out[columns]
-
-
-def _load_workbook(local_path: Path, download_status: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_workbook(
+    local_path: Path,
+    download_status: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if download_status == "not_found":
-        return _empty_sheet(ALL_RESULTS_COLUMNS), _empty_sheet(RUNS_COLUMNS)
+        return (
+            normalize_sheet(pd.DataFrame(), ALL_RESULTS_COLUMNS),
+            normalize_sheet(pd.DataFrame(), RUNS_COLUMNS),
+            normalize_sheet(pd.DataFrame(), HOLD_COLUMNS),
+            normalize_sheet(pd.DataFrame(), OTLEZKA_COLUMNS),
+        )
 
     with pd.ExcelFile(local_path, engine="openpyxl") as book:
         all_df = (
             pd.read_excel(book, sheet_name=SHEET_ALL_RESULTS)
             if SHEET_ALL_RESULTS in book.sheet_names
-            else _empty_sheet(ALL_RESULTS_COLUMNS)
+            else pd.DataFrame()
         )
         runs_df = (
             pd.read_excel(book, sheet_name=SHEET_RUNS)
             if SHEET_RUNS in book.sheet_names
-            else _empty_sheet(RUNS_COLUMNS)
+            else pd.DataFrame()
         )
-    return _normalize_sheet(all_df, ALL_RESULTS_COLUMNS), _normalize_sheet(runs_df, RUNS_COLUMNS)
+        hold_df = (
+            pd.read_excel(book, sheet_name=SHEET_HOLD)
+            if SHEET_HOLD in book.sheet_names
+            else pd.DataFrame()
+        )
+        otlezka_df = (
+            pd.read_excel(book, sheet_name=SHEET_OTLEZKA)
+            if SHEET_OTLEZKA in book.sheet_names
+            else pd.DataFrame()
+        )
 
-
-def _run_id_exists(runs_df: pd.DataFrame, run_id: str) -> bool:
-    if runs_df.empty:
-        return False
-    return run_id in runs_df["run_id"].astype(str).tolist()
+    all_df = normalize_all_results(all_df)
+    runs_df = migrate_legacy_runs(runs_df)
+    hold_df = normalize_sheet(hold_df, HOLD_COLUMNS)
+    otlezka_df = normalize_sheet(otlezka_df, OTLEZKA_COLUMNS)
+    return all_df, runs_df, hold_df, otlezka_df
 
 
 def _save_workbook(
     local_path: Path,
     all_results: pd.DataFrame,
     runs: pd.DataFrame,
+    hold: pd.DataFrame,
+    otlezka: pd.DataFrame,
 ) -> None:
     local_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(local_path, engine="openpyxl") as writer:
-        _normalize_sheet(all_results, ALL_RESULTS_COLUMNS).to_excel(
+        normalize_sheet(all_results, ALL_RESULTS_COLUMNS).to_excel(
             writer, sheet_name=SHEET_ALL_RESULTS, index=False
         )
-        _normalize_sheet(runs, RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+        normalize_sheet(runs, RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+        normalize_sheet(hold, HOLD_COLUMNS).to_excel(writer, sheet_name=SHEET_HOLD, index=False)
+        normalize_sheet(otlezka, OTLEZKA_COLUMNS).to_excel(
+            writer, sheet_name=SHEET_OTLEZKA, index=False
+        )
+    apply_missing_otlezka_red_fill(local_path)
 
 
-def _build_all_results_rows(
+def _send_missing_otlezka_warnings(chat_id: int, partners: list[str]) -> None:
+    for partner in partners:
+        try:
+            send_message_sync(
+                WARN_MESSAGE_TEMPLATE.format(partner=partner),
+                chat_id=str(chat_id),
+            )
+        except Exception:
+            log.exception(
+                "[WalletEditorRegistry] failed to send missing otlezka warning partner=%s",
+                partner,
+            )
+
+
+def _process_missing_otlezka_warnings(
     task: WalletEditorTask,
-    result_df: pd.DataFrame,
-    *,
-    source: str,
-    output_file: str,
-    run_started_at: datetime,
-    run_finished_at: datetime,
-) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    started_s = _format_dt(run_started_at)
-    finished_s = _format_dt(run_finished_at)
-
-    for row_index, (_, row) in enumerate(result_df.iterrows()):
-        entry: dict[str, object] = {
-            "run_id": task.run_id,
-            "run_started_at": started_s,
-            "run_finished_at": finished_s,
-            "operator_profile": task.operator_profile,
-            "source": source,
-            "input_file": task.source_file_name,
-            "output_file": output_file,
-            "telegram_chat_id": task.chat_id,
-            "telegram_user_id": task.telegram_user_id,
-            "row_index": row_index,
-        }
-        for col in RESULT_ROW_COLUMNS:
-            entry[col] = _cell_str(row[col]) if col in result_df.columns else ""
-        rows.append(entry)
-
-    if not rows:
-        return _empty_sheet(ALL_RESULTS_COLUMNS)
-    return pd.DataFrame(rows, columns=ALL_RESULTS_COLUMNS)
-
-
-def _build_runs_row(
-    task: WalletEditorTask,
-    stats: Stats,
-    *,
-    source: str,
-    output_file: str,
-    input_rows: int,
-    run_started_at: datetime,
-    run_finished_at: datetime,
-) -> pd.DataFrame:
-    row = {
-        "run_id": task.run_id,
-        "started_at": _format_dt(run_started_at),
-        "finished_at": _format_dt(run_finished_at),
-        "source": source,
-        "operator_profile": task.operator_profile,
-        "input_rows": input_rows,
-        "success_rows": stats.ok,
-        "failed_rows": stats.fail,
-        "skipped_rows": stats.skip,
-        "output_file": output_file,
-        "telegram_chat_id": task.chat_id,
-        "telegram_user_id": task.telegram_user_id,
-    }
-    return pd.DataFrame([row], columns=RUNS_COLUMNS)
+    missing_partners: set[str],
+    otlezka_df: pd.DataFrame,
+) -> None:
+    warned = load_warned_partners()
+    warned = sync_warned_partners_after_otlezka(otlezka_df, warned)
+    if not missing_partners:
+        return
+    to_warn = partners_to_warn(missing_partners, warned)
+    if not to_warn:
+        return
+    _send_missing_otlezka_warnings(task.chat_id, to_warn)
+    for partner in to_warn:
+        warned.add(partner.casefold())
+    save_warned_partners(warned)
 
 
 def append_run_to_dropbox_registry(
@@ -257,7 +205,6 @@ def _append_under_lock(
     run_started_at: datetime,
     run_finished_at: datetime,
 ) -> None:
-    source = resolve_source(task.operator_profile)
     output_file = os.path.basename(result_path)
 
     with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
@@ -272,9 +219,9 @@ def _append_under_lock(
             )
             return
 
-        all_results_df, runs_df = _load_workbook(local_path, status)
+        all_results_df, runs_df, hold_df, otlezka_df = _load_workbook(local_path, status)
 
-        if _run_id_exists(runs_df, task.run_id):
+        if run_id_already_processed(task.run_id, runs_df):
             log.info(
                 "[WalletEditorRegistry] skip duplicate run_id=%s path=%s",
                 task.run_id,
@@ -284,27 +231,27 @@ def _append_under_lock(
 
         result_df = pd.read_excel(result_path, engine="openpyxl")
         input_rows = len(result_df)
-        new_all = _build_all_results_rows(
-            task,
-            result_df,
-            source=source,
-            output_file=output_file,
-            run_started_at=run_started_at,
-            run_finished_at=run_finished_at,
-        )
-        new_run = _build_runs_row(
-            task,
-            stats,
-            source=source,
-            output_file=output_file,
-            input_rows=input_rows,
-            run_started_at=run_started_at,
-            run_finished_at=run_finished_at,
+        new_rows = rows_from_result_excel(result_df)
+
+        merged_all = pd.concat([all_results_df, new_rows], ignore_index=True)
+        recalculated, missing_partners = recalculate_all_results(
+            merged_all,
+            hold_df,
+            otlezka_df,
         )
 
-        merged_all = pd.concat([all_results_df, new_all], ignore_index=True)
+        new_run = build_runs_row(
+            started_at=run_started_at,
+            finished_at=run_finished_at,
+            input_rows=input_rows,
+            stats_ok=stats.ok,
+            stats_fail=stats.fail,
+            stats_skip=stats.skip,
+            output_file=output_file,
+        )
         merged_runs = pd.concat([runs_df, new_run], ignore_index=True)
-        _save_workbook(local_path, merged_all, merged_runs)
+
+        _save_workbook(local_path, recalculated, merged_runs, hold_df, otlezka_df)
 
         if not upload_file(str(local_path), dropbox_path):
             log.error(
@@ -313,6 +260,9 @@ def _append_under_lock(
                 dropbox_path,
             )
             return
+
+        mark_run_processed(task.run_id)
+        _process_missing_otlezka_warnings(task, missing_partners, otlezka_df)
 
         log.info(
             "[WalletEditorRegistry] appended run_id=%s rows=%s path=%s",

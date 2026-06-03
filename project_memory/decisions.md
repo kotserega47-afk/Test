@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-07**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-08**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -92,6 +92,7 @@
 | E-WE-05 | 2026-06-01 | Per-operator queue + daemon worker: параллельно между профилями, sequentially внутри профиля | CONFIRMED | `automation/worker.py` |
 | E-WE-06 | 2026-06-01 | Отдельный Playwright auth-state на профиль: `/tmp/auth_state_wallet_editor_<PROFILE>.json` | CONFIRMED | `automation/runtime.py`; worker passes per-task `auth_state_path` |
 | E-WE-07 | 2026-06-03 | Cumulative WE results in Dropbox (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results` + `runs`; append after successful `engine.run`, before TG send; best-effort; idempotent by `run_id`; in-process lock | CONFIRMED | `integrations/wallet_editor_registry.py`; `automation/worker.py` |
+| E-WE-08 | 2026-06-03 | Registry lifecycle: sheets `hold`, `Отлёжка`; recalc all `all_results` on append; `Дата включения` / `Статус включения`; missing-Отлёжка TG warning once per partner; future auto-enable columns reserved (`Включено`, `Комментарий включения`) | CONFIRMED | `wallet_editor_registry_lifecycle.py` |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -172,6 +173,7 @@
 | 2026-05-31 | G5 — TASK-2026-05-31-03; I8–I11 |
 | 2026-06-01 | WalletEditor E-WE-01…E-WE-06 |
 | 2026-06-03 | WalletEditor E-WE-07 — Dropbox cumulative registry |
+| 2026-06-03 | WalletEditor E-WE-08 — registry lifecycle (hold, Отлёжка, re-enable dates) |
 | 2026-06-02 | Conversion E-CONV-01…E-CONV-05; I12 passive fingerprint invariant; I13 observation best-effort invariant |
 | 2026-06-02 | CONV-WE-HOOK — E-CONV-06…E-CONV-08 |
 | 2026-06-02 | Raccoon Wallet production cutover — E-CONFIG-09; Phase 3B-6 `WAITING_FOR_PROD_OBSERVATION` |

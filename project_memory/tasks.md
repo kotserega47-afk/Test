@@ -96,6 +96,7 @@
 | WE-5 | **complete** | Operator routing by `telegram_user_id` → credentials + `WalletEditorTask` |
 | WE-6 | **complete** | Per-profile queue + worker; parallel across operators |
 | WE-7 | **complete** | Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results`, `runs`; E-WE-07 |
+| WE-8 | **complete** | Registry lifecycle: `hold`, `Отлёжка`, re-enable date/status, warnings; E-WE-08 |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
