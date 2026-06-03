@@ -187,6 +187,12 @@ def _read_legacy_env_chat(env_name: str) -> str | None:
     return s if s else None
 
 
+def _is_runtime_migrated_route(route_key: str) -> bool:
+    """True when Rules V2 is runtime source of truth for ``route_key`` (Phase 3A)."""
+
+    return routes_from_rules_v2_enabled() and route_key in MIGRATED_RUNTIME_ROUTES
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramRoutesShadowResult:
     sheet_missing: bool
@@ -194,23 +200,20 @@ class TelegramRoutesShadowResult:
     missing_rules: int
     missing_env: int
     mismatched: int
+    migrated_route_differences: int
     disabled: int
     invalid_routes: int
 
     def summary_line(self) -> str:
-        if self.sheet_missing:
-            return (
-                "[telegram_routes][shadow] sheet_missing=1 "
-                f"matched={self.matched} missing_rules={self.missing_rules} "
-                f"missing_env={self.missing_env} mismatched={self.mismatched} "
-                f"disabled={self.disabled}"
-            )
-        return (
-            "[telegram_routes][shadow] "
+        base = (
+            f"shadow_mismatches={self.mismatched} "
+            f"migrated_route_differences={self.migrated_route_differences} "
             f"matched={self.matched} missing_rules={self.missing_rules} "
-            f"missing_env={self.missing_env} mismatched={self.mismatched} "
-            f"disabled={self.disabled}"
+            f"missing_env={self.missing_env} disabled={self.disabled}"
         )
+        if self.sheet_missing:
+            return f"[telegram_routes][shadow] sheet_missing=1 {base}"
+        return f"[telegram_routes][shadow] {base}"
 
 
 def compare_telegram_routes_env_vs_rules(
@@ -235,6 +238,7 @@ def compare_telegram_routes_env_vs_rules(
     missing_rules = 0
     missing_env = 0
     mismatched = 0
+    migrated_route_differences = 0
     disabled = 0
 
     indexes = RulesIndexes(telegram_routes_by_key=dict(snapshot.telegram_routes))
@@ -259,14 +263,26 @@ def compare_telegram_routes_env_vs_rules(
 
         if env_chat and rules_chat:
             if _normalize_chat_id_for_compare(env_chat) != _normalize_chat_id_for_compare(rules_chat):
-                mismatched += 1
-                log.debug(
-                    "[telegram_routes][shadow] mismatch route=%s env=%s env_chat=%s rules_chat=%s",
-                    route_key,
-                    env_name,
-                    _mask_chat_id(env_chat),
-                    _mask_chat_id(rules_chat),
-                )
+                if _is_runtime_migrated_route(route_key):
+                    migrated_route_differences += 1
+                    log.debug(
+                        "[telegram_routes][shadow] migrated_route_difference "
+                        "route=%s env=%s env_chat=%s rules_chat=%s",
+                        route_key,
+                        env_name,
+                        _mask_chat_id(env_chat),
+                        _mask_chat_id(rules_chat),
+                    )
+                else:
+                    mismatched += 1
+                    log.debug(
+                        "[telegram_routes][shadow] shadow_mismatch route=%s env=%s "
+                        "env_chat=%s rules_chat=%s",
+                        route_key,
+                        env_name,
+                        _mask_chat_id(env_chat),
+                        _mask_chat_id(rules_chat),
+                    )
             else:
                 matched += 1
 
@@ -283,6 +299,7 @@ def compare_telegram_routes_env_vs_rules(
         missing_rules=missing_rules,
         missing_env=missing_env,
         mismatched=mismatched,
+        migrated_route_differences=migrated_route_differences,
         disabled=disabled,
         invalid_routes=invalid_routes,
     )
@@ -328,6 +345,7 @@ def run_telegram_routes_shadow_compare(
         "missing_rules": result.missing_rules,
         "missing_env": result.missing_env,
         "mismatched": result.mismatched,
+        "migrated_route_differences": result.migrated_route_differences,
         "disabled": result.disabled,
         "invalid_routes": result.invalid_routes,
     }
@@ -367,6 +385,7 @@ def get_telegram_routes_status_dict(
                 "missing_sheet": "unknown",
                 "invalid_routes": "unknown",
                 "shadow_mismatches": "unknown",
+                "migrated_route_differences": "unknown",
                 "emergency_env": TELEGRAM_CHAT_ID_EMERGENCY_ENV,
             }
 
@@ -374,8 +393,9 @@ def get_telegram_routes_status_dict(
     enabled = sum(1 for r in routes.values() if r.enabled)
     total = len(routes)
     invalid = len(validate_telegram_routes_dict(routes)) if routes else 0
-    shadow = run_telegram_routes_shadow_compare(log, snapshot=snap, force=False)
-    mismatches = shadow.mismatched if shadow else 0
+    shadow = compare_telegram_routes_env_vs_rules(snap, sheet_present=bool(routes))
+    mismatches = shadow.mismatched
+    migrated_diffs = shadow.migrated_route_differences
 
     return {
         "mode": mode,
@@ -386,6 +406,7 @@ def get_telegram_routes_status_dict(
         "missing_sheet": "yes" if not routes else "no",
         "invalid_routes": invalid,
         "shadow_mismatches": mismatches,
+        "migrated_route_differences": migrated_diffs,
         "emergency_env": TELEGRAM_CHAT_ID_EMERGENCY_ENV,
     }
 
@@ -414,6 +435,10 @@ def format_telegram_routes_status_lines() -> list[str]:
         f"- missing_sheet={status.get('missing_sheet', 'unknown')}",
         f"- invalid_routes={status.get('invalid_routes', 'unknown')}",
         f"- shadow_mismatches={status.get('shadow_mismatches', 'unknown')}",
+        (
+            "- migrated_route_differences="
+            f"{status.get('migrated_route_differences', 'unknown')}"
+        ),
     ]
     return lines
 
