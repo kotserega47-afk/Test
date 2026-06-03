@@ -70,6 +70,7 @@
 | R-WE-04 | Legacy `automation/main.py` / `tg_receiver.py` | double polling / broken `add_task` API if запущены | **Не** использовать в production; path = `scheduler.py` only |
 | R-WE-05 | Missing / incomplete `WALLET_EDITOR_OPERATOR_MAP` | все ingest отклоняются (fail-closed) | Railway env checklist per operator |
 | R-WE-06 | Result file name collision in `/tmp/wallet_editor` | suffix `_2` / `_<uuid8>` appended | `build_wallet_editor_result_path()` |
+| R-WE-07 | Concurrent Dropbox registry writes (multi-profile) | corrupt/missing rows in `wallet_editor.xlsx` | in-process `threading.Lock` in `wallet_editor_registry.py`; full download/upload per append |
 | ~~R-TG-01~~ | ~~Silent Telegram sender failure (enqueue ≠ delivery)~~ | **mitigated** | Option B: health-state + periodic log in `telegram_bot.py` |
 
 ### Telegram delivery risks (R-TG-*)
@@ -94,6 +95,7 @@
 | WE-4 | **complete** | Dedicated `WALLET_EDITOR_ALLOWED_CHAT_IDS` allowlist |
 | WE-5 | **complete** | Operator routing by `telegram_user_id` → credentials + `WalletEditorTask` |
 | WE-6 | **complete** | Per-profile queue + worker; parallel across operators |
+| WE-7 | **complete** | Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results`, `runs`; E-WE-07 |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
@@ -116,7 +118,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | Conversion Observability Phase 2 | **DONE** | Downloader tiered final TG; failure propagation fixed |
 | Conversion Fingerprint Phase 1A | **DONE** | Passive fingerprint — compute/compare/store; no dedup skip |
 | Conversion Fingerprint Phase 1B Observation | **DONE** | Diagnostic JSONL — full hashes, changed_components, would_skip; flag default off |
-| Conversion → Wallet Editor hook | **DONE** | `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run; direct scheduled credentials env |
+| Conversion → Wallet Editor hook | **DONE** | `conversion_wallet_editor_bridge.py`; best-effort; all valid cards/run; direct scheduled credentials env |
 
 ---
 
@@ -124,7 +126,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
 | ID | Goal | Status |
 |----|------|--------|
-| CONV-WE-LIMIT-REMOVAL | Remove 10-card rollout limit; process all valid `problem_cards` | open — future |
+| CONV-WE-LIMIT-REMOVAL | Remove 10-card rollout limit; process all valid `problem_cards` | **complete** (2026-06-03) |
 
 ---
 

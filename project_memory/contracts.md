@@ -79,6 +79,7 @@
 | `CONVERSION_WALLET_EDITOR` | нет (hook disabled if unset) | — | `integrations/conversion_wallet_editor_bridge.py` | Telegram chat for conversion→WE info/errors + WE result delivery | OPTIONAL | CONFIRMED |
 | `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN` | да (hook enabled) | — | `integrations/conversion_wallet_editor_bridge.py` | scheduled conversion WE credentials (direct env, not operator map) | IMPORTANT | CONFIRMED |
 | `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_PASSWORD` | да (hook enabled) | — | same | scheduled conversion WE credentials | IMPORTANT | CONFIRMED |
+| `DROPBOX_WALLET_EDITOR_PATH` | нет (registry skipped if unset) | — | `integrations/wallet_editor_registry.py` | cumulative WE results workbook in Dropbox | IMPORTANT | CONFIRMED |
 
 ### Conversion → Wallet Editor hook (scheduled)
 
@@ -95,7 +96,7 @@ Rules:
 - Operator profile for queue/worker: `CONVERSION_AUTO` (system profile)
 - Auth-state path: `/tmp/auth_state_wallet_editor_CONVERSION_AUTO.json`
 - Input Excel contract: columns `card`, `action`=`remove_partner`, `value`=`original_partner` from `problem_cards`
-- Rollout limit: max **10** cards per run (`MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN`); preserves `problem_cards` order
+- All valid `problem_cards` rows forwarded (no per-run cap); invalid rows (empty `card` / `original_partner`) filtered; preserves order
 
 ### WalletEditor operator map format
 
@@ -138,8 +139,18 @@ Rules:
 | Output reports (`report_*.xlsx`) | xlsx | — | `conversion.py`, `payout.py` | output | — | OPTIONAL | CONFIRMED |
 | `/tmp/wallet_editor/wallet_editor_*.xlsx` | xlsx | WalletEditor worker | `wallet_editor_tg` download | P-WE input | re-download on retry | IMPORTANT | CONFIRMED |
 | `/tmp/wallet_editor/wallet_editor_result_<INPUT>_<PROFILE>.xlsx` | xlsx | — | `automation/engine.py` via worker | P-WE output | collision → `_2` / `_<uuid8>` suffix | IMPORTANT | CONFIRMED |
+| Dropbox `{DROPBOX_WALLET_EDITOR_PATH}` (e.g. `/Ostin/platform/Tests/wallet_editor.xlsx`) | xlsx | WalletEditor registry read/write | `integrations/wallet_editor_registry.py` | P-WE cumulative history | download/upload fail → log only; per-run TG unchanged | IMPORTANT | CONFIRMED |
 
 Wallet Editor **result** xlsx columns (output): `Дата отключения` (MSK `ДД.ММ.ГГГГ ЧЧ:ММ:СС`, row processing time via `now_msk()`), `card`, `action`, `value`, `status`, `comment` — `automation/engine.py`.
+
+Wallet Editor **Dropbox registry** xlsx sheets (`integrations/wallet_editor_registry.py`):
+
+| Sheet | Purpose | Key columns |
+|-------|---------|-------------|
+| `all_results` | one row per result row + run metadata | `run_id`, `run_started_at`, `run_finished_at`, `operator_profile`, `source`, `input_file`, `output_file`, `telegram_chat_id`, `telegram_user_id`, `row_index`, + result columns |
+| `runs` | one row per Wallet Editor run | `run_id`, `started_at`, `finished_at`, `source`, `operator_profile`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`, `telegram_chat_id`, `telegram_user_id` |
+
+`source`: `conversion_auto` if `operator_profile == CONVERSION_AUTO`, else `telegram_manual`. Idempotency: skip append if `run_id` already in `runs`.
 | `/tmp/auth_state_wallet_editor_<PROFILE>.json` | json (Playwright) | `automation/engine.py` | Playwright per operator | нет | re-login for profile | IMPORTANT | CONFIRMED |
 | `/tmp/auth_state_wallet_editor.json` | json (Playwright) | `RunConfig` default only | legacy default path | нет | legacy / tests | OPTIONAL | CONFIRMED |
 

@@ -165,7 +165,8 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | `integrations/wallet_editor_tg.py` | WalletEditor: TG document ingest, allowlist, operator routing | `tg_commands` MessageHandler |
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
 | `automation/engine.py` | WalletEditor Playwright business logic (Antares UI) | `automation/worker` |
-| `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming | worker, handler |
+| `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming, `run_id` | worker, handler |
+| `integrations/wallet_editor_registry.py` | Dropbox cumulative registry (`all_results`, `runs`) | `automation/worker` after `engine.run` |
 | `automation/audit.py` | WalletEditor logging/stats helpers | engine, worker |
 
 ### LEGACY (не production)
@@ -344,7 +345,7 @@ analyzers/conversion.py run() — after conversion reports / TG
     ↓
 integrations/conversion_wallet_editor_bridge.py
     ↓ filter valid rows (card + original_partner)
-    ↓ limit first 10 cards (rollout)
+    ↓ all valid rows (no per-run cap)
     ↓ build Excel (card, action=remove_partner, value=original_partner)
     ↓ info message → CONVERSION_WALLET_EDITOR chat
     ↓
@@ -388,7 +389,9 @@ automation/engine.py (Playwright → Antares UI)
         ↓
 result xlsx (wallet_editor_result_<INPUT>_<OPERATOR>.xlsx)
         ↓
-Telegram document reply
+Dropbox registry append (DROPBOX_WALLET_EDITOR_PATH, best-effort)
+        ↓
+Telegram summary + document reply
 ```
 
 **Архитектурные ограничения:**
@@ -512,3 +515,4 @@ Database: not present in active runtime chain.
 | 2026-06-01 | **P-WE WalletEditor** — integrated WE-0…WE-6; production via `scheduler.py` |
 | 2026-06-02 | **Conversion Modernization** — layered analyzer/reporter/DTO; `run_conversion_pipeline` orchestrator; observability + passive fingerprint Phase 1A + Phase 1B observation JSONL |
 | 2026-06-02 | **Conversion → Wallet Editor hook** — `conversion_wallet_editor_bridge.py`; best-effort; max 10 cards/run |
+| 2026-06-03 | **Wallet Editor Dropbox registry** — `wallet_editor_registry.py`; `DROPBOX_WALLET_EDITOR_PATH`; E-WE-07 |

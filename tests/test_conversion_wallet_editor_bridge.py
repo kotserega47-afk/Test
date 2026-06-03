@@ -15,11 +15,10 @@ from integrations.conversion_wallet_editor_bridge import (
     ENV_CHAT_ID,
     ENV_LOGIN,
     ENV_PASSWORD,
-    MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN,
+    INFO_MESSAGE_TEMPLATE,
     OPERATOR_PROFILE,
-    apply_card_limit,
     build_wallet_editor_excel,
-    compute_rollout_stats,
+    compute_bridge_stats,
     map_problem_cards_to_wallet_editor_rows,
     maybe_enqueue_wallet_editor_from_problem_cards,
     resolve_conversion_we_config,
@@ -82,40 +81,144 @@ class TestConversionWERowsMapper:
         ]
 
 
-class TestConversionWELimit:
-    def test_conversion_we_limit_under_10(self):
-        rows = [{"card": f"c{i}", "action": ACTION_REMOVE_PARTNER, "value": f"p{i}"} for i in range(6)]
-        limited, stats = apply_card_limit(rows)
-        assert stats.total_found_cards == 6
-        assert stats.processed_cards == 6
-        assert stats.skipped_cards == 0
-        assert len(limited) == 6
+class TestConversionWEBridgeStats:
+    def test_compute_bridge_stats_all_valid(self):
+        stats = compute_bridge_stats(25, 25)
+        assert stats.found_cards == 25
+        assert stats.valid_cards == 25
+        assert stats.sent_cards == 25
+        assert stats.filtered_invalid == 0
 
-    def test_conversion_we_limit_exact_10(self):
-        rows = [{"card": f"c{i}", "action": ACTION_REMOVE_PARTNER, "value": f"p{i}"} for i in range(10)]
-        limited, stats = apply_card_limit(rows)
-        assert stats.total_found_cards == 10
-        assert stats.processed_cards == 10
-        assert stats.skipped_cards == 0
-        assert len(limited) == 10
-
-    def test_conversion_we_limit_over_10(self):
-        rows = [{"card": f"c{i}", "action": ACTION_REMOVE_PARTNER, "value": f"p{i}"} for i in range(37)]
-        limited, stats = apply_card_limit(rows)
-        assert stats.total_found_cards == 37
-        assert stats.processed_cards == 10
-        assert stats.skipped_cards == 27
-        assert len(limited) == 10
-        assert limited[0]["card"] == "c0"
-        assert limited[-1]["card"] == "c9"
-
-    def test_compute_rollout_stats_constant(self):
-        assert MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN == 10
-        stats = compute_rollout_stats(37)
-        assert stats.processed_cards == min(37, 10)
+    def test_compute_bridge_stats_with_invalid(self):
+        stats = compute_bridge_stats(30, 25)
+        assert stats.found_cards == 30
+        assert stats.valid_cards == 25
+        assert stats.sent_cards == 25
+        assert stats.filtered_invalid == 5
 
 
 class TestConversionWEBridge:
+    def test_bridge_sends_all_valid_cards(self, monkeypatch, tmp_path):
+        for key, value in _conversion_we_env().items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(
+            "integrations.conversion_wallet_editor_bridge.WALLET_EDITOR_INPUT_DIR",
+            tmp_path,
+        )
+
+        problem = _problem_df(
+            [{"card": f"c{i}", "original_partner": f"p{i}"} for i in range(25)]
+        )
+
+        with patch("integrations.conversion_wallet_editor_bridge.add_task", return_value=1) as add_task:
+            with patch("integrations.conversion_wallet_editor_bridge.send_message_sync"):
+                maybe_enqueue_wallet_editor_from_problem_cards(problem)
+
+        add_task.assert_called_once()
+        task = add_task.call_args.args[0]
+        df = pd.read_excel(task.file_path)
+        assert len(df) == 25
+
+    def test_bridge_no_limit_skipped_cards(self, monkeypatch, tmp_path):
+        for key, value in _conversion_we_env().items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(
+            "integrations.conversion_wallet_editor_bridge.WALLET_EDITOR_INPUT_DIR",
+            tmp_path,
+        )
+
+        problem = _problem_df(
+            [{"card": f"c{i}", "original_partner": f"p{i}"} for i in range(37)]
+        )
+        captured_message: list[str] = []
+
+        def _capture(text, chat_id=None, **_kwargs):
+            captured_message.append(text)
+
+        with patch("integrations.conversion_wallet_editor_bridge.add_task", return_value=1) as add_task:
+            with patch(
+                "integrations.conversion_wallet_editor_bridge.send_message_sync",
+                side_effect=_capture,
+            ):
+                maybe_enqueue_wallet_editor_from_problem_cards(problem)
+
+        task = add_task.call_args.args[0]
+        df = pd.read_excel(task.file_path)
+        assert len(df) == 37
+        msg = captured_message[0]
+        assert "Оставлено" not in msg
+        assert "37" in msg
+        stats = compute_bridge_stats(37, 37)
+        assert stats.filtered_invalid == 0
+
+    def test_bridge_still_filters_invalid_rows(self, monkeypatch, tmp_path):
+        for key, value in _conversion_we_env().items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(
+            "integrations.conversion_wallet_editor_bridge.WALLET_EDITOR_INPUT_DIR",
+            tmp_path,
+        )
+
+        rows = [{"card": f"c{i}", "original_partner": f"p{i}"} for i in range(25)]
+        rows.extend(
+            [
+                {"card": "", "original_partner": "X"},
+                {"card": "bad", "original_partner": ""},
+                {"card": None, "original_partner": "Y"},
+                {"card": "ok", "original_partner": "Z"},
+                {"card": "last", "original_partner": "P"},
+            ]
+        )
+        problem = _problem_df(rows)
+
+        with patch("integrations.conversion_wallet_editor_bridge.add_task", return_value=1) as add_task:
+            with patch("integrations.conversion_wallet_editor_bridge.send_message_sync"):
+                maybe_enqueue_wallet_editor_from_problem_cards(problem)
+
+        task = add_task.call_args.args[0]
+        df = pd.read_excel(task.file_path)
+        assert len(df) == 27
+
+    def test_bridge_info_message_reports_all_sent(self, monkeypatch, tmp_path):
+        for key, value in _conversion_we_env().items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(
+            "integrations.conversion_wallet_editor_bridge.WALLET_EDITOR_INPUT_DIR",
+            tmp_path,
+        )
+
+        rows = [{"card": f"c{i}", "original_partner": f"p{i}"} for i in range(25)]
+        rows.extend(
+            [
+                {"card": "", "original_partner": "X"},
+                {"card": "x", "original_partner": ""},
+                {"card": None, "original_partner": "Y"},
+                {"card": "a", "original_partner": ""},
+                {"card": "", "original_partner": "Z"},
+            ]
+        )
+        problem = _problem_df(rows)
+        captured_message: list[str] = []
+
+        def _capture(text, chat_id=None, **_kwargs):
+            captured_message.append(text)
+
+        with patch("integrations.conversion_wallet_editor_bridge.add_task", return_value=1):
+            with patch(
+                "integrations.conversion_wallet_editor_bridge.send_message_sync",
+                side_effect=_capture,
+            ):
+                maybe_enqueue_wallet_editor_from_problem_cards(problem)
+
+        expected = INFO_MESSAGE_TEMPLATE.format(
+            found_cards=30,
+            valid_cards=25,
+            sent_cards=25,
+            filtered_invalid=5,
+        )
+        assert captured_message[0] == expected
+        assert "Оставлено" not in captured_message[0]
+
     def test_conversion_we_bridge_skips_missing_env(self, monkeypatch):
         monkeypatch.delenv(ENV_CHAT_ID, raising=False)
         monkeypatch.delenv(ENV_LOGIN, raising=False)

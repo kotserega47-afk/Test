@@ -19,8 +19,6 @@ from utils.log_profiles import LOG_PROFILES
 icon, name = LOG_PROFILES["CONVERT"]
 logger = get_logger(name, icon)
 
-MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN = 10
-
 ACTION_REMOVE_PARTNER = "remove_partner"
 OPERATOR_PROFILE = "CONVERSION_AUTO"
 CONVERSION_WE_TELEGRAM_USER_ID = 0
@@ -33,17 +31,19 @@ WALLET_EDITOR_INPUT_DIR = Path("/tmp/wallet_editor")
 
 INFO_MESSAGE_TEMPLATE = (
     "🧩 Conversion → Wallet Editor\n\n"
-    "Найдено карт для отключения: {total_found_cards}\n"
-    "Передано в Wallet Editor: {processed_cards}\n"
-    "Оставлено: {skipped_cards}"
+    "Найдено в problem_cards: {found_cards}\n"
+    "Валидных: {valid_cards}\n"
+    "Передано в Wallet Editor: {sent_cards}\n"
+    "Отфильтровано (пустые card/partner): {filtered_invalid}"
 )
 
 
 @dataclass(frozen=True)
-class ConversionWERolloutStats:
-    total_found_cards: int
-    processed_cards: int
-    skipped_cards: int
+class ConversionWEBridgeStats:
+    found_cards: int
+    valid_cards: int
+    sent_cards: int
+    filtered_invalid: int
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,12 @@ def _non_empty_str(value: object) -> str:
 
 def _row_is_valid(card: object, original_partner: object) -> bool:
     return bool(_non_empty_str(card)) and bool(_non_empty_str(original_partner))
+
+
+def _count_problem_cards_rows(problem_cards: pd.DataFrame | None) -> int:
+    if problem_cards is None or problem_cards.empty:
+        return 0
+    return len(problem_cards)
 
 
 def map_problem_cards_to_wallet_editor_rows(problem_cards: pd.DataFrame) -> list[dict[str, str]]:
@@ -85,19 +91,13 @@ def map_problem_cards_to_wallet_editor_rows(problem_cards: pd.DataFrame) -> list
     return rows
 
 
-def compute_rollout_stats(total_found_cards: int) -> ConversionWERolloutStats:
-    processed_cards = min(total_found_cards, MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN)
-    skipped_cards = total_found_cards - processed_cards
-    return ConversionWERolloutStats(
-        total_found_cards=total_found_cards,
-        processed_cards=processed_cards,
-        skipped_cards=skipped_cards,
+def compute_bridge_stats(found_cards: int, valid_cards: int) -> ConversionWEBridgeStats:
+    return ConversionWEBridgeStats(
+        found_cards=found_cards,
+        valid_cards=valid_cards,
+        sent_cards=valid_cards,
+        filtered_invalid=found_cards - valid_cards,
     )
-
-
-def apply_card_limit(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], ConversionWERolloutStats]:
-    stats = compute_rollout_stats(len(rows))
-    return rows[: stats.processed_cards], stats
 
 
 def build_wallet_editor_excel(rows: list[dict[str, str]], file_path: str) -> str:
@@ -164,12 +164,13 @@ def maybe_enqueue_wallet_editor_from_problem_cards(
 ) -> None:
     """Best-effort hook after conversion analysis. Never raises."""
     try:
+        found_cards = _count_problem_cards_rows(problem_cards)
         valid_rows = map_problem_cards_to_wallet_editor_rows(problem_cards)
         if not valid_rows:
             logger.debug("[conversion_we] no valid problem_cards rows — skip Wallet Editor")
             return
 
-        limited_rows, stats = apply_card_limit(valid_rows)
+        stats = compute_bridge_stats(found_cards, len(valid_rows))
         config, config_error = resolve_conversion_we_config()
         if config is None:
             logger.warning("[conversion_we] Wallet Editor hook skipped: %s", config_error)
@@ -182,21 +183,23 @@ def maybe_enqueue_wallet_editor_from_problem_cards(
             return
 
         info_message = INFO_MESSAGE_TEMPLATE.format(
-            total_found_cards=stats.total_found_cards,
-            processed_cards=stats.processed_cards,
-            skipped_cards=stats.skipped_cards,
+            found_cards=stats.found_cards,
+            valid_cards=stats.valid_cards,
+            sent_cards=stats.sent_cards,
+            filtered_invalid=stats.filtered_invalid,
         )
         logger.info(
-            "[conversion_we] rollout total=%s processed=%s skipped=%s",
-            stats.total_found_cards,
-            stats.processed_cards,
-            stats.skipped_cards,
+            "[conversion_we] found=%s valid=%s sent=%s filtered_invalid=%s",
+            stats.found_cards,
+            stats.valid_cards,
+            stats.sent_cards,
+            stats.filtered_invalid,
         )
         _send_telegram_best_effort(config.chat_id, info_message)
 
         _ensure_input_dir()
         input_path = str(WALLET_EDITOR_INPUT_DIR / f"conversion_we_{uuid4().hex}.xlsx")
-        build_wallet_editor_excel(limited_rows, input_path)
+        build_wallet_editor_excel(valid_rows, input_path)
 
         task = WalletEditorTask(
             file_path=input_path,
@@ -210,10 +213,11 @@ def maybe_enqueue_wallet_editor_from_problem_cards(
         )
         queue_size = add_task(task)
         logger.info(
-            "[conversion_we] enqueued profile=%s chat_id=%s queue_size=%s file=%s",
+            "[conversion_we] enqueued profile=%s chat_id=%s queue_size=%s rows=%s file=%s",
             task.operator_profile,
             task.chat_id,
             queue_size,
+            stats.sent_cards,
             input_path,
         )
     except Exception as exc:

@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-06**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-07**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -91,6 +91,7 @@
 | E-WE-04 | 2026-06-01 | Routing по `telegram_user_id` → `operator_profile` через `WALLET_EDITOR_OPERATOR_MAP` | CONFIRMED | `integrations/wallet_editor_tg.py`; `automation/runtime.py` |
 | E-WE-05 | 2026-06-01 | Per-operator queue + daemon worker: параллельно между профилями, sequentially внутри профиля | CONFIRMED | `automation/worker.py` |
 | E-WE-06 | 2026-06-01 | Отдельный Playwright auth-state на профиль: `/tmp/auth_state_wallet_editor_<PROFILE>.json` | CONFIRMED | `automation/runtime.py`; worker passes per-task `auth_state_path` |
+| E-WE-07 | 2026-06-03 | Cumulative WE results in Dropbox (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results` + `runs`; append after successful `engine.run`, before TG send; best-effort; idempotent by `run_id`; in-process lock | CONFIRMED | `integrations/wallet_editor_registry.py`; `automation/worker.py` |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -102,7 +103,7 @@
 | E-CONV-04 | 2026-06-02 | Passive fingerprint rollout before real dedup skip — Phase 1A compute/compare/store only; Phase 1B skip gated separately | CONFIRMED | `integrations/conversion_fingerprint.py`; `CONVERSION_FINGERPRINT_ENABLED` |
 | E-CONV-05 | 2026-06-02 | Phase 1B diagnostic observation in separate JSONL (`{STATE_DIR}/observability/conversion_fp_observation_*.jsonl`); flag `CONVERSION_FP_OBSERVATION_ENABLED` (default off); 14-day retention; best-effort; does not affect pipeline outcome | CONFIRMED | `observability/conversion_fp_observation.py`; hook in `conversion_pipeline.py` |
 | E-CONV-06 | 2026-06-02 | Conversion → Wallet Editor hook is **best-effort** — errors logged/TG only; never fails conversion pipeline | CONFIRMED | `integrations/conversion_wallet_editor_bridge.py`; `analyzers/conversion.py` |
-| E-CONV-07 | 2026-06-02 | Initial rollout: max **10** problem cards per conversion run forwarded to Wallet Editor; preserve `problem_cards` order; skip invalid rows | CONFIRMED | `MAX_CONVERSION_WALLET_EDITOR_CARDS_PER_RUN` |
+| E-CONV-07 | 2026-06-02 | Conversion → Wallet Editor: all valid `problem_cards` forwarded; invalid rows filtered; no per-run cap (10-card rollout removed 2026-06-03) | CONFIRMED | `integrations/conversion_wallet_editor_bridge.py` |
 | E-CONV-08 | 2026-06-02 | Scheduled conversion WE credentials via direct env (`CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN/PASSWORD`); profile `CONVERSION_AUTO`; no `WALLET_EDITOR_OPERATOR_MAP` | CONFIRMED | `integrations/conversion_wallet_editor_bridge.py` |
 | E-INFRA-01 | 2026-06-02 | `STATE_DIR` default `/data/state` (Railway Volume); local persistent state (locks, events, observation JSONL) — no `/config/state` default | CONFIRMED | `job_runner.py`, `event_log.py`, `lock_status.py`, `conversion_fp_observation.py` |
 
@@ -170,6 +171,7 @@
 | 2026-05-31 | G2 — TASK-2026-05-31-02; E4, E7, E9; I5–I7 |
 | 2026-05-31 | G5 — TASK-2026-05-31-03; I8–I11 |
 | 2026-06-01 | WalletEditor E-WE-01…E-WE-06 |
+| 2026-06-03 | WalletEditor E-WE-07 — Dropbox cumulative registry |
 | 2026-06-02 | Conversion E-CONV-01…E-CONV-05; I12 passive fingerprint invariant; I13 observation best-effort invariant |
 | 2026-06-02 | CONV-WE-HOOK — E-CONV-06…E-CONV-08 |
 | 2026-06-02 | Raccoon Wallet production cutover — E-CONFIG-09; Phase 3B-6 `WAITING_FOR_PROD_OBSERVATION` |

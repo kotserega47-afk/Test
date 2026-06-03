@@ -45,9 +45,9 @@
 - Prod process model: single long-running `scheduler.py` with Telegram polling + background schedule loop.
 - Active job types in code: `wallet`, `hourly`, `rate`, `download`.
 - Tests in `tests/` (pytest).
-- **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-6 complete).
+- **WalletEditor** integrated into main Telegram runtime (`scheduler.py`); status **ACTIVE**, production-ready (WE-0…WE-7 complete).
 - **Conversion Modernization Program** complete — layered architecture, orchestrator, observability, passive fingerprint Phase 1A deployed in code.
-- **Conversion → Wallet Editor hook** active in code — best-effort bridge from `problem_cards` after `conversion.run()`; requires `CONVERSION_WALLET_EDITOR*` env; max 10 cards per run (initial rollout).
+- **Conversion → Wallet Editor hook** active in code — best-effort bridge from `problem_cards` after `conversion.run()`; requires `CONVERSION_WALLET_EDITOR*` env; all valid cards per run (10-card rollout limit removed).
 
 ---
 
@@ -198,7 +198,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Fingerprint** | Passive only — `CONVERSION_FINGERPRINT_ENABLED` (default on); no skip yet |
 | **Phase 1B Observation** | **IMPLEMENTED** — diagnostic JSONL; flag `CONVERSION_FP_OBSERVATION_ENABLED` (default off); 14-day retention |
 | **Phase 1B Dedup Skip** | **NOT STARTED** — real dedup skip when fingerprint matches |
-| **Conversion → Wallet Editor** | **IMPLEMENTED** — `integrations/conversion_wallet_editor_bridge.py`; env-gated; max 10 cards/run; best-effort |
+| **Conversion → Wallet Editor** | **IMPLEMENTED** — `integrations/conversion_wallet_editor_bridge.py`; env-gated; all valid cards/run; best-effort |
 
 ### WalletEditor (S8) — operational snapshot
 
@@ -210,6 +210,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
+| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH` (e.g. `wallet_editor.xlsx`); sheets `all_results`, `runs`; append after each successful run (best-effort) |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
 | **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
 | **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production |
@@ -234,7 +235,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 
 | Тип | Где | Покрывает |
 |-----|-----|-----------|
-| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render, **WalletEditor** (`test_wallet_editor_*`), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
+| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render, **WalletEditor** (`test_wallet_editor_*`, `test_wallet_editor_dropbox_registry`), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
 | CLI tools | `tools/validate_rules_xlsx.py` | rules validation (DEV_ONLY) |
 | Manual scripts | `scripts/test_wallet_pipeline.py`, `scripts/test_bridge_legacy.py` | DEV_ONLY |
 
@@ -272,6 +273,8 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-05-31 | G2 — TASK-2026-05-31-02 |
 | 2026-05-31 | G5 — TASK-2026-05-31-03 |
 | 2026-06-01 | WalletEditor WE-0…WE-6 integrated — S8 ACTIVE |
+| 2026-06-03 | WalletEditor Dropbox cumulative registry (WE-7 / E-WE-07) |
+| 2026-06-03 | Conversion → Wallet Editor: 10-card rollout limit removed (CONV-WE-LIMIT-REMOVAL) |
 | 2026-06-01 | Telegram outbound sender health (Option B) |
 | 2026-06-02 | Conversion Modernization + Observability + Fingerprint Phase 1A — S9 ACTIVE; Phase 1B Observation Layer implemented (dedup skip NOT STARTED) |
 | 2026-06-02 | STATE_DIR Volume Migration Phase A — default `/data/state` (E-INFRA-01) |
