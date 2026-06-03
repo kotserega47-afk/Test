@@ -388,7 +388,7 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 
 | Contract | Location | Semantics | Stale / TTL | Критичность | Статус |
 |----------|----------|-----------|-------------|-------------|--------|
-| Job lock | `{STATE_DIR}/locks/{job_type}.lock` | PID single-flight | stale if PID dead | IMPORTANT | CONFIRMED |
+| Job lock | `{STATE_DIR}/locks/{job_type}.lock` | PID single-flight | stale if PID dead, ghost PID-1 (same `os.getpid()` but not in `_RUNNING`), or age > `JOB_LOCK_STALE_SEC` (default 600) | IMPORTANT | CONFIRMED |
 | Dropbox pipeline lock | `/tmp/dropbox_pipeline.lock` | PID single-flight | 600 sec (`run_once_guard`) | IMPORTANT | CONFIRMED |
 | Hourly fingerprint | file meta sha256 + `state.jobs.hourly.last_fingerprint` | skip unchanged | — | OPTIONAL | CONFIRMED |
 | Wallet fingerprint | payin+payout meta hash + state | skip unchanged | — | OPTIONAL | CONFIRMED |

@@ -69,13 +69,42 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _lock_stale_max_age_sec() -> float:
+    raw = os.getenv("JOB_LOCK_STALE_SEC", "600").strip()
+    try:
+        return max(60.0, float(raw))
+    except ValueError:
+        return 600.0
+
+
+def _lock_held_by_live_runner(job_type: str, pid: int, lock_path: Path) -> bool:
+    """True when another live holder should block this job (not a ghost lock file)."""
+
+    if pid <= 0 or not _pid_alive(pid):
+        return False
+
+    # PID-1 containers: after restart the volume may still contain wallet.lock with "1"
+    # while the new main process is also PID 1 but is not running the job.
+    if pid == os.getpid() and job_type not in _RUNNING:
+        return False
+
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+        if age > _lock_stale_max_age_sec():
+            return False
+    except OSError:
+        pass
+
+    return True
+
+
 def _try_lock(job_type: str) -> bool:
     p = _lock_path(job_type)
 
     if p.exists():
         try:
             pid = int(p.read_text(encoding="utf-8").strip())
-            if pid > 0 and _pid_alive(pid):
+            if _lock_held_by_live_runner(job_type, pid, p):
                 return False
         except Exception:
             pass
