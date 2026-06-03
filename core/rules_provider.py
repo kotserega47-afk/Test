@@ -14,6 +14,7 @@ import contextvars
 import logging
 import os
 import time
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,7 @@ class RulesWorkbookSnapshot:
 _RULES_CACHE_DIR = Path("/tmp/rules_cache")
 _RULES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _RULES_LOCAL = _RULES_CACHE_DIR / "rules.xlsx"
+_RULES_DOWNLOAD_PART = _RULES_CACHE_DIR / "rules.xlsx.part"
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +72,50 @@ _last_indexes_snapshot_id: Optional[int] = None
 def _stat_key(path: Path) -> tuple[float, int]:
     st = path.stat()
     return (st.st_mtime, st.st_size)
+
+
+def _is_valid_xlsx_zip(path: Path) -> bool:
+    """Reject truncated/corrupt downloads before replacing the rules cache."""
+
+    try:
+        if not path.is_file() or path.stat().st_size < 22:
+            return False
+        if not zipfile.is_zipfile(path):
+            return False
+        with zipfile.ZipFile(path, "r") as zf:
+            if zf.testzip() is not None:
+                return False
+    except (zipfile.BadZipFile, OSError, EOFError):
+        return False
+    return True
+
+
+def _download_rules_workbook_atomic(db_path: str) -> bool:
+    """Download to ``.part``, validate ZIP, atomically promote — never leave a truncated cache."""
+
+    part = _RULES_DOWNLOAD_PART
+    try:
+        if part.exists():
+            part.unlink()
+    except OSError:
+        pass
+
+    if not download_file(db_path, str(part)):
+        return False
+
+    if not _is_valid_xlsx_zip(part):
+        log.warning(
+            "rules.xlsx download rejected (corrupt/truncated); cache unchanged",
+            extra={"dropbox_path": db_path, "part_path": str(part)},
+        )
+        try:
+            part.unlink()
+        except OSError:
+            pass
+        return False
+
+    part.replace(_RULES_LOCAL)
+    return True
 
 
 def _read_meta_ruleset_version(path: Path) -> str:
@@ -266,7 +312,7 @@ def get_rules_snapshot(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
             pass
 
     db_path = _rules_dropbox_path()
-    ok = download_file(db_path, str(_RULES_LOCAL))
+    ok = _download_rules_workbook_atomic(db_path)
     policy = resolve_contract_validation_mode()
 
     if ok and _RULES_LOCAL.exists():
@@ -349,13 +395,16 @@ def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
             _last_v2_decision = decision
             return decision.snapshot
         if (
-            not force_sync
-            and _last_v2_snapshot is not None
-            and _last_v2_stat == st
+            _last_v2_snapshot is not None
+            and (
+                decision.build_error
+                or decision.load_error
+                or decision.validation_crash
+            )
         ):
             log.warning(
-                "rules contract legacy: workbook build failed (non-blocking), "
-                "reusing cached snapshot",
+                "rules contract legacy: workbook build/load failed (non-blocking), "
+                "reusing last valid in-memory snapshot",
                 extra={"rules_contract": decision.to_log_dict()},
             )
             return _last_v2_snapshot
