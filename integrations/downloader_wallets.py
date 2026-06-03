@@ -21,6 +21,11 @@ from core.config_manager import get_job_param, get_job_params_overrides
 from core.event_log import append_event
 from core.state_store import state_get, state_update
 from reporters.wallet_reporter import render_wallet
+from integrations.telegram_routes import (
+    ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT,
+    routes_from_rules_v2_enabled,
+    send_message_to_route,
+)
 from transport.telegram_transport import send_text
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -239,15 +244,18 @@ def run_wallet_cycle() -> None:
     if not main_text:
         raise RuntimeError("wallet: rendered main report is empty")
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
-
-    if not chat_id:
-        logger.warning("TELEGRAM_CHAT_ID_WALLET не задан — отправка отключена")
-    else:
-        send_text(text=main_text, chat_id=chat_id)
-
+    if routes_from_rules_v2_enabled():
+        send_message_to_route(ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT, main_text)
         if alerts_text:
-            send_text(text=alerts_text, chat_id=chat_id)
+            send_message_to_route(ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT, alerts_text)
+    else:
+        chat_id = os.getenv("TELEGRAM_CHAT_ID_WALLET", "").strip()
+        if not chat_id:
+            logger.warning("TELEGRAM_CHAT_ID_WALLET не задан — отправка отключена")
+        else:
+            send_text(text=main_text, chat_id=chat_id)
+            if alerts_text:
+                send_text(text=alerts_text, chat_id=chat_id)
 
 
     state_update("wallet", {

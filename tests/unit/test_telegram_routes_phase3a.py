@@ -153,8 +153,8 @@ def test_emergency_not_used_for_hourly(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res.source == "missing_route"
 
 
-def test_only_platform_hourly_migrated() -> None:
-    assert MIGRATED_RUNTIME_ROUTES == frozenset({ROUTE_PLATFORM_HOURLY_REPORT})
+def test_platform_hourly_still_migrated() -> None:
+    assert ROUTE_PLATFORM_HOURLY_REPORT in MIGRATED_RUNTIME_ROUTES
 
 
 def test_unmigrated_route_stays_legacy_when_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:

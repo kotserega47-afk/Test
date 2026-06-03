@@ -2,6 +2,7 @@
 
 Phase 2: ENV vs rules shadow (default).
 Phase 3A: ``platform_hourly_report`` may use Rules V2 when ``TELEGRAM_ROUTES_FROM_RULES_V2=1``.
+Phase 3B: ``platform_wallet_download_report`` (wallet download text reports).
 """
 
 from __future__ import annotations
@@ -27,13 +28,19 @@ log = logging.getLogger(__name__)
 
 ENV_TELEGRAM_ROUTES_FROM_RULES_V2 = "TELEGRAM_ROUTES_FROM_RULES_V2"
 ROUTE_PLATFORM_HOURLY_REPORT = "platform_hourly_report"
+ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT = "platform_wallet_download_report"
 ENV_PLATFORM_HOURLY_LEGACY = "TELEGRAM_CHAT_ID_HOURLY"
+ENV_PLATFORM_WALLET_LEGACY = "TELEGRAM_CHAT_ID_WALLET"
 
-# Phase 3A — only these routes may read Rules V2 when the feature flag is on.
-MIGRATED_RUNTIME_ROUTES: frozenset[str] = frozenset({ROUTE_PLATFORM_HOURLY_REPORT})
+# Phase 3A/3B — routes that read Rules V2 when ``TELEGRAM_ROUTES_FROM_RULES_V2=1``.
+MIGRATED_RUNTIME_ROUTES: frozenset[str] = frozenset({
+    ROUTE_PLATFORM_HOURLY_REPORT,
+    ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT,
+})
 
 LEGACY_ENV_BY_ROUTE_KEY: dict[str, str] = {
     ROUTE_PLATFORM_HOURLY_REPORT: ENV_PLATFORM_HOURLY_LEGACY,
+    ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT: ENV_PLATFORM_WALLET_LEGACY,
 }
 
 RouteSource = Literal[
@@ -75,17 +82,21 @@ class RouteResolution:
     source: RouteSource
 
 
+def _log_migrated_route_warning(route_key: str, source: RouteSource) -> None:
+    if source == "missing_route":
+        log.warning("%s route missing", route_key)
+    elif source == "disabled_route":
+        log.warning("%s route disabled", route_key)
+
+
 def _log_route_resolution(resolution: RouteResolution) -> None:
     log.info(
         "[telegram_routes] route=%s source=%s",
         resolution.route_key,
         resolution.source,
     )
-    if resolution.route_key == ROUTE_PLATFORM_HOURLY_REPORT:
-        if resolution.source == "missing_route":
-            log.warning("platform_hourly_report route missing")
-        elif resolution.source == "disabled_route":
-            log.warning("platform_hourly_report route disabled")
+    if resolution.route_key in MIGRATED_RUNTIME_ROUTES:
+        _log_migrated_route_warning(resolution.route_key, resolution.source)
 
 
 def _resolve_from_rules_v2(route_key: str) -> RouteResolution:
@@ -96,26 +107,23 @@ def _resolve_from_rules_v2(route_key: str) -> RouteResolution:
 
         snapshot = get_snapshot_v2(force_sync=False)
     except Exception:
-        log.warning(
-            "platform_hourly_report route missing",
-            exc_info=True,
-        )
+        log.warning("%s route missing", route_key, exc_info=True)
         return RouteResolution(route_key, None, "missing_route")
 
     route = snapshot.telegram_routes.get(route_key)
     if route is None:
-        log.warning("platform_hourly_report route missing")
+        log.warning("%s route missing", route_key)
         return RouteResolution(route_key, None, "missing_route")
 
     if not route.enabled:
-        log.warning("platform_hourly_report route disabled")
+        log.warning("%s route disabled", route_key)
         return RouteResolution(route_key, None, "disabled_route")
 
     indexes = RulesIndexes(telegram_routes_by_key=dict(snapshot.telegram_routes))
     accessor = BaseRulesAccessor(snapshot=snapshot, indexes=indexes)
     chat_id = accessor.get_telegram_chat_id(route_key)
     if not chat_id:
-        log.warning("platform_hourly_report route missing")
+        log.warning("%s route missing", route_key)
         return RouteResolution(route_key, None, "missing_route")
 
     return RouteResolution(route_key, chat_id, "rules_v2")
@@ -352,8 +360,8 @@ def run_telegram_routes_shadow_compare(
     return result
 
 
-def _status_source_label_for_platform_hourly() -> str:
-    resolution = resolve_route_chat_id(ROUTE_PLATFORM_HOURLY_REPORT)
+def _status_source_label(route_key: str) -> str:
+    resolution = resolve_route_chat_id(route_key)
     if resolution.source == "legacy_env":
         return "legacy_env"
     if resolution.source == "rules_v2":
@@ -381,6 +389,7 @@ def get_telegram_routes_status_dict(
                 "feature_flag": "1" if flag_on else "0",
                 "migrated_routes": sorted(MIGRATED_RUNTIME_ROUTES),
                 "source_for_platform_hourly_report": "unknown",
+                "source_for_platform_wallet_download_report": "unknown",
                 "loaded": "unknown",
                 "missing_sheet": "unknown",
                 "invalid_routes": "unknown",
@@ -401,7 +410,12 @@ def get_telegram_routes_status_dict(
         "mode": mode,
         "feature_flag": "1" if flag_on else "0",
         "migrated_routes": sorted(MIGRATED_RUNTIME_ROUTES),
-        "source_for_platform_hourly_report": _status_source_label_for_platform_hourly(),
+        "source_for_platform_hourly_report": _status_source_label(
+            ROUTE_PLATFORM_HOURLY_REPORT
+        ),
+        "source_for_platform_wallet_download_report": _status_source_label(
+            ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT
+        ),
         "loaded": f"{enabled}/{total} enabled/total",
         "missing_sheet": "yes" if not routes else "no",
         "invalid_routes": invalid,
@@ -431,6 +445,10 @@ def format_telegram_routes_status_lines() -> list[str]:
             "- source_for_platform_hourly_report="
             f"{status.get('source_for_platform_hourly_report', 'unknown')}"
         ),
+        (
+            "- source_for_platform_wallet_download_report="
+            f"{status.get('source_for_platform_wallet_download_report', 'unknown')}"
+        ),
         f"- loaded={status.get('loaded', 'unknown')}",
         f"- missing_sheet={status.get('missing_sheet', 'unknown')}",
         f"- invalid_routes={status.get('invalid_routes', 'unknown')}",
@@ -453,6 +471,8 @@ def emergency_must_not_fallback_business_route(route_key: str) -> bool:
 __all__ = [
     "ENV_TELEGRAM_ROUTES_FROM_RULES_V2",
     "ROUTE_PLATFORM_HOURLY_REPORT",
+    "ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT",
+    "ENV_PLATFORM_WALLET_LEGACY",
     "MIGRATED_RUNTIME_ROUTES",
     "RouteResolution",
     "RouteSource",

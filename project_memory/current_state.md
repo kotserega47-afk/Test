@@ -51,6 +51,7 @@
 - **Telegram routes Phase 2** — optional `rules.xlsx` sheet `telegram_routes` parsed into snapshot; ENV↔rules shadow compare on `/status` (E-TG-ROUTES-01).
 - **Telegram routes Phase 3A** — `TELEGRAM_ROUTES_FROM_RULES_V2=0` (default): hourly → `TELEGRAM_CHAT_ID_HOURLY`. `=1`: hourly → `platform_hourly_report` from rules; other routes unchanged (E-TG-ROUTES-02).
 - **Telegram routes Phase 3A.1** — `/status`: `shadow_mismatches` = ENV↔rules diff for **non-migrated** routes only; `migrated_route_differences` = informational legacy ENV drift for routes already on Rules V2 runtime (e.g. `platform_hourly_report` when flag `1`).
+- **Telegram routes Phase 3B** — `platform_wallet_download_report` in `MIGRATED_RUNTIME_ROUTES`; `downloader_wallets.run_wallet_cycle` uses `send_message_to_route` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` (E-TG-ROUTES-03).
 
 ---
 

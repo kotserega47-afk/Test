@@ -42,6 +42,8 @@
 
 **Runtime (Phase 3A):** `TELEGRAM_ROUTES_FROM_RULES_V2=1` → job `hourly` sends via `send_message_to_route("platform_hourly_report")` → Rules V2 `chat_id`. Missing/disabled route → skip send + log (no emergency). Flag `0` (default) → `TELEGRAM_CHAT_ID_HOURLY` unchanged.
 
+**Runtime (Phase 3B):** same flag `1` → `downloader_wallets.run_wallet_cycle` sends via `send_message_to_route("platform_wallet_download_report")`. Flag `0` → `TELEGRAM_CHAT_ID_WALLET` + `send_text` unchanged. Requires `telegram_routes` row with numeric `chat_id` before cutover.
+
 **Status (Phase 3A.1):** Shadow compare still logs ENV↔rules for all mapped routes. `/status` fields: `shadow_mismatches` — warning count for routes **not** yet runtime-migrated; `migrated_route_differences` — informational count when a runtime-migrated route’s legacy ENV differs from rules (not a warning).
 
 ---
