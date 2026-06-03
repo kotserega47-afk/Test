@@ -143,20 +143,24 @@ Rules:
 
 Wallet Editor **result** xlsx columns (output): `Дата отключения` (MSK `ДД.ММ.ГГГГ ЧЧ:ММ:СС`, row processing time via `now_msk()`), `card`, `action`, `value`, `status`, `comment` — `automation/engine.py`.
 
-Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_lifecycle.py`):
+Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_lifecycle.py` + `wallet_editor_registry_xlsx.py`):
 
-| Sheet | Purpose |
-|-------|---------|
-| `all_results` | lifecycle table per result row (recalculated on every append) |
-| `runs` | one row per WE run |
-| `hold` | card+partner pairs excluded from re-enable |
-| `Отлёжка` | partner → full days before re-enable |
+| Sheet | Ownership | Purpose |
+|-------|-----------|---------|
+| `all_results` | program (format-preserving cell updates) | lifecycle table per result row (recalculated on every append) |
+| `runs` | program (format-preserving cell updates) | one row per WE run |
+| `hold` | user if exists; program creates headers only if missing | card+partner pairs excluded from re-enable |
+| `Отлёжка` | user if exists; program creates headers only if missing | partner → full days before re-enable |
 
-**`all_results` columns (order):** `Дата отключения`, `Дата включения`, `Статус включения`, `Включено`, `Комментарий включения`, `card`, `partner`, `action`, `value`, `status`, `comment`, `hold`
+**`all_results` columns (order):** `Дата отключения`, `Дата включения`, `Статус включения`, `Включено`, `Комментарий включения`, `card`, `partner`, `action`, `status`, `comment`, `hold` — column `value` **not** written (legacy column migrated to `partner` on read, then removed on save).
 
 **`runs` columns:** `started_at`, `finished_at`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`
 
-**Rules:** `partner` = `value` when `action=remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
+**Write model:** openpyxl in-place (`load_workbook` → update cells by header → `save`); no `pandas.to_excel` overwrite. Preserves column widths, freeze panes, fonts/fills where untouched. `card` written as Excel text (`number_format` `@`).
+
+**Rules:** `partner` from row or migrated from legacy `value` when `action=remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). `Включено` OK/SKIP/FAIL overrides lifecycle status. Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
+
+**Dropbox rev protection:** download stores `rev`; upload via `upload_file_if_rev` only if remote `rev` unchanged; on conflict — skip upload, TG warning to `task.chat_id`, per-run WE result unchanged.
 | `/tmp/auth_state_wallet_editor_<PROFILE>.json` | json (Playwright) | `automation/engine.py` | Playwright per operator | нет | re-login for profile | IMPORTANT | CONFIRMED |
 | `/tmp/auth_state_wallet_editor.json` | json (Playwright) | `RunConfig` default only | legacy default path | нет | legacy / tests | OPTIONAL | CONFIRMED |
 

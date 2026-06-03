@@ -49,25 +49,72 @@ def download_file_status(dropbox_path: str, local_path: str) -> str:
       "not_found" — файла нет
       "error"     — иная ошибка
     """
+    status, _rev = download_file_with_rev(dropbox_path, local_path)
+    return status
+
+
+def download_file_with_rev(dropbox_path: str, local_path: str) -> tuple[str, str | None]:
+    """
+    Скачивает файл и возвращает (status, rev).
+    rev is None при not_found / error.
+    """
     try:
         dbx = _get_dbx()
         metadata, res = dbx.files_download(dropbox_path)
         with open(local_path, "wb") as f:
             f.write(res.content)
-        return "ok"
+        return "ok", metadata.rev
 
     except ApiError as e:
         if isinstance(e.error, dropbox.files.DownloadError) and e.error.is_path():
             if e.error.get_path().is_not_found():
                 logger.info(f"File not found in Dropbox: {dropbox_path}")
-                return "not_found"
+                return "not_found", None
 
         logger.error(f"Dropbox API error: {e}")
-        return "error"
+        return "error", None
 
     except Exception as e:
         logger.error(f"Ошибка download_file({dropbox_path}): {e}")
-        return "error"
+        return "error", None
+
+
+def get_dropbox_file_rev(dropbox_path: str) -> str | None:
+    """Текущий Dropbox rev для path; None если файл недоступен."""
+    try:
+        dbx = _get_dbx()
+        metadata = dbx.files_get_metadata(dropbox_path)
+        return metadata.rev
+    except Exception as e:
+        logger.error(f"Ошибка get_dropbox_file_rev({dropbox_path}): {e}")
+        return None
+
+
+def upload_file_if_rev(
+    local_path: str, dropbox_path: str, expected_rev: str | None
+) -> str:
+    """
+    Upload только если rev совпадает (lost-update protection).
+    expected_rev None — новый файл (not_found при download), upload без проверки.
+
+    Returns: "uploaded" | "rev_conflict" | "failed"
+    """
+    if expected_rev is not None:
+        current = get_dropbox_file_rev(dropbox_path)
+        if current is None:
+            logger.warning(
+                "[Dropbox] upload skipped: cannot read rev for %s", dropbox_path
+            )
+            return "failed"
+        if current != expected_rev:
+            logger.warning(
+                "[Dropbox] upload skipped: rev changed path=%s expected=%s current=%s",
+                dropbox_path,
+                expected_rev,
+                current,
+            )
+            return "rev_conflict"
+    return "uploaded" if upload_file(local_path, dropbox_path) else "failed"
 
 
 def download_file(dropbox_path: str, local_path: str) -> bool:

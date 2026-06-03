@@ -70,7 +70,7 @@
 | R-WE-04 | Legacy `automation/main.py` / `tg_receiver.py` | double polling / broken `add_task` API if запущены | **Не** использовать в production; path = `scheduler.py` only |
 | R-WE-05 | Missing / incomplete `WALLET_EDITOR_OPERATOR_MAP` | все ingest отклоняются (fail-closed) | Railway env checklist per operator |
 | R-WE-06 | Result file name collision in `/tmp/wallet_editor` | suffix `_2` / `_<uuid8>` appended | `build_wallet_editor_result_path()` |
-| R-WE-07 | Concurrent Dropbox registry writes (multi-profile) | corrupt/missing rows in `wallet_editor.xlsx` | in-process `threading.Lock` in `wallet_editor_registry.py`; full download/upload per append |
+| R-WE-07 | Concurrent Dropbox registry writes (multi-profile) | corrupt/missing rows in `wallet_editor.xlsx` | in-process `threading.Lock` in `wallet_editor_registry.py`; full download/upload per append; rev check before upload (lost-update skip) |
 | ~~R-TG-01~~ | ~~Silent Telegram sender failure (enqueue ≠ delivery)~~ | **mitigated** | Option B: health-state + periodic log in `telegram_bot.py` |
 
 ### Telegram delivery risks (R-TG-*)
@@ -97,6 +97,7 @@
 | WE-6 | **complete** | Per-profile queue + worker; parallel across operators |
 | WE-7 | **complete** | Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results`, `runs`; E-WE-07 |
 | WE-8 | **complete** | Registry lifecycle: `hold`, `Отлёжка`, re-enable date/status, warnings; E-WE-08 |
+| WE-9 | **complete** | Registry format-safe write + Dropbox rev conflict protection; E-WE-09 |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 

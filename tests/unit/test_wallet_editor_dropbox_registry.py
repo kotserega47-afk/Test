@@ -14,11 +14,11 @@ import pytest
 from automation.audit import Stats
 from automation.runtime import WalletEditorTask
 from integrations.wallet_editor_registry import (
-    SHEET_ALL_RESULTS,
-    SHEET_RUNS,
+    REV_CONFLICT_MESSAGE,
     append_run_to_dropbox_registry,
     resolve_source,
 )
+from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
     HOLD_COLUMNS,
@@ -27,8 +27,10 @@ from integrations.wallet_editor_registry_lifecycle import (
     MISSING_OTLEZKA_STATUS,
     OTLEZKA_COLUMNS,
     RUNS_COLUMNS,
+    SHEET_ALL_RESULTS,
     SHEET_HOLD,
     SHEET_OTLEZKA,
+    SHEET_RUNS,
     STATUS_K_VKLUCHENIYU,
     STATUS_OZHIDAET,
     STATUS_PROSROCHENO,
@@ -107,38 +109,57 @@ def _read_registry(data: bytes) -> dict[str, pd.DataFrame]:
 @pytest.fixture
 def registry_env(monkeypatch, tmp_path):
     store: dict[str, bytes] = {}
+    revs: dict[str, str] = {}
 
-    def fake_download(dropbox_path: str, local_path: str) -> str:
+    def fake_download_with_rev(dropbox_path: str, local_path: str) -> tuple[str, str | None]:
         content = store.get(dropbox_path)
         if content is None:
-            return "not_found"
+            return "not_found", None
         Path(local_path).write_bytes(content)
-        return "ok"
+        return "ok", revs.get(dropbox_path, "rev-initial")
 
-    def fake_upload(local_path: str, dropbox_path: str) -> bool:
+    def fake_get_rev(dropbox_path: str) -> str | None:
+        if dropbox_path not in store:
+            return None
+        return revs.get(dropbox_path, "rev-initial")
+
+    def fake_upload_if_rev(
+        local_path: str, dropbox_path: str, expected_rev: str | None
+    ) -> str:
+        from integrations import dropbox_watcher
+
+        if expected_rev is not None:
+            current = dropbox_watcher.get_dropbox_file_rev(dropbox_path)
+            if current != expected_rev:
+                return "rev_conflict"
         store[dropbox_path] = Path(local_path).read_bytes()
-        return True
+        revs[dropbox_path] = f"rev-after-{len(store)}"
+        return "uploaded"
 
     state_root = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(state_root))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
     with patch(
-        "integrations.wallet_editor_registry.download_file_status",
-        side_effect=fake_download,
+        "integrations.wallet_editor_registry.download_file_with_rev",
+        side_effect=fake_download_with_rev,
     ):
         with patch(
-            "integrations.wallet_editor_registry.upload_file",
-            side_effect=fake_upload,
+            "integrations.wallet_editor_registry.upload_file_if_rev",
+            side_effect=fake_upload_if_rev,
         ):
             with patch(
-                "integrations.wallet_editor_registry_lifecycle.now_msk",
-                return_value=datetime(2026, 6, 3, 12, 0, 0, tzinfo=MSK),
+                "integrations.dropbox_watcher.get_dropbox_file_rev",
+                side_effect=fake_get_rev,
             ):
-                yield store, tmp_path
+                with patch(
+                    "integrations.wallet_editor_registry_lifecycle.now_msk",
+                    return_value=datetime(2026, 6, 3, 12, 0, 0, tzinfo=MSK),
+                ):
+                    yield store, tmp_path, revs
 
 
 def test_registry_all_results_columns_order(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path)
     append_run_to_dropbox_registry(
@@ -153,7 +174,7 @@ def test_registry_all_results_columns_order(registry_env, tmp_path):
 
 
 def test_registry_runs_columns_order(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path)
     append_run_to_dropbox_registry(
@@ -168,7 +189,7 @@ def test_registry_runs_columns_order(registry_env, tmp_path):
 
 
 def test_registry_creates_hold_sheet(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path)
     append_run_to_dropbox_registry(
@@ -183,7 +204,7 @@ def test_registry_creates_hold_sheet(registry_env, tmp_path):
 
 
 def test_registry_creates_otlezka_sheet(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path)
     append_run_to_dropbox_registry(
@@ -282,7 +303,7 @@ def test_registry_hold_blocks_reenable():
 
 
 def test_registry_recalculates_existing_rows_after_otlezka_added(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path, partner="Ostin", disable_at="01.06.2026 10:00:00")
 
@@ -376,7 +397,7 @@ def test_registry_included_status_overrides_lifecycle():
 
 
 def test_missing_otlezka_warning_sent_once_per_partner(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path, partner="NoOtlezka")
     messages: list[str] = []
@@ -406,7 +427,7 @@ def test_missing_otlezka_warning_sent_once_per_partner(registry_env, tmp_path):
 
 
 def test_missing_otlezka_warning_state_cleared_after_fix(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path, partner="Teon")
 
@@ -458,8 +479,8 @@ def test_registry_best_effort_failure_still_does_not_break_worker(registry_env, 
         worker_mod._profile_workers.clear()
 
     with patch(
-        "integrations.wallet_editor_registry.download_file_status",
-        return_value="error",
+        "integrations.wallet_editor_registry.download_file_with_rev",
+        return_value=("error", None),
     ):
         with patch("automation.worker.run") as mock_run:
             mock_run.return_value = (str(result_path), Stats(ok=1, fail=0, skip=0))
@@ -477,7 +498,7 @@ def test_registry_best_effort_failure_still_does_not_break_worker(registry_env, 
 
 
 def test_registry_idempotent_same_run(registry_env, tmp_path):
-    store, _ = registry_env
+    store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path, rows=2)
     task = _make_task(run_id="run-dup")
@@ -498,3 +519,253 @@ def test_registry_idempotent_same_run(registry_env, tmp_path):
 
 def test_registry_source_conversion_auto():
     assert resolve_source("CONVERSION_AUTO") == "conversion_auto"
+
+
+def _append_once(registry_env, tmp_path, *, run_id: str = "fmt-run"):
+    store, _, _ = registry_env
+    result_path = tmp_path / "result.xlsx"
+    _write_result_xlsx(result_path)
+    append_run_to_dropbox_registry(
+        _make_task(run_id=run_id),
+        str(result_path),
+        Stats(ok=1, fail=0, skip=0),
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+    )
+    return store
+
+
+def test_registry_preserves_column_widths(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-styled"
+
+    _append_once(registry_env, tmp_path, run_id="preserve-width")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    assert ws.column_dimensions["A"].width == 22.5
+    assert ws.column_dimensions["F"].width == 18.0
+    wb.close()
+
+
+def test_registry_preserves_freeze_panes(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-freeze"
+
+    _append_once(registry_env, tmp_path, run_id="preserve-freeze")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    assert wb[SHEET_ALL_RESULTS].freeze_panes == "A2"
+    wb.close()
+
+
+def test_registry_preserves_header_fill(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-fill"
+
+    _append_once(registry_env, tmp_path, run_id="preserve-fill")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    cell = wb[SHEET_ALL_RESULTS].cell(row=1, column=1)
+    assert cell.fill.start_color.rgb in ("004472C4", "4472C4")
+    wb.close()
+
+
+def test_registry_card_written_as_text(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-card"
+
+    result_path = tmp_path / "result.xlsx"
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    headers = ["Дата отключения", "card", "action", "value", "status", "comment"]
+    for col_idx, name in enumerate(headers, 1):
+        ws.cell(row=1, column=col_idx, value=name)
+    ws.cell(row=2, column=1, value="03.06.2026 09:00:00")
+    card_cell = ws.cell(row=2, column=2, value="0041111111111111")
+    card_cell.number_format = "@"
+    ws.cell(row=2, column=3, value="remove_partner")
+    ws.cell(row=2, column=4, value="Ostin")
+    ws.cell(row=2, column=5, value="OK")
+    ws.cell(row=2, column=6, value="removed")
+    wb.save(result_path)
+    wb.close()
+
+    append_run_to_dropbox_registry(
+        _make_task(run_id="card-text"),
+        str(result_path),
+        Stats(ok=1, fail=0, skip=0),
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+    )
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    headers = [c.value for c in ws[1]]
+    card_col = headers.index("card") + 1
+    cell = ws.cell(row=2, column=card_col)
+    assert cell.number_format == "@"
+    assert str(cell.value) == "0041111111111111"
+    wb.close()
+
+
+def test_registry_does_not_write_value_column_to_all_results(registry_env, tmp_path):
+    store, _, _ = registry_env
+    _append_once(registry_env, tmp_path, run_id="no-value-col")
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert "value" not in sheets["all_results"].columns
+
+
+def test_registry_migrates_partner_from_value(registry_env, tmp_path):
+    store, _, revs = registry_env
+    legacy_path = tmp_path / "legacy.xlsx"
+    legacy_cols = list(ALL_RESULTS_COLUMNS)
+    legacy_cols.insert(legacy_cols.index("partner") + 1, "value")
+    row = {col: "" for col in legacy_cols}
+    row.update(
+        {
+            "Дата отключения": "01.06.2026 10:00:00",
+            "card": "4111",
+            "action": "remove_partner",
+            "value": "LegacyPartner",
+            "status": "OK",
+        }
+    )
+    with pd.ExcelWriter(legacy_path, engine="openpyxl") as writer:
+        pd.DataFrame([row], columns=legacy_cols).to_excel(
+            writer, sheet_name=SHEET_ALL_RESULTS, index=False
+        )
+        pd.DataFrame(columns=RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+    store[DROPBOX_PATH] = legacy_path.read_bytes()
+    revs[DROPBOX_PATH] = "rev-legacy"
+
+    _append_once(registry_env, tmp_path, run_id="migrate-value")
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert "value" not in sheets["all_results"].columns
+    assert sheets["all_results"].iloc[0]["partner"] == "LegacyPartner"
+
+
+def test_registry_does_not_overwrite_hold_sheet(registry_env, tmp_path):
+    store, _, revs = registry_env
+    wb_path = tmp_path / "with_hold.xlsx"
+    with pd.ExcelWriter(wb_path, engine="openpyxl") as writer:
+        pd.DataFrame(columns=ALL_RESULTS_COLUMNS).to_excel(
+            writer, sheet_name=SHEET_ALL_RESULTS, index=False
+        )
+        pd.DataFrame(columns=RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+        pd.DataFrame(
+            [{"Дата добавления": "01.01.2020", "card": "USERCARD", "partner": "UserP", "comment": "keep"}]
+        ).to_excel(writer, sheet_name=SHEET_HOLD, index=False)
+    store[DROPBOX_PATH] = wb_path.read_bytes()
+    revs[DROPBOX_PATH] = "rev-hold"
+
+    _append_once(registry_env, tmp_path, run_id="hold-keep")
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert sheets["hold"].iloc[0]["card"] == "USERCARD"
+    assert sheets["hold"].iloc[0]["comment"] == "keep"
+
+
+def test_registry_does_not_overwrite_otlezka_sheet(registry_env, tmp_path):
+    store, _, revs = registry_env
+    wb_path = tmp_path / "with_otlezka.xlsx"
+    with pd.ExcelWriter(wb_path, engine="openpyxl") as writer:
+        pd.DataFrame(columns=ALL_RESULTS_COLUMNS).to_excel(
+            writer, sheet_name=SHEET_ALL_RESULTS, index=False
+        )
+        pd.DataFrame(columns=RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+        pd.DataFrame(
+            [{"partner": "UserPartner", "Полные дни": 99, "comment": "manual"}]
+        ).to_excel(writer, sheet_name=SHEET_OTLEZKA, index=False)
+    store[DROPBOX_PATH] = wb_path.read_bytes()
+    revs[DROPBOX_PATH] = "rev-otlezka"
+
+    _append_once(registry_env, tmp_path, run_id="otlezka-keep")
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert sheets[SHEET_OTLEZKA].iloc[0]["partner"] == "UserPartner"
+    assert int(sheets[SHEET_OTLEZKA].iloc[0]["Полные дни"]) == 99
+    assert sheets[SHEET_OTLEZKA].iloc[0]["comment"] == "manual"
+
+
+def test_registry_rev_conflict_skips_upload(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    before = store[DROPBOX_PATH]
+    revs[DROPBOX_PATH] = "rev-at-download"
+
+    with patch(
+        "integrations.dropbox_watcher.get_dropbox_file_rev",
+        return_value="rev-changed-by-user",
+    ):
+        _append_once(registry_env, tmp_path, run_id="rev-skip")
+
+    assert store[DROPBOX_PATH] == before
+
+
+def test_registry_rev_conflict_warns_telegram(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-at-download"
+    result_path = tmp_path / "result.xlsx"
+    _write_result_xlsx(result_path)
+    messages: list[str] = []
+
+    with patch(
+        "integrations.dropbox_watcher.get_dropbox_file_rev",
+        return_value="rev-changed-by-user",
+    ):
+        with patch(
+            "integrations.wallet_editor_registry.send_message_sync",
+            side_effect=lambda text, chat_id=None, **_kw: messages.append(text),
+        ):
+            append_run_to_dropbox_registry(
+                _make_task(run_id="rev-warn", chat_id=-999),
+                str(result_path),
+                Stats(ok=1, fail=0, skip=0),
+                run_started_at=RUN_STARTED,
+                run_finished_at=RUN_FINISHED,
+            )
+
+    assert any(REV_CONFLICT_MESSAGE in m for m in messages)
+
+
+def test_registry_open_without_rev_change_allows_upload(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-stable"
+
+    _append_once(registry_env, tmp_path, run_id="rev-ok")
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert len(sheets["all_results"]) == 1

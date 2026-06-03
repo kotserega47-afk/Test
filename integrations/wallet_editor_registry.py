@@ -12,30 +12,26 @@ import pandas as pd
 
 from automation.audit import Stats
 from automation.runtime import WalletEditorTask
-from core.datetime_utils import EXCEL_DATETIME_FORMAT, ensure_aware_msk
-from integrations.dropbox_watcher import download_file_status, upload_file
+from integrations.dropbox_watcher import (
+    download_file_with_rev,
+    upload_file_if_rev,
+)
 from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry_lifecycle import (
-    ALL_RESULTS_COLUMNS,
-    HOLD_COLUMNS,
-    OTLEZKA_COLUMNS,
-    RUNS_COLUMNS,
-    SHEET_HOLD,
-    SHEET_OTLEZKA,
-    WARN_MESSAGE_TEMPLATE,
-    apply_missing_otlezka_red_fill,
     build_runs_row,
     load_warned_partners,
     mark_run_processed,
-    migrate_legacy_runs,
-    normalize_all_results,
-    normalize_sheet,
     partners_to_warn,
     recalculate_all_results,
     rows_from_result_excel,
     run_id_already_processed,
     save_warned_partners,
     sync_warned_partners_after_otlezka,
+)
+from integrations.wallet_editor_registry_xlsx import (
+    card_as_text,
+    load_registry_frames,
+    save_registry_workbook,
 )
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -48,8 +44,12 @@ CONVERSION_OPERATOR_PROFILE = "CONVERSION_AUTO"
 SOURCE_CONVERSION_AUTO = "conversion_auto"
 SOURCE_TELEGRAM_MANUAL = "telegram_manual"
 
-SHEET_ALL_RESULTS = "all_results"
-SHEET_RUNS = "runs"
+REV_CONFLICT_MESSAGE = (
+    "⚠️ Wallet Editor registry не обновлён\n\n"
+    "Файл:\nwallet_editor.xlsx\n\n"
+    "Причина:\nфайл был изменён пользователем во время записи\n\n"
+    "Wallet Editor результат отправлен отдельно."
+)
 
 _lock = threading.Lock()
 
@@ -65,68 +65,16 @@ def resolve_source(operator_profile: str) -> str:
     return SOURCE_TELEGRAM_MANUAL
 
 
-def _load_workbook(
-    local_path: Path,
-    download_status: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    if download_status == "not_found":
-        return (
-            normalize_sheet(pd.DataFrame(), ALL_RESULTS_COLUMNS),
-            normalize_sheet(pd.DataFrame(), RUNS_COLUMNS),
-            normalize_sheet(pd.DataFrame(), HOLD_COLUMNS),
-            normalize_sheet(pd.DataFrame(), OTLEZKA_COLUMNS),
-        )
-
-    with pd.ExcelFile(local_path, engine="openpyxl") as book:
-        all_df = (
-            pd.read_excel(book, sheet_name=SHEET_ALL_RESULTS)
-            if SHEET_ALL_RESULTS in book.sheet_names
-            else pd.DataFrame()
-        )
-        runs_df = (
-            pd.read_excel(book, sheet_name=SHEET_RUNS)
-            if SHEET_RUNS in book.sheet_names
-            else pd.DataFrame()
-        )
-        hold_df = (
-            pd.read_excel(book, sheet_name=SHEET_HOLD)
-            if SHEET_HOLD in book.sheet_names
-            else pd.DataFrame()
-        )
-        otlezka_df = (
-            pd.read_excel(book, sheet_name=SHEET_OTLEZKA)
-            if SHEET_OTLEZKA in book.sheet_names
-            else pd.DataFrame()
-        )
-
-    all_df = normalize_all_results(all_df)
-    runs_df = migrate_legacy_runs(runs_df)
-    hold_df = normalize_sheet(hold_df, HOLD_COLUMNS)
-    otlezka_df = normalize_sheet(otlezka_df, OTLEZKA_COLUMNS)
-    return all_df, runs_df, hold_df, otlezka_df
-
-
-def _save_workbook(
-    local_path: Path,
-    all_results: pd.DataFrame,
-    runs: pd.DataFrame,
-    hold: pd.DataFrame,
-    otlezka: pd.DataFrame,
-) -> None:
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(local_path, engine="openpyxl") as writer:
-        normalize_sheet(all_results, ALL_RESULTS_COLUMNS).to_excel(
-            writer, sheet_name=SHEET_ALL_RESULTS, index=False
-        )
-        normalize_sheet(runs, RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
-        normalize_sheet(hold, HOLD_COLUMNS).to_excel(writer, sheet_name=SHEET_HOLD, index=False)
-        normalize_sheet(otlezka, OTLEZKA_COLUMNS).to_excel(
-            writer, sheet_name=SHEET_OTLEZKA, index=False
-        )
-    apply_missing_otlezka_red_fill(local_path)
+def _send_rev_conflict_warning(chat_id: int) -> None:
+    try:
+        send_message_sync(REV_CONFLICT_MESSAGE, chat_id=str(chat_id))
+    except Exception:
+        log.exception("[WalletEditorRegistry] failed to send rev conflict warning")
 
 
 def _send_missing_otlezka_warnings(chat_id: int, partners: list[str]) -> None:
+    from integrations.wallet_editor_registry_lifecycle import WARN_MESSAGE_TEMPLATE
+
     for partner in partners:
         try:
             send_message_sync(
@@ -209,7 +157,7 @@ def _append_under_lock(
 
     with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
         local_path = Path(tmp) / "wallet_editor.xlsx"
-        status = download_file_status(dropbox_path, str(local_path))
+        status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
 
         if status == "error":
             log.error(
@@ -219,7 +167,10 @@ def _append_under_lock(
             )
             return
 
-        all_results_df, runs_df, hold_df, otlezka_df = _load_workbook(local_path, status)
+        is_new_file = status == "not_found"
+        all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
+            load_registry_frames(local_path, status)
+        )
 
         if run_id_already_processed(task.run_id, runs_df):
             log.info(
@@ -229,7 +180,11 @@ def _append_under_lock(
             )
             return
 
-        result_df = pd.read_excel(result_path, engine="openpyxl")
+        result_df = pd.read_excel(
+            result_path,
+            engine="openpyxl",
+            converters={"card": card_as_text},
+        )
         input_rows = len(result_df)
         new_rows = rows_from_result_excel(result_df)
 
@@ -251,9 +206,26 @@ def _append_under_lock(
         )
         merged_runs = pd.concat([runs_df, new_run], ignore_index=True)
 
-        _save_workbook(local_path, recalculated, merged_runs, hold_df, otlezka_df)
+        save_registry_workbook(
+            local_path,
+            all_results=recalculated,
+            runs=merged_runs,
+            hold_exists=hold_exists,
+            otlezka_exists=otlezka_exists,
+            is_new_file=is_new_file,
+        )
 
-        if not upload_file(str(local_path), dropbox_path):
+        expected_rev = None if is_new_file else download_rev
+        upload_status = upload_file_if_rev(str(local_path), dropbox_path, expected_rev)
+        if upload_status == "rev_conflict":
+            log.warning(
+                "[WalletEditorRegistry] upload skipped: rev conflict run_id=%s path=%s",
+                task.run_id,
+                dropbox_path,
+            )
+            _send_rev_conflict_warning(task.chat_id)
+            return
+        if upload_status != "uploaded":
             log.error(
                 "[WalletEditorRegistry] upload failed run_id=%s path=%s",
                 task.run_id,

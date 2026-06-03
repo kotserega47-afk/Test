@@ -31,6 +31,8 @@ SHEET_RUNS = "runs"
 SHEET_HOLD = "hold"
 SHEET_OTLEZKA = "Отлёжка"
 
+LEGACY_VALUE_COLUMN = "value"
+
 ALL_RESULTS_COLUMNS = [
     "Дата отключения",
     "Дата включения",
@@ -40,7 +42,6 @@ ALL_RESULTS_COLUMNS = [
     "card",
     "partner",
     "action",
-    "value",
     "status",
     "comment",
     "hold",
@@ -199,9 +200,10 @@ def migrate_legacy_all_results(df: pd.DataFrame) -> pd.DataFrame:
         value = _cell_str(row.get("value", ""))
         entry = {col: "" for col in ALL_RESULTS_COLUMNS}
         entry["Дата отключения"] = _cell_str(row.get("Дата отключения", ""))
-        entry["card"] = _cell_str(row.get("card", ""))
+        from integrations.wallet_editor_registry_xlsx import card_as_text
+
+        entry["card"] = card_as_text(row.get("card", ""))
         entry["action"] = action
-        entry["value"] = value
         entry["status"] = _cell_str(row.get("status", ""))
         entry["comment"] = _cell_str(row.get("comment", ""))
         entry["partner"] = partner_from_row(action, value)
@@ -211,12 +213,31 @@ def migrate_legacy_all_results(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=ALL_RESULTS_COLUMNS)
 
 
+def _migrate_partner_from_legacy_value(out: pd.DataFrame) -> pd.DataFrame:
+    if LEGACY_VALUE_COLUMN not in out.columns:
+        return out
+    for idx in out.index:
+        partner = _cell_str(out.at[idx, "partner"])
+        if partner:
+            continue
+        action = _cell_str(out.at[idx, "action"])
+        legacy_value = _cell_str(out.at[idx, LEGACY_VALUE_COLUMN])
+        migrated = partner_from_row(action, legacy_value)
+        if migrated:
+            out.at[idx, "partner"] = migrated
+    return out.drop(columns=[LEGACY_VALUE_COLUMN], errors="ignore")
+
+
 def normalize_all_results(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return _empty_sheet(ALL_RESULTS_COLUMNS)
     if is_legacy_all_results(df):
         df = migrate_legacy_all_results(df)
     out = df.copy()
+    for col in ALL_RESULTS_COLUMNS:
+        if col not in out.columns:
+            out[col] = ""
+    out = _migrate_partner_from_legacy_value(out)
     for col in ALL_RESULTS_COLUMNS:
         if col not in out.columns:
             out[col] = ""
@@ -240,6 +261,8 @@ def rows_from_result_excel(result_df: pd.DataFrame) -> pd.DataFrame:
         value = _cell_str(row.get("value", ""))
         entry = {col: "" for col in ALL_RESULTS_COLUMNS}
         for col in RESULT_SOURCE_COLUMNS:
+            if col == LEGACY_VALUE_COLUMN:
+                continue
             entry[col] = _cell_str(row[col]) if col in result_df.columns else ""
         entry["partner"] = partner_from_row(action, value)
         rows.append(entry)
@@ -298,10 +321,14 @@ def recalculate_all_results(
 
     for idx in df.index:
         action = _cell_str(df.at[idx, "action"])
-        value = _cell_str(df.at[idx, "value"])
         status = _cell_str(df.at[idx, "status"])
         card = _cell_str(df.at[idx, "card"])
-        partner = partner_from_row(action, value)
+        partner = _cell_str(df.at[idx, "partner"])
+        if not partner:
+            legacy_value = ""
+            if LEGACY_VALUE_COLUMN in df.columns:
+                legacy_value = _cell_str(df.at[idx, LEGACY_VALUE_COLUMN])
+            partner = partner_from_row(action, legacy_value)
         df.at[idx, "partner"] = partner
 
         vklyucheno = _cell_str(df.at[idx, "Включено"])
