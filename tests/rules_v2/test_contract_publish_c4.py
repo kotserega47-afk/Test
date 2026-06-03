@@ -25,9 +25,12 @@ from core.rules_v2.contract_errors import (
 )
 from core.rules_v2.contract_publish import (
     ContractValidationMode,
+    SnapshotPublishDecision,
     evaluate_snapshot_publish,
     resolve_contract_validation_mode,
 )
+from core.rules_v2.models import MetaInfo, RulesSnapshotV2
+from datetime import datetime
 from core.rules_v2.contract_schema import SHEET_SCHEMAS
 from core.rules_v2.validation_issues import ValidationSeverity, has_blocking_errors
 from core.rules_v2.validation_snapshot import validate_snapshot as real_validate_snapshot
@@ -529,6 +532,136 @@ def test_get_indexes_v2_force_sync_rebuilds_indexes(rules_xlsx_baseline: Path) -
         get_indexes_v2()
         get_indexes_v2(force_sync=True)
     assert spy.call_count == 2
+
+
+def _legacy_non_blocking_decision(
+    *,
+    publish_allowed: bool,
+    snapshot: RulesSnapshotV2 | None,
+    has_blocking: bool = False,
+    build_error: str | None = None,
+) -> SnapshotPublishDecision:
+    return SnapshotPublishDecision(
+        workbook_path="/tmp/rules.xlsx",
+        policy_mode="legacy",
+        validators_strict=False,
+        contract_issues=(),
+        has_blocking_contract=has_blocking,
+        blocking_issue_codes=(),
+        warning_count=0,
+        info_count=0,
+        error_count=0,
+        snapshot_fingerprint="fp-test",
+        snapshot=snapshot,
+        publish_allowed=publish_allowed,
+        build_error=build_error,
+    )
+
+
+def _minimal_snapshot() -> RulesSnapshotV2:
+    return RulesSnapshotV2(
+        meta=MetaInfo(
+            ruleset_version="test",
+            updated_at=datetime(2026, 6, 3, 12, 0, 0),
+            updated_by="test",
+        ),
+    )
+
+
+def test_legacy_get_snapshot_v2_non_blocking_publish_allowed_false_with_snapshot(
+    rules_xlsx_baseline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy: contract non-blocking findings must not block when snapshot is available."""
+
+    monkeypatch.delenv("RULES_CONTRACT_STRICT", raising=False)
+    monkeypatch.delenv("RULES_CONTRACT_SHADOW", raising=False)
+    invalidate_rules_v2_cache()
+
+    snap = _minimal_snapshot()
+    decision = _legacy_non_blocking_decision(
+        publish_allowed=False,
+        snapshot=snap,
+        has_blocking=False,
+    )
+
+    with patch(
+        "core.rules_provider.evaluate_snapshot_publish",
+        return_value=decision,
+    ):
+        out = get_snapshot_v2(force_sync=True)
+
+    assert out is snap
+
+
+def test_legacy_get_snapshot_v2_blocking_still_rejects(
+    rules_xlsx_baseline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RULES_CONTRACT_STRICT", raising=False)
+    invalidate_rules_v2_cache()
+
+    snap = _minimal_snapshot()
+    decision = SnapshotPublishDecision(
+        workbook_path="/tmp/rules.xlsx",
+        policy_mode="legacy",
+        validators_strict=False,
+        contract_issues=(),
+        has_blocking_contract=True,
+        blocking_issue_codes=(RULE_EMPTY_JOBS,),
+        warning_count=0,
+        info_count=0,
+        error_count=0,
+        snapshot_fingerprint="fp-test",
+        snapshot=snap,
+        publish_allowed=False,
+    )
+
+    with patch(
+        "core.rules_provider.evaluate_snapshot_publish",
+        return_value=decision,
+    ):
+        with pytest.raises(ContractPublishRejected) as ei:
+            get_snapshot_v2(force_sync=True)
+
+    assert ei.value.decision.has_blocking_contract is True
+    assert RULE_EMPTY_JOBS in ei.value.decision.blocking_issue_codes
+
+
+def test_strict_publish_allowed_false_still_rejects_without_blocking_codes(
+    rules_xlsx_baseline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict/infra gating unchanged: publish_allowed=False still blocks."""
+
+    monkeypatch.setenv("RULES_CONTRACT_STRICT", "1")
+    invalidate_rules_v2_cache()
+
+    decision = SnapshotPublishDecision(
+        workbook_path="/tmp/rules.xlsx",
+        policy_mode="strict",
+        validators_strict=True,
+        contract_issues=(),
+        has_blocking_contract=False,
+        blocking_issue_codes=(),
+        warning_count=0,
+        info_count=0,
+        error_count=0,
+        snapshot_fingerprint=None,
+        snapshot=None,
+        publish_allowed=False,
+        build_error="ValueError: injected build failure",
+    )
+
+    with patch(
+        "core.rules_provider.evaluate_snapshot_publish",
+        return_value=decision,
+    ):
+        with pytest.raises(ContractPublishRejected) as ei:
+            get_snapshot_v2(force_sync=True)
+
+    assert ei.value.decision.policy_mode == "strict"
+    assert ei.value.decision.has_blocking_contract is False
 
 
 def test_invalidate_rules_v2_cache_clears_indexes_cache(rules_xlsx_baseline: Path) -> None:

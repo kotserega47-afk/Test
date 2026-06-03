@@ -339,6 +339,28 @@ def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
     except Exception:  # noqa: BLE001
         log.exception("rules_validate_audit: publish hook failed (ignored)")
 
+    if policy == ContractValidationMode.LEGACY:
+        if decision.has_blocking_contract:
+            raise ContractPublishRejected(decision)
+        if decision.snapshot is not None:
+            _try_save_identity_registry_after_publish(path, decision)
+            _last_v2_stat = st
+            _last_v2_snapshot = decision.snapshot
+            _last_v2_decision = decision
+            return decision.snapshot
+        if (
+            not force_sync
+            and _last_v2_snapshot is not None
+            and _last_v2_stat == st
+        ):
+            log.warning(
+                "rules contract legacy: workbook build failed (non-blocking), "
+                "reusing cached snapshot",
+                extra={"rules_contract": decision.to_log_dict()},
+            )
+            return _last_v2_snapshot
+        raise ContractPublishRejected(decision)
+
     if not decision.publish_allowed:
         raise ContractPublishRejected(decision)
 

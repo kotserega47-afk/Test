@@ -125,6 +125,13 @@ class ContractPublishRejected(RuntimeError):
             f"blocking={decision.has_blocking_contract} "
             f"codes={list(decision.blocking_issue_codes)}"
         )
+        if not decision.has_blocking_contract:
+            if decision.build_error:
+                msg += f" build_error={decision.build_error!r}"
+            elif decision.load_error:
+                msg += f" load_error={decision.load_error!r}"
+            elif decision.validation_crash:
+                msg += f" validation_crash={decision.validation_crash!r}"
         super().__init__(msg)
 
 
