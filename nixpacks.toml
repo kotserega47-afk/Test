@@ -2,6 +2,7 @@
 aptPkgs = [
   "python3-venv",          # ← добавили
   "python3-pip",
+  "libstdc++6",            # numpy/pandas wheels (libstdc++.so.6) + WalletEditor import chain
   "libnss3","libxss1","libasound2t64","libatk-bridge2.0-0","libgtk-3-0",
   "libdrm2","libxdamage1","libxcomposite1","libxrandr2","libgbm1",
   "libxkbcommon0","libpango-1.0-0","libcairo2","libatspi2.0-0",
