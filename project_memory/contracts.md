@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-03 |
+| **KB версия** | v1.4 |
+| **Последнее обновление** | 2026-06-04 |
 
 ---
 
@@ -49,6 +49,32 @@
 **Runtime (Phase 3D):** same flag `1` → Bakai rate monitor: `bakai_rate_current` (current/unchanged/errors/screenshot), `bakai_rate_alert` (rate change alert). Flag `0` → `CURRENT_RATE_BAKAI_CHAT_ID` / `NEW_RATE_BAKAI_CHAT_ID`. No import-time ENV raise (lazy at send).
 
 **Status (Phase 3A.1):** Shadow compare still logs ENV↔rules for all mapped routes. `/status` fields: `shadow_mismatches` — warning count for routes **not** yet runtime-migrated; `migrated_route_differences` — informational count when a runtime-migrated route’s legacy ENV differs from rules (not a warning).
+
+### `job_progress` + `job_health` (Job Health Guard v2 — C1 observe only)
+
+**Progress registry (`core/job_progress.py`):**
+
+| Contract | Rule |
+|----------|------|
+| API | `record_progress(job_type, stage)` — in-memory only; never raises |
+| Scope (C1) | **wallet** stages written from `downloader_wallets._wallet_stage()` |
+| Consumer | `core/job_health.evaluate_job_health()` reads latest `(stage, ts)` per `job_type` |
+| Persistence | **none** (lost on process restart) |
+| Idle display | When `job_type ∉ _RUNNING`, `/status` shows `state=idle` and **does not** surface stale stage |
+
+**Health snapshot (`core/job_health.py`):**
+
+| Field (per job_type) | Source |
+|----------------------|--------|
+| `state` | `idle` \| `running_ok` \| `running_slow` \| `stuck` \| `ghost_lock` |
+| `stage` | `job_progress` when running; else `none` |
+| `progress_age_sec` | `now - progress_ts` when running |
+| `runtime_sec` | `get_status()` when running |
+| `lock_age_sec`, `lock_pid` | `lock_status` |
+
+**Events (observe):** `job_health_degraded` appended when state ∈ `{running_slow, stuck, ghost_lock}` and `JOB_HEALTH_RECOVERY_MODE=observe`. **No** lock mutation.
+
+**Recovery:** **OFF** in C1 — `JOB_HEALTH_RECOVERY_MODE` values `ghost_lock_only` / `stuck_release` reserved for C2/C3 (not implemented).
 
 ---
 
@@ -105,6 +131,15 @@
 | `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_LOGIN` | да (hook enabled) | — | `integrations/conversion_wallet_editor_bridge.py` | scheduled conversion WE credentials (direct env, not operator map) | IMPORTANT | CONFIRMED |
 | `CONVERSION_WALLET_EDITOR_OPERATOR_PROFILE_PASSWORD` | да (hook enabled) | — | same | scheduled conversion WE credentials | IMPORTANT | CONFIRMED |
 | `DROPBOX_WALLET_EDITOR_PATH` | нет (registry skipped if unset) | — | `integrations/wallet_editor_registry.py` | cumulative WE results workbook in Dropbox | IMPORTANT | CONFIRMED |
+| `JOB_DISPATCH_VIA_EXECUTOR` | нет | `1` | `core/job_dispatch.py` | `0`: inline `request_job`; `1`: ThreadPoolExecutor (`job-worker`) | IMPORTANT | CONFIRMED |
+| `JOB_EXECUTOR_MAX_WORKERS` | нет | `2` | `core/job_dispatch.py` | worker pool size | OPTIONAL | CONFIRMED |
+| `JOB_LOCK_STALE_SEC` | нет | `600` | `core/job_runner.py`, `core/job_health.py` (ghost detect) | stale lock file reclaim on acquire | IMPORTANT | CONFIRMED |
+| `JOB_HEALTH_GUARD_ENABLED` | нет | `0` | `core/job_health.py`, `scheduler.py` | `1`: evaluate + `/status` `job_health:` block | OPTIONAL | CONFIRMED |
+| `JOB_HEALTH_RECOVERY_MODE` | нет | `observe` | `core/job_health.py` | C1: `observe` only (events, no lock action); C2/C3 reserved | OPTIONAL | CONFIRMED |
+| `JOB_HEALTH_WARNING_SECONDS` | нет | `600` | `core/job_health.py` | `running_slow` when runtime exceeds | OPTIONAL | CONFIRMED |
+| `JOB_HEALTH_TIMEOUT_SECONDS` | нет | `1800` | `core/job_health.py` | `stuck` when runtime exceeds | OPTIONAL | CONFIRMED |
+| `JOB_HEALTH_PROGRESS_TIMEOUT_SECONDS` | нет | `600` (min clamp 60 in code) | `core/job_health.py` | `stuck` when no progress update | OPTIONAL | CONFIRMED |
+| `JOB_HEALTH_TICK_INTERVAL_SEC` | нет | `30` | `core/job_health.py` | throttle `evaluate_job_health_if_due` in scheduler | OPTIONAL | CONFIRMED |
 
 ### Conversion → Wallet Editor hook (scheduled)
 

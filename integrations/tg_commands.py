@@ -144,6 +144,15 @@ def _format_observation_status() -> str:
     lines.extend(_format_conversion_observation_lines())
 
     lines.append("")
+    try:
+        from core.job_health import format_job_health_lines
+
+        lines.extend(format_job_health_lines())
+    except Exception:
+        lines.append("job_health:")
+        lines.append("- unknown")
+
+    lines.append("")
     lines.append("jobs:")
     try:
         st = get_status()

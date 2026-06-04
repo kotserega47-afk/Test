@@ -19,6 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analyzers.wallet_analyzer import build_wallet_stats_dto
 from core.config_manager import get_job_param, get_job_params_overrides
 from core.event_log import append_event
+from core.job_progress import record_progress
 from core.state_store import state_get, state_update
 from reporters.wallet_reporter import render_wallet
 from integrations.telegram_routes import (
@@ -44,6 +45,18 @@ BASE_DIR = "/tmp"
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "wallet_handler")
 AUTH_STATE_FILE = os.path.join(BASE_DIR, "auth_state_wallets.json")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Playwright timeouts (aligned with hourly_downloader; no env knobs in this patch).
+GOTO_TIMEOUT_MS = 60_000
+CALENDAR_SELECTOR_TIMEOUT_MS = 15_000
+NETWORKIDLE_TIMEOUT_MS = 60_000
+
+_WALLET_JOB_TYPE = "wallet"
+
+
+def _wallet_stage(stage: str) -> None:
+    logger.info(stage)
+    record_progress(_WALLET_JOB_TYPE, stage)
 
 
 @dataclass(frozen=True)
@@ -73,7 +86,11 @@ def _load_wallet_params() -> WalletJobParams:
 def _ensure_logged_in(page, context) -> None:
     logger.info("🔑 Проверяем авторизацию в Antares…")
 
-    page.goto("https://antares.plus/lkcard/#/payin", wait_until="domcontentloaded")
+    page.goto(
+        "https://antares.plus/lkcard/#/payin",
+        wait_until="domcontentloaded",
+        timeout=GOTO_TIMEOUT_MS,
+    )
     page.wait_for_timeout(3000)
 
     if "login" not in page.url.lower():
@@ -81,7 +98,11 @@ def _ensure_logged_in(page, context) -> None:
         return
 
     logger.info("🔑 Сессия недействительна, логинимся заново…")
-    page.goto("https://antares.plus/lkcard/#/login", wait_until="domcontentloaded")
+    page.goto(
+        "https://antares.plus/lkcard/#/login",
+        wait_until="domcontentloaded",
+        timeout=GOTO_TIMEOUT_MS,
+    )
 
     login_input = page.locator("input.form-control[type='text']").first
     password_input = page.locator("input.form-control[type='password']").first
@@ -107,6 +128,7 @@ def _ensure_logged_in(page, context) -> None:
     context.storage_state(path=AUTH_STATE_FILE)
     logger.info("✅ Новая сессия сохранена")
 
+
 def _find_and_pick_date(page, target_date: str) -> bool:
     selector = f"[data-date='{target_date}']"
     for _ in range(12):
@@ -127,19 +149,25 @@ def _find_and_pick_date(page, target_date: str) -> bool:
 
 def _download_payin(page, ts: str, days_back: int) -> str:
     logger.info("⬇️ PayIn → экспорт…")
-    page.goto("https://antares.plus/lkcard/#/payin")
-    page.wait_for_load_state("networkidle")
+    _wallet_stage("payin_goto_start")
+    page.goto("https://antares.plus/lkcard/#/payin", timeout=GOTO_TIMEOUT_MS)
+    _wallet_stage("payin_goto_done")
+    page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
+    _wallet_stage("payin_networkidle_done")
 
     target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
     logger.info(f"📅 PayIn дата (МСК): {target_date}")
 
     page.click("label.form-control")
-    page.wait_for_selector(".b-calendar")
+    page.wait_for_selector(".b-calendar", timeout=CALENDAR_SELECTOR_TIMEOUT_MS)
+    _wallet_stage("payin_calendar_open")
     _find_and_pick_date(page, target_date)
     page.locator("button:has-text('Применить')").click()
-    page.wait_for_load_state("networkidle")
+    page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
+    _wallet_stage("payin_apply_done")
     time.sleep(2)
 
+    _wallet_stage("payin_export_click")
     with page.expect_download(timeout=180000) as d:
         page.click("button:has-text('Экспорт')")
     download = d.value
@@ -152,19 +180,25 @@ def _download_payin(page, ts: str, days_back: int) -> str:
 
 def _download_payout(page, ts: str, days_back: int) -> str:
     logger.info("⬇️ Payout → экспорт…")
-    page.goto("https://antares.plus/lkcard/#/vyplaty")
-    page.wait_for_load_state("networkidle")
+    _wallet_stage("payout_goto_start")
+    page.goto("https://antares.plus/lkcard/#/vyplaty", timeout=GOTO_TIMEOUT_MS)
+    _wallet_stage("payout_goto_done")
+    page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
+    _wallet_stage("payout_networkidle_done")
 
     target_date = (datetime.now(MSK_TZ) - timedelta(days=days_back)).strftime("%Y-%m-%d")
     logger.info(f"📅 Payout дата (МСК): {target_date}")
 
     page.click("label.form-control")
-    page.wait_for_selector(".b-calendar")
+    page.wait_for_selector(".b-calendar", timeout=CALENDAR_SELECTOR_TIMEOUT_MS)
+    _wallet_stage("payout_calendar_open")
     _find_and_pick_date(page, target_date)
     page.locator("button:has-text('Применить')").click()
-    page.wait_for_load_state("networkidle")
+    page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
+    _wallet_stage("payout_apply_done")
     time.sleep(2)
 
+    _wallet_stage("payout_export_click")
     with page.expect_download(timeout=180000) as d:
         page.locator("button:has-text('Экспорт')").click()
     download = d.value
@@ -188,6 +222,7 @@ def _calc_wallet_fingerprint(payin_path: str, payout_path: str) -> str:
 
 
 def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
+    _wallet_stage("wallet_playwright_start")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
 
@@ -204,6 +239,7 @@ def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
 
         browser.close()
 
+    _wallet_stage("wallet_playwright_done")
     return payin_path, payout_path
 
 
@@ -227,8 +263,10 @@ def run_wallet_cycle() -> None:
     if last == fp:
         logger.info("🕒 [wallet] no changes -> skip analyzer")
         append_event(type="job_skipped_no_changes", job_type="wallet", payload={"fingerprint": fp[:10]})
+        _wallet_stage("wallet_cycle_done")
         return
 
+    _wallet_stage("wallet_analyze_start")
     dto = build_wallet_stats_dto(
         payin_path=payin_path,
         payout_path=payout_path,
@@ -244,6 +282,7 @@ def run_wallet_cycle() -> None:
     if not main_text:
         raise RuntimeError("wallet: rendered main report is empty")
 
+    _wallet_stage("wallet_send_start")
     if routes_from_rules_v2_enabled():
         send_message_to_route(ROUTE_PLATFORM_WALLET_DOWNLOAD_REPORT, main_text)
         if alerts_text:
@@ -257,11 +296,11 @@ def run_wallet_cycle() -> None:
             if alerts_text:
                 send_text(text=alerts_text, chat_id=chat_id)
 
-
     state_update("wallet", {
         "last_fingerprint": fp,
         "last_sent_ts": int(time.time()),
     })
+    _wallet_stage("wallet_cycle_done")
 
 
 if __name__ == "__main__":

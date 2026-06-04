@@ -132,6 +132,9 @@
 | E-TG-ROUTES-03 | 2026-06-03 | Phase 3B: second runtime route — `platform_wallet_download_report` / `TELEGRAM_CHAT_ID_WALLET`; `downloader_wallets.run_wallet_cycle` → `send_message_to_route`; same flag; text reports (not files) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/downloader_wallets.py` |
 | E-TG-ROUTES-04 | 2026-06-03 | Phase 3C: `conversion_wallet_editor` / `CONVERSION_WALLET_EDITOR`; bridge notifications + config chat via `send_message_to_route` when flag on; WE `task.chat_id` unchanged semantically | CONFIRMED | `integrations/telegram_routes.py`; `integrations/conversion_wallet_editor_bridge.py` |
 | E-TG-ROUTES-05 | 2026-06-03 | Phase 3D: `bakai_rate_current` / `bakai_rate_alert`; `bakai_monitor_playwright` route send helpers; lazy ENV (no import-time raise) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/bakai_monitor_playwright.py` |
+| E-OPS-01 | 2026-06-04 | Scheduled jobs use `dispatch_job_background` (executor submit, no `future.result()` in `schedule_loop`); single-flight preserved via `job_runner` lock; overlap → `job_rejected_busy` | CONFIRMED | `core/job_dispatch.py`; `scheduler.py` |
+| E-OPS-02 | 2026-06-04 | Wallet downloader: explicit Playwright timeouts aligned with `hourly_downloader`; stage logs; timeout → exception → `job_failed` + lock release in `finally` | CONFIRMED | `integrations/downloader_wallets.py` |
+| E-OPS-03 | 2026-06-04 | Job Health Guard v2 rollout: **C1** = observe only (`job_health` in `/status`, `job_health_degraded` events); **C2** planned = ghost_lock_only; **C3** planned = stuck recovery (manual/flag-gated) | CONFIRMED | `core/job_health.py`; `core/job_progress.py`; `tasks.md` JOB-HEALTH-GUARD-V2 |
 
 ---
 
@@ -152,6 +155,8 @@
 | I11 | Conversion `load_data` requires mapped columns `card`, `status`, `datetime` minimum | analyze fail | CONFIRMED |
 | I12 | Conversion fingerprint Phase 1A: match does **not** skip `conversion.run`; dedup skip requires Phase 1B + explicit decision | false dedup / missed reports | CONFIRMED |
 | I13 | Observation layer errors (write/retention/read) must not affect conversion pipeline outcome; `conversion_fingerprint_computed` payload unchanged | silent behavior change / contract drift | CONFIRMED |
+| I14 | `schedule_loop` must not block on job completion; health tick runs every loop iteration when guard enabled | false “scheduler dead” on long wallet | CONFIRMED |
+| I15 | Job Health Guard C1 must not clear locks or start duplicate jobs; recovery requires explicit C2/C3 + flag | split-brain wallet / zombie Chromium | CONFIRMED |
 
 ---
 
@@ -195,3 +200,4 @@
 | 2026-06-03 | Telegram routes Phase 3B — E-TG-ROUTES-03; `platform_wallet_download_report` / wallet download cycle |
 | 2026-06-03 | Telegram routes Phase 3C — E-TG-ROUTES-04; `conversion_wallet_editor` / Conversion→WE bridge |
 | 2026-06-03 | Telegram routes Phase 3D — E-TG-ROUTES-05; Bakai rate routes |
+| 2026-06-04 | Wallet hang mitigation — E-OPS-01…03; Patch A/B + Job Health Guard C1 |

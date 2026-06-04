@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.3 |
-| **Снимок на дату** | 2026-06-02 |
+| **KB версия** | v1.4 |
+| **Снимок на дату** | 2026-06-04 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -55,6 +55,9 @@
 - **Job lock stale recovery** — persistent `{STATE_DIR}/locks/*.lock` cleared when PID dead, ghost PID-1 after redeploy (lock pid == process but job not in `_RUNNING`), or lock age > `JOB_LOCK_STALE_SEC` (default 600).
 - **Telegram routes Phase 3C** — `conversion_wallet_editor` in `MIGRATED_RUNTIME_ROUTES`; `conversion_wallet_editor_bridge` notifications via `send_message_to_route` when `TELEGRAM_ROUTES_FROM_RULES_V2=1` (E-TG-ROUTES-04). `WalletEditorTask.chat_id` still from resolved route/config (not `access_rules`).
 - **Telegram routes Phase 3D** — `bakai_rate_current` / `bakai_rate_alert` in `MIGRATED_RUNTIME_ROUTES`; `bakai_monitor_playwright` uses route helpers when flag `1` (E-TG-ROUTES-05).
+- **Wallet hang Patch A** — `downloader_wallets.py`: explicit Playwright timeouts (`GOTO`/`networkidle`/`calendar` 60s/15s); stage logs + `record_progress("wallet", …)` (E-OPS-02).
+- **Wallet hang Patch B** — `schedule_loop` uses `dispatch_job_background`; scheduler `tick_age` independent of long jobs; TG/manual dispatch still blocking (E-OPS-01).
+- **Job Health Guard C1** — observe-only: `JOB_HEALTH_GUARD_ENABLED=1` → `/status` `job_health:` with `state`/`stage`/`progress_age`; recovery **off**; enable on Railway for ops (E-OPS-03).
 
 ---
 

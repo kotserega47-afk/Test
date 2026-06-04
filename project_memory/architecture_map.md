@@ -4,7 +4,7 @@
 |------|----------|
 | **KB версия** | v1.3 |
 | **Статус документа** | draft |
-| **Последнее обновление** | 2026-06-02 |
+| **Последнее обновление** | 2026-06-04 |
 
 ---
 
@@ -46,7 +46,7 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 | **Primary entrypoint** | `scheduler.py` → `main()` | `railway.toml` L7; `scheduler.py` L262–281 | CONFIRMED |
 | **Deploy command** | `/opt/venv/bin/python scheduler.py` | `railway.toml` | CONFIRMED |
 | **Startup path** | `main()` → build Telegram `Application` → register handlers → `ensure_worker_started()` (WalletEditor lazy workers) → `RULES.get_snapshot(force_sync=True)` → start daemon `schedule_loop` → `app.run_polling()` | `scheduler.py` L262–277 | CONFIRMED |
-| **Scheduler loop** | `schedule_loop()`: каждые ~5s читает schedules из rules, триггерит `request_job(job_type, Actor(kind="scheduler"))` | `scheduler.py` L155–255 | CONFIRMED |
+| **Scheduler loop** | `schedule_loop()`: каждые ~5s → `record_tick()` → `evaluate_job_health_if_due()` → schedules → `dispatch_job_background` (non-blocking) | `scheduler.py` | CONFIRMED |
 | **Telegram** | long polling (`app.run_polling`); команды через `integrations/tg_commands.get_handlers()` | `scheduler.py` L266–277 | CONFIRMED |
 | **Secondary entry** | `main.py` CLI (`python main.py <file>`) — не prod start; library entry `process_file()` вызывается из download job | `main.py` L157–174; `integrations/downloader.py` L18, L355 | CONFIRMED |
 
@@ -60,6 +60,44 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 - Schedules загружаются из rules workbook через `core/schedules.load_schedules()` → `rules.xlsx` (via `core/rules_provider.py`).
 - Job single-flight: PID lock `{STATE_DIR}/locks/{job_type}.lock` — `core/job_runner.py` L57–109.
 - Download/analyze pipeline lock: `/tmp/dropbox_pipeline.lock` — `run_once_guard.py` L6.
+- **Wallet Hang Patch A** — `downloader_wallets.py`: explicit Playwright timeouts + stage logs + `record_progress("wallet", stage)`.
+- **Wallet Hang Patch B** — scheduled jobs via `dispatch_job_background` (no `future.result()` in `schedule_loop`); TG/manual still blocking via `dispatch_job_sync` / `dispatch_job_async`.
+- **Job Health Guard C1** — observe-only: `core/job_progress.py` + `core/job_health.py` → `/status` `job_health:` block; recovery **off**.
+
+---
+
+## Job execution & health (Wallet Hang Mitigation + JHG v2 C1)
+
+```mermaid
+flowchart LR
+  SL[scheduler.schedule_loop]
+  RT[record_tick]
+  JH[evaluate_job_health_if_due]
+  DB[dispatch_job_background]
+  EX[ThreadPoolExecutor job-worker]
+  RJ[request_job]
+  JR[_RUNNING + wallet.lock]
+  PR[job_progress registry]
+  JHE[job_health snapshot]
+  ST["/status job_health:"]
+
+  SL --> RT --> JH
+  SL --> DB --> EX --> RJ --> JR
+  RJ --> PR
+  JH --> JHE --> ST
+  PR --> JHE
+```
+
+| Layer | Module | Role | Patch |
+|-------|--------|------|-------|
+| Scheduler | `scheduler.py` | Tick + schedule gating; **does not wait** for job completion | **B** |
+| Dispatch | `core/job_dispatch.py` | `dispatch_job_background` → `submit(request_job)` + done-callback log | **B** |
+| Runner | `core/job_runner.py` | Lock acquire/release, `_RUNNING`, `job_*` events | — |
+| Progress | `core/job_progress.py` | In-memory `(job_type → stage, ts)`; wallet stages from Patch A | **A** + **C1** |
+| Health | `core/job_health.py` | Classify idle / running_ok / running_slow / stuck / ghost_lock; observe events | **C1** |
+| Status | `integrations/tg_commands.py` | `format_job_health_lines()` in `/status` | **C1** |
+
+**Future (planned, not implemented):** C2 ghost_lock recovery only; C3 flag-gated stuck release — see `tasks.md` JOB-HEALTH-GUARD-V2.
 
 ---
 
@@ -455,8 +493,8 @@ raccoon_wallet_downloader
 
 | Job / loop | Trigger | Function | Lock / single-flight | Side effects | Failure behavior | Статус |
 |------------|---------|----------|----------------------|--------------|------------------|--------|
-| `schedule_loop` | daemon thread, ~5s tick | `scheduler.schedule_loop` | n/a | `request_job` for due schedules | load fail → sleep 10s, continue; job fail → log.exception, continue | CONFIRMED |
-| `wallet` | rules schedule or TG | `run_wallet_cycle` | `{STATE_DIR}/locks/wallet.lock` | Antares DL, TG wallet chat, state | exception → `job_failed`, re-raise | CONFIRMED |
+| `schedule_loop` | daemon thread, ~5s tick | `scheduler.schedule_loop` | n/a | `dispatch_job_background` for due jobs; `record_tick` + `evaluate_job_health_if_due` each iteration | load fail → sleep 10s; job errors logged in worker callback | CONFIRMED |
+| `wallet` | rules schedule or TG | `run_wallet_cycle` | `{STATE_DIR}/locks/wallet.lock` | Antares DL (bounded PW timeouts), progress stages, TG wallet chat, state | timeout → exception → `job_failed`; lock released in `finally` | CONFIRMED |
 | `hourly` | rules schedule (+ job_params gate) or TG | `run_hourly_job` | `{STATE_DIR}/locks/hourly.lock` | Antares DL, TG hourly chat, state | skip events; exception → `job_failed` | CONFIRMED |
 | `download` | rules schedule or TG | `run_download` | job lock + `/tmp/dropbox_pipeline.lock` | Antares DL, Dropbox, analyze, TG analiz chat | TG notify + raise | CONFIRMED |
 | `rate` | rules schedule or TG | `run_rate_monitor_safe` | `{STATE_DIR}/locks/rate.lock` | Playwright scrape, TG rate chats | 3 retries; final TG alert | CONFIRMED |
@@ -524,3 +562,4 @@ Database: not present in active runtime chain.
 | 2026-06-03 | **Registry lifecycle** — `hold`, `Отлёжка`, re-enable calc; E-WE-08 |
 | 2026-06-03 | **Registry format-safe** — openpyxl in-place; rev conflict; E-WE-09 |
 | 2026-06-03 | **Registry async + timeout** — job_params; TG before registry; E-WE-10 |
+| 2026-06-04 | **Wallet hang mitigation** — Patch A (PW timeouts + stage logs); Patch B (`dispatch_job_background`); Job Health Guard C1 (observe-only `/status` `job_health:`) |

@@ -17,7 +17,8 @@ from utils.log_profiles import LOG_PROFILES
 from core.schedules import load_schedules, Schedule
 from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
 from core.scheduler_health import record_error, record_schedules_loaded, record_tick
-from core.job_dispatch import dispatch_job_sync
+from core.job_health import evaluate_job_health_if_due
+from core.job_dispatch import dispatch_job_background
 from core.job_runner import Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
@@ -160,7 +161,7 @@ def schedule_loop() -> None:
     Каждые ~5 сек:
       - читаем schedules из rules.xlsx
       - вычисляем "пора ли"
-      - триггерим request_job(job_type, actor="scheduler")
+      - триггерим dispatch_job_background(job_type, actor="scheduler")
 
     Особенность:
       - Для job_type == "hourly" дополнительно применяем gate из job_params:
@@ -175,6 +176,7 @@ def schedule_loop() -> None:
     while True:
         _apply_scheduler_clock_reset_if_requested(next_every, next_cron, logger=log)
         record_tick()
+        evaluate_job_health_if_due()
         log_telegram_health_if_due()
 
         try:
@@ -218,10 +220,9 @@ def schedule_loop() -> None:
 
                     actor = Actor(kind="scheduler")
                     try:
-                        dispatch_job_sync(jt, actor)
+                        dispatch_job_background(jt, actor)
                     except Exception as e:
-                        # dispatch_job_sync / request_job already appends job_failed; here only log
-                        log.exception(f"❌ scheduled job failed: {jt}: {e}")
+                        log.exception(f"❌ scheduled job dispatch failed: {jt}: {e}")
 
                     next_every[jt] = ts_now + max(1, int(s.every_seconds))
 
@@ -247,9 +248,9 @@ def schedule_loop() -> None:
 
                     actor = Actor(kind="scheduler")
                     try:
-                        dispatch_job_sync(jt, actor)
+                        dispatch_job_background(jt, actor)
                     except Exception as e:
-                        log.exception(f"❌ scheduled job failed: {jt}: {e}")
+                        log.exception(f"❌ scheduled job dispatch failed: {jt}: {e}")
 
                     try:
                         next_cron[jt] = _next_cron_run(datetime.now(MSK), s.cron)

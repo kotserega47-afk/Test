@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-03 |
+| **Последнее обновление** | 2026-06-04 |
 
 ---
 
@@ -17,6 +17,8 @@
 | **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started) |
 | **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
+| **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
+| **Job Health Guard** | C1 observe **done**; C2/C3 **planned** — see roadmap below |
 
 ---
 
@@ -83,6 +85,26 @@
 | R-TG-03 | Polling alive but outbound sender broken | Compare `/status` telegram_sender block vs scheduler; health logs |
 | R-TG-04 | Business jobs commit state after enqueue (not delivery) | **open** — separate task; health does not fix state semantics |
 | R-TG-05 | No external alert channel besides Railway logs | Railway log alert on `[TelegramSender/health] DEGRADED` |
+
+### Job Health Guard risks (R-JHG-*)
+
+| ID | Risk | Mitigation |
+|----|------|------------|
+| R-JHG-01 | False-positive `stuck` (slow Antares vs zombie) | Progress registry + per-job `JOB_HEALTH_*_SECONDS`; C1 observe rollout before C2/C3 recovery; tune from `/status` `progress_age` / `stage` |
+
+---
+
+## JOB-HEALTH-GUARD-V2 (roadmap)
+
+| Phase | Status | Goal |
+|-------|--------|------|
+| **C1** | **COMPLETE** | Observe-only: `job_progress` + `job_health` + `/status` `job_health:`; `JOB_HEALTH_GUARD_ENABLED`; recovery **off** |
+| **C2** | **PLANNED** | **ghost_lock_only** — clear stale lock file when provably ghost (not in `_RUNNING`, dead PID / PID-1 pattern / age > `JOB_LOCK_STALE_SEC`); no `_RUNNING` mutation |
+| **C3** | **PLANNED** | **Stuck recovery** — manual TG command and/or `JOB_HEALTH_RECOVERY_MODE=stuck_release` flag; never default; requires progress+runtime proof; ops runbook for Chromium zombie |
+
+**Dependencies:** Patch A + Patch B deployed; enable `JOB_HEALTH_GUARD_ENABLED=1` on Railway for C1 validation.
+
+**Tests (C1):** `tests/unit/test_job_health_c1.py`, `test_downloader_wallets_timeouts.py`, `test_scheduler_dispatch_background.py`.
 
 ---
 
@@ -169,6 +191,9 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | CONFIG-MIGRATION-PHASE-4A | complete | Payout rules workbook prep (`payout_info_rules`, `payout_ignore_phrases`) |
 | CONFIG-MIGRATION-PHASE-4B | complete | Validate Payout Rules V2 mode=1 — semantic equality + shadow clean |
 | CONFIG-MIGRATION-PHASE-4C | complete | Payout Rules V2 production cutover (`PAYOUT_CONFIG_FROM_RULES_V2=1`) |
+| WALLET-HANG-PATCH-A | complete | Playwright timeouts + wallet stage logs + progress hooks |
+| WALLET-HANG-PATCH-B | complete | Scheduler `dispatch_job_background` |
+| JOB-HEALTH-GUARD-C1 | complete | Observe-only job health in `/status` |
 
 ---
 

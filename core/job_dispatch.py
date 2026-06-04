@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Optional
 
 from core.job_runner import Actor, request_job
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_MAX_WORKERS = 2
 _JOB_EXECUTOR: Optional[ThreadPoolExecutor] = None
@@ -47,6 +50,44 @@ def _reset_job_executor_for_tests() -> None:
     if _JOB_EXECUTOR is not None:
         _JOB_EXECUTOR.shutdown(wait=False, cancel_futures=True)
     _JOB_EXECUTOR = None
+
+
+def _log_future_exception(future: Future, *, job_type: str, actor_kind: str) -> None:
+    exc = future.exception()
+    if exc is None:
+        return
+    log.exception(
+        "scheduled job worker failed: job_type=%s actor=%s",
+        job_type,
+        actor_kind,
+        exc_info=exc,
+    )
+
+
+def dispatch_job_background(
+    job_type: str,
+    actor: Actor,
+    *,
+    force_rules_sync: bool = False,
+) -> None:
+    """Enqueue a job for the scheduler without blocking the caller.
+
+    Locking and ``job_started`` / ``job_failed`` events remain inside ``request_job``.
+    Exceptions raised from the worker future are logged via ``add_done_callback``.
+    """
+
+    actor_kind = actor.kind
+
+    def _done(fut: Future) -> None:
+        _log_future_exception(fut, job_type=job_type, actor_kind=actor_kind)
+
+    future = get_job_executor().submit(
+        request_job,
+        job_type,
+        actor,
+        force_rules_sync=force_rules_sync,
+    )
+    future.add_done_callback(_done)
 
 
 def dispatch_job_sync(
