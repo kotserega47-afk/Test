@@ -5,6 +5,7 @@ from core.datetime_utils import now_msk
 from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+from core.playwright_cleanup import close_playwright_stack
 from integrations.telegram_bot import send_message_sync
 from integrations.telegram_routes import (
     ENV_BAKAI_RATE_ALERT_LEGACY,
@@ -126,6 +127,11 @@ def check_bakai_rate(chat_id: str | None = None):
 
     logger.info("[rate_monitor] === Проверка курса покупки RUB ===")
 
+    browser = None
+    context = None
+    page = None
+    buy_rate = None
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -175,14 +181,12 @@ def check_bakai_rate(chat_id: str | None = None):
 
             buy_text = cells.nth(1).inner_text().strip()
             buy_rate = float(buy_text.replace(",", "."))
-
-            browser.close()
     except Exception as e:
         logger.error(f"[rate_monitor] Ошибка мониторинга: {e}")
 
         screenshot_path = None
         try:
-            if 'page' in locals() and not page.is_closed():
+            if page is not None and not page.is_closed():
                 ts = now_msk().strftime("%Y%m%d_%H%M%S")
                 screenshot_path = f"/tmp/bakai_error_{ts}.png"
                 page.screenshot(path=screenshot_path, full_page=True)
@@ -190,6 +194,8 @@ def check_bakai_rate(chat_id: str | None = None):
             screenshot_path = None
 
         raise RateMonitorError(str(e), screenshot_path=screenshot_path)
+    finally:
+        close_playwright_stack(page=page, context=context, browser=browser)
 
     # ---------------- обработка результата ----------------
 

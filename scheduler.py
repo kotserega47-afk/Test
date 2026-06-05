@@ -23,6 +23,7 @@ from core.job_runner import Actor
 from core.config_manager import get_job_params
 from integrations.tg_commands import get_handlers, RULES
 from integrations.telegram_bot import log_telegram_health_if_due
+from observability.process_resource_health import log_process_resource_health_if_due
 from automation.worker import ensure_worker_started
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -178,6 +179,7 @@ def schedule_loop() -> None:
         record_tick()
         evaluate_job_health_if_due()
         log_telegram_health_if_due()
+        log_process_resource_health_if_due()
 
         try:
             schedules = load_schedules(force_sync=False)

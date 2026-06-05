@@ -20,6 +20,7 @@ from analyzers.wallet_analyzer import build_wallet_stats_dto
 from core.config_manager import get_job_param, get_job_params_overrides
 from core.event_log import append_event
 from core.job_progress import record_progress
+from core.playwright_cleanup import close_playwright_stack
 from core.state_store import state_get, state_update
 from reporters.wallet_reporter import render_wallet
 from integrations.telegram_routes import (
@@ -224,20 +225,23 @@ def _calc_wallet_fingerprint(payin_path: str, payout_path: str) -> str:
 def _download_wallet_files(ts: str, params: WalletJobParams) -> Tuple[str, str]:
     _wallet_stage("wallet_playwright_start")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
+            if os.path.exists(AUTH_STATE_FILE):
+                context = browser.new_context(storage_state=AUTH_STATE_FILE, accept_downloads=True)
+            else:
+                context = browser.new_context(accept_downloads=True)
 
-        if os.path.exists(AUTH_STATE_FILE):
-            context = browser.new_context(storage_state=AUTH_STATE_FILE, accept_downloads=True)
-        else:
-            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
+            _ensure_logged_in(page, context)
 
-        page = context.new_page()
-        _ensure_logged_in(page, context)
-
-        payin_path = _download_payin(page, ts, params.payin_days_back)
-        payout_path = _download_payout(page, ts, params.payout_days_back)
-
-        browser.close()
+            payin_path = _download_payin(page, ts, params.payin_days_back)
+            payout_path = _download_payout(page, ts, params.payout_days_back)
+        finally:
+            close_playwright_stack(page=page, context=context, browser=browser)
 
     _wallet_stage("wallet_playwright_done")
     return payin_path, payout_path

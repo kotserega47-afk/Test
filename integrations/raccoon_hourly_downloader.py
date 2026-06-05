@@ -4,6 +4,7 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 import zoneinfo
 
+from core.playwright_cleanup import close_playwright_stack
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -72,19 +73,23 @@ def _download_payin(page):
 def run_hourly_raccoon_cycle():
     """Скачивание PayIn + Payout за сегодня."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
-        context = browser.new_context(
-            accept_downloads=True,
-            storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None,
-            timezone_id = "Europe/Moscow"
-        )
-        page = context.new_page()
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
+            context = browser.new_context(
+                accept_downloads=True,
+                storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None,
+                timezone_id="Europe/Moscow",
+            )
+            page = context.new_page()
 
-        _ensure_logged_in(page, context)
+            _ensure_logged_in(page, context)
 
-        payin_path = _download_payin(page)
-
-        browser.close()
+            _download_payin(page)
+        finally:
+            close_playwright_stack(page=page, context=context, browser=browser)
 
     logger.info("[hourly_dl] Скачивание завершено")
     return True

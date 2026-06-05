@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.conversion_pipeline import run_conversion_pipeline
+from core.playwright_cleanup import close_playwright_stack
 from integrations.dropbox_watcher import upload_file
 from integrations.telegram_bot import send_message_sync
 from main import process_file
@@ -314,6 +315,8 @@ def run_download():
             headless=HEADLESS,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
+        context = None
+        page = None
         try:
             context = browser.new_context(accept_downloads=True)
             if os.path.exists(AUTH_STATE_FILE):
@@ -341,7 +344,7 @@ def run_download():
             send_message_sync(msg, chat_id=CHAT_ID)
             raise
         finally:
-            browser.close()
+            close_playwright_stack(page=page, context=context, browser=browser)
 
     try:
         card_name = f"card_{timestamp}.xlsx"

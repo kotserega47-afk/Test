@@ -10,6 +10,7 @@ from typing import Tuple
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
 
+from core.playwright_cleanup import close_playwright_stack
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -140,30 +141,34 @@ def run_hourly_cycle() -> Tuple[str, str]:
     payout_path = os.path.join(BASE_DIR, "payout.xlsx")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
 
-        context = browser.new_context(
-            accept_downloads=True,
-            storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None,
-        )
-        page = context.new_page()
+            context = browser.new_context(
+                accept_downloads=True,
+                storage_state=AUTH_STATE if os.path.exists(AUTH_STATE) else None,
+            )
+            page = context.new_page()
 
-        _ensure_logged_in(page, context)
+            _ensure_logged_in(page, context)
 
-        _download_table(
-            page,
-            url="https://antares.plus/lkcard/#/payin",
-            kind="PayIn",
-            out_path=payin_path,
-        )
-        _download_table(
-            page,
-            url="https://antares.plus/lkcard/#/vyplaty",
-            kind="Payout",
-            out_path=payout_path,
-        )
-
-        browser.close()
+            _download_table(
+                page,
+                url="https://antares.plus/lkcard/#/payin",
+                kind="PayIn",
+                out_path=payin_path,
+            )
+            _download_table(
+                page,
+                url="https://antares.plus/lkcard/#/vyplaty",
+                kind="Payout",
+                out_path=payout_path,
+            )
+        finally:
+            close_playwright_stack(page=page, context=context, browser=browser)
 
     logger.info("[hourly_dl] done")
     return payin_path, payout_path

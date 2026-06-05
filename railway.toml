@@ -4,5 +4,5 @@ builder = "NIXPACKS"
 [services]
   [services.main]
     name = "file-analyzer"
-    start = "/opt/venv/bin/python scheduler.py"
+    start = "/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py"
     plan = "free"

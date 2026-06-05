@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
 
+from core.playwright_cleanup import close_playwright_stack
+
 # Добавляем корень проекта в пути
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -153,26 +155,29 @@ def run_raccoon_wallet_cycle():
     payin_days = cfg.get("download_periods", {}).get("payin_days_back", 2)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
-        context = browser.new_context(
-            accept_downloads=True,
-            timezone_id="Europe/Moscow"
-        )
-
-        if os.path.exists(AUTH_STATE_FILE):
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox"])
             context = browser.new_context(
-                storage_state=AUTH_STATE_FILE,
                 accept_downloads=True,
-                timezone_id="Europe/Moscow"
+                timezone_id="Europe/Moscow",
             )
 
-        page = context.new_page()
-        _ensure_logged_in(page, context)
+            if os.path.exists(AUTH_STATE_FILE):
+                context = browser.new_context(
+                    storage_state=AUTH_STATE_FILE,
+                    accept_downloads=True,
+                    timezone_id="Europe/Moscow",
+                )
 
-        payin_path = _download_payin(page, ts, payin_days)
-        #payout_path = _download_payout(page, ts, payout_days)
+            page = context.new_page()
+            _ensure_logged_in(page, context)
 
-        browser.close()
+            payin_path = _download_payin(page, ts, payin_days)
+        finally:
+            close_playwright_stack(page=page, context=context, browser=browser)
 
     analyze_raccoon_wallets(payin_path, payout_path=None)
 
