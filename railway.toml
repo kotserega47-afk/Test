@@ -1,8 +1,10 @@
 [build]
 builder = "NIXPACKS"
 
+[deploy]
+startCommand = "/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py"
+
 [services]
   [services.main]
     name = "file-analyzer"
-    start = "/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py"
     plan = "free"
