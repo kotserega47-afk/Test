@@ -58,6 +58,8 @@ ALLOWED_TELEGRAM_ROUTE_KEYS: frozenset[str] = frozenset(
         "bakai_rate_current",
         "bakai_rate_alert",
         "wallet_editor_registry_warnings",
+        "wallet_editor_auto_enable",
+        "wallet_editor_auto_enable_alert",
     }
 )
 

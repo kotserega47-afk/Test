@@ -17,6 +17,7 @@ from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 from core.job_dispatch import dispatch_job_async
 from core.job_runner import get_status, Actor, JOB_REGISTRY
+from integrations.wallet_editor_auto_enable import run_auto_enable
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
 
@@ -240,6 +241,7 @@ def _help_text() -> str:
         "/run_raccoon\n"
         "/run_hourly_raccoon\n"
         "/rules_validate\n"
+        "/auto_enable_run\n"
         "/help"
     )
 
@@ -398,6 +400,36 @@ async def cmd_run_hourly_raccoon(update: Update, context: ContextTypes.DEFAULT_T
     await _run_job_async(update, "raccoon_hourly")
 
 
+async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "auto_enable_run"):
+        return
+
+    actor = Actor(
+        kind="tg",
+        chat_id=int(update.effective_chat.id),
+        user_id=int(update.effective_user.id),
+    )
+    await update.message.reply_text("🧩 Запускаю WalletEditor Auto-Enable (Phase A dry-run)...")
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: run_auto_enable(actor, manual=True),
+        )
+        if result.skipped_reason == "disabled":
+            await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
+        elif result.skipped_reason == "error":
+            await update.message.reply_text("⚠️ Auto-Enable plan failed. См. route-отчёт.")
+        else:
+            await update.message.reply_text(
+                f"✅ Phase A plan готов. Telegram report sent={result.sent}"
+            )
+    except Exception as e:
+        log.exception("cmd_auto_enable_run failed")
+        await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
+
+
 def get_handlers():
     return [
         CommandHandler("start", cmd_start),
@@ -412,5 +444,6 @@ def get_handlers():
         CommandHandler("run_raccoon", cmd_run_raccoon),
         CommandHandler("run_hourly_raccoon", cmd_run_hourly_raccoon),
         CommandHandler("rules_validate", cmd_rules_validate),
+        CommandHandler("auto_enable_run", cmd_auto_enable_run),
         MessageHandler(filters.Document.ALL, handle_wallet_editor_document),
     ]
