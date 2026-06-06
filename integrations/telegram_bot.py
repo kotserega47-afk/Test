@@ -27,6 +27,15 @@ _HEALTH_LOG_PREFIX = "[TelegramSender/health]"
 _DEFAULT_DEGRADED_THRESHOLD = 3
 _DEFAULT_HEALTH_LOG_INTERVAL_SECONDS = 600
 _TOKEN_URL_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+", re.IGNORECASE)
+_TELEGRAM_API_BOT_URL_RE = re.compile(
+    r"https://api\.telegram\.org/bot[^/\s\"'<>]+",
+    re.IGNORECASE,
+)
+_TELEGRAM_API_FILE_BOT_URL_RE = re.compile(
+    r"https://api\.telegram\.org/file/bot[^/\s\"'<>]+",
+    re.IGNORECASE,
+)
+_TOKEN_ENV_NAMES = ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN")
 
 # =====================================================
 #   Telegram sender health (Option B)
@@ -70,15 +79,41 @@ def _health_log_interval_seconds() -> int:
     return max(1, value)
 
 
+def _known_telegram_tokens() -> tuple[str, ...]:
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for env_name in _TOKEN_ENV_NAMES:
+        value = (os.getenv(env_name) or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            tokens.append(value)
+    module_token = (TELEGRAM_TOKEN or "").strip()
+    if module_token and module_token not in seen:
+        tokens.append(module_token)
+    return tuple(tokens)
+
+
 def _sanitize_error_message(message: str) -> str:
     text = (message or "").strip()
-    token = (TELEGRAM_TOKEN or "").strip()
-    if token:
-        text = text.replace(token, "***")
-    text = _TOKEN_URL_RE.sub("bot***", text)
+    for token in _known_telegram_tokens():
+        text = text.replace(token, "<redacted>")
+    text = _TELEGRAM_API_FILE_BOT_URL_RE.sub(
+        "https://api.telegram.org/file/bot<redacted>",
+        text,
+    )
+    text = _TELEGRAM_API_BOT_URL_RE.sub(
+        "https://api.telegram.org/bot<redacted>",
+        text,
+    )
+    text = _TOKEN_URL_RE.sub("bot<redacted>", text)
     if len(text) > 500:
         text = text[:500] + "..."
     return text or "unknown"
+
+
+def sanitize_telegram_error(message: str) -> str:
+    """Public wrapper for redacting Telegram bot tokens from log/alert text."""
+    return _sanitize_error_message(message)
 
 
 def _error_class_name(exc: BaseException) -> str:
@@ -402,7 +437,10 @@ def send_message_sync(text: str, chat_id: str):
         logger.info(f"📨 Добавлено в очередь сообщение ({chat_id}): {text[:60]}")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка постановки в очередь send_message: {e}")
+        logger.error(
+            f"❌ Ошибка постановки в очередь send_message: "
+            f"{_sanitize_error_message(str(e))}"
+        )
 
 
 def send_photo_sync(photo_path: str, caption: str, chat_id: str):
@@ -419,8 +457,12 @@ def send_photo_sync(photo_path: str, caption: str, chat_id: str):
                 timeout=30
             )
     except Exception as e:
-        print(f"[telegram] Ошибка отправки фото: {e}")
-        send_message_sync(f"⚠️ Ошибка при отправке скриншота: {e}", chat_id)
+        safe_error = _sanitize_error_message(str(e))
+        print(f"[telegram] Ошибка отправки фото: {safe_error}")
+        send_message_sync(
+            f"⚠️ Ошибка при отправке скриншота: {safe_error}",
+            chat_id,
+        )
 
 
 def send_file_sync(path: str, caption: str | None, chat_id: str):
@@ -444,7 +486,10 @@ def send_file_sync(path: str, caption: str | None, chat_id: str):
         logger.info(f"📨 Файл поставлен в очередь ({chat_id}): {path}")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка постановки в очередь send_file: {e}")
+        logger.error(
+            f"❌ Ошибка постановки в очередь send_file: "
+            f"{_sanitize_error_message(str(e))}"
+        )
 
 
 # =====================================================
@@ -462,13 +507,16 @@ def send_message_direct(text: str, chat_id: str):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    resp = requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text
-    }, timeout=10)
-
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(
+            url,
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        raise RuntimeError(_sanitize_error_message(str(e))) from e
 
 
 # Phase 3A — route-first delivery helpers (resolution in ``telegram_routes``).

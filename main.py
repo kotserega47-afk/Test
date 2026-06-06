@@ -33,7 +33,12 @@ def _safe_send(msg: str) -> None:
         else:
             logger.warning(f"CHAT_ID не задан, сообщение не отправлено: {msg}")
     except Exception as e:
-        logger.error(f"⚠️ Не удалось отправить сообщение в Telegram: {e}")
+        from integrations.telegram_bot import sanitize_telegram_error
+
+        logger.error(
+            f"⚠️ Не удалось отправить сообщение в Telegram: "
+            f"{sanitize_telegram_error(str(e))}"
+        )
 
 
 def process_file(filename: str, aux_filename: str | None = None) -> bool:

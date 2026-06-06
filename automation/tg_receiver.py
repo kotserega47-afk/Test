@@ -8,6 +8,7 @@ import requests
 
 from automation.worker import add_task, task_queue
 from automation.audit import log
+from integrations.telegram_bot import sanitize_telegram_error
 from transport.telegram_transport import send_text
 
 
@@ -170,14 +171,19 @@ def run_receiver() -> None:
                     )
 
                 except Exception as e:
-                    log.exception(f"❌ [Receiver] failed to receive file chat_id={chat_id}: {e}")
+                    safe_error = sanitize_telegram_error(str(e))
+                    log.error(
+                        f"❌ [Receiver] failed to receive file chat_id={chat_id}: {safe_error}"
+                    )
 
                     send_text(
                         chat_id=str(chat_id),
-                        text=f"❌ Ошибка при приёме файла: {e}",
+                        text=f"❌ Ошибка при приёме файла: {safe_error}",
                     )
 
         except Exception as e:
-            log.error(f"❌ [Receiver] loop crash: {e}")
-            log.error(traceback.format_exc())
+            safe_error = sanitize_telegram_error(str(e))
+            safe_traceback = sanitize_telegram_error(traceback.format_exc())
+            log.error(f"❌ [Receiver] loop crash: {safe_error}")
+            log.error(safe_traceback)
             time.sleep(5)

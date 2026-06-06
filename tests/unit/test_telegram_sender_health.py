@@ -114,7 +114,7 @@ def test_snapshot_does_not_contain_token(with_token):
 def test_sanitize_error_message_redacts_token(with_token):
     msg = tg._sanitize_error_message("error bot123456:ABC-DEF timeout")
     assert "ABC-DEF" not in msg
-    assert "bot***" in msg
+    assert "bot<redacted>" in msg
 
 
 def test_worker_failure_does_not_stop_processing(with_token):
