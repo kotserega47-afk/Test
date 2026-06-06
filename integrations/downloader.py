@@ -14,6 +14,10 @@ from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from integrations.conversion_pipeline import run_conversion_pipeline
+from integrations.downloader_datepicker import (
+    payout_left_date,
+    pick_date_in_bootstrap_datepicker,
+)
 from core.playwright_cleanup import close_playwright_stack
 from integrations.dropbox_watcher import upload_file
 from integrations.telegram_bot import send_message_sync
@@ -220,10 +224,9 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
         apply_button_selector = "button:has-text('Применить')"
         export_button_selector = "button:has-text('Экспорт')"
 
-        # Левая дата = today - 7
-        start_dt = datetime.now(tz) - timedelta(days=7)
-        start_day = str(start_dt.day)
-        logger.info(f"📅 Левая дата должна быть: {start_dt.strftime('%d.%m.%Y')}")
+        # Левая дата = today - 7 (может попасть в предыдущий месяц, напр. 31.05)
+        start_date = payout_left_date(now=datetime.now(tz), days_back=7)
+        logger.info(f"📅 Левая дата должна быть: {start_date.strftime('%d.%m.%Y')}")
 
         # На странице два datepicker.
         # Берём кнопку первого (левого) datepicker, а не общий label.form-control.
@@ -232,15 +235,17 @@ def _download_extra_files(page, timestamp: str) -> list[str]:
         left_date_button.click()
 
         # Ждём открытие popup календаря первого datepicker
-        calendar_popup = page.locator("div.b-form-datepicker div.dropdown-menu[role='dialog']").nth(0)
+        calendar_popup = page.locator(
+            "div.b-form-datepicker div.dropdown-menu[role='dialog']"
+        ).nth(0)
         calendar_popup.wait_for(state="visible", timeout=10_000)
 
-        # В этом календаре день рендерится как span/button с текстом числа, а не как [data-date=...]
-        day_locator = calendar_popup.locator(f"span.btn:has-text('{start_day}')").first
-        day_locator.wait_for(state="visible", timeout=10_000)
-        day_locator.click()
-
-        logger.info(f"✅ В левом календаре выбрано число: {start_day}")
+        pick_date_in_bootstrap_datepicker(
+            calendar_popup,
+            start_date,
+            log_info=logger.info,
+            log_warning=logger.warning,
+        )
 
         page.wait_for_selector(apply_button_selector, state="visible", timeout=10_000)
         page.click(apply_button_selector)
