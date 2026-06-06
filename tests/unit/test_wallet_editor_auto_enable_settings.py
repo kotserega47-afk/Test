@@ -10,6 +10,7 @@ from integrations.wallet_editor_auto_enable_settings import (
     DEFAULT_DRY_RUN,
     DEFAULT_ENABLED,
     DEFAULT_MAX_ROWS_PER_BATCH,
+    DEFAULT_MAX_ROWS_PER_RUN,
     DEFAULT_SECONDS_PER_CARD_TIMEOUT,
     JOB_KEY,
     load_auto_enable_settings,
@@ -38,6 +39,7 @@ def test_load_auto_enable_settings_defaults():
     assert settings.dry_run is DEFAULT_DRY_RUN
     assert settings.approval_required is True
     assert settings.max_rows_per_batch == DEFAULT_MAX_ROWS_PER_BATCH
+    assert settings.max_rows_per_run == DEFAULT_MAX_ROWS_PER_RUN
     assert settings.seconds_per_card_timeout == DEFAULT_SECONDS_PER_CARD_TIMEOUT
     assert settings.batch_timeout_buffer_seconds == DEFAULT_BATCH_TIMEOUT_BUFFER_SECONDS
     assert settings.allowed_statuses_for_enable == DEFAULT_ALLOWED_STATUSES
@@ -52,6 +54,7 @@ def test_load_auto_enable_settings_bool_and_int_parsing():
         "dry_run": "false",
         "approval_required": "yes",
         "max_rows_per_batch": "150",
+        "max_rows_per_run": "25",
         "seconds_per_card_timeout": "12",
         "batch_timeout_buffer_seconds": "60",
         "include_overdue": "0",
@@ -68,6 +71,7 @@ def test_load_auto_enable_settings_bool_and_int_parsing():
     assert settings.dry_run is False
     assert settings.approval_required is True
     assert settings.max_rows_per_batch == 150
+    assert settings.max_rows_per_run == 25
     assert settings.seconds_per_card_timeout == 12
     assert settings.batch_timeout_buffer_seconds == 60
     assert settings.include_overdue is False
@@ -92,7 +96,9 @@ def test_load_auto_enable_settings_csv_statuses():
     "bad_value,field,expected",
     [
         ("abc", "max_rows_per_batch", DEFAULT_MAX_ROWS_PER_BATCH),
+        ("abc", "max_rows_per_run", DEFAULT_MAX_ROWS_PER_RUN),
         ("-5", "seconds_per_card_timeout", DEFAULT_SECONDS_PER_CARD_TIMEOUT),
+        ("-3", "max_rows_per_run", DEFAULT_MAX_ROWS_PER_RUN),
         ("maybe", "enabled", DEFAULT_ENABLED),
     ],
 )

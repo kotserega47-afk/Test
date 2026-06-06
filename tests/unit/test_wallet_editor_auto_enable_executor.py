@@ -31,6 +31,7 @@ def _settings() -> AutoEnableSettings:
         dry_run=False,
         approval_required=False,
         max_rows_per_batch=200,
+        max_rows_per_run=0,
         seconds_per_card_timeout=10,
         batch_timeout_buffer_seconds=300,
         allowed_statuses_for_enable=("готов к работе", "активный вход", "активный выход"),

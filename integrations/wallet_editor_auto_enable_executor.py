@@ -29,6 +29,7 @@ from integrations.conversion_wallet_editor_bridge import (
     OPERATOR_PROFILE,
 )
 from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
+from integrations.wallet_editor_auto_enable_eligibility import is_run_limited
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -417,6 +418,8 @@ def build_batch_execution_report(
     batch_index: int,
     batch_total: int,
     settings: AutoEnableSettings,
+    selected_after_dedup: int | None = None,
+    selected_for_run: int | None = None,
 ) -> str:
     ok = sum(1 for o in outcomes if o.registry_value == REGISTRY_OK)
     skip = sum(1 for o in outcomes if o.registry_value == REGISTRY_SKIP)
@@ -425,11 +428,32 @@ def build_batch_execution_report(
     def _count(code: str) -> int:
         return sum(1 for o in outcomes if o.error_code == code)
 
+    run_limit_lines: list[str] = []
+    if selected_after_dedup is not None and selected_for_run is not None:
+        limited = is_run_limited(
+            selected_after_dedup=selected_after_dedup,
+            selected_for_run=selected_for_run,
+            max_rows_per_run=settings.max_rows_per_run,
+        )
+        run_limit_lines = [
+            "",
+            "run selection:",
+            f"- selected after dedup: {selected_after_dedup}",
+            f"- max_rows_per_run: {settings.max_rows_per_run}",
+            f"- selected for this run: {selected_for_run}",
+            f"- limited by max_rows_per_run: {'yes' if limited else 'no'}",
+        ]
+        if limited:
+            run_limit_lines.append(
+                f"⚠️ Run limited by max_rows_per_run: selected {selected_for_run} of {selected_after_dedup} candidates."
+            )
+
     lines = [
         "🧩 WalletEditor Auto-Enable",
         "mode: Phase B1 execution-only",
         f"batch: {batch_index}/{batch_total}",
         f"rows in batch: {len(outcomes)}",
+        *run_limit_lines,
         "",
         "results:",
         f"- OK: {ok}",

@@ -16,6 +16,7 @@ DEFAULT_ENABLED = False
 DEFAULT_DRY_RUN = True
 DEFAULT_APPROVAL_REQUIRED = True
 DEFAULT_MAX_ROWS_PER_BATCH = 200
+DEFAULT_MAX_ROWS_PER_RUN = 0
 DEFAULT_SECONDS_PER_CARD_TIMEOUT = 10
 DEFAULT_BATCH_TIMEOUT_BUFFER_SECONDS = 300
 DEFAULT_INCLUDE_OVERDUE = True
@@ -31,6 +32,7 @@ PARAM_ENABLED = "enabled"
 PARAM_DRY_RUN = "dry_run"
 PARAM_APPROVAL_REQUIRED = "approval_required"
 PARAM_MAX_ROWS_PER_BATCH = "max_rows_per_batch"
+PARAM_MAX_ROWS_PER_RUN = "max_rows_per_run"
 PARAM_SECONDS_PER_CARD_TIMEOUT = "seconds_per_card_timeout"
 PARAM_BATCH_TIMEOUT_BUFFER_SECONDS = "batch_timeout_buffer_seconds"
 PARAM_ALLOWED_STATUSES = "allowed_statuses_for_enable"
@@ -45,6 +47,7 @@ class AutoEnableSettings:
     dry_run: bool
     approval_required: bool
     max_rows_per_batch: int
+    max_rows_per_run: int
     seconds_per_card_timeout: int
     batch_timeout_buffer_seconds: int
     allowed_statuses_for_enable: tuple[str, ...]
@@ -151,6 +154,7 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
         PARAM_DRY_RUN,
         PARAM_APPROVAL_REQUIRED,
         PARAM_MAX_ROWS_PER_BATCH,
+        PARAM_MAX_ROWS_PER_RUN,
         PARAM_SECONDS_PER_CARD_TIMEOUT,
         PARAM_BATCH_TIMEOUT_BUFFER_SECONDS,
         PARAM_ALLOWED_STATUSES,
@@ -184,6 +188,11 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
             raw[PARAM_MAX_ROWS_PER_BATCH],
             default=DEFAULT_MAX_ROWS_PER_BATCH,
             param_name=PARAM_MAX_ROWS_PER_BATCH,
+        ),
+        max_rows_per_run=_parse_non_negative_int(
+            raw[PARAM_MAX_ROWS_PER_RUN],
+            default=DEFAULT_MAX_ROWS_PER_RUN,
+            param_name=PARAM_MAX_ROWS_PER_RUN,
         ),
         seconds_per_card_timeout=_parse_non_negative_int(
             raw[PARAM_SECONDS_PER_CARD_TIMEOUT],

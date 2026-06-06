@@ -29,7 +29,9 @@ from integrations.telegram_routes import (
 from integrations.wallet_editor_auto_enable_eligibility import (
     CandidateRow,
     EligibilityResult,
+    apply_run_limit,
     calculate_batch_timeout,
+    is_run_limited,
     select_auto_enable_candidates,
     split_batches,
 )
@@ -94,6 +96,29 @@ def _send_to_route(route_key: str, text: str) -> bool:
     return False
 
 
+def _run_limit_report_lines(
+    settings: AutoEnableSettings,
+    *,
+    selected_after_dedup: int,
+    selected_for_run: int,
+) -> list[str]:
+    limited = is_run_limited(
+        selected_after_dedup=selected_after_dedup,
+        selected_for_run=selected_for_run,
+        max_rows_per_run=settings.max_rows_per_run,
+    )
+    lines = [
+        f"- max_rows_per_run: {settings.max_rows_per_run}",
+        f"- selected for this run: {selected_for_run}",
+        f"- limited by max_rows_per_run: {'yes' if limited else 'no'}",
+    ]
+    if limited:
+        lines.append(
+            f"⚠️ Run limited by max_rows_per_run: selected {selected_for_run} of {selected_after_dedup} candidates."
+        )
+    return lines
+
+
 def load_registry_frames_for_planning(
     *,
     today: date | None = None,
@@ -132,6 +157,7 @@ def build_phase_a_report(
     manual: bool,
     actor: Actor | None = None,
     execution_note: str | None = None,
+    selected_for_run: int | None = None,
 ) -> str:
     batch_sizes = [len(batch) for batch in batches]
     timeout_lines = [
@@ -170,6 +196,7 @@ def build_phase_a_report(
         f"- approval_required: {settings.approval_required}",
         f"- include_overdue: {settings.include_overdue}",
         f"- max_rows_per_batch: {settings.max_rows_per_batch}",
+        f"- max_rows_per_run: {settings.max_rows_per_run}",
         f"- seconds_per_card_timeout: {settings.seconds_per_card_timeout}",
         f"- batch_timeout_buffer_seconds: {settings.batch_timeout_buffer_seconds}",
         "",
@@ -177,6 +204,15 @@ def build_phase_a_report(
         f"- eligible before dedup: {eligibility.eligible_before_dedup}",
         f"- selected after dedup: {len(eligibility.selected)}",
         f"- duplicates skipped: {eligibility.duplicates_skipped}",
+        *_run_limit_report_lines(
+            settings,
+            selected_after_dedup=len(eligibility.selected),
+            selected_for_run=(
+                selected_for_run
+                if selected_for_run is not None
+                else len(eligibility.selected)
+            ),
+        ),
         "",
         "breakdown (selected):",
         f"- К ВКЛЮЧЕНИЮ: {eligibility.breakdown.k_vklyucheniyu}",
@@ -221,6 +257,9 @@ def _should_execute_phase_b1(settings: AutoEnableSettings) -> bool:
 def _run_phase_b1_batches(
     batches: tuple[tuple[CandidateRow, ...], ...],
     settings: AutoEnableSettings,
+    *,
+    selected_after_dedup: int,
+    selected_for_run: int,
 ) -> tuple[bool, str]:
     """Execute all batches; return (any_sent, last_report_text)."""
     if not batches:
@@ -252,6 +291,8 @@ def _run_phase_b1_batches(
             batch_index=batch_index,
             batch_total=batch_total,
             settings=settings,
+            selected_after_dedup=selected_after_dedup,
+            selected_for_run=selected_for_run,
         )
         sent_text = _send_to_route(settings.telegram_route_report, report)
         any_sent = any_sent or sent_text
@@ -307,8 +348,14 @@ def run_auto_enable(
             recalculated,
             include_overdue=settings.include_overdue,
         )
-        batches = split_batches(
+        selected_after_dedup = len(eligibility.selected)
+        candidates_for_run = apply_run_limit(
             eligibility.selected,
+            max_rows_per_run=settings.max_rows_per_run,
+        )
+        selected_for_run = len(candidates_for_run)
+        batches = split_batches(
+            candidates_for_run,
             max_rows_per_batch=settings.max_rows_per_batch,
         )
 
@@ -319,20 +366,28 @@ def run_auto_enable(
                 batches=batches,
                 manual=manual,
                 actor=actor,
+                selected_for_run=selected_for_run,
             )
             log.info(
-                "[AutoEnable] plan ready selected=%s batches=%s (no execution)",
-                len(eligibility.selected),
+                "[AutoEnable] plan ready selected_after_dedup=%s selected_for_run=%s batches=%s (no execution)",
+                selected_after_dedup,
+                selected_for_run,
                 len(batches),
             )
             sent = _send_to_route(settings.telegram_route_report, report)
             return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_A_LABEL)
 
-        sent, report = _run_phase_b1_batches(batches, settings)
+        sent, report = _run_phase_b1_batches(
+            batches,
+            settings,
+            selected_after_dedup=selected_after_dedup,
+            selected_for_run=selected_for_run,
+        )
         log.info(
-            "[AutoEnable] Phase B1 finished batches=%s selected=%s",
+            "[AutoEnable] Phase B1 finished batches=%s selected_after_dedup=%s selected_for_run=%s",
             len(batches),
-            len(eligibility.selected),
+            selected_after_dedup,
+            selected_for_run,
         )
         return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_B1_LABEL)
 

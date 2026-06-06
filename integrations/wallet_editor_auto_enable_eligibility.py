@@ -194,6 +194,27 @@ def select_auto_enable_candidates(
     )
 
 
+def apply_run_limit(
+    candidates: Sequence[CandidateRow] | tuple[CandidateRow, ...],
+    *,
+    max_rows_per_run: int,
+) -> tuple[CandidateRow, ...]:
+    """Cap candidates for a single run. ``max_rows_per_run <= 0`` means no limit."""
+    items = tuple(candidates)
+    if max_rows_per_run <= 0:
+        return items
+    return items[:max_rows_per_run]
+
+
+def is_run_limited(
+    *,
+    selected_after_dedup: int,
+    selected_for_run: int,
+    max_rows_per_run: int,
+) -> bool:
+    return max_rows_per_run > 0 and selected_for_run < selected_after_dedup
+
+
 def split_batches(
     candidates: Sequence[CandidateRow] | tuple[CandidateRow, ...],
     *,
