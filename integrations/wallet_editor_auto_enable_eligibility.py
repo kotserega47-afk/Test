@@ -12,6 +12,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     HOLD_MARK,
     MISSING_OTLEZKA_STATUS,
     STATUS_K_VKLUCHENIYU,
+    STATUS_OSHIBKA,
     STATUS_OZHIDAET,
     STATUS_PROSROCHENO,
     parse_disable_datetime,
@@ -78,6 +79,8 @@ def _row_is_eligible(
     if hold == HOLD_MARK:
         return False
 
+    vklyucheno = _cell_str(row.get("Включено", "")).upper()
+
     enable_status = _cell_str(row.get("Статус включения", ""))
     if enable_status in {MISSING_OTLEZKA_STATUS, STATUS_OZHIDAET, HOLD_MARK}:
         return False
@@ -85,10 +88,11 @@ def _row_is_eligible(
     allowed_statuses = {STATUS_K_VKLUCHENIYU}
     if include_overdue:
         allowed_statuses.add(STATUS_PROSROCHENO)
-    if enable_status not in allowed_statuses:
+    if enable_status == STATUS_OSHIBKA:
+        if vklyucheno != _VKLYUCHENO_FAIL:
+            return False
+    elif enable_status not in allowed_statuses:
         return False
-
-    vklyucheno = _cell_str(row.get("Включено", "")).upper()
     if vklyucheno in {_VKLYUCHENO_OK, _VKLYUCHENO_SKIP}:
         return False
     if vklyucheno not in {"", _VKLYUCHENO_FAIL}:

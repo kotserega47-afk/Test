@@ -420,6 +420,10 @@ def build_batch_execution_report(
     settings: AutoEnableSettings,
     selected_after_dedup: int | None = None,
     selected_for_run: int | None = None,
+    registry_updated: bool | None = None,
+    patched_rows: int | None = None,
+    requested_patch_rows: int | None = None,
+    patch_failed_reason: str | None = None,
 ) -> str:
     ok = sum(1 for o in outcomes if o.registry_value == REGISTRY_OK)
     skip = sum(1 for o in outcomes if o.registry_value == REGISTRY_SKIP)
@@ -448,9 +452,37 @@ def build_batch_execution_report(
                 f"⚠️ Run limited by max_rows_per_run: selected {selected_for_run} of {selected_after_dedup} candidates."
             )
 
+    registry_lines: list[str] = ["", "registry:"]
+    if registry_updated is True:
+        registry_lines.extend(
+            [
+                "- registry_updated: True",
+                f"- patched rows: {patched_rows or 0}",
+                f"- requested rows: {requested_patch_rows or len(outcomes)}",
+            ]
+        )
+    elif registry_updated is False:
+        registry_lines.extend(
+            [
+                "- registry_updated: False",
+                f"- patched rows: {patched_rows or 0}",
+                f"- requested rows: {requested_patch_rows or len(outcomes)}",
+            ]
+        )
+        if patch_failed_reason:
+            registry_lines.append(f"- patch failed reason: {patch_failed_reason}")
+        registry_lines.append("⚠️ Antares changes were NOT rolled back.")
+    else:
+        registry_lines.extend(
+            [
+                "- registry_updated: False",
+                "- reason: no outcomes to patch",
+            ]
+        )
+
     lines = [
         "🧩 WalletEditor Auto-Enable",
-        "mode: Phase B1 execution-only",
+        "mode: Phase B2 execution + registry patch",
         f"batch: {batch_index}/{batch_total}",
         f"rows in batch: {len(outcomes)}",
         *run_limit_lines,
@@ -467,8 +499,8 @@ def build_batch_execution_report(
         f"- card_not_found: {_count(ERROR_CARD_NOT_FOUND)}",
         f"- partner_not_available: {_count(ERROR_PARTNER_NOT_AVAILABLE)}",
         f"- technical: {_count(ERROR_TECHNICAL)}",
+        *registry_lines,
         "",
-        "⚠️ Registry не обновлялся. Это Phase B1 execution-only.",
         "⚠️ Antares execution completed for this batch.",
     ]
     return "\n".join(lines)

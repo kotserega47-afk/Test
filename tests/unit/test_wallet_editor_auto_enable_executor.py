@@ -338,6 +338,9 @@ def test_build_batch_execution_report_contains_registry_warning():
         batch_index=1,
         batch_total=2,
         settings=_settings(),
+        registry_updated=True,
+        patched_rows=1,
+        requested_patch_rows=1,
     )
-    assert "Registry не обновлялся" in report
+    assert "registry_updated: True" in report
     assert "batch: 1/2" in report

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -11,6 +11,7 @@ from integrations.wallet_editor_auto_enable_executor import (
     REGISTRY_OK,
 )
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
+from integrations.wallet_editor_registry import EnablePatchResult
 from integrations.wallet_editor_registry_lifecycle import STATUS_K_VKLUCHENIYU
 
 
@@ -66,6 +67,14 @@ def _ok_outcome() -> EnableOutcome:
         mutated=False,
         saved=False,
         error_code="ALREADY_ADDED",
+        source_row_index=0,
+    )
+
+
+def _patch_success():
+    return patch(
+        "integrations.wallet_editor_auto_enable.patch_enable_results_in_dropbox_registry",
+        return_value=EnablePatchResult(success=True, patched_count=1, requested_count=1),
     )
 
 
@@ -133,21 +142,22 @@ def test_phase_b1_calls_executor_and_sends_batch_report(registry_frames):
                     with patch(
                         "integrations.wallet_editor_auto_enable.os.remove",
                     ):
-                        result = run_auto_enable(
-                            settings=settings,
-                            manual=True,
-                            registry_frames=registry_frames,
-                        )
+                        with _patch_success():
+                            result = run_auto_enable(
+                                settings=settings,
+                                manual=True,
+                                registry_frames=registry_frames,
+                            )
 
     execute.assert_called_once()
     send_route.assert_called()
     send_file.assert_called_once()
     write_report.assert_called_once()
-    assert "Registry не обновлялся" in result.report_text
-    assert result.phase == "Phase B1 execution-only"
+    assert result.phase == "Phase B2 execution + registry patch"
+    assert "registry_updated: True" in result.report_text
 
 
-def test_registry_patch_not_called(registry_frames):
+def test_registry_append_not_called(registry_frames):
     settings = _settings(dry_run=False, approval_required=False)
     with patch(
         "integrations.wallet_editor_auto_enable._send_to_route",
@@ -167,19 +177,20 @@ def test_registry_patch_not_called(registry_frames):
                     with patch(
                         "integrations.wallet_editor_auto_enable.os.remove",
                     ):
-                        with patch(
-                            "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-                        ) as append_registry:
-                            run_auto_enable(
-                                settings=settings,
-                                manual=True,
-                                registry_frames=registry_frames,
-                            )
+                        with _patch_success():
+                            with patch(
+                                "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
+                            ) as append_registry:
+                                run_auto_enable(
+                                    settings=settings,
+                                    manual=True,
+                                    registry_frames=registry_frames,
+                                )
 
     append_registry.assert_not_called()
 
 
-def test_batch_report_contains_registry_not_patched_warning(registry_frames):
+def test_batch_report_contains_registry_patch_status(registry_frames):
     settings = _settings(dry_run=False, approval_required=False)
     with patch(
         "integrations.wallet_editor_auto_enable._send_to_route",
@@ -199,12 +210,13 @@ def test_batch_report_contains_registry_not_patched_warning(registry_frames):
                     with patch(
                         "integrations.wallet_editor_auto_enable.os.remove",
                     ):
-                        run_auto_enable(
-                            settings=settings,
-                            manual=True,
-                            registry_frames=registry_frames,
-                        )
+                        with _patch_success():
+                            run_auto_enable(
+                                settings=settings,
+                                manual=True,
+                                registry_frames=registry_frames,
+                            )
 
     report_text = send_route.call_args.args[1]
-    assert "Registry не обновлялся" in report_text
-    assert "Phase B1 execution-only" in report_text
+    assert "Phase B2 execution + registry patch" in report_text
+    assert "registry_updated: True" in report_text

@@ -1,7 +1,7 @@
 """Wallet Editor auto-enable orchestrator.
 
 Phase A: read-only registry planning and Telegram report.
-Phase B1: Antares execution via auto_enable_executor (no registry patch).
+Phase B2: Antares execution via auto_enable_executor + registry patch.
 Single Antares session per card — open once, read status/partners, decide, act, save.
 """
 
@@ -36,6 +36,7 @@ from integrations.wallet_editor_auto_enable_eligibility import (
     split_batches,
 )
 from integrations.wallet_editor_auto_enable_executor import (
+    EnableOutcome,
     build_batch_execution_report,
     execute_enable_batch,
     make_batch_result_path,
@@ -45,7 +46,12 @@ from integrations.wallet_editor_auto_enable_settings import (
     AutoEnableSettings,
     load_auto_enable_settings,
 )
-from integrations.wallet_editor_registry import wallet_editor_dropbox_path
+from integrations.wallet_editor_registry import (
+    EnablePatchResult,
+    EnableRegistryUpdate,
+    patch_enable_results_in_dropbox_registry,
+    wallet_editor_dropbox_path,
+)
 from integrations.wallet_editor_registry_lifecycle import recalculate_all_results
 from integrations.wallet_editor_registry_xlsx import load_registry_frames
 from utils.loggers import get_logger
@@ -55,7 +61,7 @@ icon, name = LOG_PROFILES["DROPBOX"]
 log = get_logger(name, icon)
 
 PHASE_A_LABEL = "Phase A dry-run"
-PHASE_B1_LABEL = "Phase B1 execution-only"
+PHASE_B2_LABEL = "Phase B2 execution + registry patch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +182,7 @@ def build_phase_a_report(
                 "dry_run=0, approval_required=1: plan only, execution skipped."
             )
         else:
-            execution_note = "dry_run=0, approval_required=0: Phase B1 execution."
+            execution_note = "dry_run=0, approval_required=0: Phase B2 execution + registry patch."
 
     actor_line = ""
     if actor is not None:
@@ -250,25 +256,61 @@ def _disabled_report(settings: AutoEnableSettings, *, manual: bool, actor: Actor
     ).strip()
 
 
-def _should_execute_phase_b1(settings: AutoEnableSettings) -> bool:
+def _should_execute_phase_b2(settings: AutoEnableSettings) -> bool:
     return settings.enabled and not settings.dry_run and not settings.approval_required
 
 
-def _run_phase_b1_batches(
+def outcomes_to_registry_updates(
+    outcomes: tuple[EnableOutcome, ...] | list[EnableOutcome],
+) -> tuple[EnableRegistryUpdate, ...]:
+    return tuple(
+        EnableRegistryUpdate(
+            card=outcome.card,
+            partner=outcome.partner,
+            disable_date=outcome.disable_date,
+            vklyucheno=outcome.registry_value,
+            comment=outcome.registry_comment,
+            source_row_index=outcome.source_row_index,
+        )
+        for outcome in outcomes
+    )
+
+
+def _send_registry_patch_alert(
+    settings: AutoEnableSettings,
+    *,
+    batch_index: int,
+    batch_total: int,
+    patch_result: EnablePatchResult,
+) -> bool:
+    report = "\n".join(
+        [
+            "🧩 WalletEditor Auto-Enable — Registry Patch Failed",
+            f"batch: {batch_index}/{batch_total}",
+            f"requested rows: {patch_result.requested_count}",
+            f"reason: {patch_result.error_reason or 'unknown'}",
+            "",
+            "Antares changes were NOT rolled back.",
+        ]
+    )
+    return _send_to_route(settings.telegram_route_alert, report)
+
+
+def _run_phase_b2_batches(
     batches: tuple[tuple[CandidateRow, ...], ...],
     settings: AutoEnableSettings,
     *,
     selected_after_dedup: int,
     selected_for_run: int,
 ) -> tuple[bool, str]:
-    """Execute all batches; return (any_sent, last_report_text)."""
+    """Execute all batches with registry patch; return (any_sent, last_report_text)."""
     if not batches:
         report = "\n".join(
             [
                 "🧩 WalletEditor Auto-Enable",
-                f"mode: {PHASE_B1_LABEL}",
+                f"mode: {PHASE_B2_LABEL}",
                 "status: no candidates to execute.",
-                "⚠️ Registry не обновлялся. Это Phase B1 execution-only.",
+                "registry: not patched (no outcomes).",
             ]
         )
         sent = _send_to_route(settings.telegram_route_report, report)
@@ -280,12 +322,25 @@ def _run_phase_b1_batches(
 
     for batch_index, batch in enumerate(batches, start=1):
         log.info(
-            "[AutoEnable] Phase B1 batch %s/%s size=%s",
+            "[AutoEnable] Phase B2 batch %s/%s size=%s",
             batch_index,
             batch_total,
             len(batch),
         )
         outcomes = execute_enable_batch(batch, settings)
+        patch_result: EnablePatchResult | None = None
+        if outcomes:
+            patch_result = patch_enable_results_in_dropbox_registry(
+                outcomes_to_registry_updates(outcomes),
+            )
+            if not patch_result.success:
+                _send_registry_patch_alert(
+                    settings,
+                    batch_index=batch_index,
+                    batch_total=batch_total,
+                    patch_result=patch_result,
+                )
+
         report = build_batch_execution_report(
             outcomes,
             batch_index=batch_index,
@@ -293,6 +348,10 @@ def _run_phase_b1_batches(
             settings=settings,
             selected_after_dedup=selected_after_dedup,
             selected_for_run=selected_for_run,
+            registry_updated=patch_result.success if patch_result else False,
+            patched_rows=patch_result.patched_count if patch_result else 0,
+            requested_patch_rows=patch_result.requested_count if patch_result else 0,
+            patch_failed_reason=patch_result.error_reason if patch_result else None,
         )
         sent_text = _send_to_route(settings.telegram_route_report, report)
         any_sent = any_sent or sent_text
@@ -328,7 +387,7 @@ def run_auto_enable(
     Auto-enable entrypoint.
 
     Phase A when dry_run=1 or approval_required=1.
-    Phase B1 when dry_run=0 and approval_required=0 (Antares, no registry patch).
+    Phase B2 when dry_run=0 and approval_required=0 (Antares + registry patch).
     """
     settings = settings or load_auto_enable_settings()
 
@@ -359,7 +418,7 @@ def run_auto_enable(
             max_rows_per_batch=settings.max_rows_per_batch,
         )
 
-        if not _should_execute_phase_b1(settings):
+        if not _should_execute_phase_b2(settings):
             report = build_phase_a_report(
                 settings=settings,
                 eligibility=eligibility,
@@ -377,19 +436,19 @@ def run_auto_enable(
             sent = _send_to_route(settings.telegram_route_report, report)
             return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_A_LABEL)
 
-        sent, report = _run_phase_b1_batches(
+        sent, report = _run_phase_b2_batches(
             batches,
             settings,
             selected_after_dedup=selected_after_dedup,
             selected_for_run=selected_for_run,
         )
         log.info(
-            "[AutoEnable] Phase B1 finished batches=%s selected_after_dedup=%s selected_for_run=%s",
+            "[AutoEnable] Phase B2 finished batches=%s selected_after_dedup=%s selected_for_run=%s",
             len(batches),
             selected_after_dedup,
             selected_for_run,
         )
-        return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_B1_LABEL)
+        return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_B2_LABEL)
 
     except Exception as exc:
         log.exception("[AutoEnable] run failed")
@@ -399,7 +458,7 @@ def run_auto_enable(
                 f"mode: error",
                 "",
                 f"status: error — {exc}",
-                "⚠️ Registry не обновлялся.",
+                "⚠️ Registry patch not attempted.",
             ]
         )
         sent = _send_to_route(settings.telegram_route_report, report)

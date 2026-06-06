@@ -6,9 +6,11 @@ import os
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Sequence
 
 import pandas as pd
 
@@ -20,15 +22,20 @@ from integrations.dropbox_watcher import (
 )
 from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry_lifecycle import (
+    ACTION_REMOVE_PARTNER,
     build_runs_row,
     load_warned_partners,
     mark_run_processed,
+    normalize_all_results,
+    parse_disable_datetime,
     partners_to_warn,
     recalculate_all_results,
     rows_from_result_excel,
     run_id_already_processed,
     save_warned_partners,
     sync_warned_partners_after_otlezka,
+    _cell_str,
+    _normalize_key,
 )
 from integrations.wallet_editor_registry_settings import (
     RegistrySettings,
@@ -80,6 +87,31 @@ class _AppendOutcome(str, Enum):
     REV_CONFLICT = "rev_conflict"
     TRANSIENT = "transient"
     PERMANENT = "permanent"
+
+
+class _PatchOutcome(str, Enum):
+    SUCCESS = "success"
+    REV_CONFLICT = "rev_conflict"
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+
+
+@dataclass(frozen=True, slots=True)
+class EnableRegistryUpdate:
+    card: str
+    partner: str
+    disable_date: str
+    vklyucheno: str
+    comment: str
+    source_row_index: int = -1
+
+
+@dataclass(frozen=True, slots=True)
+class EnablePatchResult:
+    success: bool
+    patched_count: int
+    requested_count: int = 0
+    error_reason: str | None = None
 
 
 def wallet_editor_dropbox_path() -> str | None:
@@ -332,3 +364,209 @@ def _append_attempt(
             dropbox_path,
         )
         return _AppendOutcome.SUCCESS
+
+
+def _disable_dates_equal(left: object, right: object) -> bool:
+    left_dt = parse_disable_datetime(left)
+    right_dt = parse_disable_datetime(right)
+    if left_dt is not None and right_dt is not None:
+        return left_dt == right_dt
+    return _cell_str(left) == _cell_str(right)
+
+
+def _find_enable_patch_row_index(
+    df: pd.DataFrame,
+    update: EnableRegistryUpdate,
+) -> int | None:
+    matches: list[int] = []
+    for idx in df.index:
+        row = df.loc[idx]
+        if _cell_str(row.get("action", "")).lower() != ACTION_REMOVE_PARTNER:
+            continue
+        if _normalize_key(row.get("card", "")) != _normalize_key(update.card):
+            continue
+        if _normalize_key(row.get("partner", "")) != _normalize_key(update.partner):
+            continue
+        if not _disable_dates_equal(row.get("Дата отключения", ""), update.disable_date):
+            continue
+        matches.append(int(idx))
+
+    if not matches:
+        return None
+    if update.source_row_index >= 0 and update.source_row_index in matches:
+        return update.source_row_index
+    return matches[-1]
+
+
+def apply_enable_updates_to_all_results(
+    all_results: pd.DataFrame,
+    updates: Sequence[EnableRegistryUpdate],
+) -> tuple[pd.DataFrame, int]:
+    """Apply enable outcomes to matching remove_partner rows. Returns (df, patched_count)."""
+    df = normalize_all_results(all_results)
+    patched_count = 0
+    for update in updates:
+        idx = _find_enable_patch_row_index(df, update)
+        if idx is None:
+            log.warning(
+                "[WalletEditorRegistry] enable patch row not found card=%s partner=%s disable=%s",
+                update.card,
+                update.partner,
+                update.disable_date,
+            )
+            continue
+        df.at[idx, "Включено"] = _cell_str(update.vklyucheno)
+        df.at[idx, "Комментарий включения"] = _cell_str(update.comment)
+        patched_count += 1
+    return df, patched_count
+
+
+def patch_enable_results_in_dropbox_registry(
+    updates: Sequence[EnableRegistryUpdate],
+    *,
+    settings: RegistrySettings | None = None,
+    run_id: str | None = None,
+) -> EnablePatchResult:
+    """
+    Patch Включено / Комментарий включения for auto-enable outcomes.
+
+    Atomic per call: one download, apply all updates, recalc lifecycle, one upload.
+    Retries rev conflicts / transient errors until registry_timeout_seconds.
+    """
+    requested_count = len(updates)
+    if not updates:
+        return EnablePatchResult(success=True, patched_count=0, requested_count=0)
+
+    dropbox_path = wallet_editor_dropbox_path()
+    if not dropbox_path:
+        return EnablePatchResult(
+            success=False,
+            patched_count=0,
+            requested_count=requested_count,
+            error_reason="DROPBOX_WALLET_EDITOR_PATH is not set",
+        )
+
+    settings = settings or load_registry_settings()
+    started = time.monotonic()
+    deadline = started + settings.registry_timeout_seconds
+    last_error = "unknown error"
+
+    while time.monotonic() < deadline:
+        try:
+            with _lock:
+                outcome, patched_count, error_reason = _patch_attempt(
+                    updates,
+                    dropbox_path=dropbox_path,
+                )
+        except Exception as exc:
+            log.exception(
+                "[WalletEditorRegistry] enable patch attempt failed run_id=%s",
+                run_id,
+            )
+            outcome = _PatchOutcome.TRANSIENT
+            patched_count = 0
+            error_reason = str(exc)
+
+        if outcome == _PatchOutcome.SUCCESS:
+            return EnablePatchResult(
+                success=True,
+                patched_count=patched_count,
+                requested_count=requested_count,
+            )
+
+        if outcome == _PatchOutcome.PERMANENT:
+            return EnablePatchResult(
+                success=False,
+                patched_count=0,
+                requested_count=requested_count,
+                error_reason=error_reason or last_error,
+            )
+
+        last_error = error_reason or outcome.value
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sleep_for = min(settings.registry_retry_interval_seconds, remaining)
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+    log.warning(
+        "[WalletEditorRegistry] enable patch timeout after %ss run_id=%s path=%s",
+        settings.registry_timeout_seconds,
+        run_id,
+        dropbox_path,
+    )
+    return EnablePatchResult(
+        success=False,
+        patched_count=0,
+        requested_count=requested_count,
+        error_reason=f"timeout: {last_error}",
+    )
+
+
+def _patch_attempt(
+    updates: Sequence[EnableRegistryUpdate],
+    *,
+    dropbox_path: str,
+) -> tuple[_PatchOutcome, int, str | None]:
+    with tempfile.TemporaryDirectory(prefix="we_registry_patch_") as tmp:
+        local_path = Path(tmp) / "wallet_editor.xlsx"
+        status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
+
+        if status == "error":
+            log.error(
+                "[WalletEditorRegistry] enable patch download failed path=%s status=%s",
+                dropbox_path,
+                status,
+            )
+            return _PatchOutcome.TRANSIENT, 0, "registry download failed"
+
+        is_new_file = status == "not_found"
+        if is_new_file:
+            return _PatchOutcome.PERMANENT, 0, "registry file not found"
+
+        all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
+            load_registry_frames(local_path, status)
+        )
+
+        patched_df, patched_count = apply_enable_updates_to_all_results(
+            all_results_df,
+            updates,
+        )
+        recalculated, _missing_partners = recalculate_all_results(
+            patched_df,
+            hold_df,
+            otlezka_df,
+        )
+
+        save_registry_workbook(
+            local_path,
+            all_results=recalculated,
+            runs=runs_df,
+            hold_exists=hold_exists,
+            otlezka_exists=otlezka_exists,
+            is_new_file=False,
+        )
+
+        upload_status = upload_file_if_rev(str(local_path), dropbox_path, download_rev)
+        if upload_status == "rev_conflict":
+            log.warning(
+                "[WalletEditorRegistry] enable patch upload skipped: rev conflict path=%s",
+                dropbox_path,
+            )
+            return _PatchOutcome.REV_CONFLICT, 0, "rev conflict"
+        if upload_status != "uploaded":
+            log.error(
+                "[WalletEditorRegistry] enable patch upload failed path=%s status=%s",
+                dropbox_path,
+                upload_status,
+            )
+            return _PatchOutcome.TRANSIENT, 0, f"upload failed: {upload_status}"
+
+        log.info(
+            "[WalletEditorRegistry] enable patch applied patched=%s requested=%s path=%s",
+            patched_count,
+            len(updates),
+            dropbox_path,
+        )
+        return _PatchOutcome.SUCCESS, patched_count, None
