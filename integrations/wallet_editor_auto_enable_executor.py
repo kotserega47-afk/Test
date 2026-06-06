@@ -17,6 +17,7 @@ from automation.engine import (
     _get_current_card_status,
     _partner_already_selected,
     ensure_partner_added,
+    ensure_status_set,
     get_partner_chips,
     open_card,
     save,
@@ -71,16 +72,22 @@ def normalize_status_text(status: str) -> str:
     return re.sub(r"\s+", " ", (status or "").strip()).casefold()
 
 
+def build_status_set(statuses: Sequence[str]) -> frozenset[str]:
+    return frozenset(normalize_status_text(item) for item in statuses if str(item).strip())
+
+
+def is_status_in_set(status: str, statuses: frozenset[str]) -> bool:
+    return normalize_status_text(status) in statuses
+
+
 def build_allowed_status_set(allowed: Sequence[str]) -> frozenset[str]:
-    return frozenset(normalize_status_text(item) for item in allowed if str(item).strip())
-
-
-def is_service_works_status(status: str) -> bool:
-    return normalize_status_text(status) == normalize_status_text(SERVICE_WORKS_STATUS)
+    """Backward-compatible alias for tests."""
+    return build_status_set(allowed)
 
 
 def is_whitelisted_status(status: str, allowed: frozenset[str]) -> bool:
-    return normalize_status_text(status) in allowed
+    """Backward-compatible alias for tests."""
+    return is_status_in_set(status, allowed)
 
 
 def build_run_config_from_conversion_env() -> RunConfig:
@@ -180,23 +187,152 @@ def _build_already_added_comment(status: str) -> str:
     return "Партнёр уже был добавлен; статус карты рабочий: не определён"
 
 
+def _build_status_changed_comment(
+    status_before: str,
+    target_status: str,
+    *,
+    partner_already: bool,
+) -> str:
+    old_status = _status_text(status_before) or "не определён"
+    new_status = _status_text(target_status) or "не определён"
+    if partner_already:
+        return (
+            f"Партнёр уже был добавлен; статус изменён: {old_status} → {new_status}"
+        )
+    return f"Партнёр добавлен; статус изменён: {old_status} → {new_status}"
+
+
+def _unknown_status_comment(status: str) -> str:
+    text = _status_text(status)
+    if text:
+        return f"UNKNOWN_STATUS: {text}; ручной разбор"
+    return "UNKNOWN_STATUS: статус карты не определён; ручной разбор"
+
+
+def _partner_present(get_chips_fn: Callable[[Page], list[str]], page: Page, partner: str) -> bool:
+    return _partner_already_selected(get_chips_fn(page), partner)
+
+
+def _add_partner_or_outcome(
+    page: Page,
+    candidate: CandidateRow,
+    *,
+    status_before: str,
+    partner_present_before: bool,
+    cfg: RunConfig,
+    get_status_fn: Callable[[Page], str],
+    get_chips_fn: Callable[[Page], list[str]],
+    add_partner_fn: Callable[[Page, str, RunConfig], str],
+) -> tuple[bool, EnableOutcome | None]:
+    try:
+        add_result = add_partner_fn(page, candidate.partner, cfg)
+    except Exception as exc:
+        return False, _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            error_code=ERROR_TECHNICAL,
+            raw_error=str(exc),
+        )
+
+    if add_result.startswith("skip"):
+        if "option not found" in add_result:
+            return False, _outcome(
+                candidate,
+                registry_value=REGISTRY_SKIP,
+                registry_comment=(
+                    f"PARTNER_NOT_AVAILABLE: {candidate.partner}; ручной разбор"
+                ),
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+                partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+                error_code=ERROR_PARTNER_NOT_AVAILABLE,
+                raw_error=add_result,
+            )
+        return False, _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment=f"TECHNICAL: {add_result}; можно повторить",
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            error_code=ERROR_TECHNICAL,
+            raw_error=add_result,
+        )
+
+    if not _partner_present(get_chips_fn, page, candidate.partner):
+        return False, _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment="TECHNICAL: partner add did not stick; можно повторить",
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=False,
+            mutated=True,
+            saved=False,
+            error_code=ERROR_TECHNICAL,
+        )
+    return True, None
+
+
+def _save_or_outcome(
+    page: Page,
+    candidate: CandidateRow,
+    *,
+    status_before: str,
+    partner_present_before: bool,
+    partner_present_after: bool,
+    cfg: RunConfig,
+    get_status_fn: Callable[[Page], str],
+    save_fn: Callable[[Page, RunConfig], str],
+) -> tuple[bool, EnableOutcome | None]:
+    try:
+        save_fn(page, cfg)
+    except Exception as exc:
+        return False, _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=partner_present_after,
+            mutated=True,
+            saved=False,
+            error_code=ERROR_TECHNICAL,
+            raw_error=str(exc),
+        )
+    return True, None
+
+
 def process_enable_candidate(
     page: Page,
     candidate: CandidateRow,
     *,
     settings: AutoEnableSettings,
     cfg: RunConfig,
-    allowed_statuses: frozenset[str] | None = None,
+    working_statuses: frozenset[str] | None = None,
+    auto_return_statuses: frozenset[str] | None = None,
     open_card_fn: Callable[[Page, str], None] = open_card,
     get_status_fn: Callable[[Page], str] = _get_current_card_status,
     get_chips_fn: Callable[[Page], list[str]] = _chip_texts,
     add_partner_fn: Callable[[Page, str, RunConfig], str] = ensure_partner_added,
+    set_status_fn: Callable[[Page, str, RunConfig], str] = ensure_status_set,
     save_fn: Callable[[Page, RunConfig], str] = save,
 ) -> EnableOutcome:
     """Single-card enable pass: one open_card, read status/partners, decide, act, save."""
-    allowed_statuses = allowed_statuses or build_allowed_status_set(
-        settings.allowed_statuses_for_enable
+    working_statuses = working_statuses or build_status_set(settings.working_statuses)
+    auto_return_statuses = auto_return_statuses or build_status_set(
+        settings.auto_return_statuses
     )
+    target_status = settings.auto_return_target_status
 
     try:
         open_card_fn(page, candidate.card)
@@ -218,24 +354,11 @@ def process_enable_candidate(
         )
 
     status_before = get_status_fn(page)
-
-    if is_service_works_status(status_before):
+    if not _status_text(status_before):
         return _outcome(
             candidate,
             registry_value=REGISTRY_SKIP,
-            registry_comment=(
-                f"SERVICE_WORKS: {SERVICE_WORKS_STATUS}; ручное включение"
-            ),
-            status_before=status_before,
-            status_after=status_before,
-            error_code=ERROR_SERVICE_WORKS,
-        )
-
-    if not is_whitelisted_status(status_before, allowed_statuses):
-        return _outcome(
-            candidate,
-            registry_value=REGISTRY_SKIP,
-            registry_comment=f"UNKNOWN_STATUS: {status_before}; ручной разбор",
+            registry_comment=_unknown_status_comment(status_before),
             status_before=status_before,
             status_after=status_before,
             error_code=ERROR_UNKNOWN_STATUS,
@@ -244,113 +367,137 @@ def process_enable_candidate(
     chips_before = get_chips_fn(page)
     partner_present_before = _partner_already_selected(chips_before, candidate.partner)
 
-    if partner_present_before:
+    is_working = is_status_in_set(status_before, working_statuses)
+    is_auto_return = is_status_in_set(status_before, auto_return_statuses)
+
+    if not is_working and not is_auto_return:
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_SKIP,
+            registry_comment=_unknown_status_comment(status_before),
+            status_before=status_before,
+            status_after=status_before,
+            partner_present_before=partner_present_before,
+            partner_present_after=partner_present_before,
+            error_code=ERROR_UNKNOWN_STATUS,
+        )
+
+    if is_working:
+        if partner_present_before:
+            return _outcome(
+                candidate,
+                registry_value=REGISTRY_OK,
+                registry_comment=_build_already_added_comment(status_before),
+                status_before=status_before,
+                status_after=status_before,
+                partner_present_before=True,
+                partner_present_after=True,
+                mutated=False,
+                saved=False,
+                error_code=ERROR_ALREADY_ADDED,
+            )
+
+        ok, outcome = _add_partner_or_outcome(
+            page,
+            candidate,
+            status_before=status_before,
+            partner_present_before=partner_present_before,
+            cfg=cfg,
+            get_status_fn=get_status_fn,
+            get_chips_fn=get_chips_fn,
+            add_partner_fn=add_partner_fn,
+        )
+        if not ok:
+            return outcome
+
+        partner_present_after = True
+        saved_ok, outcome = _save_or_outcome(
+            page,
+            candidate,
+            status_before=status_before,
+            partner_present_before=partner_present_before,
+            partner_present_after=partner_present_after,
+            cfg=cfg,
+            get_status_fn=get_status_fn,
+            save_fn=save_fn,
+        )
+        if not saved_ok:
+            return outcome
+
+        status_after = get_status_fn(page)
         return _outcome(
             candidate,
             registry_value=REGISTRY_OK,
-            registry_comment=_build_already_added_comment(status_before),
+            registry_comment=_build_partner_added_comment(status_after, status_before),
             status_before=status_before,
-            status_after=status_before,
-            partner_present_before=True,
-            partner_present_after=True,
-            mutated=False,
-            saved=False,
-            error_code=ERROR_ALREADY_ADDED,
-        )
-
-    try:
-        add_result = add_partner_fn(page, candidate.partner, cfg)
-    except Exception as exc:
-        return _outcome(
-            candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
-            status_before=status_before,
-            status_after=get_status_fn(page),
-            partner_present_before=partner_present_before,
-            partner_present_after=_partner_already_selected(
-                get_chips_fn(page), candidate.partner
-            ),
-            error_code=ERROR_TECHNICAL,
-            raw_error=str(exc),
-        )
-
-    if add_result.startswith("skip"):
-        if "option not found" in add_result:
-            return _outcome(
-                candidate,
-                registry_value=REGISTRY_SKIP,
-                registry_comment=(
-                    f"PARTNER_NOT_AVAILABLE: {candidate.partner}; ручной разбор"
-                ),
-                status_before=status_before,
-                status_after=get_status_fn(page),
-                partner_present_before=partner_present_before,
-                partner_present_after=_partner_already_selected(
-                    get_chips_fn(page), candidate.partner
-                ),
-                error_code=ERROR_PARTNER_NOT_AVAILABLE,
-                raw_error=add_result,
-            )
-        return _outcome(
-            candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {add_result}; можно повторить",
-            status_before=status_before,
-            status_after=get_status_fn(page),
-            partner_present_before=partner_present_before,
-            partner_present_after=_partner_already_selected(
-                get_chips_fn(page), candidate.partner
-            ),
-            error_code=ERROR_TECHNICAL,
-            raw_error=add_result,
-        )
-
-    chips_after_add = get_chips_fn(page)
-    partner_present_after = _partner_already_selected(chips_after_add, candidate.partner)
-    if not partner_present_after:
-        return _outcome(
-            candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment="TECHNICAL: partner add did not stick; можно повторить",
-            status_before=status_before,
-            status_after=get_status_fn(page),
-            partner_present_before=partner_present_before,
-            partner_present_after=False,
-            mutated=True,
-            saved=False,
-            error_code=ERROR_TECHNICAL,
-        )
-
-    try:
-        save_fn(page, cfg)
-    except Exception as exc:
-        return _outcome(
-            candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
-            status_before=status_before,
-            status_after=get_status_fn(page),
+            status_after=status_after or status_before,
             partner_present_before=partner_present_before,
             partner_present_after=partner_present_after,
             mutated=True,
+            saved=True,
+        )
+
+    try:
+        set_status_fn(page, target_status, cfg)
+    except Exception as exc:
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            mutated=True,
             saved=False,
             error_code=ERROR_TECHNICAL,
             raw_error=str(exc),
         )
 
-    status_after = get_status_fn(page)
+    partner_present_after = partner_present_before
+    if not partner_present_before:
+        ok, outcome = _add_partner_or_outcome(
+            page,
+            candidate,
+            status_before=status_before,
+            partner_present_before=partner_present_before,
+            cfg=cfg,
+            get_status_fn=get_status_fn,
+            get_chips_fn=get_chips_fn,
+            add_partner_fn=add_partner_fn,
+        )
+        if not ok:
+            return outcome
+        partner_present_after = True
+
+    saved_ok, outcome = _save_or_outcome(
+        page,
+        candidate,
+        status_before=status_before,
+        partner_present_before=partner_present_before,
+        partner_present_after=partner_present_after,
+        cfg=cfg,
+        get_status_fn=get_status_fn,
+        save_fn=save_fn,
+    )
+    if not saved_ok:
+        return outcome
+
+    status_after = get_status_fn(page) or target_status
     return _outcome(
         candidate,
         registry_value=REGISTRY_OK,
-        registry_comment=_build_partner_added_comment(status_after, status_before),
+        registry_comment=_build_status_changed_comment(
+            status_before,
+            target_status,
+            partner_already=partner_present_before,
+        ),
         status_before=status_before,
-        status_after=status_after or status_before,
+        status_after=status_after,
         partner_present_before=partner_present_before,
         partner_present_after=partner_present_after,
         mutated=True,
         saved=True,
-        error_code="",
     )
 
 
@@ -368,7 +515,8 @@ def execute_enable_batch(
     require_wallet_editor_antares_credentials(cfg)
 
     outcomes: list[EnableOutcome] = []
-    allowed = build_allowed_status_set(settings.allowed_statuses_for_enable)
+    working = build_status_set(settings.working_statuses)
+    auto_return = build_status_set(settings.auto_return_statuses)
 
     with sync_playwright() as playwright:
         browser = None
@@ -399,7 +547,8 @@ def execute_enable_batch(
                         candidate,
                         settings=settings,
                         cfg=cfg,
-                        allowed_statuses=allowed,
+                        working_statuses=working,
+                        auto_return_statuses=auto_return,
                     )
                 )
         finally:

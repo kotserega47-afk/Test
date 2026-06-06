@@ -205,6 +205,16 @@ def build_phase_a_report(
         f"- max_rows_per_run: {settings.max_rows_per_run}",
         f"- seconds_per_card_timeout: {settings.seconds_per_card_timeout}",
         f"- batch_timeout_buffer_seconds: {settings.batch_timeout_buffer_seconds}",
+        f"- working_statuses: {list(settings.working_statuses)}",
+        f"- auto_return_statuses: {list(settings.auto_return_statuses)}",
+        f"- auto_return_target_status: {settings.auto_return_target_status}",
+        *(
+            [
+                "⚠️ working_statuses loaded from deprecated allowed_statuses_for_enable fallback.",
+            ]
+            if settings.deprecated_working_statuses_fallback
+            else []
+        ),
         "",
         "selection:",
         f"- eligible before dedup: {eligibility.eligible_before_dedup}",

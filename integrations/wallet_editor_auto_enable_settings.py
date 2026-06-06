@@ -22,11 +22,14 @@ DEFAULT_BATCH_TIMEOUT_BUFFER_SECONDS = 300
 DEFAULT_INCLUDE_OVERDUE = True
 DEFAULT_TELEGRAM_ROUTE_REPORT = "wallet_editor_auto_enable"
 DEFAULT_TELEGRAM_ROUTE_ALERT = "wallet_editor_auto_enable_alert"
-DEFAULT_ALLOWED_STATUSES = (
+DEFAULT_WORKING_STATUSES = (
     "готов к работе",
     "активный вход",
     "активный выход",
 )
+DEFAULT_AUTO_RETURN_STATUSES: tuple[str, ...] = ()
+DEFAULT_AUTO_RETURN_TARGET_STATUS = "Готов к работе"
+DEFAULT_ALLOWED_STATUSES = DEFAULT_WORKING_STATUSES
 
 PARAM_ENABLED = "enabled"
 PARAM_DRY_RUN = "dry_run"
@@ -36,6 +39,9 @@ PARAM_MAX_ROWS_PER_RUN = "max_rows_per_run"
 PARAM_SECONDS_PER_CARD_TIMEOUT = "seconds_per_card_timeout"
 PARAM_BATCH_TIMEOUT_BUFFER_SECONDS = "batch_timeout_buffer_seconds"
 PARAM_ALLOWED_STATUSES = "allowed_statuses_for_enable"
+PARAM_WORKING_STATUSES = "working_statuses"
+PARAM_AUTO_RETURN_STATUSES = "auto_return_statuses"
+PARAM_AUTO_RETURN_TARGET_STATUS = "auto_return_target_status"
 PARAM_INCLUDE_OVERDUE = "include_overdue"
 PARAM_TELEGRAM_ROUTE_REPORT = "telegram_route_report"
 PARAM_TELEGRAM_ROUTE_ALERT = "telegram_route_alert"
@@ -50,7 +56,11 @@ class AutoEnableSettings:
     max_rows_per_run: int
     seconds_per_card_timeout: int
     batch_timeout_buffer_seconds: int
+    working_statuses: tuple[str, ...]
+    auto_return_statuses: tuple[str, ...]
+    auto_return_target_status: str
     allowed_statuses_for_enable: tuple[str, ...]
+    deprecated_working_statuses_fallback: bool
     include_overdue: bool
     telegram_route_report: str
     telegram_route_alert: str
@@ -125,17 +135,36 @@ def _parse_non_negative_int(value: object, *, default: int, param_name: str) -> 
     return parsed
 
 
-def _parse_csv_statuses(value: object) -> tuple[str, ...]:
-    if value is None or value == "":
-        return DEFAULT_ALLOWED_STATUSES
+def _parse_csv_list(
+    value: object,
+    *,
+    default: tuple[str, ...],
+    param_name: str,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    if value is None:
+        return default
     if isinstance(value, (list, tuple)):
         items = [str(x).strip() for x in value if str(x).strip()]
-        return tuple(items) if items else DEFAULT_ALLOWED_STATUSES
+        if not items:
+            return () if allow_empty else default
+        return tuple(items)
     text = str(value).strip()
     if not text:
-        return DEFAULT_ALLOWED_STATUSES
+        return () if allow_empty else default
     items = [part.strip() for part in text.split(",") if part.strip()]
-    return tuple(items) if items else DEFAULT_ALLOWED_STATUSES
+    if not items:
+        return () if allow_empty else default
+    return tuple(items)
+
+
+def _parse_status_text(value: object, *, default: str, param_name: str) -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    return text
 
 
 def _parse_route(value: object, *, default: str, param_name: str) -> str:
@@ -145,6 +174,37 @@ def _parse_route(value: object, *, default: str, param_name: str) -> str:
     if not text:
         return default
     return text
+
+
+def _resolve_working_statuses(
+    raw_working: object | None,
+    raw_allowed: object | None,
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """
+    Return (working_statuses, deprecated_allowed_raw, fallback_used).
+
+    ``working_statuses`` uses ``working_statuses`` param when explicitly set;
+    otherwise falls back to deprecated ``allowed_statuses_for_enable``.
+    """
+    deprecated_raw = _parse_csv_list(
+        raw_allowed,
+        default=DEFAULT_ALLOWED_STATUSES,
+        param_name=PARAM_ALLOWED_STATUSES,
+        allow_empty=True,
+    )
+    if raw_working is not None and str(raw_working).strip() != "":
+        working = _parse_csv_list(
+            raw_working,
+            default=DEFAULT_WORKING_STATUSES,
+            param_name=PARAM_WORKING_STATUSES,
+            allow_empty=False,
+        )
+        return working, deprecated_raw, False
+
+    if raw_allowed is not None and str(raw_allowed).strip() != "":
+        return deprecated_raw, deprecated_raw, True
+
+    return DEFAULT_WORKING_STATUSES, deprecated_raw, False
 
 
 def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings:
@@ -158,6 +218,9 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
         PARAM_SECONDS_PER_CARD_TIMEOUT,
         PARAM_BATCH_TIMEOUT_BUFFER_SECONDS,
         PARAM_ALLOWED_STATUSES,
+        PARAM_WORKING_STATUSES,
+        PARAM_AUTO_RETURN_STATUSES,
+        PARAM_AUTO_RETURN_TARGET_STATUS,
         PARAM_INCLUDE_OVERDUE,
         PARAM_TELEGRAM_ROUTE_REPORT,
         PARAM_TELEGRAM_ROUTE_ALERT,
@@ -175,6 +238,17 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
             JOB_KEY,
             exc_info=True,
         )
+
+    working_statuses, deprecated_raw, fallback_used = _resolve_working_statuses(
+        raw[PARAM_WORKING_STATUSES],
+        raw[PARAM_ALLOWED_STATUSES],
+    )
+    auto_return_statuses = _parse_csv_list(
+        raw[PARAM_AUTO_RETURN_STATUSES],
+        default=DEFAULT_AUTO_RETURN_STATUSES,
+        param_name=PARAM_AUTO_RETURN_STATUSES,
+        allow_empty=True,
+    )
 
     return AutoEnableSettings(
         enabled=_parse_bool(raw[PARAM_ENABLED], default=DEFAULT_ENABLED, param_name=PARAM_ENABLED),
@@ -204,7 +278,15 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
             default=DEFAULT_BATCH_TIMEOUT_BUFFER_SECONDS,
             param_name=PARAM_BATCH_TIMEOUT_BUFFER_SECONDS,
         ),
-        allowed_statuses_for_enable=_parse_csv_statuses(raw[PARAM_ALLOWED_STATUSES]),
+        working_statuses=working_statuses,
+        auto_return_statuses=auto_return_statuses,
+        auto_return_target_status=_parse_status_text(
+            raw[PARAM_AUTO_RETURN_TARGET_STATUS],
+            default=DEFAULT_AUTO_RETURN_TARGET_STATUS,
+            param_name=PARAM_AUTO_RETURN_TARGET_STATUS,
+        ),
+        allowed_statuses_for_enable=deprecated_raw,
+        deprecated_working_statuses_fallback=fallback_used,
         include_overdue=_parse_bool(
             raw[PARAM_INCLUDE_OVERDUE],
             default=DEFAULT_INCLUDE_OVERDUE,

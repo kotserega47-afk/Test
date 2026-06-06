@@ -27,8 +27,8 @@ from integrations.wallet_editor_auto_enable_executor import (
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
 
 
-def _settings() -> AutoEnableSettings:
-    return AutoEnableSettings(
+def _settings(**overrides) -> AutoEnableSettings:
+    base = dict(
         enabled=True,
         dry_run=False,
         approval_required=False,
@@ -36,11 +36,17 @@ def _settings() -> AutoEnableSettings:
         max_rows_per_run=0,
         seconds_per_card_timeout=10,
         batch_timeout_buffer_seconds=300,
-        allowed_statuses_for_enable=("готов к работе", "активный вход", "активный выход"),
+        working_statuses=("готов к работе", "активный вход", "активный выход"),
+        auto_return_statuses=("не готов. плановый прозвон",),
+        auto_return_target_status="Готов к работе",
+        allowed_statuses_for_enable=(),
+        deprecated_working_statuses_fallback=False,
         include_overdue=True,
         telegram_route_report="wallet_editor_auto_enable",
         telegram_route_alert="wallet_editor_auto_enable_alert",
     )
+    base.update(overrides)
+    return AutoEnableSettings(**base)
 
 
 def _candidate(**overrides) -> CandidateRow:
@@ -84,8 +90,8 @@ def test_service_works_skip_no_mutation_no_save(page):
     )
 
     assert outcome.registry_value == REGISTRY_SKIP
-    assert outcome.error_code == ERROR_SERVICE_WORKS
-    assert "SERVICE_WORKS" in outcome.registry_comment
+    assert outcome.error_code == ERROR_UNKNOWN_STATUS
+    assert "UNKNOWN_STATUS" in outcome.registry_comment
     assert outcome.mutated is False
     assert outcome.saved is False
     assert open_calls == ["4111"]
@@ -95,7 +101,7 @@ def test_unknown_status_skip_no_mutation_no_save(page):
     outcome = process_enable_candidate(
         page,
         _candidate(),
-        settings=_settings(),
+        settings=_settings(auto_return_statuses=()),
         cfg=_cfg(),
         open_card_fn=lambda _p, _c: None,
         get_status_fn=lambda _p: "Не готов. Плановый прозвон",
@@ -387,15 +393,15 @@ def test_no_separate_prescan_only_status_and_chips_after_open(page):
 
 
 def test_active_input_whitelist_normalization(page):
-    allowed = build_allowed_status_set(_settings().allowed_statuses_for_enable)
-    assert is_whitelisted_status("  Активный   вход ", allowed)
+    working = build_allowed_status_set(_settings().working_statuses)
+    assert is_whitelisted_status("  Активный   вход ", working)
 
     outcome = process_enable_candidate(
         page,
         _candidate(),
         settings=_settings(),
         cfg=_cfg(),
-        allowed_statuses=allowed,
+        working_statuses=working,
         open_card_fn=lambda _p, _c: None,
         get_status_fn=lambda _p: "активный вход",
         get_chips_fn=lambda _p: ["Ostin"],
@@ -432,3 +438,144 @@ def test_build_batch_execution_report_contains_registry_warning():
     )
     assert "registry_updated: True" in report
     assert "batch: 1/2" in report
+
+
+def test_auto_return_partner_missing_sets_status_adds_partner_saves(page):
+    chips: list[str] = []
+
+    def set_status(_page, status, _cfg):
+        return f"set: {status}"
+
+    def add_partner(_page, partner, _cfg):
+        chips.append(partner)
+        return f"added {partner}"
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: list(chips),
+        set_status_fn=set_status,
+        add_partner_fn=add_partner,
+        save_fn=lambda _p, _c: "saved",
+    )
+
+    assert outcome.registry_value == REGISTRY_OK
+    assert outcome.mutated is True
+    assert outcome.saved is True
+    assert "статус изменён" in outcome.registry_comment
+    assert "Не готов. Плановый прозвон → Готов к работе" in outcome.registry_comment
+    assert "Партнёр добавлен" in outcome.registry_comment
+
+
+def test_auto_return_partner_already_sets_status_and_saves(page):
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: ["Ostin"],
+        set_status_fn=lambda _p, status, _c: f"set: {status}",
+        add_partner_fn=lambda *_a, **_k: pytest.fail("add_partner should not run"),
+        save_fn=lambda _p, _c: "saved",
+    )
+
+    assert outcome.registry_value == REGISTRY_OK
+    assert outcome.saved is True
+    assert "Партнёр уже был добавлен; статус изменён" in outcome.registry_comment
+    assert "Не готов. Плановый прозвон → Готов к работе" in outcome.registry_comment
+
+
+def test_working_status_comment_does_not_mention_status_changed(page):
+    outcome = _add_and_save_ok(page, status_before="Активный вход", status_after="")
+    assert "статус изменён" not in outcome.registry_comment
+    assert "статус карты:" in outcome.registry_comment
+
+
+def test_empty_status_skip(page):
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "",
+        get_chips_fn=lambda _p: [],
+    )
+    assert outcome.registry_value == REGISTRY_SKIP
+    assert outcome.error_code == ERROR_UNKNOWN_STATUS
+    assert "статус карты не определён" in outcome.registry_comment
+
+
+def test_status_set_failure_fail(page):
+    def set_status_raises(_page, _status, _cfg):
+        raise RuntimeError("status select missing")
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: [],
+        set_status_fn=set_status_raises,
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+    )
+
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == ERROR_TECHNICAL
+
+
+def test_save_failure_after_auto_return_status_set_fail(page):
+    def save_raises(_page, _cfg):
+        raise RuntimeError("save failed")
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: ["Ostin"],
+        set_status_fn=lambda _p, status, _c: f"set: {status}",
+        add_partner_fn=lambda *_a, **_k: pytest.fail("no add"),
+        save_fn=save_raises,
+    )
+
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.mutated is True
+    assert outcome.saved is False
+
+
+def test_deprecated_allowed_does_not_make_planovoy_auto_return(page):
+    settings = _settings(
+        working_statuses=("готов к работе", "не готов. плановый прозвон"),
+        auto_return_statuses=(),
+        deprecated_working_statuses_fallback=True,
+        allowed_statuses_for_enable=("готов к работе", "не готов. плановый прозвон"),
+    )
+    chips: list[str] = []
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=settings,
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: list(chips),
+        set_status_fn=lambda *_a, **_k: pytest.fail("status should not change"),
+        add_partner_fn=lambda _p, partner, _c: chips.append(partner) or "added",
+        save_fn=lambda _p, _c: "saved",
+    )
+
+    assert outcome.registry_value == REGISTRY_OK
+    assert "статус изменён" not in outcome.registry_comment
+    assert "Партнёр добавлен; статус карты:" in outcome.registry_comment

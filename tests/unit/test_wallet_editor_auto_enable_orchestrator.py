@@ -25,7 +25,11 @@ def _enabled_settings(**overrides) -> AutoEnableSettings:
         max_rows_per_run=0,
         seconds_per_card_timeout=10,
         batch_timeout_buffer_seconds=300,
-        allowed_statuses_for_enable=("готов к работе", "активный вход", "активный выход"),
+        working_statuses=("готов к работе", "активный вход", "активный выход"),
+        auto_return_statuses=(),
+        auto_return_target_status="Готов к работе",
+        allowed_statuses_for_enable=(),
+        deprecated_working_statuses_fallback=False,
         include_overdue=True,
         telegram_route_report="wallet_editor_auto_enable",
         telegram_route_alert="wallet_editor_auto_enable_alert",
@@ -86,6 +90,27 @@ def test_run_auto_enable_phase_a_plan_only():
     assert "Antares не изменялся" in result.report_text
     assert "eligible before dedup: 1" in result.report_text
     send_route.assert_called_once()
+
+
+def test_build_phase_a_report_includes_status_whitelists():
+    settings = _enabled_settings(
+        deprecated_working_statuses_fallback=True,
+        allowed_statuses_for_enable=("готов к работе",),
+        working_statuses=("готов к работе",),
+        auto_return_statuses=("не готов. плановый прозвон",),
+    )
+    eligibility = select_auto_enable_candidates(_sample_df(), include_overdue=True)
+    batches = split_batches(eligibility.selected, max_rows_per_batch=200)
+    report = build_phase_a_report(
+        settings=settings,
+        eligibility=eligibility,
+        batches=batches,
+        manual=True,
+    )
+    assert "working_statuses:" in report
+    assert "auto_return_statuses:" in report
+    assert "auto_return_target_status: Готов к работе" in report
+    assert "deprecated allowed_statuses_for_enable fallback" in report
 
 
 def test_build_phase_a_report_notes_approval_required_skips_execution():
