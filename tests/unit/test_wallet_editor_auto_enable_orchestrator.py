@@ -87,8 +87,8 @@ def test_run_auto_enable_phase_a_plan_only():
     send_route.assert_called_once()
 
 
-def test_build_phase_a_report_notes_dry_run_zero_no_execution():
-    settings = _enabled_settings(dry_run=False)
+def test_build_phase_a_report_notes_approval_required_skips_execution():
+    settings = _enabled_settings(dry_run=False, approval_required=True)
     eligibility = select_auto_enable_candidates(_sample_df(), include_overdue=True)
     batches = split_batches(eligibility.selected, max_rows_per_batch=200)
     report = build_phase_a_report(
@@ -98,7 +98,7 @@ def test_build_phase_a_report_notes_dry_run_zero_no_execution():
         manual=True,
         actor=None,
     )
-    assert "Phase A does not execute Antares" in report
+    assert "approval_required=1: plan only, execution skipped" in report
 
 
 def test_cmd_auto_enable_run_uses_guard_and_runs_orchestrator():
