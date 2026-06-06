@@ -17,6 +17,8 @@ from integrations.wallet_editor_auto_enable_executor import (
     REGISTRY_OK,
     REGISTRY_SKIP,
     SERVICE_WORKS_STATUS,
+    _build_already_added_comment,
+    _build_partner_added_comment,
     build_allowed_status_set,
     build_batch_execution_report,
     is_whitelisted_status,
@@ -130,6 +132,92 @@ def test_partner_already_whitelist_ok_no_save(page):
     assert outcome.saved is False
 
 
+def _add_and_save_ok(
+    page,
+    *,
+    status_before: str = "Готов к работе",
+    status_after: str = "Готов к работе",
+):
+    chips: list[str] = []
+
+    def add_partner(_page, partner, _cfg):
+        chips.append(partner)
+        return f"added {partner}"
+
+    def save(_page, _cfg):
+        return "ok"
+
+    reads = {"count": 0}
+
+    def get_status(_page):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return status_before
+        return status_after
+
+    return process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=get_status,
+        get_chips_fn=lambda _p: list(chips),
+        add_partner_fn=add_partner,
+        save_fn=save,
+    )
+
+
+def test_add_partner_success_uses_status_before_in_comment(page):
+    outcome = _add_and_save_ok(page, status_before="Готов к работе", status_after="Готов к работе")
+    assert outcome.registry_comment == "Партнёр добавлен; статус карты: Готов к работе"
+    assert not outcome.registry_comment.endswith("статус карты:")
+
+
+def test_add_partner_success_empty_status_after_falls_back_to_status_before(page):
+    outcome = _add_and_save_ok(page, status_before="Активный вход", status_after="")
+    assert outcome.registry_comment == "Партнёр добавлен; статус карты: Активный вход"
+    assert outcome.status_after == "Активный вход"
+
+
+def test_add_partner_success_both_statuses_empty_writes_undefined_comment():
+    assert _build_partner_added_comment("", "") == "Партнёр добавлен; статус карты не определён"
+
+
+def test_already_added_comment_includes_status(page):
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Активный выход",
+        get_chips_fn=lambda _p: ["Ostin"],
+        add_partner_fn=lambda *_a, **_k: pytest.fail("no add"),
+        save_fn=lambda *_a, **_k: pytest.fail("no save"),
+    )
+    assert outcome.registry_comment == (
+        "Партнёр уже был добавлен; статус карты рабочий: Активный выход"
+    )
+
+
+def test_comment_helpers_never_leave_bare_status_prefix():
+    assert _build_partner_added_comment("", "") == "Партнёр добавлен; статус карты не определён"
+    assert _build_partner_added_comment("", "Готов к работе") == (
+        "Партнёр добавлен; статус карты: Готов к работе"
+    )
+    assert _build_already_added_comment("") == (
+        "Партнёр уже был добавлен; статус карты рабочий: не определён"
+    )
+    for comment in (
+        _build_partner_added_comment("Готов к работе", ""),
+        _build_partner_added_comment("", "Активный вход"),
+        _build_already_added_comment("Активный выход"),
+    ):
+        assert not comment.endswith("статус карты:")
+        assert not comment.endswith("статус карты рабочий:")
+
+
 def test_partner_missing_whitelist_add_and_save_ok(page):
     save_calls: list[str] = []
     chips: list[str] = []
@@ -158,7 +246,7 @@ def test_partner_missing_whitelist_add_and_save_ok(page):
     assert outcome.mutated is True
     assert outcome.saved is True
     assert outcome.partner_present_after is True
-    assert "Партнёр добавлен" in outcome.registry_comment
+    assert outcome.registry_comment == "Партнёр добавлен; статус карты: Готов к работе"
     assert save_calls == ["save"]
 
 

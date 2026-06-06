@@ -151,6 +151,35 @@ def _is_card_not_found(exc: Exception) -> bool:
     return "Карта не найдена" in str(exc)
 
 
+def _status_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def _status_for_comment(status_after: str, status_before: str) -> str | None:
+    """Prefer post-save status; fall back to pre-mutation read when modal is closed."""
+    after = _status_text(status_after)
+    if after:
+        return after
+    before = _status_text(status_before)
+    if before:
+        return before
+    return None
+
+
+def _build_partner_added_comment(status_after: str, status_before: str) -> str:
+    status = _status_for_comment(status_after, status_before)
+    if status:
+        return f"Партнёр добавлен; статус карты: {status}"
+    return "Партнёр добавлен; статус карты не определён"
+
+
+def _build_already_added_comment(status: str) -> str:
+    text = _status_text(status)
+    if text:
+        return f"Партнёр уже был добавлен; статус карты рабочий: {text}"
+    return "Партнёр уже был добавлен; статус карты рабочий: не определён"
+
+
 def process_enable_candidate(
     page: Page,
     candidate: CandidateRow,
@@ -219,9 +248,7 @@ def process_enable_candidate(
         return _outcome(
             candidate,
             registry_value=REGISTRY_OK,
-            registry_comment=(
-                f"Партнёр уже был добавлен; статус карты рабочий: {status_before}"
-            ),
+            registry_comment=_build_already_added_comment(status_before),
             status_before=status_before,
             status_after=status_before,
             partner_present_before=True,
@@ -316,9 +343,9 @@ def process_enable_candidate(
     return _outcome(
         candidate,
         registry_value=REGISTRY_OK,
-        registry_comment=f"Партнёр добавлен; статус карты: {status_after}",
+        registry_comment=_build_partner_added_comment(status_after, status_before),
         status_before=status_before,
-        status_after=status_after,
+        status_after=status_after or status_before,
         partner_present_before=partner_present_before,
         partner_present_after=partner_present_after,
         mutated=True,
