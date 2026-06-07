@@ -286,3 +286,126 @@ def test_log_step_duration_records_fail_on_exception(caplog):
         with log_step_duration(profile="DENIS", scope="disable", step="save", card="4111"):
             raise ValueError("boom")
     assert "outcome=fail" in caplog.text
+
+
+def _open_card_page_mock(card: str = "9990080818592862") -> MagicMock:
+    page = MagicMock()
+    modal = MagicMock()
+    row = MagicMock()
+    row.inner_text.return_value = card
+    rows = MagicMock()
+    rows.count.return_value = 1
+    rows.nth.return_value = row
+
+    def locator(selector: str) -> MagicMock:
+        if selector == "#wallet-add-modal___BV_modal_body_":
+            return modal
+        if selector == "tr.pointer":
+            return rows
+        return MagicMock()
+
+    page.locator.side_effect = locator
+    modal.is_visible.return_value = True
+    return page
+
+
+def test_open_card_logs_modal_stages(caplog):
+    from automation.engine import open_card
+
+    caplog.set_level(logging.INFO)
+    page = _open_card_page_mock()
+
+    with patch("automation.engine._close_stale_modal"):
+        with patch(
+            "automation.engine._wait_modal_card_data_ready",
+            return_value="9990080818592862",
+        ):
+            open_card(page, "9990080818592862")
+
+    text = caplog.text
+    assert "[Card] row clicked card=9990080818592862" in text
+    assert "[Card] modal container visible card=9990080818592862" in text
+    assert "[Card] modal card verified card=9990080818592862" in text
+
+
+def test_open_card_waits_for_modal_data_before_verify():
+    from automation.engine import open_card
+
+    page = _open_card_page_mock()
+    order: list[str] = []
+
+    def container(modal, card):  # noqa: ARG001
+        order.append("container")
+
+    def data(page_arg, card):  # noqa: ARG001
+        order.append("data")
+        return "9990080818592862"
+
+    def verify(card, value):  # noqa: ARG001
+        order.append("verify")
+
+    with patch("automation.engine._close_stale_modal"):
+        with patch("automation.engine._wait_modal_container_visible", side_effect=container):
+            with patch("automation.engine._wait_modal_card_data_ready", side_effect=data):
+                with patch("automation.engine._verify_modal_card_number", side_effect=verify):
+                    open_card(page, "9990080818592862")
+
+    assert order == ["container", "data", "verify"]
+
+
+def test_open_card_settle_ms_from_env(monkeypatch):
+    from automation.engine import _wait_modal_card_data_ready
+
+    monkeypatch.setenv("WALLET_EDITOR_OPEN_CARD_SETTLE_MS", "500")
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    with patch(
+        "automation.engine._try_get_modal_card_value_fast",
+        side_effect=[None, "9990080818592862"],
+    ):
+        value = _wait_modal_card_data_ready(page, "9990080818592862")
+
+    assert value == "9990080818592862"
+    page.wait_for_timeout.assert_any_call(500)
+
+
+def test_open_card_settle_ms_can_be_zero(monkeypatch):
+    from automation.engine import _wait_modal_card_data_ready
+
+    monkeypatch.setenv("WALLET_EDITOR_OPEN_CARD_SETTLE_MS", "0")
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    with patch(
+        "automation.engine._try_get_modal_card_value_fast",
+        return_value="9990080818592862",
+    ):
+        _wait_modal_card_data_ready(page, "9990080818592862")
+
+    settle_calls = [
+        c for c in page.wait_for_timeout.call_args_list if c.args == (500,)
+    ]
+    assert not settle_calls
+
+
+def test_open_card_timeout_reports_stage():
+    from automation.engine import OpenCardStageError, open_card
+
+    page = _open_card_page_mock()
+    modal = page.locator("#wallet-add-modal___BV_modal_body_")
+    modal.wait_for.side_effect = TimeoutError("visible timeout")
+
+    with patch("automation.engine._close_stale_modal"):
+        with pytest.raises(OpenCardStageError) as exc_info:
+            open_card(page, "9990080818592862")
+
+    assert exc_info.value.stage == "modal_container"
+
+
+def test_open_card_settle_ms_invalid_env_defaults(monkeypatch):
+    from automation.runtime import wallet_editor_open_card_settle_ms
+
+    monkeypatch.setenv("WALLET_EDITOR_OPEN_CARD_SETTLE_MS", "bad")
+    assert wallet_editor_open_card_settle_ms() == 500
+

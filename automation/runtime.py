@@ -19,7 +19,9 @@ _WALLET_EDITOR_ANTARES_LOGIN_ENV = "WALLET_EDITOR_ANTARES_LOGIN"
 _WALLET_EDITOR_ANTARES_PASSWORD_ENV = "WALLET_EDITOR_ANTARES_PASSWORD"
 _WALLET_EDITOR_OPERATOR_MAP_ENV = "WALLET_EDITOR_OPERATOR_MAP"
 _WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV = "WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS"
+_WALLET_EDITOR_OPEN_CARD_SETTLE_ENV = "WALLET_EDITOR_OPEN_CARD_SETTLE_MS"
 _DEFAULT_PLAYWRIGHT_SLOW_MO_MS = 0
+_DEFAULT_OPEN_CARD_SETTLE_MS = 500
 _PROFILE_KEY_RE = re.compile(r"^[A-Z0-9_]+$")
 _INPUT_NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_\-.]+")
 WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
@@ -120,6 +122,37 @@ def wallet_editor_playwright_slow_mo_ms() -> int:
             _DEFAULT_PLAYWRIGHT_SLOW_MO_MS,
         )
         return _DEFAULT_PLAYWRIGHT_SLOW_MO_MS
+    return value
+
+
+def wallet_editor_open_card_settle_ms() -> int:
+    """
+    Bounded settle wait after modal container becomes visible while card data loads.
+
+    Default 500 ms. Set WALLET_EDITOR_OPEN_CARD_SETTLE_MS=0 to disable.
+    Invalid values fall back to 500.
+    """
+    raw = os.getenv(_WALLET_EDITOR_OPEN_CARD_SETTLE_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_OPEN_CARD_SETTLE_MS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "[WalletEditor] invalid %s=%r, using default=%s",
+            _WALLET_EDITOR_OPEN_CARD_SETTLE_ENV,
+            raw,
+            _DEFAULT_OPEN_CARD_SETTLE_MS,
+        )
+        return _DEFAULT_OPEN_CARD_SETTLE_MS
+    if value < 0:
+        log.warning(
+            "[WalletEditor] invalid %s=%s, using default=%s",
+            _WALLET_EDITOR_OPEN_CARD_SETTLE_ENV,
+            value,
+            _DEFAULT_OPEN_CARD_SETTLE_MS,
+        )
+        return _DEFAULT_OPEN_CARD_SETTLE_MS
     return value
 
 

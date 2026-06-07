@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import re
 import tempfile
+import time
 
 import pandas as pd
 from playwright.sync_api import Page, sync_playwright
@@ -16,6 +17,7 @@ from automation.runtime import (
     RunConfig,
     require_wallet_editor_antares_credentials,
     retry,
+    wallet_editor_open_card_settle_ms,
     wallet_editor_playwright_slow_mo_ms,
 )
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
@@ -32,6 +34,26 @@ SAVE_BUTTON = 'button:has-text("Сохранить")'
 
 _WALLET_UI_READY_TIMEOUT_MS = 15_000
 _AUTH_NETWORKIDLE_TIMEOUT_MS = 60_000
+_MODAL_CONTAINER_TIMEOUT_MS = 10_000
+_MODAL_DATA_TIMEOUT_MS = 10_000
+_MODAL_DATA_POLL_MS = 100
+
+
+class OpenCardStageError(Exception):
+    """open_card failed at a specific wait/verify stage."""
+
+    def __init__(
+        self,
+        stage: str,
+        card: str,
+        cause: Exception | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.stage = stage
+        self.card = card
+        text = message or f"open_card failed stage={stage} card={card}"
+        super().__init__(text)
+        self.__cause__ = cause
 
 ALLOWED_ACTIONS = {
     "remove_partner",
@@ -386,6 +408,88 @@ def _try_get_modal_card_value(page: Page) -> str | None:
     return None
 
 
+def _try_get_modal_card_value_fast(page: Page) -> str | None:
+    """Read modal card input without long label waits — for polling while data loads."""
+    modal = page.locator(MODAL_BODY)
+    if not modal.is_visible():
+        return None
+
+    rows = modal.locator("div.row")
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        if not row.is_visible():
+            continue
+        inputs = row.locator("input[type='text']")
+        for j in range(inputs.count()):
+            inp = inputs.nth(j)
+            if not inp.is_visible():
+                continue
+            value = inp.input_value().strip()
+            if value and _digits_only(value):
+                return value
+
+    inputs = modal.locator("input[type='text']")
+    for i in range(inputs.count()):
+        inp = inputs.nth(i)
+        if not inp.is_visible():
+            continue
+        value = inp.input_value().strip()
+        if value and _digits_only(value):
+            return value
+
+    return None
+
+
+def _wait_modal_container_visible(modal, card: str) -> None:
+    try:
+        modal.wait_for(state="visible", timeout=_MODAL_CONTAINER_TIMEOUT_MS)
+    except Exception as exc:
+        log.error("[Card] open_card timeout stage=modal_container card=%s", card)
+        raise OpenCardStageError("modal_container", card, exc) from exc
+    log.info("[Card] modal container visible card=%s", card)
+
+
+def _wait_modal_card_data_ready(page: Page, card: str) -> str:
+    log.info("[Card] waiting modal data card=%s", card)
+    settle_ms = wallet_editor_open_card_settle_ms()
+    if settle_ms > 0:
+        page.wait_for_timeout(settle_ms)
+
+    deadline = time.monotonic() + _MODAL_DATA_TIMEOUT_MS / 1000.0
+    last_value: str | None = None
+    while time.monotonic() < deadline:
+        last_value = _try_get_modal_card_value_fast(page)
+        if last_value and _digits_only(last_value):
+            return last_value
+        page.wait_for_timeout(_MODAL_DATA_POLL_MS)
+
+    log.error("[Card] open_card timeout stage=modal_data card=%s", card)
+    raise OpenCardStageError(
+        "modal_data",
+        card,
+        message=f"open_card failed stage=modal_data card={card} reason=card field not populated",
+    )
+
+
+def _verify_modal_card_number(card: str, modal_card_value: str) -> None:
+    card_digits = _digits_only(card)
+    modal_digits = _digits_only(modal_card_value)
+    if card_digits and modal_digits and card_digits != modal_digits:
+        log.error("[Card] open_card timeout stage=card_verify card=%s", card)
+        raise OpenCardStageError(
+            "card_verify",
+            card,
+            message=f"Модалка не соответствует карте: {card}",
+        )
+    if not (card_digits and modal_digits):
+        log.error("[Card] open_card timeout stage=card_verify card=%s", card)
+        raise OpenCardStageError(
+            "card_verify",
+            card,
+            message=f"open_card failed stage=card_verify card={card} reason=empty card value",
+        )
+
+
 def open_card(page: Page, card: str) -> None:
     modal = page.locator(MODAL_BODY)
 
@@ -409,33 +513,16 @@ def open_card(page: Page, card: str) -> None:
         if card in row_text:
             log.info(f"✅ [Card] matched row index={i} for card={card}")
             row.click()
+            log.info("[Card] row clicked card=%s", card)
             break
     else:
         log.error(f"❌ [Card] not found in table card={card}")
         raise Exception("Карта не найдена")
 
-    modal.wait_for(state="visible", timeout=10000)
-
-    modal_card_value = _try_get_modal_card_value(page)
-    if modal_card_value:
-        card_digits = _digits_only(card)
-        modal_digits = _digits_only(modal_card_value)
-        if card_digits and modal_digits and card_digits != modal_digits:
-            log.error(
-                f"❌ [Card] modal card mismatch expected={card} modal={modal_card_value}"
-            )
-            raise Exception(f"Модалка не соответствует карте: {card}")
-        if card_digits and modal_digits:
-            log.info(f"✅ [Card] modal card verified card={card}")
-        else:
-            log.warning(
-                "⚠️ [Card] unable to verify modal card value; continuing after stale modal close"
-            )
-    else:
-        log.warning(
-            "⚠️ [Card] unable to verify modal card value; continuing after stale modal close"
-        )
-
+    _wait_modal_container_visible(modal, card)
+    modal_card_value = _wait_modal_card_data_ready(page, card)
+    _verify_modal_card_number(card, modal_card_value)
+    log.info("[Card] modal card verified card=%s", card)
     log.info(f"✅ [Card] card modal opened card={card}")
 
 
