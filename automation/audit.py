@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -48,6 +49,40 @@ def mask_card(card: str | None) -> str:
     if len(digits) <= 4:
         return "***"
     return f"***{digits[-4:]}"
+
+
+def normalize_card_digits(value: object) -> str:
+    """Extract comparable card digits from Excel/table text (.0, spaces, NBSP)."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    text = text.replace("\u00a0", " ").replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"\s+", "", text)
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return "".join(c for c in text if c.isdigit())
+
+
+def row_matches_card(row_text: str, card_digits: str) -> bool:
+    if not card_digits:
+        return False
+    row_digits = normalize_card_digits(row_text)
+    if not row_digits:
+        return False
+    return (
+        row_digits == card_digits
+        or card_digits in row_digits
+        or row_digits in card_digits
+    )
+
+
+def shorten_for_log(text: str, *, max_len: int = 80) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").replace("\u00a0", " ")).strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 3] + "..."
 
 
 def log_timing(

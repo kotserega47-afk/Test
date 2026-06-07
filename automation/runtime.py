@@ -20,8 +20,10 @@ _WALLET_EDITOR_ANTARES_PASSWORD_ENV = "WALLET_EDITOR_ANTARES_PASSWORD"
 _WALLET_EDITOR_OPERATOR_MAP_ENV = "WALLET_EDITOR_OPERATOR_MAP"
 _WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV = "WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS"
 _WALLET_EDITOR_OPEN_CARD_SETTLE_ENV = "WALLET_EDITOR_OPEN_CARD_SETTLE_MS"
+_WALLET_EDITOR_ROW_MATCH_TIMEOUT_ENV = "WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS"
 _DEFAULT_PLAYWRIGHT_SLOW_MO_MS = 0
 _DEFAULT_OPEN_CARD_SETTLE_MS = 500
+_DEFAULT_ROW_MATCH_TIMEOUT_MS = 3000
 _PROFILE_KEY_RE = re.compile(r"^[A-Z0-9_]+$")
 _INPUT_NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_\-.]+")
 WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
@@ -153,6 +155,37 @@ def wallet_editor_open_card_settle_ms() -> int:
             _DEFAULT_OPEN_CARD_SETTLE_MS,
         )
         return _DEFAULT_OPEN_CARD_SETTLE_MS
+    return value
+
+
+def wallet_editor_row_match_timeout_ms() -> int:
+    """
+    Extra poll window for table row text to load after filter rows appear.
+
+    Default 3000 ms. Set WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS=0 for a single attempt only.
+    Invalid values fall back to 3000.
+    """
+    raw = os.getenv(_WALLET_EDITOR_ROW_MATCH_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_ROW_MATCH_TIMEOUT_MS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "[WalletEditor] invalid %s=%r, using default=%s",
+            _WALLET_EDITOR_ROW_MATCH_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_ROW_MATCH_TIMEOUT_MS,
+        )
+        return _DEFAULT_ROW_MATCH_TIMEOUT_MS
+    if value < 0:
+        log.warning(
+            "[WalletEditor] invalid %s=%s, using default=%s",
+            _WALLET_EDITOR_ROW_MATCH_TIMEOUT_ENV,
+            value,
+            _DEFAULT_ROW_MATCH_TIMEOUT_MS,
+        )
+        return _DEFAULT_ROW_MATCH_TIMEOUT_MS
     return value
 
 

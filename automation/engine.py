@@ -12,13 +12,22 @@ from playwright.sync_api import Page, sync_playwright
 
 from core.playwright_cleanup import close_playwright_stack
 
-from automation.audit import Stats, log, log_step_duration
+from automation.audit import (
+    Stats,
+    log,
+    log_step_duration,
+    mask_card,
+    normalize_card_digits,
+    row_matches_card,
+    shorten_for_log,
+)
 from automation.runtime import (
     RunConfig,
     require_wallet_editor_antares_credentials,
     retry,
     wallet_editor_open_card_settle_ms,
     wallet_editor_playwright_slow_mo_ms,
+    wallet_editor_row_match_timeout_ms,
 )
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
 
@@ -37,6 +46,7 @@ _AUTH_NETWORKIDLE_TIMEOUT_MS = 60_000
 _MODAL_CONTAINER_TIMEOUT_MS = 10_000
 _MODAL_DATA_TIMEOUT_MS = 10_000
 _MODAL_DATA_POLL_MS = 100
+_ROW_MATCH_POLL_MS = 150
 
 
 class OpenCardStageError(Exception):
@@ -363,7 +373,78 @@ def _close_stale_modal(page: Page) -> None:
 
 
 def _digits_only(value: str) -> str:
-    return "".join(c for c in (value or "") if c.isdigit())
+    return normalize_card_digits(value)
+
+
+def _try_match_row_index(rows, card_digits: str) -> tuple[int | None, int, str]:
+    row_count = rows.count()
+    first_text = rows.nth(0).inner_text() if row_count > 0 else ""
+    for i in range(row_count):
+        row_text = rows.nth(i).inner_text()
+        if row_matches_card(row_text, card_digits):
+            return i, row_count, row_text
+    return None, row_count, first_text
+
+
+def _log_row_match_failure(
+    card: str,
+    card_digits: str,
+    rows_count: int,
+    first_row_text: str,
+) -> None:
+    log.error(
+        "[Card] row match failed card=%s stage=row_match rows=%s first_row=%r "
+        "first_row_tail=%s expected_tail=%s",
+        card,
+        rows_count,
+        shorten_for_log(first_row_text),
+        mask_card(normalize_card_digits(first_row_text)),
+        mask_card(card_digits),
+    )
+
+
+def _wait_for_matching_row(page: Page, rows, card: str, card_digits: str) -> int:
+    log.info("[Card] waiting row text card=%s", card)
+    timeout_ms = wallet_editor_row_match_timeout_ms()
+
+    def attempt() -> tuple[int | None, int, str]:
+        return _try_match_row_index(rows, card_digits)
+
+    if timeout_ms <= 0:
+        match_index, rows_count, first_text = attempt()
+        if match_index is not None:
+            log.info("[Card] row text loaded card=%s", card)
+            log.info("[Card] matched row index=%s card=%s", match_index, card)
+            return match_index
+        _log_row_match_failure(card, card_digits, rows_count, first_text)
+        raise OpenCardStageError(
+            "row_match",
+            card,
+            message=f"Карта не найдена (stage=row_match): {card}",
+        )
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    last_count = 0
+    last_first = ""
+    while time.monotonic() < deadline:
+        match_index, rows_count, first_text = attempt()
+        last_count = rows_count
+        last_first = first_text
+        if match_index is not None:
+            log.info("[Card] row text loaded card=%s", card)
+            log.info("[Card] matched row index=%s card=%s", match_index, card)
+            return match_index
+        if rows_count > 0:
+            page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+        else:
+            page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    _log_row_match_failure(card, card_digits, last_count, last_first)
+    raise OpenCardStageError(
+        "row_match",
+        card,
+        message=f"Карта не найдена (stage=row_match): {card}",
+    )
 
 
 def _try_get_modal_card_value(page: Page) -> str | None:
@@ -507,17 +588,10 @@ def open_card(page: Page, card: str) -> None:
     row_count = rows.count()
     log.info(f"📋 [Card] rows found={row_count} for card={card}")
 
-    for i in range(row_count):
-        row = rows.nth(i)
-        row_text = row.inner_text()
-        if card in row_text:
-            log.info(f"✅ [Card] matched row index={i} for card={card}")
-            row.click()
-            log.info("[Card] row clicked card=%s", card)
-            break
-    else:
-        log.error(f"❌ [Card] not found in table card={card}")
-        raise Exception("Карта не найдена")
+    card_digits = normalize_card_digits(card)
+    match_index = _wait_for_matching_row(page, rows, card, card_digits)
+    rows.nth(match_index).click()
+    log.info("[Card] row clicked card=%s", card)
 
     _wait_modal_container_visible(modal, card)
     modal_card_value = _wait_modal_card_data_ready(page, card)

@@ -317,10 +317,14 @@ def test_open_card_logs_modal_stages(caplog):
 
     with patch("automation.engine._close_stale_modal"):
         with patch(
-            "automation.engine._wait_modal_card_data_ready",
-            return_value="9990080818592862",
+            "automation.engine._wait_for_matching_row",
+            return_value=0,
         ):
-            open_card(page, "9990080818592862")
+            with patch(
+                "automation.engine._wait_modal_card_data_ready",
+                return_value="9990080818592862",
+            ):
+                open_card(page, "9990080818592862")
 
     text = caplog.text
     assert "[Card] row clicked card=9990080818592862" in text
@@ -345,10 +349,11 @@ def test_open_card_waits_for_modal_data_before_verify():
         order.append("verify")
 
     with patch("automation.engine._close_stale_modal"):
-        with patch("automation.engine._wait_modal_container_visible", side_effect=container):
-            with patch("automation.engine._wait_modal_card_data_ready", side_effect=data):
-                with patch("automation.engine._verify_modal_card_number", side_effect=verify):
-                    open_card(page, "9990080818592862")
+        with patch("automation.engine._wait_for_matching_row", return_value=0):
+            with patch("automation.engine._wait_modal_container_visible", side_effect=container):
+                with patch("automation.engine._wait_modal_card_data_ready", side_effect=data):
+                    with patch("automation.engine._verify_modal_card_number", side_effect=verify):
+                        open_card(page, "9990080818592862")
 
     assert order == ["container", "data", "verify"]
 
@@ -397,8 +402,9 @@ def test_open_card_timeout_reports_stage():
     modal.wait_for.side_effect = TimeoutError("visible timeout")
 
     with patch("automation.engine._close_stale_modal"):
-        with pytest.raises(OpenCardStageError) as exc_info:
-            open_card(page, "9990080818592862")
+        with patch("automation.engine._wait_for_matching_row", return_value=0):
+            with pytest.raises(OpenCardStageError) as exc_info:
+                open_card(page, "9990080818592862")
 
     assert exc_info.value.stage == "modal_container"
 
@@ -408,4 +414,97 @@ def test_open_card_settle_ms_invalid_env_defaults(monkeypatch):
 
     monkeypatch.setenv("WALLET_EDITOR_OPEN_CARD_SETTLE_MS", "bad")
     assert wallet_editor_open_card_settle_ms() == 500
+
+
+def test_row_match_normalizes_spaces_and_nbsp():
+    from automation.audit import normalize_card_digits, row_matches_card
+
+    card_digits = normalize_card_digits("9990080812990492")
+    row_text = "9990\u00a0080\u00a0812\u00a0990\u00a0492"
+    assert row_matches_card(row_text, card_digits)
+
+
+def test_row_match_normalizes_float_suffix_dot_zero():
+    from automation.audit import normalize_card_digits, row_matches_card
+
+    card_digits = normalize_card_digits("9990080812990492.0")
+    row_text = "9990080812990492"
+    assert row_matches_card(row_text, card_digits)
+    assert normalize_card_digits("9990080812990492.0") == "9990080812990492"
+
+
+def test_row_match_waits_until_row_text_loaded(monkeypatch):
+    from automation.engine import _wait_for_matching_row
+
+    monkeypatch.setenv("WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS", "1000")
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    row = MagicMock()
+    call_count = [0]
+
+    def inner_text():
+        call_count[0] += 1
+        if call_count[0] < 3:
+            return ""
+        return "9990080812990492"
+
+    row.inner_text.side_effect = inner_text
+    rows = MagicMock()
+    rows.count.return_value = 1
+    rows.nth.return_value = row
+
+    index = _wait_for_matching_row(
+        page,
+        rows,
+        "9990080812990492",
+        "9990080812990492",
+    )
+
+    assert index == 0
+    assert call_count[0] >= 3
+    page.wait_for_timeout.assert_called()
+
+
+def test_row_match_timeout_reports_diagnostics(caplog):
+    from automation.engine import OpenCardStageError, _wait_for_matching_row
+
+    caplog.set_level(logging.ERROR)
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    row = MagicMock()
+    row.inner_text.return_value = "partial"
+    rows = MagicMock()
+    rows.count.return_value = 1
+    rows.nth.return_value = row
+
+    with patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0):
+        with pytest.raises(OpenCardStageError) as exc_info:
+            _wait_for_matching_row(
+                page,
+                rows,
+                "9990080812990492",
+                "9990080812990492",
+            )
+
+    assert exc_info.value.stage == "row_match"
+    assert "row match failed" in caplog.text
+    assert "stage=row_match" in caplog.text
+    assert "expected_tail=" in caplog.text
+
+
+def test_row_match_timeout_env_default(monkeypatch):
+    from automation.runtime import wallet_editor_row_match_timeout_ms
+
+    monkeypatch.delenv("WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS", raising=False)
+    assert wallet_editor_row_match_timeout_ms() == 3000
+
+
+def test_row_match_timeout_env_zero_disables_poll(monkeypatch):
+    from automation.runtime import wallet_editor_row_match_timeout_ms
+
+    monkeypatch.setenv("WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS", "0")
+    assert wallet_editor_row_match_timeout_ms() == 0
+
 
