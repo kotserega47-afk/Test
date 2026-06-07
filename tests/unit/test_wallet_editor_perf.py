@@ -443,7 +443,7 @@ def test_row_match_waits_until_row_text_loaded(monkeypatch):
     row = MagicMock()
     call_count = [0]
 
-    def inner_text():
+    def inner_text(**_kwargs):
         call_count[0] += 1
         if call_count[0] < 3:
             return ""
@@ -507,4 +507,88 @@ def test_row_match_timeout_env_zero_disables_poll(monkeypatch):
     monkeypatch.setenv("WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS", "0")
     assert wallet_editor_row_match_timeout_ms() == 0
 
+
+def test_row_match_inner_text_timeout_is_bounded():
+    from automation.engine import _ROW_TEXT_READ_TIMEOUT_MS, _try_match_row_index
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    row = MagicMock()
+    row.inner_text.side_effect = PlaywrightTimeoutError("Timeout 500ms exceeded")
+    rows = MagicMock()
+    rows.count.return_value = 3
+    rows.nth.return_value = row
+
+    match_index, rows_count, first_text = _try_match_row_index(
+        rows,
+        "9990080812990492",
+        "9990080812990492",
+    )
+
+    assert match_index is None
+    assert rows_count == 3
+    assert first_text == ""
+    assert row.inner_text.call_count == 3
+    for call in row.inner_text.call_args_list:
+        assert call.kwargs.get("timeout") == _ROW_TEXT_READ_TIMEOUT_MS
+
+
+def test_row_match_skips_not_ready_row_and_later_matches(monkeypatch):
+    from automation.engine import _wait_for_matching_row
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    monkeypatch.setenv("WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS", "1000")
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    row = MagicMock()
+    call_count = [0]
+
+    def inner_text(**_kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise PlaywrightTimeoutError("Timeout 500ms exceeded")
+        return "9990080812990492"
+
+    row.inner_text.side_effect = inner_text
+    rows = MagicMock()
+    rows.count.return_value = 1
+    rows.nth.return_value = row
+
+    index = _wait_for_matching_row(
+        page,
+        rows,
+        "9990080812990492",
+        "9990080812990492",
+    )
+
+    assert index == 0
+    assert call_count[0] >= 2
+    page.wait_for_timeout.assert_called()
+
+
+def test_row_match_all_rows_timeout_reports_row_match_stage(caplog):
+    from automation.engine import OpenCardStageError, _wait_for_matching_row
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    caplog.set_level(logging.INFO)
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    row = MagicMock()
+    row.inner_text.side_effect = PlaywrightTimeoutError("Timeout 500ms exceeded")
+    rows = MagicMock()
+    rows.count.return_value = 2
+    rows.nth.return_value = row
+
+    with patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0):
+        with pytest.raises(OpenCardStageError) as exc_info:
+            _wait_for_matching_row(
+                page,
+                rows,
+                "9990080812990492",
+                "9990080812990492",
+            )
+
+    assert exc_info.value.stage == "row_match"
+    assert "row text not ready" in caplog.text
 

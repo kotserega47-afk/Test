@@ -8,7 +8,7 @@ import tempfile
 import time
 
 import pandas as pd
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from core.playwright_cleanup import close_playwright_stack
 
@@ -47,6 +47,7 @@ _MODAL_CONTAINER_TIMEOUT_MS = 10_000
 _MODAL_DATA_TIMEOUT_MS = 10_000
 _MODAL_DATA_POLL_MS = 100
 _ROW_MATCH_POLL_MS = 150
+_ROW_TEXT_READ_TIMEOUT_MS = 500
 
 
 class OpenCardStageError(Exception):
@@ -376,11 +377,27 @@ def _digits_only(value: str) -> str:
     return normalize_card_digits(value)
 
 
-def _try_match_row_index(rows, card_digits: str) -> tuple[int | None, int, str]:
+def _read_row_text(row, *, row_index: int, card: str) -> str | None:
+    try:
+        return row.inner_text(timeout=_ROW_TEXT_READ_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        log.info("[Card] row text not ready card=%s row_index=%s", card, row_index)
+        return None
+
+
+def _try_match_row_index(
+    rows,
+    card_digits: str,
+    card: str,
+) -> tuple[int | None, int, str]:
     row_count = rows.count()
-    first_text = rows.nth(0).inner_text() if row_count > 0 else ""
+    first_text = ""
     for i in range(row_count):
-        row_text = rows.nth(i).inner_text()
+        row_text = _read_row_text(rows.nth(i), row_index=i, card=card)
+        if row_text is None:
+            continue
+        if not first_text:
+            first_text = row_text
         if row_matches_card(row_text, card_digits):
             return i, row_count, row_text
     return None, row_count, first_text
@@ -408,7 +425,7 @@ def _wait_for_matching_row(page: Page, rows, card: str, card_digits: str) -> int
     timeout_ms = wallet_editor_row_match_timeout_ms()
 
     def attempt() -> tuple[int | None, int, str]:
-        return _try_match_row_index(rows, card_digits)
+        return _try_match_row_index(rows, card_digits, card)
 
     if timeout_ms <= 0:
         match_index, rows_count, first_text = attempt()
