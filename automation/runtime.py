@@ -21,9 +21,11 @@ _WALLET_EDITOR_OPERATOR_MAP_ENV = "WALLET_EDITOR_OPERATOR_MAP"
 _WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV = "WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS"
 _WALLET_EDITOR_OPEN_CARD_SETTLE_ENV = "WALLET_EDITOR_OPEN_CARD_SETTLE_MS"
 _WALLET_EDITOR_ROW_MATCH_TIMEOUT_ENV = "WALLET_EDITOR_ROW_MATCH_TIMEOUT_MS"
+_WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS_ENV = "WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS"
 _DEFAULT_PLAYWRIGHT_SLOW_MO_MS = 0
 _DEFAULT_OPEN_CARD_SETTLE_MS = 500
 _DEFAULT_ROW_MATCH_TIMEOUT_MS = 3000
+_DEFAULT_RETRYABLE_MAX_ATTEMPTS = 3
 _PROFILE_KEY_RE = re.compile(r"^[A-Z0-9_]+$")
 _INPUT_NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_\-.]+")
 WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
@@ -186,6 +188,37 @@ def wallet_editor_row_match_timeout_ms() -> int:
             _DEFAULT_ROW_MATCH_TIMEOUT_MS,
         )
         return _DEFAULT_ROW_MATCH_TIMEOUT_MS
+    return value
+
+
+def wallet_editor_retryable_max_attempts() -> int:
+    """
+    Auto-enable retry limit for retryable technical FAIL rows.
+
+    Default 3. Set WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS=0 to disable auto-pickup.
+    Invalid values fall back to 3.
+    """
+    raw = os.getenv(_WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_RETRYABLE_MAX_ATTEMPTS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "[WalletEditor] invalid %s=%r, using default=%s",
+            _WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS_ENV,
+            raw,
+            _DEFAULT_RETRYABLE_MAX_ATTEMPTS,
+        )
+        return _DEFAULT_RETRYABLE_MAX_ATTEMPTS
+    if value < 0:
+        log.warning(
+            "[WalletEditor] invalid %s=%s, using default=%s",
+            _WALLET_EDITOR_RETRYABLE_MAX_ATTEMPTS_ENV,
+            value,
+            _DEFAULT_RETRYABLE_MAX_ATTEMPTS,
+        )
+        return _DEFAULT_RETRYABLE_MAX_ATTEMPTS
     return value
 
 

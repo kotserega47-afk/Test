@@ -71,4 +71,9 @@ def test_patched_skip_excluded_from_next_selection():
 
 
 def test_patched_fail_included_in_next_selection():
-    assert _select_after_patch("FAIL", "TECHNICAL: timeout") == 1
+    from automation.audit import build_retryable_fail_comment, ERROR_MODAL_DATA_TIMEOUT
+
+    assert _select_after_patch(
+        "FAIL",
+        build_retryable_fail_comment(ERROR_MODAL_DATA_TIMEOUT, 1, 3, "timeout"),
+    ) == 1

@@ -85,6 +85,159 @@ def shorten_for_log(text: str, *, max_len: int = 80) -> str:
     return cleaned[: max_len - 3] + "..."
 
 
+ERROR_CARD_NOT_FOUND = "CARD_NOT_FOUND"
+ERROR_TECHNICAL = "TECHNICAL"
+ERROR_MODAL_CARD_MISMATCH = "MODAL_CARD_MISMATCH"
+ERROR_MODAL_DATA_TIMEOUT = "MODAL_DATA_TIMEOUT"
+ERROR_MODAL_CONTAINER_TIMEOUT = "MODAL_CONTAINER_TIMEOUT"
+ERROR_ROW_MATCH_TIMEOUT = "ROW_MATCH_TIMEOUT"
+ERROR_PLAYWRIGHT_TIMEOUT = "PLAYWRIGHT_TIMEOUT"
+ERROR_RETRY_LIMIT_REACHED = "RETRY_LIMIT_REACHED"
+
+_OPEN_CARD_STAGE_TO_ERROR_CODE = {
+    "card_verify": ERROR_MODAL_CARD_MISMATCH,
+    "modal_data": ERROR_MODAL_DATA_TIMEOUT,
+    "modal_container": ERROR_MODAL_CONTAINER_TIMEOUT,
+    "row_match": ERROR_ROW_MATCH_TIMEOUT,
+}
+
+_RETRY_COUNT_RE = re.compile(r"RETRY:(\d+)/(\d+)")
+
+
+@dataclass(frozen=True, slots=True)
+class RetryClassification:
+    error_code: str
+    retryable: bool
+    message: str
+
+
+def classify_enable_exception(exc: Exception) -> RetryClassification:
+    """Map enable-path exceptions to error_code and retryable flag."""
+    stage = getattr(exc, "stage", None)
+    message = str(exc).strip() or type(exc).__name__
+
+    if stage:
+        code = _OPEN_CARD_STAGE_TO_ERROR_CODE.get(stage, ERROR_TECHNICAL)
+        return RetryClassification(error_code=code, retryable=True, message=message)
+
+    if "Карта не найдена" in message:
+        return RetryClassification(
+            error_code=ERROR_CARD_NOT_FOUND,
+            retryable=False,
+            message=message,
+        )
+
+    exc_name = type(exc).__name__
+    if exc_name in {"TimeoutError", "PlaywrightTimeoutError"}:
+        return RetryClassification(
+            error_code=ERROR_PLAYWRIGHT_TIMEOUT,
+            retryable=True,
+            message=message,
+        )
+    if "timeout" in message.lower() or "Timeout" in exc_name:
+        return RetryClassification(
+            error_code=ERROR_PLAYWRIGHT_TIMEOUT,
+            retryable=True,
+            message=message,
+        )
+
+    return RetryClassification(
+        error_code=ERROR_TECHNICAL,
+        retryable=True,
+        message=message,
+    )
+
+
+def parse_retry_count(comment: str) -> int:
+    match = _RETRY_COUNT_RE.search(comment or "")
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def parse_retry_max(comment: str) -> int | None:
+    match = _RETRY_COUNT_RE.search(comment or "")
+    if not match:
+        return None
+    return int(match.group(2))
+
+
+def build_retryable_fail_comment(
+    error_code: str,
+    retry_count: int,
+    max_attempts: int,
+    message: str,
+) -> str:
+    cleaned = re.sub(r"\s+", " ", (message or "").strip())
+    return (
+        f"TECHNICAL:{error_code}: RETRY:{retry_count}/{max_attempts}: "
+        f"{cleaned}; можно повторить"
+    )
+
+
+def build_retry_limit_reached_comment(error_code: str) -> str:
+    return f"RETRY_LIMIT_REACHED:{error_code}: ручной разбор"
+
+
+def is_retry_limit_reached_comment(comment: str) -> bool:
+    return (comment or "").strip().startswith("RETRY_LIMIT_REACHED:")
+
+
+def is_retryable_fail_comment_for_eligibility(
+    comment: str,
+    *,
+    max_attempts: int,
+) -> bool:
+    """Whether a FAIL row with this enable comment may be auto-selected again."""
+    if max_attempts <= 0:
+        return False
+
+    text = (comment or "").strip()
+    if not text:
+        return False
+    if is_retry_limit_reached_comment(text):
+        return False
+    if text.startswith(f"{ERROR_CARD_NOT_FOUND}") or "CARD_NOT_FOUND" in text.split(";")[0]:
+        return False
+    if "UNKNOWN_STATUS" in text or "PARTNER_NOT_AVAILABLE" in text:
+        return False
+
+    retry_count = parse_retry_count(text)
+    if _RETRY_COUNT_RE.search(text):
+        return retry_count < max_attempts
+
+    if "можно повторить" in text:
+        return retry_count < max_attempts
+
+    return False
+
+
+def next_retry_fail_comment(
+    *,
+    prior_comment: str,
+    error_code: str,
+    message: str,
+    max_attempts: int,
+) -> tuple[str, str]:
+    """
+    Build registry comment for a retryable technical failure.
+
+    Returns (registry_comment, outcome_error_code).
+    """
+    if max_attempts <= 0:
+        cleaned = re.sub(r"\s+", " ", (message or "").strip())
+        return f"TECHNICAL: {cleaned}; можно повторить", error_code
+
+    next_count = parse_retry_count(prior_comment) + 1
+    if next_count >= max_attempts:
+        return build_retry_limit_reached_comment(error_code), ERROR_RETRY_LIMIT_REACHED
+
+    return (
+        build_retryable_fail_comment(error_code, next_count, max_attempts, message),
+        error_code,
+    )
+
+
 def log_timing(
     *,
     profile: str,

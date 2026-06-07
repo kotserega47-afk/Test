@@ -10,6 +10,7 @@ from integrations.wallet_editor_auto_enable_executor import (
     ERROR_ALREADY_ADDED,
     ERROR_CARD_NOT_FOUND,
     ERROR_PARTNER_NOT_AVAILABLE,
+    ERROR_PLAYWRIGHT_TIMEOUT,
     ERROR_SERVICE_WORKS,
     ERROR_TECHNICAL,
     ERROR_UNKNOWN_STATUS,
@@ -310,8 +311,8 @@ def test_technical_exception_fail(page):
     )
 
     assert outcome.registry_value == REGISTRY_FAIL
-    assert outcome.error_code == ERROR_TECHNICAL
-    assert "TECHNICAL" in outcome.registry_comment
+    assert outcome.error_code == ERROR_PLAYWRIGHT_TIMEOUT
+    assert "PLAYWRIGHT_TIMEOUT" in outcome.registry_comment
 
 
 def test_save_failure_after_mutation_fail(page):

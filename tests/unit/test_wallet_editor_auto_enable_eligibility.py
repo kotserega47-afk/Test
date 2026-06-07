@@ -15,6 +15,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
     HOLD_MARK,
     STATUS_K_VKLUCHENIYU,
+    STATUS_OSHIBKA,
     STATUS_OZHIDAET,
     STATUS_PROSROCHENO,
 )
@@ -30,13 +31,14 @@ def _row(
     action: str = ACTION_REMOVE_PARTNER,
     status: str = "OK",
     hold: str = "",
+    enable_comment: str = "",
 ) -> dict[str, str]:
     return {
         "Дата отключения": disable_at,
         "Дата включения": "06.06.2026",
         "Статус включения": enable_status,
         "Включено": vklyucheno,
-        "Комментарий включения": "",
+        "Комментарий включения": enable_comment,
         "card": card,
         "partner": partner,
         "action": action,
@@ -77,7 +79,16 @@ def test_select_excludes_prosrocheno_when_include_overdue_false():
 
 def test_select_includes_empty_vklyucheno_and_fail_retry():
     empty = select_auto_enable_candidates(_df(_row(vklyucheno="")), include_overdue=True)
-    fail = select_auto_enable_candidates(_df(_row(vklyucheno="FAIL")), include_overdue=True)
+    fail = select_auto_enable_candidates(
+        _df(
+            _row(
+                vklyucheno="FAIL",
+                enable_status=STATUS_OSHIBKA,
+                enable_comment="TECHNICAL: timeout; можно повторить",
+            )
+        ),
+        include_overdue=True,
+    )
     assert len(empty.selected) == 1
     assert empty.breakdown.empty_vklyucheno == 1
     assert len(fail.selected) == 1

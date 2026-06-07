@@ -22,13 +22,27 @@ from automation.engine import (
     open_card,
     save,
 )
-from automation.audit import log_step_duration
+from automation.audit import (
+    ERROR_CARD_NOT_FOUND,
+    ERROR_MODAL_CARD_MISMATCH,
+    ERROR_MODAL_CONTAINER_TIMEOUT,
+    ERROR_MODAL_DATA_TIMEOUT,
+    ERROR_PLAYWRIGHT_TIMEOUT,
+    ERROR_RETRY_LIMIT_REACHED,
+    ERROR_ROW_MATCH_TIMEOUT,
+    ERROR_TECHNICAL,
+    RetryClassification,
+    classify_enable_exception,
+    log_step_duration,
+    next_retry_fail_comment,
+)
 from automation.runtime import (
     CONVERSION_AUTO_PROFILE,
     RunConfig,
     operator_auth_state_path,
     require_wallet_editor_antares_credentials,
     wallet_editor_playwright_slow_mo_ms,
+    wallet_editor_retryable_max_attempts,
 )
 from core.playwright_cleanup import close_playwright_stack
 from integrations.conversion_wallet_editor_bridge import (
@@ -51,12 +65,21 @@ REGISTRY_OK = "OK"
 REGISTRY_SKIP = "SKIP"
 REGISTRY_FAIL = "FAIL"
 
-ERROR_CARD_NOT_FOUND = "CARD_NOT_FOUND"
-ERROR_SERVICE_WORKS = "SERVICE_WORKS"
 ERROR_UNKNOWN_STATUS = "UNKNOWN_STATUS"
 ERROR_ALREADY_ADDED = "ALREADY_ADDED"
 ERROR_PARTNER_NOT_AVAILABLE = "PARTNER_NOT_AVAILABLE"
-ERROR_TECHNICAL = "TECHNICAL"
+ERROR_SERVICE_WORKS = "SERVICE_WORKS"
+
+_TECHNICAL_OUTCOME_CODES = frozenset(
+    {
+        ERROR_TECHNICAL,
+        ERROR_MODAL_CARD_MISMATCH,
+        ERROR_MODAL_DATA_TIMEOUT,
+        ERROR_MODAL_CONTAINER_TIMEOUT,
+        ERROR_ROW_MATCH_TIMEOUT,
+        ERROR_PLAYWRIGHT_TIMEOUT,
+    }
+)
 
 _OUTCOME_COLUMNS = [
     "card",
@@ -162,8 +185,37 @@ def _chip_texts(page: Page) -> list[str]:
     return [text for _, text in get_partner_chips(page)]
 
 
-def _is_card_not_found(exc: Exception) -> bool:
-    return "Карта не найдена" in str(exc)
+def _technical_fail_outcome(
+    candidate: CandidateRow,
+    classification: RetryClassification,
+    *,
+    status_before: str = "",
+    status_after: str = "",
+    partner_present_before: bool = False,
+    partner_present_after: bool = False,
+    mutated: bool = False,
+    saved: bool = False,
+    raw_error: str | None = None,
+) -> EnableOutcome:
+    registry_comment, error_code = next_retry_fail_comment(
+        prior_comment=candidate.enable_comment,
+        error_code=classification.error_code,
+        message=classification.message,
+        max_attempts=wallet_editor_retryable_max_attempts(),
+    )
+    return _outcome(
+        candidate,
+        registry_value=REGISTRY_FAIL,
+        registry_comment=registry_comment,
+        status_before=status_before,
+        status_after=status_after,
+        partner_present_before=partner_present_before,
+        partner_present_after=partner_present_after,
+        mutated=mutated,
+        saved=saved,
+        error_code=error_code,
+        raw_error=raw_error,
+    )
 
 
 def _status_text(value: str) -> str:
@@ -235,15 +287,14 @@ def _add_partner_or_outcome(
     try:
         add_result = add_partner_fn(page, candidate.partner, cfg)
     except Exception as exc:
-        return False, _outcome(
+        classification = classify_enable_exception(exc)
+        return _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            classification,
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
             partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
-            error_code=ERROR_TECHNICAL,
             raw_error=str(exc),
         )
 
@@ -262,30 +313,34 @@ def _add_partner_or_outcome(
                 error_code=ERROR_PARTNER_NOT_AVAILABLE,
                 raw_error=add_result,
             )
-        return False, _outcome(
+        return False, _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {add_result}; можно повторить",
+            RetryClassification(
+                error_code=ERROR_TECHNICAL,
+                retryable=True,
+                message=add_result,
+            ),
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
             partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
-            error_code=ERROR_TECHNICAL,
             raw_error=add_result,
         )
 
     if not _partner_present(get_chips_fn, page, candidate.partner):
-        return False, _outcome(
+        return False, _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment="TECHNICAL: partner add did not stick; можно повторить",
+            RetryClassification(
+                error_code=ERROR_TECHNICAL,
+                retryable=True,
+                message="partner add did not stick",
+            ),
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
             partner_present_after=False,
             mutated=True,
             saved=False,
-            error_code=ERROR_TECHNICAL,
         )
     return True, None
 
@@ -304,17 +359,16 @@ def _save_or_outcome(
     try:
         save_fn(page, cfg)
     except Exception as exc:
-        return False, _outcome(
+        classification = classify_enable_exception(exc)
+        return False, _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            classification,
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
             partner_present_after=partner_present_after,
             mutated=True,
             saved=False,
-            error_code=ERROR_TECHNICAL,
             raw_error=str(exc),
         )
     return True, None
@@ -345,7 +399,8 @@ def process_enable_candidate(
     try:
         open_card_fn(page, candidate.card)
     except Exception as exc:
-        if _is_card_not_found(exc):
+        classification = classify_enable_exception(exc)
+        if not classification.retryable:
             return _outcome(
                 candidate,
                 registry_value=REGISTRY_SKIP,
@@ -353,11 +408,9 @@ def process_enable_candidate(
                 error_code=ERROR_CARD_NOT_FOUND,
                 raw_error=str(exc),
             )
-        return _outcome(
+        return _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
-            error_code=ERROR_TECHNICAL,
+            classification,
             raw_error=str(exc),
         )
 
@@ -448,17 +501,16 @@ def process_enable_candidate(
     try:
         set_status_fn(page, target_status, cfg)
     except Exception as exc:
-        return _outcome(
+        classification = classify_enable_exception(exc)
+        return _technical_fail_outcome(
             candidate,
-            registry_value=REGISTRY_FAIL,
-            registry_comment=f"TECHNICAL: {exc}; можно повторить",
+            classification,
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
             partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
             mutated=True,
             saved=False,
-            error_code=ERROR_TECHNICAL,
             raw_error=str(exc),
         )
 
@@ -631,6 +683,9 @@ def build_batch_execution_report(
     def _count(code: str) -> int:
         return sum(1 for o in outcomes if o.error_code == code)
 
+    def _count_technical() -> int:
+        return sum(1 for o in outcomes if o.error_code in _TECHNICAL_OUTCOME_CODES)
+
     run_limit_lines: list[str] = []
     if selected_after_dedup is not None and selected_for_run is not None:
         limited = is_run_limited(
@@ -697,7 +752,7 @@ def build_batch_execution_report(
         f"- unknown_status: {_count(ERROR_UNKNOWN_STATUS)}",
         f"- card_not_found: {_count(ERROR_CARD_NOT_FOUND)}",
         f"- partner_not_available: {_count(ERROR_PARTNER_NOT_AVAILABLE)}",
-        f"- technical: {_count(ERROR_TECHNICAL)}",
+        f"- technical: {_count_technical()}",
         *registry_lines,
         "",
         "⚠️ Antares execution completed for this batch.",

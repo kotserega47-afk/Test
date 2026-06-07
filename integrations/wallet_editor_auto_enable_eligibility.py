@@ -7,6 +7,8 @@ from typing import Iterable, Sequence
 
 import pandas as pd
 
+from automation.audit import is_retryable_fail_comment_for_eligibility
+from automation.runtime import wallet_editor_retryable_max_attempts
 from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
     HOLD_MARK,
@@ -41,6 +43,7 @@ class CandidateRow:
     enable_status: str
     vklyucheno: str
     source_row_index: int
+    enable_comment: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +100,14 @@ def _row_is_eligible(
         return False
     if vklyucheno not in {"", _VKLYUCHENO_FAIL}:
         return False
+
+    if vklyucheno == _VKLYUCHENO_FAIL:
+        enable_comment = _cell_str(row.get("Комментарий включения", ""))
+        if not is_retryable_fail_comment_for_eligibility(
+            enable_comment,
+            max_attempts=wallet_editor_retryable_max_attempts(),
+        ):
+            return False
 
     return True
 
@@ -184,6 +195,7 @@ def select_auto_enable_candidates(
                 enable_status=_cell_str(row.get("Статус включения", "")),
                 vklyucheno=_cell_str(row.get("Включено", "")),
                 source_row_index=idx,
+                enable_comment=_cell_str(row.get("Комментарий включения", "")),
             )
         )
 
