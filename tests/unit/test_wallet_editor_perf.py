@@ -296,8 +296,11 @@ def _open_card_page_mock(card: str = "9990080818592862") -> MagicMock:
     rows = MagicMock()
     rows.count.return_value = 1
     rows.nth.return_value = row
+    card_input = MagicMock()
 
     def locator(selector: str) -> MagicMock:
+        if selector == CARD_INPUT:
+            return card_input
         if selector == "#wallet-add-modal___BV_modal_body_":
             return modal
         if selector == "tr.pointer":
@@ -305,6 +308,7 @@ def _open_card_page_mock(card: str = "9990080818592862") -> MagicMock:
         return MagicMock()
 
     page.locator.side_effect = locator
+    page.wait_for_selector = MagicMock()
     modal.is_visible.return_value = True
     return page
 
@@ -414,6 +418,110 @@ def test_open_card_settle_ms_invalid_env_defaults(monkeypatch):
 
     monkeypatch.setenv("WALLET_EDITOR_OPEN_CARD_SETTLE_MS", "bad")
     assert wallet_editor_open_card_settle_ms() == 500
+
+
+def test_open_card_submits_search_with_enter():
+    from automation.engine import open_card
+
+    page = _open_card_page_mock()
+    card_input = page.locator(CARD_INPUT)
+
+    with patch("automation.engine._close_stale_modal"):
+        with patch("automation.engine._wait_for_matching_row", return_value=0):
+            with patch(
+                "automation.engine._wait_modal_card_data_ready",
+                return_value="9990080818592862",
+            ):
+                open_card(page, "9990080818592862")
+
+    card_input.fill.assert_any_call("")
+    card_input.fill.assert_any_call("9990080818592862")
+    card_input.press.assert_called_once_with("Enter")
+
+
+def test_open_card_does_not_require_apply_button_for_first_search():
+    from automation.engine import APPLY_BUTTON, open_card
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    page = _open_card_page_mock()
+    apply_button = MagicMock()
+    apply_button.click.side_effect = PlaywrightTimeoutError("disabled")
+
+    original_locator = page.locator.side_effect
+
+    def locator(selector: str) -> MagicMock:
+        if selector == APPLY_BUTTON:
+            return apply_button
+        return original_locator(selector)
+
+    page.locator.side_effect = locator
+
+    with patch("automation.engine._close_stale_modal"):
+        with patch("automation.engine._wait_for_matching_row", return_value=0):
+            with patch(
+                "automation.engine._wait_modal_card_data_ready",
+                return_value="9990080818592862",
+            ):
+                open_card(page, "9990080818592862")
+
+    apply_button.click.assert_not_called()
+
+
+def test_open_card_apply_fallback_if_enter_no_rows(caplog):
+    from automation.engine import _submit_card_filter
+
+    caplog.set_level(logging.INFO)
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+
+    card_input = MagicMock()
+    apply_button = MagicMock()
+    rows = MagicMock()
+    poll = [0]
+
+    def rows_count() -> int:
+        poll[0] += 1
+        return 0
+
+    rows.count.side_effect = rows_count
+
+    def locator(selector: str) -> MagicMock:
+        from automation.engine import APPLY_BUTTON, CARD_INPUT, ROW_SELECTOR
+
+        if selector == CARD_INPUT:
+            return card_input
+        if selector == APPLY_BUTTON:
+            return apply_button
+        if selector == ROW_SELECTOR:
+            return rows
+        return MagicMock()
+
+    page.locator.side_effect = locator
+
+    with patch("automation.engine._CARD_SEARCH_ENTER_CHECK_MS", 300):
+        _submit_card_filter(page, "9990080812990492")
+
+    assert "search fallback apply" in caplog.text
+    apply_button.click.assert_called_once()
+
+
+def test_row_match_still_used_after_enter():
+    from automation.engine import open_card
+
+    page = _open_card_page_mock()
+
+    with patch("automation.engine._close_stale_modal"):
+        with patch(
+            "automation.engine._wait_for_matching_row",
+            return_value=0,
+        ) as row_match:
+            with patch(
+                "automation.engine._wait_modal_card_data_ready",
+                return_value="9990080818592862",
+            ):
+                open_card(page, "9990080818592862")
+
+    row_match.assert_called_once()
 
 
 def test_row_match_normalizes_spaces_and_nbsp():

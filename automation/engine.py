@@ -48,6 +48,8 @@ _MODAL_DATA_TIMEOUT_MS = 10_000
 _MODAL_DATA_POLL_MS = 100
 _ROW_MATCH_POLL_MS = 150
 _ROW_TEXT_READ_TIMEOUT_MS = 500
+_CARD_SEARCH_ENTER_CHECK_MS = 2000
+_CARD_SEARCH_FALLBACK_CLICK_TIMEOUT_MS = 2000
 
 
 class OpenCardStageError(Exception):
@@ -588,17 +590,40 @@ def _verify_modal_card_number(card: str, modal_card_value: str) -> None:
         )
 
 
+def _submit_card_filter(page: Page, card: str) -> None:
+    card_input = page.locator(CARD_INPUT)
+    card_input.fill("")
+    card_input.fill(card)
+    log.info("[Card] search input filled card=%s", card)
+
+    card_input.press("Enter")
+    log.info("[Card] search submitted via enter card=%s", card)
+
+    deadline = time.monotonic() + _CARD_SEARCH_ENTER_CHECK_MS / 1000.0
+    while time.monotonic() < deadline:
+        if page.locator(ROW_SELECTOR).count() > 0:
+            return
+        page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    log.info("[Card] search fallback apply card=%s", card)
+    try:
+        page.locator(APPLY_BUTTON).click(
+            timeout=_CARD_SEARCH_FALLBACK_CLICK_TIMEOUT_MS,
+        )
+    except PlaywrightTimeoutError:
+        log.info(
+            "[Card] search fallback apply skipped card=%s reason=button unavailable",
+            card,
+        )
+
+
 def open_card(page: Page, card: str) -> None:
     modal = page.locator(MODAL_BODY)
 
     _close_stale_modal(page)
 
     log.info(f"🔎 [Card] searching card={card}")
-    page.fill(CARD_INPUT, "")
-    page.fill(CARD_INPUT, card)
-
-    log.info(f"🖱️ [Card] applying filter for card={card}")
-    page.click(APPLY_BUTTON)
+    _submit_card_filter(page, card)
     page.wait_for_selector(ROW_SELECTOR, timeout=10000)
 
     rows = page.locator(ROW_SELECTOR)
