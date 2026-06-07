@@ -18,9 +18,12 @@ _WALLET_EDITOR_AUTH_STATE_ENV = "WALLET_EDITOR_AUTH_STATE_PATH"
 _WALLET_EDITOR_ANTARES_LOGIN_ENV = "WALLET_EDITOR_ANTARES_LOGIN"
 _WALLET_EDITOR_ANTARES_PASSWORD_ENV = "WALLET_EDITOR_ANTARES_PASSWORD"
 _WALLET_EDITOR_OPERATOR_MAP_ENV = "WALLET_EDITOR_OPERATOR_MAP"
+_WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV = "WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS"
+_DEFAULT_PLAYWRIGHT_SLOW_MO_MS = 0
 _PROFILE_KEY_RE = re.compile(r"^[A-Z0-9_]+$")
 _INPUT_NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_\-.]+")
 WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
+CONVERSION_AUTO_PROFILE = "CONVERSION_AUTO"
 MAX_INPUT_NAME_LEN = 80
 RESULT_NAME_PREFIX = "wallet_editor_result_"
 
@@ -94,6 +97,32 @@ def operator_auth_state_path(profile_key: str) -> str:
     return f"/tmp/auth_state_wallet_editor_{profile_key}.json"
 
 
+def wallet_editor_playwright_slow_mo_ms() -> int:
+    """Playwright launch slow_mo in ms. Default 0; rollback via WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS=600."""
+    raw = os.getenv(_WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_PLAYWRIGHT_SLOW_MO_MS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "[WalletEditor] invalid %s=%r, using default=%s",
+            _WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV,
+            raw,
+            _DEFAULT_PLAYWRIGHT_SLOW_MO_MS,
+        )
+        return _DEFAULT_PLAYWRIGHT_SLOW_MO_MS
+    if value < 0:
+        log.warning(
+            "[WalletEditor] invalid %s=%s, using default=%s",
+            _WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_ENV,
+            value,
+            _DEFAULT_PLAYWRIGHT_SLOW_MO_MS,
+        )
+        return _DEFAULT_PLAYWRIGHT_SLOW_MO_MS
+    return value
+
+
 def sanitize_input_name(file_name: str, *, max_len: int = MAX_INPUT_NAME_LEN) -> str:
     name = (file_name or "").strip()
     name = os.path.basename(name.replace("\\", "/"))
@@ -155,6 +184,7 @@ class WalletEditorTask:
     password: str
     auth_state_path: str
     run_id: str = field(default_factory=lambda: uuid4().hex)
+    queued_at: float = field(default_factory=time.perf_counter)
 
 
 def resolve_operator_for_user(telegram_user_id: int) -> tuple[OperatorCredentials | None, str | None]:
@@ -188,6 +218,7 @@ class RunConfig:
     login: str = field(default_factory=wallet_editor_antares_login)
     password: str = field(default_factory=wallet_editor_antares_password)
     result_file_path: str | None = None
+    operator_profile: str | None = None
 
 
 def require_wallet_editor_antares_credentials(cfg: RunConfig) -> None:

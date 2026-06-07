@@ -11,8 +11,13 @@ from playwright.sync_api import Page, sync_playwright
 
 from core.playwright_cleanup import close_playwright_stack
 
-from automation.audit import Stats, log
-from automation.runtime import RunConfig, require_wallet_editor_antares_credentials, retry
+from automation.audit import Stats, log, log_step_duration
+from automation.runtime import (
+    RunConfig,
+    require_wallet_editor_antares_credentials,
+    retry,
+    wallet_editor_playwright_slow_mo_ms,
+)
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
 
 
@@ -24,6 +29,9 @@ ROW_SELECTOR = "tr.pointer"
 MODAL_BODY = "#wallet-add-modal___BV_modal_body_"
 MODAL_CLOSE_BUTTON = "#wallet-add-modal___BV_modal_header_ button.close"
 SAVE_BUTTON = 'button:has-text("Сохранить")'
+
+_WALLET_UI_READY_TIMEOUT_MS = 15_000
+_AUTH_NETWORKIDLE_TIMEOUT_MS = 60_000
 
 ALLOWED_ACTIONS = {
     "remove_partner",
@@ -267,12 +275,17 @@ def _apply_auto_no_partners_status_after_actions(
     return not result.startswith("skip")
 
 
+def _wait_for_wallet_page_ready(page: Page, *, timeout_ms: int = _WALLET_UI_READY_TIMEOUT_MS) -> None:
+    """Wait until wallet search UI is usable (card filter input visible)."""
+    page.locator(CARD_INPUT).wait_for(state="visible", timeout=timeout_ms)
+
+
 def _ensure_logged_in(page: Page, context, cfg: RunConfig) -> None:
     log.info("🔐 [Auth] opening wallet page")
     page.goto("https://antares.plus/lkcard/#/wallet")
-    page.wait_for_timeout(3000)
 
     if "#/login" not in page.url:
+        _wait_for_wallet_page_ready(page)
         log.info("✅ [Auth] existing session is valid")
         return
 
@@ -284,8 +297,8 @@ def _ensure_logged_in(page: Page, context, cfg: RunConfig) -> None:
     page.fill("input[type='password']", cfg.password)
     page.click("button:has-text('Войти')")
 
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(3000)
+    page.wait_for_load_state("networkidle", timeout=_AUTH_NETWORKIDLE_TIMEOUT_MS)
+    _wait_for_wallet_page_ready(page)
 
     if "#/login" in page.url:
         log.error("❌ [Auth] login failed")
@@ -491,7 +504,7 @@ def _multiselect_remove_label(multiselect, label: str) -> bool:
 
 def _multiselect_add_option(page: Page, multiselect, option: str, log_prefix: str) -> bool:
     multiselect.scroll_into_view_if_needed()
-    page.wait_for_timeout(200)
+    multiselect.wait_for(state="visible", timeout=3000)
 
     try:
         multiselect.click()
@@ -537,7 +550,7 @@ def _multiselect_add_option(page: Page, multiselect, option: str, log_prefix: st
         return False
 
     found.scroll_into_view_if_needed()
-    page.wait_for_timeout(100)
+    found.wait_for(state="visible", timeout=3000)
 
     try:
         found.click()
@@ -670,7 +683,7 @@ def ensure_partner_added(page: Page, partner: str, cfg: RunConfig):
 
     # 🔓 ОТКРЫТЬ DROPDOWN
     multiselect.scroll_into_view_if_needed()
-    page.wait_for_timeout(200)
+    multiselect.wait_for(state="visible", timeout=3000)
 
     try:
         multiselect.click()
@@ -721,7 +734,7 @@ def ensure_partner_added(page: Page, partner: str, cfg: RunConfig):
 
     # 🔥 КЛИК ПО ПАРТНЕРУ
     found.scroll_into_view_if_needed()
-    page.wait_for_timeout(100)
+    found.wait_for(state="visible", timeout=3000)
 
     try:
         found.click()
@@ -1024,156 +1037,182 @@ def _write_result(df: pd.DataFrame, out_path: str | None = None) -> str:
 
 
 def run(file_path: str, cfg: RunConfig):
-    log.info(f"🚀 [Run] wallet editor started file={file_path}")
+    profile = (cfg.operator_profile or "unknown").strip()
+    log.info(f"🚀 [Run] wallet editor started file={file_path} profile={profile}")
     require_wallet_editor_antares_credentials(cfg)
 
-    stats = Stats()
-    df = _prepare_df(file_path)
+    with log_step_duration(profile=profile, scope="disable", step="run_total"):
+        stats = Stats()
+        df = _prepare_df(file_path)
 
-    # 🔥 гарантируем, что колонка есть и она первая
-    if "Дата отключения" not in df.columns:
-        df.insert(0, "Дата отключения", "")
-    else:
-        col = df.pop("Дата отключения")
-        df.insert(0, "Дата отключения", col)
+        # 🔥 гарантируем, что колонка есть и она первая
+        if "Дата отключения" not in df.columns:
+            df.insert(0, "Дата отключения", "")
+        else:
+            col = df.pop("Дата отключения")
+            df.insert(0, "Дата отключения", col)
 
-    _validate_set_direction_pre_playwright(df)
-    stats.fail += int((df["status"] == "FAIL").sum())
+        _validate_set_direction_pre_playwright(df)
+        stats.fail += int((df["status"] == "FAIL").sum())
 
-    grouped = _group_actions(df)
+        grouped = _group_actions(df)
 
-    with sync_playwright() as p:
-        browser = None
-        context = None
-        page = None
-        try:
-            log.info(f"🌐 [Browser] launching chromium headless={cfg.headless}")
-            browser = p.chromium.launch(
-                headless=cfg.headless,
-                slow_mo=600,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+        slow_mo = wallet_editor_playwright_slow_mo_ms()
+        log.info("[WalletEditor] playwright slow_mo_ms=%s profile=%s scope=disable", slow_mo, profile)
 
-            if os.path.exists(cfg.auth_state_path):
-                log.info(f"🔐 [Browser] using storage_state={cfg.auth_state_path}")
-                context = browser.new_context(storage_state=cfg.auth_state_path)
-            else:
-                log.info("🔐 [Browser] storage_state not found, using clean context")
-                context = browser.new_context()
+        with sync_playwright() as p:
+            browser = None
+            context = None
+            page = None
+            try:
+                log.info(f"🌐 [Browser] launching chromium headless={cfg.headless}")
+                browser = p.chromium.launch(
+                    headless=cfg.headless,
+                    slow_mo=slow_mo,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
 
-            page = context.new_page()
-            _ensure_logged_in(page, context, cfg)
+                if os.path.exists(cfg.auth_state_path):
+                    log.info(f"🔐 [Browser] using storage_state={cfg.auth_state_path}")
+                    context = browser.new_context(storage_state=cfg.auth_state_path)
+                else:
+                    log.info("🔐 [Browser] storage_state not found, using clean context")
+                    context = browser.new_context()
 
-            for card, actions in grouped.items():
-                log.info(f"🃏 [Card] start card={card} actions={len(actions)}")
+                page = context.new_page()
+                _ensure_logged_in(page, context, cfg)
 
-                if not actions:
-                    log.info(f"ℹ️ [Card] skip card={card} — no runnable actions")
-                    continue
+                for card, actions in grouped.items():
+                    log.info(f"🃏 [Card] start card={card} actions={len(actions)}")
 
-                card_failed = False
-                card_mutated = False
+                    if not actions:
+                        log.info(f"ℹ️ [Card] skip card={card} — no runnable actions")
+                        continue
 
-                try:
-                    retry(
-                        lambda: open_card(page, card),
-                        cfg.retries,
-                        cfg.delay,
-                        step_name=f"open_card:{card}"
-                    )
+                    card_failed = False
+                    card_mutated = False
 
-                    for idx, action, value in actions:
-                        log.info(f"➡️ [Card] processing row={idx} card={card} action={action} value={value}")
-
-                        # 🔥 единая точка времени (MSK, время обработки строки)
-                        now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
-
+                    with log_step_duration(
+                        profile=profile, scope="disable", step="card", card=card
+                    ):
                         try:
-                            if action == "remove_partner":
-                                result = ensure_partner_removed(page, value, cfg)
-                            elif action == "add_partner":
-                                result = ensure_partner_added(page, value, cfg)
-                            elif action == "set_status":
-                                result = ensure_status_set(page, value, cfg)
-                            elif action == "set_direction":
-                                result = ensure_direction_set(page, value, cfg)
-                            elif action == "add_group":
-                                result = ensure_group_added(page, value, cfg)
-                            elif action == "set_group":
-                                result = ensure_group_set(page, value, cfg)
-                            elif action == "clear_groups":
-                                result = ensure_groups_cleared(page, value, cfg)
-                            else:
-                                result = "skip: unsupported action"
+                            with log_step_duration(
+                                profile=profile,
+                                scope="disable",
+                                step="open_card",
+                                card=card,
+                            ):
+                                retry(
+                                    lambda: open_card(page, card),
+                                    cfg.retries,
+                                    cfg.delay,
+                                    step_name=f"open_card:{card}",
+                                )
 
-                            status = "OK" if not result.startswith("skip") else "SKIP"
-                            if status == "OK":
+                            for idx, action, value in actions:
+                                log.info(f"➡️ [Card] processing row={idx} card={card} action={action} value={value}")
+
+                                # 🔥 единая точка времени (MSK, время обработки строки)
+                                now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
+
+                                try:
+                                    with log_step_duration(
+                                        profile=profile,
+                                        scope="disable",
+                                        step=f"action:{action}",
+                                        card=card,
+                                    ):
+                                        if action == "remove_partner":
+                                            result = ensure_partner_removed(page, value, cfg)
+                                        elif action == "add_partner":
+                                            result = ensure_partner_added(page, value, cfg)
+                                        elif action == "set_status":
+                                            result = ensure_status_set(page, value, cfg)
+                                        elif action == "set_direction":
+                                            result = ensure_direction_set(page, value, cfg)
+                                        elif action == "add_group":
+                                            result = ensure_group_added(page, value, cfg)
+                                        elif action == "set_group":
+                                            result = ensure_group_set(page, value, cfg)
+                                        elif action == "clear_groups":
+                                            result = ensure_groups_cleared(page, value, cfg)
+                                        else:
+                                            result = "skip: unsupported action"
+
+                                    status = "OK" if not result.startswith("skip") else "SKIP"
+                                    if status == "OK":
+                                        card_mutated = True
+
+                                    df.at[idx, "status"] = status
+                                    df.at[idx, "comment"] = result
+
+                                    # 🔥 ВСЕГДА ставим дату
+                                    df.at[idx, "Дата отключения"] = now_str
+
+                                    stats.inc(result)
+
+                                    log.info(f"✅ [Card] row={idx} result={result}")
+
+                                except Exception as e:
+                                    df.at[idx, "status"] = "FAIL"
+                                    df.at[idx, "comment"] = str(e)
+
+                                    # 🔥 ВСЕГДА ставим дату
+                                    df.at[idx, "Дата отключения"] = now_str
+
+                                    stats.fail += 1
+                                    log.exception(f"❌ [Card] row={idx} failed card={card}: {e}")
+
+                            explicit_status_in_excel = any(
+                                action == "set_status" for _, action, _ in actions
+                            )
+                            if _apply_auto_no_partners_status_after_actions(
+                                page, cfg, explicit_status_in_excel
+                            ):
                                 card_mutated = True
 
-                            df.at[idx, "status"] = status
-                            df.at[idx, "comment"] = result
+                            if card_mutated:
+                                with log_step_duration(
+                                    profile=profile,
+                                    scope="disable",
+                                    step="save",
+                                    card=card,
+                                ):
+                                    retry(
+                                        lambda: save(page, cfg),
+                                        cfg.retries,
+                                        cfg.delay,
+                                        step_name=f"save:{card}",
+                                    )
+                            else:
+                                log.info(f"ℹ️ [Card] skip save card={card} — no mutations")
 
-                            # 🔥 ВСЕГДА ставим дату
-                            df.at[idx, "Дата отключения"] = now_str
-
-                            stats.inc(result)
-
-                            log.info(f"✅ [Card] row={idx} result={result}")
+                            log.info(f"✅ [Card] finished card={card}")
 
                         except Exception as e:
-                            df.at[idx, "status"] = "FAIL"
-                            df.at[idx, "comment"] = str(e)
+                            card_failed = True
 
-                            # 🔥 ВСЕГДА ставим дату
-                            df.at[idx, "Дата отключения"] = now_str
+                            log.exception(f"❌ [Card] fatal failure card={card}: {e}")
 
-                            stats.fail += 1
-                            log.exception(f"❌ [Card] row={idx} failed card={card}: {e}")
+                            now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
 
-                    explicit_status_in_excel = any(
-                        action == "set_status" for _, action, _ in actions
-                    )
-                    if _apply_auto_no_partners_status_after_actions(
-                        page, cfg, explicit_status_in_excel
-                    ):
-                        card_mutated = True
+                            for idx, _, _ in actions:
+                                if not str(df.at[idx, "status"]).strip():
+                                    df.at[idx, "status"] = "FAIL"
+                                    df.at[idx, "comment"] = str(e)
 
-                    if card_mutated:
-                        retry(
-                            lambda: save(page, cfg),
-                            cfg.retries,
-                            cfg.delay,
-                            step_name=f"save:{card}"
-                        )
-                    else:
-                        log.info(f"ℹ️ [Card] skip save card={card} — no mutations")
+                                    # 🔥 ВСЕГДА ставим дату
+                                    df.at[idx, "Дата отключения"] = now_str
 
-                    log.info(f"✅ [Card] finished card={card}")
+                                    stats.fail += 1
 
-                except Exception as e:
-                    card_failed = True
+                    if card_failed:
+                        log.warning(f"⚠️ [Card] card marked as failed card={card}")
+            finally:
+                close_playwright_stack(page=page, context=context, browser=browser)
+                log.info("🛑 [Browser] playwright stack closed")
 
-                    log.exception(f"❌ [Card] fatal failure card={card}: {e}")
-
-                    now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
-
-                    for idx, _, _ in actions:
-                        if not str(df.at[idx, "status"]).strip():
-                            df.at[idx, "status"] = "FAIL"
-                            df.at[idx, "comment"] = str(e)
-
-                            # 🔥 ВСЕГДА ставим дату
-                            df.at[idx, "Дата отключения"] = now_str
-
-                            stats.fail += 1
-
-                if card_failed:
-                    log.warning(f"⚠️ [Card] card marked as failed card={card}")
-        finally:
-            close_playwright_stack(page=page, context=context, browser=browser)
-            log.info("🛑 [Browser] playwright stack closed")
-
-    out_path = _write_result(df, cfg.result_file_path)
+        out_path = _write_result(df, cfg.result_file_path)
 
     log.info(f"🏁 [Run] completed summary={stats.summary()}")
 

@@ -95,7 +95,7 @@ def test_dry_run_does_not_call_executor(registry_frames):
         return_value=True,
     ):
         with patch(
-            "integrations.wallet_editor_auto_enable.execute_enable_batch",
+            "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
         ) as execute:
             result = run_auto_enable(
                 settings=settings,
@@ -114,7 +114,7 @@ def test_approval_required_does_not_call_executor(registry_frames):
         return_value=True,
     ):
         with patch(
-            "integrations.wallet_editor_auto_enable.execute_enable_batch",
+            "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
         ) as execute:
             result = run_auto_enable(
                 settings=settings,
@@ -137,7 +137,7 @@ def test_phase_b1_calls_executor_and_sends_batch_report(registry_frames):
             return_value=True,
         ) as send_file:
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[_ok_outcome()],
             ) as execute:
                 with patch(
@@ -172,7 +172,7 @@ def test_registry_append_not_called(registry_frames):
             return_value=True,
         ):
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[_ok_outcome()],
             ):
                 with patch(
@@ -205,7 +205,7 @@ def test_batch_report_contains_registry_patch_status(registry_frames):
             return_value=True,
         ):
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[_ok_outcome()],
             ):
                 with patch(

@@ -121,7 +121,7 @@ def test_phase_b1_executor_receives_only_limited_candidates():
             return_value=True,
         ):
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[],
             ) as execute:
                 with patch(

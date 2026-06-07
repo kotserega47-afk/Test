@@ -35,10 +35,10 @@ from integrations.wallet_editor_auto_enable_eligibility import (
     select_auto_enable_candidates,
     split_batches,
 )
+from automation.worker import enqueue_auto_enable_batch
 from integrations.wallet_editor_auto_enable_executor import (
     EnableOutcome,
     build_batch_execution_report,
-    execute_enable_batch,
     make_batch_result_path,
     write_outcomes_report,
 )
@@ -337,7 +337,7 @@ def _run_phase_b2_batches(
             batch_total,
             len(batch),
         )
-        outcomes = execute_enable_batch(batch, settings)
+        outcomes = enqueue_auto_enable_batch(batch, settings)
         patch_result: EnablePatchResult | None = None
         if outcomes:
             patch_result = patch_enable_results_in_dropbox_registry(

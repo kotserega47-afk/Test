@@ -109,7 +109,7 @@ def test_phase_b2_calls_registry_patch_after_executor(registry_frames):
     with patch("integrations.wallet_editor_auto_enable._send_to_route", return_value=True):
         with patch("integrations.wallet_editor_auto_enable.send_file_to_route", return_value=True):
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[_ok_outcome()],
             ):
                 with patch(
@@ -142,7 +142,7 @@ def test_no_outcomes_does_not_patch_registry(registry_frames):
     frames = (empty_df, pd.DataFrame(), pd.DataFrame(), empty_df)
     with patch("integrations.wallet_editor_auto_enable._send_to_route", return_value=True):
         with patch(
-            "integrations.wallet_editor_auto_enable.execute_enable_batch",
+            "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
         ) as execute:
             with patch(
                 "integrations.wallet_editor_auto_enable.patch_enable_results_in_dropbox_registry",
@@ -161,7 +161,7 @@ def test_patch_failure_sends_alert_and_report_shows_false(registry_frames):
     ) as send_route:
         with patch("integrations.wallet_editor_auto_enable.send_file_to_route", return_value=True):
             with patch(
-                "integrations.wallet_editor_auto_enable.execute_enable_batch",
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
                 return_value=[_ok_outcome()],
             ):
                 with patch(

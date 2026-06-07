@@ -22,7 +22,14 @@ from automation.engine import (
     open_card,
     save,
 )
-from automation.runtime import RunConfig, operator_auth_state_path, require_wallet_editor_antares_credentials
+from automation.audit import log_step_duration
+from automation.runtime import (
+    CONVERSION_AUTO_PROFILE,
+    RunConfig,
+    operator_auth_state_path,
+    require_wallet_editor_antares_credentials,
+    wallet_editor_playwright_slow_mo_ms,
+)
 from core.playwright_cleanup import close_playwright_stack
 from integrations.conversion_wallet_editor_bridge import (
     ENV_LOGIN,
@@ -97,6 +104,7 @@ def build_run_config_from_conversion_env() -> RunConfig:
         login=login,
         password=password,
         auth_state_path=operator_auth_state_path(OPERATOR_PROFILE),
+        operator_profile=OPERATOR_PROFILE,
     )
 
 
@@ -513,46 +521,61 @@ def execute_enable_batch(
 
     cfg = cfg or build_run_config_from_conversion_env()
     require_wallet_editor_antares_credentials(cfg)
+    profile = (cfg.operator_profile or CONVERSION_AUTO_PROFILE).strip()
 
     outcomes: list[EnableOutcome] = []
     working = build_status_set(settings.working_statuses)
     auto_return = build_status_set(settings.auto_return_statuses)
 
-    with sync_playwright() as playwright:
-        browser = None
-        context = None
-        page = None
-        try:
-            browser = playwright.chromium.launch(
-                headless=cfg.headless,
-                slow_mo=600,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            if os.path.exists(cfg.auth_state_path):
-                context = browser.new_context(storage_state=cfg.auth_state_path)
-            else:
-                context = browser.new_context()
-            page = context.new_page()
-            _ensure_logged_in(page, context, cfg)
+    slow_mo = wallet_editor_playwright_slow_mo_ms()
+    log.info(
+        "[WalletEditor] playwright slow_mo_ms=%s profile=%s scope=auto_enable",
+        slow_mo,
+        profile,
+    )
 
-            for candidate in candidates:
-                log.info(
-                    "[AutoEnable] processing card=%s partner=%s",
-                    candidate.card,
-                    candidate.partner,
+    with log_step_duration(profile=profile, scope="auto_enable", step="batch"):
+        with sync_playwright() as playwright:
+            browser = None
+            context = None
+            page = None
+            try:
+                browser = playwright.chromium.launch(
+                    headless=cfg.headless,
+                    slow_mo=slow_mo,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
                 )
-                outcomes.append(
-                    process_enable_candidate(
-                        page,
-                        candidate,
-                        settings=settings,
-                        cfg=cfg,
-                        working_statuses=working,
-                        auto_return_statuses=auto_return,
+                if os.path.exists(cfg.auth_state_path):
+                    context = browser.new_context(storage_state=cfg.auth_state_path)
+                else:
+                    context = browser.new_context()
+                page = context.new_page()
+                _ensure_logged_in(page, context, cfg)
+
+                for candidate in candidates:
+                    log.info(
+                        "[AutoEnable] processing card=%s partner=%s",
+                        candidate.card,
+                        candidate.partner,
                     )
-                )
-        finally:
-            close_playwright_stack(page=page, context=context, browser=browser)
+                    with log_step_duration(
+                        profile=profile,
+                        scope="auto_enable",
+                        step="candidate",
+                        card=candidate.card,
+                    ):
+                        outcomes.append(
+                            process_enable_candidate(
+                                page,
+                                candidate,
+                                settings=settings,
+                                cfg=cfg,
+                                working_statuses=working,
+                                auto_return_statuses=auto_return,
+                            )
+                        )
+            finally:
+                close_playwright_stack(page=page, context=context, browser=browser)
 
     return outcomes
 

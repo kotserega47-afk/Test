@@ -1,0 +1,288 @@
+"""WE-PERF-1: timing instrumentation, slow_mo env, auth/micro-sleep optimizations."""
+from __future__ import annotations
+
+import logging
+import re
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+
+from automation.audit import log_step_duration, log_timing, mask_card
+from automation.engine import CARD_INPUT, _ensure_logged_in, run
+from automation.runtime import RunConfig, wallet_editor_playwright_slow_mo_ms
+from integrations.wallet_editor_auto_enable_executor import execute_enable_batch
+from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
+from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
+
+
+def _settings() -> AutoEnableSettings:
+    return AutoEnableSettings(
+        enabled=True,
+        dry_run=False,
+        approval_required=False,
+        max_rows_per_batch=200,
+        max_rows_per_run=0,
+        seconds_per_card_timeout=10,
+        batch_timeout_buffer_seconds=300,
+        working_statuses=("готов к работе",),
+        auto_return_statuses=(),
+        auto_return_target_status="Готов к работе",
+        allowed_statuses_for_enable=("готов к работе",),
+        deprecated_working_statuses_fallback=False,
+        include_overdue=True,
+        telegram_route_report="wallet_editor_auto_enable",
+        telegram_route_alert="wallet_editor_auto_enable_alert",
+    )
+
+
+def _candidate() -> CandidateRow:
+    return CandidateRow(
+        card="4111111111111111",
+        partner="P1",
+        disable_at="01.06.2026 10:00:00",
+        enable_status="К ВКЛЮЧЕНИЮ",
+        vklyucheno="",
+        source_row_index=0,
+    )
+
+
+def test_slow_mo_env_default_zero(monkeypatch):
+    monkeypatch.delenv("WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS", raising=False)
+    assert wallet_editor_playwright_slow_mo_ms() == 0
+
+
+def test_slow_mo_env_rollback_600(monkeypatch):
+    monkeypatch.setenv("WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS", "600")
+    assert wallet_editor_playwright_slow_mo_ms() == 600
+
+
+def test_slow_mo_invalid_env_safe_default(monkeypatch, caplog):
+    monkeypatch.setenv("WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS", "not-a-number")
+    assert wallet_editor_playwright_slow_mo_ms() == 0
+    assert "invalid" in caplog.text.lower()
+
+
+def test_we_timing_log_format(caplog):
+    caplog.set_level(logging.INFO)
+    log_timing(
+        profile="DENIS",
+        scope="disable",
+        step="open_card",
+        duration_ms=123,
+        outcome="ok",
+        card="4111111111111111",
+    )
+    assert re.search(
+        r"\[WE/timing\] profile=DENIS scope=disable step=open_card card=\*\*\*1111 duration_ms=123 outcome=ok",
+        caplog.text,
+    )
+
+
+def test_mask_card_masks_digits():
+    assert mask_card("4111111111111111") == "***1111"
+    assert mask_card("12") == "***"
+
+
+def test_engine_run_emits_total_and_card_timing(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    xlsx = tmp_path / "input.xlsx"
+    pd.DataFrame(
+        [{"card": "4111", "action": "remove_partner", "value": "P1"}]
+    ).to_excel(xlsx, index=False)
+
+    cfg = RunConfig(
+        login="u",
+        password="p",
+        auth_state_path=str(tmp_path / "auth.json"),
+        operator_profile="DENIS",
+        result_file_path=str(tmp_path / "out.xlsx"),
+    )
+
+    mock_page = MagicMock()
+    mock_context = MagicMock()
+    mock_browser = MagicMock()
+    mock_playwright = MagicMock()
+    mock_playwright.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+
+    with patch("automation.engine.sync_playwright") as sp:
+        sp.return_value.__enter__.return_value = mock_playwright
+        with patch("automation.engine._ensure_logged_in"):
+            with patch("automation.engine.open_card"):
+                with patch(
+                    "automation.engine.ensure_partner_removed",
+                    return_value="skip: not selected",
+                ):
+                    run(str(xlsx), cfg)
+
+    text = caplog.text
+    assert "[WE/timing] profile=DENIS scope=disable step=run_total" in text
+    assert "[WE/timing] profile=DENIS scope=disable step=card" in text
+
+
+def test_auto_enable_batch_emits_timing(caplog):
+    caplog.set_level(logging.INFO)
+    cfg = RunConfig(
+        login="u",
+        password="p",
+        auth_state_path="/tmp/auth.json",
+        operator_profile="CONVERSION_AUTO",
+    )
+
+    mock_page = MagicMock()
+    mock_context = MagicMock()
+    mock_browser = MagicMock()
+    mock_playwright = MagicMock()
+    mock_playwright.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+
+    with patch("integrations.wallet_editor_auto_enable_executor.sync_playwright") as sp:
+        sp.return_value.__enter__.return_value = mock_playwright
+        with patch("integrations.wallet_editor_auto_enable_executor._ensure_logged_in"):
+            with patch(
+                "integrations.wallet_editor_auto_enable_executor.process_enable_candidate",
+                return_value=MagicMock(registry_value="OK"),
+            ):
+                execute_enable_batch([_candidate()], _settings(), cfg=cfg)
+
+    assert "[WE/timing] profile=CONVERSION_AUTO scope=auto_enable step=batch" in caplog.text
+
+
+def test_slow_mo_passed_to_chromium_launch(monkeypatch):
+    monkeypatch.setenv("WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS", "600")
+    cfg = RunConfig(login="u", password="p", operator_profile="DENIS")
+
+    mock_playwright = MagicMock()
+    mock_browser = MagicMock()
+    mock_playwright.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value.new_page.return_value = MagicMock()
+
+    with patch("integrations.wallet_editor_auto_enable_executor.sync_playwright") as sp:
+        sp.return_value.__enter__.return_value = mock_playwright
+        with patch("integrations.wallet_editor_auto_enable_executor._ensure_logged_in"):
+            with patch(
+                "integrations.wallet_editor_auto_enable_executor.process_enable_candidate",
+                return_value=MagicMock(registry_value="OK"),
+            ):
+                execute_enable_batch([_candidate()], _settings(), cfg=cfg)
+
+    assert mock_playwright.chromium.launch.call_args.kwargs["slow_mo"] == 600
+
+
+def test_ensure_logged_in_no_fixed_sleep_when_ui_ready():
+    page = MagicMock()
+    page.url = "https://antares.plus/lkcard/#/wallet"
+    context = MagicMock()
+    cfg = RunConfig(login="u", password="p")
+
+    card_input = MagicMock()
+    page.locator.return_value = card_input
+
+    _ensure_logged_in(page, context, cfg)
+
+    page.wait_for_timeout.assert_not_called()
+    card_input.wait_for.assert_called_once_with(state="visible", timeout=15000)
+
+
+def test_ensure_logged_in_cold_login_uses_networkidle_not_fixed_sleep():
+    page = MagicMock()
+    page.url = "https://antares.plus/lkcard/#/wallet"
+    context = MagicMock()
+    cfg = RunConfig(login="u", password="p", auth_state_path="/tmp/auth.json")
+
+    card_input = MagicMock()
+    page.locator.return_value = card_input
+
+    def goto_side_effect(url: str, *args, **kwargs):
+        if "#/wallet" in url:
+            page.url = "https://antares.plus/lkcard/#/login"
+        return None
+
+    def click_side_effect(*args, **kwargs):
+        page.url = "https://antares.plus/lkcard/#/wallet"
+        return None
+
+    page.goto.side_effect = goto_side_effect
+    page.click.side_effect = click_side_effect
+
+    _ensure_logged_in(page, context, cfg)
+
+    page.wait_for_timeout.assert_not_called()
+    page.wait_for_load_state.assert_called_once()
+    assert card_input.wait_for.call_count >= 1
+    context.storage_state.assert_called_once()
+
+
+def test_disable_flow_outcomes_unchanged(tmp_path):
+    """Golden-style: skip remove_partner still yields SKIP row."""
+    xlsx = tmp_path / "input.xlsx"
+    pd.DataFrame(
+        [{"card": "4111", "action": "remove_partner", "value": "P1"}]
+    ).to_excel(xlsx, index=False)
+
+    cfg = RunConfig(
+        login="u",
+        password="p",
+        auth_state_path=str(tmp_path / "auth.json"),
+        operator_profile="DENIS",
+        result_file_path=str(tmp_path / "out.xlsx"),
+    )
+
+    mock_playwright = MagicMock()
+    mock_browser = MagicMock()
+    mock_playwright.chromium.launch.return_value = mock_browser
+    mock_context = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = MagicMock()
+
+    with patch("automation.engine.sync_playwright") as sp:
+        sp.return_value.__enter__.return_value = mock_playwright
+        with patch("automation.engine._ensure_logged_in"):
+            with patch("automation.engine.open_card"):
+                with patch(
+                    "automation.engine.ensure_partner_removed",
+                    return_value="skip: not selected",
+                ):
+                    out_path, stats = run(str(xlsx), cfg)
+
+    result = pd.read_excel(out_path)
+    assert result.iloc[0]["status"] == "SKIP"
+    assert stats.skip == 1
+    assert stats.ok == 0
+
+
+def test_auto_enable_outcomes_unchanged():
+    from integrations.wallet_editor_auto_enable_executor import (
+        ERROR_ALREADY_ADDED,
+        REGISTRY_OK,
+        process_enable_candidate,
+    )
+
+    page = MagicMock()
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=RunConfig(login="u", password="p"),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=lambda _p: ["Ostin / P1"],
+        working_statuses=frozenset({"готов к работе"}),
+        auto_return_statuses=frozenset(),
+    )
+
+    assert outcome.registry_value == REGISTRY_OK
+    assert outcome.error_code == ERROR_ALREADY_ADDED
+    assert outcome.saved is False
+
+
+def test_log_step_duration_records_fail_on_exception(caplog):
+    caplog.set_level(logging.INFO)
+    with pytest.raises(ValueError):
+        with log_step_duration(profile="DENIS", scope="disable", step="save", card="4111"):
+            raise ValueError("boom")
+    assert "outcome=fail" in caplog.text
