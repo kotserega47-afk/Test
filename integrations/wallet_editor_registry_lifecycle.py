@@ -35,6 +35,7 @@ SHEET_OTLEZKA = "Отлёжка"
 LEGACY_VALUE_COLUMN = "value"
 OPERATION_DATE_COLUMN = "Дата операции"
 DISABLE_DATE_COLUMN = "Дата отключения"
+OPERATION_DATE_NUMBER_FORMAT = "dd.mm.yyyy"
 
 ALL_RESULTS_COLUMNS = [
     OPERATION_DATE_COLUMN,
@@ -118,6 +119,24 @@ def result_row_dates(action: str, status: str, processed_at: datetime) -> tuple[
         return operation_date, processed_at.strftime(EXCEL_DATETIME_FORMAT)
     return operation_date, ""
 
+
+def parse_operation_date(value: object) -> date | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none"}:
+        return None
+    for fmt in (EXCEL_DATETIME_FORMAT, EXCEL_DATE_FORMAT):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
 RED_FILL = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
 
 WARN_MESSAGE_TEMPLATE = (
@@ -154,6 +173,8 @@ def _cell_str(value: object) -> str:
         if value.tzinfo is None:
             return value.strftime(EXCEL_DATETIME_FORMAT)
         return value.strftime(EXCEL_DATETIME_FORMAT)
+    if isinstance(value, date):
+        return value.strftime(EXCEL_DATE_FORMAT)
     return str(value).strip()
 
 

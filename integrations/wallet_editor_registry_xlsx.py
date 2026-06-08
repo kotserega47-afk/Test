@@ -16,6 +16,8 @@ from integrations.wallet_editor_registry_lifecycle import (
     HOLD_COLUMNS,
     LEGACY_VALUE_COLUMN,
     MISSING_OTLEZKA_DATE_TEXT,
+    OPERATION_DATE_COLUMN,
+    OPERATION_DATE_NUMBER_FORMAT,
     OTLEZKA_COLUMNS,
     RED_FILL,
     RUNS_COLUMNS,
@@ -29,6 +31,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     normalize_all_results,
     normalize_sheet,
     is_legacy_all_results,
+    parse_operation_date,
 )
 
 CARD_TEXT_FORMAT = "@"
@@ -145,6 +148,13 @@ def _set_cell_value(
     if col_name in TEXT_COLUMNS:
         cell.value = card_as_text(value)
         cell.number_format = CARD_TEXT_FORMAT
+    elif col_name == OPERATION_DATE_COLUMN:
+        excel_date = parse_operation_date(value)
+        if excel_date is None:
+            cell.value = None
+        else:
+            cell.value = excel_date
+            cell.number_format = OPERATION_DATE_NUMBER_FORMAT
     else:
         cell.value = value if value != "" else None
 

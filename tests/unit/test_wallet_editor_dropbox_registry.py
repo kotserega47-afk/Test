@@ -19,7 +19,7 @@ from integrations.wallet_editor_registry import (
     resolve_source,
 )
 from integrations.wallet_editor_registry_settings import RegistrySettings
-from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
+from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook, save_registry_workbook
 from integrations.wallet_editor_auto_enable_eligibility import select_auto_enable_candidates
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
@@ -29,6 +29,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     MISSING_OTLEZKA_DATE_TEXT,
     MISSING_OTLEZKA_STATUS,
     OPERATION_DATE_COLUMN,
+    OPERATION_DATE_NUMBER_FORMAT,
     OTLEZKA_COLUMNS,
     RUNS_COLUMNS,
     SHEET_ALL_RESULTS,
@@ -994,3 +995,169 @@ def test_registry_append_copies_runs_row_style(registry_env, tmp_path):
     assert ws_runs.cell(row=3, column=1).border.left.style == "thin"
     assert ws_runs.cell(row=3, column=len(RUNS_COLUMNS)).border.left.style == "thin"
     wb2.close()
+
+
+def _operation_date_cell(ws, row_idx: int = 2):
+    col = ALL_RESULTS_COLUMNS.index(OPERATION_DATE_COLUMN) + 1
+    return ws.cell(row=row_idx, column=col)
+
+
+def _disable_date_cell(ws, row_idx: int = 2):
+    col = ALL_RESULTS_COLUMNS.index(DISABLE_DATE_COLUMN) + 1
+    return ws.cell(row=row_idx, column=col)
+
+
+def _all_results_row(**overrides) -> dict:
+    row = {col: "" for col in ALL_RESULTS_COLUMNS}
+    row.update(overrides)
+    return row
+
+
+def test_operation_date_written_as_excel_date(registry_env, tmp_path):
+    store, _, _ = registry_env
+    _append_once(registry_env, tmp_path, run_id="op-date-excel")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    cell = _operation_date_cell(ws)
+    assert isinstance(cell.value, (date, datetime))
+    assert not isinstance(cell.value, str)
+    assert cell.number_format == OPERATION_DATE_NUMBER_FORMAT
+    wb.close()
+
+
+def test_operation_date_preserved_on_append(registry_env, tmp_path):
+    store, _, revs = registry_env
+    _append_once(registry_env, tmp_path, run_id="op-date-first")
+    _append_once(registry_env, tmp_path, run_id="op-date-second")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    for row_idx in (2, 3):
+        cell = _operation_date_cell(ws, row_idx)
+        assert isinstance(cell.value, (date, datetime))
+        assert cell.number_format == OPERATION_DATE_NUMBER_FORMAT
+    wb.close()
+
+
+@pytest.mark.parametrize(
+    "legacy_value",
+    ["08.06.2026", "08.06.2026 00:00:00"],
+)
+def test_legacy_string_operation_date_normalized_on_save(tmp_path, legacy_value: str):
+    from openpyxl import Workbook
+
+    wb_path = tmp_path / "legacy_op_date.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = SHEET_ALL_RESULTS
+    for col_idx, name in enumerate(ALL_RESULTS_COLUMNS, 1):
+        ws.cell(row=1, column=col_idx, value=name)
+    ws.cell(row=2, column=1, value=legacy_value)
+    ws.cell(row=2, column=ALL_RESULTS_COLUMNS.index(DISABLE_DATE_COLUMN) + 1, value="01.06.2026 10:00:00")
+    ws.cell(row=2, column=ALL_RESULTS_COLUMNS.index("card") + 1, value="4111")
+    ws.cell(row=2, column=ALL_RESULTS_COLUMNS.index("action") + 1, value="remove_partner")
+    ws.cell(row=2, column=ALL_RESULTS_COLUMNS.index("partner") + 1, value="Ostin")
+    ws.cell(row=2, column=ALL_RESULTS_COLUMNS.index("status") + 1, value="OK")
+    wb.create_sheet(SHEET_RUNS)
+    wb.save(wb_path)
+    wb.close()
+
+    all_df = pd.DataFrame(
+        [
+            _all_results_row(
+                **{
+                    OPERATION_DATE_COLUMN: legacy_value,
+                    DISABLE_DATE_COLUMN: "01.06.2026 10:00:00",
+                    "card": "4111",
+                    "partner": "Ostin",
+                    "action": "remove_partner",
+                    "status": "OK",
+                }
+            )
+        ]
+    )
+    save_registry_workbook(
+        wb_path,
+        all_results=all_df,
+        runs=pd.DataFrame(columns=RUNS_COLUMNS),
+        hold_exists=True,
+        otlezka_exists=True,
+        is_new_file=False,
+    )
+
+    from openpyxl import load_workbook
+
+    wb2 = load_workbook(wb_path)
+    ws2 = wb2[SHEET_ALL_RESULTS]
+    cell = _operation_date_cell(ws2)
+    assert isinstance(cell.value, (date, datetime))
+    assert not isinstance(cell.value, str)
+    assert cell.number_format == OPERATION_DATE_NUMBER_FORMAT
+    if isinstance(cell.value, datetime):
+        assert cell.value.time() == datetime.min.time()
+    wb2.close()
+
+
+def test_remove_partner_ok_disable_date_remains_timestamp(registry_env, tmp_path):
+    store, _, _ = registry_env
+    _append_once(registry_env, tmp_path, run_id="disable-ts")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    cell = _disable_date_cell(ws)
+    assert cell.value is not None
+    rendered = (
+        cell.value.strftime("%d.%m.%Y %H:%M:%S")
+        if isinstance(cell.value, datetime)
+        else str(cell.value)
+    )
+    assert "09:00:00" in rendered
+    assert cell.number_format != OPERATION_DATE_NUMBER_FORMAT
+    wb.close()
+
+
+def test_add_partner_result_has_empty_disable_date_in_registry(registry_env, tmp_path):
+    store, _, _ = registry_env
+    result_path = tmp_path / "add_partner.xlsx"
+    processed = datetime(2026, 6, 8, 12, 0, 0, tzinfo=MSK)
+    operation_date, disable_date = result_row_dates("add_partner", "OK", processed)
+    assert disable_date == ""
+    pd.DataFrame(
+        {
+            OPERATION_DATE_COLUMN: [operation_date],
+            DISABLE_DATE_COLUMN: [disable_date],
+            "card": ["4111111111111111"],
+            "action": ["add_partner"],
+            "value": ["Ostin"],
+            "status": ["OK"],
+            "comment": ["added"],
+        }
+    ).to_excel(result_path, index=False)
+
+    append_run_to_dropbox_registry(
+        _make_task(run_id="add-no-disable"),
+        str(result_path),
+        Stats(ok=1, fail=0, skip=0),
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+    )
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    row_idx = ws.max_row
+    op_cell = _operation_date_cell(ws, row_idx)
+    disable_cell = _disable_date_cell(ws, row_idx)
+    assert isinstance(op_cell.value, (date, datetime))
+    assert op_cell.number_format == OPERATION_DATE_NUMBER_FORMAT
+    assert disable_cell.value in (None, "")
+    wb.close()
