@@ -38,6 +38,8 @@ from integrations.wallet_editor_registry import EnableRegistryUpdate, apply_enab
 from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
     ALL_RESULTS_COLUMNS,
+    DISABLE_DATE_COLUMN,
+    OPERATION_DATE_COLUMN,
     recalculate_all_results,
 )
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
@@ -212,7 +214,8 @@ def test_apply_add_partner_hold_precheck_marks_held_rows():
             "value": ["Ostin"],
             "status": [""],
             "comment": [""],
-            "Дата отключения": [""],
+            OPERATION_DATE_COLUMN: [""],
+            DISABLE_DATE_COLUMN: [""],
         }
     )
     stats = Stats()
@@ -223,7 +226,8 @@ def test_apply_add_partner_hold_precheck_marks_held_rows():
     )
     assert df.iloc[0]["status"] == "SKIP"
     assert df.iloc[0]["comment"] == HOLD_SKIP_COMMENT
-    assert df.iloc[0]["Дата отключения"]
+    assert str(df.iloc[0]["Дата операции"]).strip()
+    assert not str(df.iloc[0]["Дата отключения"]).strip()
     assert stats.skip == 1
 
 
@@ -235,7 +239,8 @@ def test_apply_add_partner_hold_precheck_fail_closed():
             "value": ["Ostin"],
             "status": [""],
             "comment": [""],
-            "Дата отключения": [""],
+            OPERATION_DATE_COLUMN: [""],
+            DISABLE_DATE_COLUMN: [""],
         }
     )
     stats = Stats()
@@ -275,6 +280,8 @@ def test_add_partner_held_skip_no_open_card(tmp_path, monkeypatch, mock_wallet_e
     df = pd.read_excel(result_path)
     assert df.iloc[0]["status"] == "SKIP"
     assert df.iloc[0]["comment"] == HOLD_SKIP_COMMENT
+    assert str(df.iloc[0]["Дата операции"]).strip()
+    assert pd.isna(df.iloc[0]["Дата отключения"]) or not str(df.iloc[0]["Дата отключения"]).strip()
     assert stats.skip == 1
 
 

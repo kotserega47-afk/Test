@@ -85,6 +85,20 @@ def _copy_header_style_from_neighbor(ws: Worksheet, col_idx: int) -> None:
     copy_cell_style(ws.cell(row=1, column=col_idx - 1), ws.cell(row=1, column=col_idx))
 
 
+def _copy_header_style_from_right_neighbor(ws: Worksheet, col_idx: int) -> None:
+    if col_idx >= ws.max_column:
+        return
+    copy_cell_style(ws.cell(row=1, column=col_idx + 1), ws.cell(row=1, column=col_idx))
+
+
+def _ensure_operation_date_column(ws: Worksheet) -> None:
+    if "Дата операции" in _header_map(ws):
+        return
+    ws.insert_cols(1)
+    ws.cell(row=1, column=1, value="Дата операции")
+    _copy_header_style_from_right_neighbor(ws, 1)
+
+
 def card_as_text(value: object) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
@@ -251,9 +265,7 @@ def _sync_all_results_sheet(ws: Worksheet, df: pd.DataFrame) -> None:
     if not existing_headers:
         header_map = _write_headers(ws, ALL_RESULTS_COLUMNS)
     else:
-        for col_idx, col_name in enumerate(ALL_RESULTS_COLUMNS, 1):
-            if col_name not in existing_headers:
-                ws.cell(row=1, column=col_idx, value=col_name)
+        _ensure_operation_date_column(ws)
         header_map = _header_map(ws)
         for col_name in ALL_RESULTS_COLUMNS:
             if col_name not in header_map:
@@ -393,7 +405,7 @@ def create_styled_registry_workbook(path: Path) -> None:
         cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
         cell.font = Font(bold=True, color="FFFFFF")
     ws.column_dimensions["A"].width = 22.5
-    ws.column_dimensions["F"].width = 18.0
+    ws.column_dimensions["G"].width = 18.0
     ws.freeze_panes = "A2"
     wb.create_sheet(SHEET_RUNS)
     _write_headers(wb[SHEET_RUNS], RUNS_COLUMNS)

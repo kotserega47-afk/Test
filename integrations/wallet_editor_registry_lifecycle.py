@@ -33,9 +33,12 @@ SHEET_HOLD = "hold"
 SHEET_OTLEZKA = "Отлёжка"
 
 LEGACY_VALUE_COLUMN = "value"
+OPERATION_DATE_COLUMN = "Дата операции"
+DISABLE_DATE_COLUMN = "Дата отключения"
 
 ALL_RESULTS_COLUMNS = [
-    "Дата отключения",
+    OPERATION_DATE_COLUMN,
+    DISABLE_DATE_COLUMN,
     "Дата включения",
     "Статус включения",
     "Включено",
@@ -95,7 +98,25 @@ LEGACY_RUNS_COLUMNS = [
     "telegram_user_id",
 ]
 
-RESULT_SOURCE_COLUMNS = ["Дата отключения", "card", "action", "value", "status", "comment"]
+RESULT_SOURCE_COLUMNS = [
+    OPERATION_DATE_COLUMN,
+    DISABLE_DATE_COLUMN,
+    "card",
+    "action",
+    "value",
+    "status",
+    "comment",
+]
+
+
+def result_row_dates(action: str, status: str, processed_at: datetime) -> tuple[str, str]:
+    """Return (operation_date, disable_date) for a registry result row."""
+    operation_date = processed_at.strftime(EXCEL_DATE_FORMAT)
+    action_norm = (action or "").strip().lower()
+    status_norm = (status or "").strip().upper()
+    if action_norm == ACTION_REMOVE_PARTNER and status_norm == "OK":
+        return operation_date, processed_at.strftime(EXCEL_DATETIME_FORMAT)
+    return operation_date, ""
 
 RED_FILL = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
 
@@ -201,7 +222,8 @@ def migrate_legacy_all_results(df: pd.DataFrame) -> pd.DataFrame:
         action = _cell_str(row.get("action", ""))
         value = _cell_str(row.get("value", ""))
         entry = {col: "" for col in ALL_RESULTS_COLUMNS}
-        entry["Дата отключения"] = _cell_str(row.get("Дата отключения", ""))
+        entry[OPERATION_DATE_COLUMN] = _cell_str(row.get(OPERATION_DATE_COLUMN, ""))
+        entry[DISABLE_DATE_COLUMN] = _cell_str(row.get(DISABLE_DATE_COLUMN, ""))
         from integrations.wallet_editor_registry_xlsx import card_as_text
 
         entry["card"] = card_as_text(row.get("card", ""))

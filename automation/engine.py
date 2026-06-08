@@ -29,13 +29,18 @@ from automation.runtime import (
     wallet_editor_playwright_slow_mo_ms,
     wallet_editor_row_match_timeout_ms,
 )
-from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
+from core.datetime_utils import EXCEL_DATE_FORMAT, now_msk
 from integrations.wallet_editor_hold import (
     HOLD_CHECK_FAILED_MANUAL_COMMENT,
     HOLD_SKIP_COMMENT,
     HoldPairsSnapshot,
     is_card_partner_on_hold,
     load_hold_pairs_from_dropbox,
+)
+from integrations.wallet_editor_registry_lifecycle import (
+    DISABLE_DATE_COLUMN,
+    OPERATION_DATE_COLUMN,
+    result_row_dates,
 )
 
 
@@ -1225,12 +1230,35 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
     return df
 
 
+def _ensure_result_date_columns(df: pd.DataFrame) -> None:
+    for col_idx, col in enumerate((OPERATION_DATE_COLUMN, DISABLE_DATE_COLUMN)):
+        if col in df.columns:
+            series = df.pop(col)
+            df.insert(col_idx, col, series)
+        else:
+            df.insert(col_idx, col, "")
+
+
+def _apply_result_row_dates(
+    df: pd.DataFrame,
+    idx: int,
+    *,
+    action: str,
+    status: str,
+    processed_at,
+) -> None:
+    operation_date, disable_date = result_row_dates(action, status, processed_at)
+    df.at[idx, OPERATION_DATE_COLUMN] = operation_date
+    df.at[idx, DISABLE_DATE_COLUMN] = disable_date
+
+
 def _apply_add_partner_hold_precheck(
     df: pd.DataFrame,
     hold_snapshot: HoldPairsSnapshot,
     stats: Stats,
 ) -> None:
-    now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
+    now = now_msk()
+    operation_date = now.strftime(EXCEL_DATE_FORMAT)
     for idx, row in df.iterrows():
         status = str(row.get("status", "")).strip().upper()
         if status in {"FAIL", "SKIP"}:
@@ -1250,7 +1278,8 @@ def _apply_add_partner_hold_precheck(
             )
             df.at[idx, "status"] = "SKIP"
             df.at[idx, "comment"] = HOLD_CHECK_FAILED_MANUAL_COMMENT
-            df.at[idx, "Дата отключения"] = now_str
+            df.at[idx, OPERATION_DATE_COLUMN] = operation_date
+            df.at[idx, DISABLE_DATE_COLUMN] = ""
             stats.skip += 1
             continue
 
@@ -1262,7 +1291,8 @@ def _apply_add_partner_hold_precheck(
             )
             df.at[idx, "status"] = "SKIP"
             df.at[idx, "comment"] = HOLD_SKIP_COMMENT
-            df.at[idx, "Дата отключения"] = now_str
+            df.at[idx, OPERATION_DATE_COLUMN] = operation_date
+            df.at[idx, DISABLE_DATE_COLUMN] = ""
             stats.skip += 1
 
 
@@ -1296,12 +1326,8 @@ def run(file_path: str, cfg: RunConfig):
         stats = Stats()
         df = _prepare_df(file_path)
 
-        # 🔥 гарантируем, что колонка есть и она первая
-        if "Дата отключения" not in df.columns:
-            df.insert(0, "Дата отключения", "")
-        else:
-            col = df.pop("Дата отключения")
-            df.insert(0, "Дата отключения", col)
+        # гарантируем, что колонки дат есть и они первые
+        _ensure_result_date_columns(df)
 
         _validate_set_direction_pre_playwright(df)
         hold_snapshot = load_hold_pairs_from_dropbox()
@@ -1365,8 +1391,8 @@ def run(file_path: str, cfg: RunConfig):
                             for idx, action, value in actions:
                                 log.info(f"➡️ [Card] processing row={idx} card={card} action={action} value={value}")
 
-                                # 🔥 единая точка времени (MSK, время обработки строки)
-                                now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
+                                # единая точка времени (MSK, время обработки строки)
+                                processed_at = now_msk()
 
                                 try:
                                     with log_step_duration(
@@ -1398,9 +1424,13 @@ def run(file_path: str, cfg: RunConfig):
 
                                     df.at[idx, "status"] = status
                                     df.at[idx, "comment"] = result
-
-                                    # 🔥 ВСЕГДА ставим дату
-                                    df.at[idx, "Дата отключения"] = now_str
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status=status,
+                                        processed_at=processed_at,
+                                    )
 
                                     stats.inc(result)
 
@@ -1409,9 +1439,13 @@ def run(file_path: str, cfg: RunConfig):
                                 except Exception as e:
                                     df.at[idx, "status"] = "FAIL"
                                     df.at[idx, "comment"] = str(e)
-
-                                    # 🔥 ВСЕГДА ставим дату
-                                    df.at[idx, "Дата отключения"] = now_str
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status="FAIL",
+                                        processed_at=processed_at,
+                                    )
 
                                     stats.fail += 1
                                     log.exception(f"❌ [Card] row={idx} failed card={card}: {e}")
@@ -1447,15 +1481,19 @@ def run(file_path: str, cfg: RunConfig):
 
                             log.exception(f"❌ [Card] fatal failure card={card}: {e}")
 
-                            now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
+                            processed_at = now_msk()
 
-                            for idx, _, _ in actions:
+                            for idx, action, _ in actions:
                                 if not str(df.at[idx, "status"]).strip():
                                     df.at[idx, "status"] = "FAIL"
                                     df.at[idx, "comment"] = str(e)
-
-                                    # 🔥 ВСЕГДА ставим дату
-                                    df.at[idx, "Дата отключения"] = now_str
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status="FAIL",
+                                        processed_at=processed_at,
+                                    )
 
                                     stats.fail += 1
 

@@ -23,10 +23,12 @@ from integrations.wallet_editor_registry_xlsx import create_styled_registry_work
 from integrations.wallet_editor_auto_enable_eligibility import select_auto_enable_candidates
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
+    DISABLE_DATE_COLUMN,
     HOLD_COLUMNS,
     HOLD_MARK,
     MISSING_OTLEZKA_DATE_TEXT,
     MISSING_OTLEZKA_STATUS,
+    OPERATION_DATE_COLUMN,
     OTLEZKA_COLUMNS,
     RUNS_COLUMNS,
     SHEET_ALL_RESULTS,
@@ -41,6 +43,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     load_warned_partners,
     partner_from_row,
     recalculate_all_results,
+    result_row_dates,
     rows_from_result_excel,
     warned_partners_path,
 )
@@ -80,9 +83,12 @@ def _write_result_xlsx(
     status: str = "OK",
     action: str = "remove_partner",
 ) -> None:
+    processed = datetime.strptime(disable_at, "%d.%m.%Y %H:%M:%S").replace(tzinfo=MSK)
+    operation_date, disable_date = result_row_dates(action, status, processed)
     pd.DataFrame(
         {
-            "Дата отключения": [disable_at] * rows,
+            OPERATION_DATE_COLUMN: [operation_date] * rows,
+            DISABLE_DATE_COLUMN: [disable_date] * rows,
             "card": [f"411111111111111{i}" for i in range(rows)],
             "action": [action] * rows,
             "value": [partner] * rows,
@@ -624,7 +630,7 @@ def test_registry_preserves_column_widths(registry_env, tmp_path):
     wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
     ws = wb[SHEET_ALL_RESULTS]
     assert ws.column_dimensions["A"].width == 22.5
-    assert ws.column_dimensions["F"].width == 18.0
+    assert ws.column_dimensions["G"].width == 18.0
     wb.close()
 
 
@@ -742,6 +748,43 @@ def test_registry_migrates_partner_from_value(registry_env, tmp_path):
     sheets = _read_registry(store[DROPBOX_PATH])
     assert "value" not in sheets["all_results"].columns
     assert sheets["all_results"].iloc[0]["partner"] == "LegacyPartner"
+
+
+def test_legacy_workbook_inserts_operation_date_column(registry_env, tmp_path):
+    store, _, revs = registry_env
+    legacy_path = tmp_path / "legacy_no_op_date.xlsx"
+    legacy_cols = [col for col in ALL_RESULTS_COLUMNS if col != OPERATION_DATE_COLUMN]
+    row = {col: "" for col in legacy_cols}
+    row.update(
+        {
+            DISABLE_DATE_COLUMN: "01.06.2026 10:00:00",
+            "card": "4111",
+            "action": "remove_partner",
+            "partner": "Ostin",
+            "status": "OK",
+        }
+    )
+    with pd.ExcelWriter(legacy_path, engine="openpyxl") as writer:
+        pd.DataFrame([row], columns=legacy_cols).to_excel(
+            writer, sheet_name=SHEET_ALL_RESULTS, index=False
+        )
+        pd.DataFrame(columns=RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
+    store[DROPBOX_PATH] = legacy_path.read_bytes()
+    revs[DROPBOX_PATH] = "rev-no-op-date"
+
+    _append_once(registry_env, tmp_path, run_id="legacy-op-date")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    headers = [ws.cell(row=1, column=col_idx).value for col_idx in range(1, len(ALL_RESULTS_COLUMNS) + 1)]
+    assert headers[0] == OPERATION_DATE_COLUMN
+    assert headers[1] == DISABLE_DATE_COLUMN
+    assert str(ws.cell(row=2, column=2).value).startswith("01.06.2026")
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert list(sheets["all_results"].columns) == ALL_RESULTS_COLUMNS
+    wb.close()
 
 
 def test_registry_does_not_overwrite_hold_sheet(registry_env, tmp_path):
@@ -924,7 +967,8 @@ def test_registry_append_copies_all_results_row_style(registry_env, tmp_path):
     assert ws2.cell(row=new_row, column=status_col).alignment.horizontal == "center"
     assert ws2.cell(row=new_row, column=card_col).number_format == "@"
     assert ws2.column_dimensions["A"].width == 22.5
-    assert ws2.column_dimensions["F"].width == 18.0
+    assert ws2.column_dimensions["G"].width == 18.0
+    assert ws2.freeze_panes == "A2"
     wb2.close()
 
 
