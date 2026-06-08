@@ -20,6 +20,7 @@ from integrations.wallet_editor_registry import (
 )
 from integrations.wallet_editor_registry_settings import RegistrySettings
 from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
+from integrations.wallet_editor_auto_enable_eligibility import select_auto_enable_candidates
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
     HOLD_COLUMNS,
@@ -40,6 +41,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     load_warned_partners,
     partner_from_row,
     recalculate_all_results,
+    rows_from_result_excel,
     warned_partners_path,
 )
 
@@ -221,7 +223,79 @@ def test_registry_creates_otlezka_sheet(registry_env, tmp_path):
 
 def test_registry_partner_from_remove_partner_value():
     assert partner_from_row("remove_partner", "Ostin") == "Ostin"
+    assert partner_from_row("add_partner", "Partner A") == "Partner A"
+    assert partner_from_row("add_partner", "") == ""
     assert partner_from_row("set_status", "Ostin") == ""
+
+
+def test_rows_from_result_excel_add_partner_populates_partner():
+    result_df = pd.DataFrame(
+        [
+            {
+                "Дата отключения": "01.06.2026 10:00:00",
+                "card": "4111",
+                "action": "add_partner",
+                "value": "Partner A",
+                "status": "OK",
+                "comment": "added Partner A",
+            }
+        ]
+    )
+    rows = rows_from_result_excel(result_df)
+    assert rows.iloc[0]["partner"] == "Partner A"
+    assert rows.iloc[0]["action"] == "add_partner"
+    assert rows.iloc[0]["status"] == "OK"
+    assert rows.iloc[0]["comment"] == "added Partner A"
+
+
+def test_recalculate_add_partner_does_not_set_lifecycle_dates():
+    all_df = pd.DataFrame(
+        [
+            {
+                "Дата отключения": "01.06.2026 10:00:00",
+                "Дата включения": "",
+                "Статус включения": "",
+                "Включено": "",
+                "Комментарий включения": "",
+                "card": "4111",
+                "partner": "Partner A",
+                "action": "add_partner",
+                "status": "OK",
+                "comment": "added Partner A",
+                "hold": "",
+            }
+        ]
+    )
+    otlezka = pd.DataFrame([{"partner": "Partner A", "Полные дни": 3, "comment": ""}])
+    out, missing = recalculate_all_results(all_df, pd.DataFrame(), otlezka, today=TODAY)
+    row = out.iloc[0]
+    assert row["partner"] == "Partner A"
+    assert row["Дата включения"] == ""
+    assert row["Статус включения"] == ""
+    assert row["hold"] == ""
+    assert missing == set()
+
+    eligible = select_auto_enable_candidates(out, include_overdue=True)
+    assert eligible.selected == ()
+
+
+def test_recalculate_add_partner_via_rows_from_result_preserves_partner():
+    result_df = pd.DataFrame(
+        [
+            {
+                "Дата отключения": "01.06.2026 10:00:00",
+                "card": "4111",
+                "action": "add_partner",
+                "value": "Partner A",
+                "status": "OK",
+                "comment": "added Partner A",
+            }
+        ]
+    )
+    rows = rows_from_result_excel(result_df)
+    otlezka = pd.DataFrame([{"partner": "Partner A", "Полные дни": 3, "comment": ""}])
+    out, _ = recalculate_all_results(rows, pd.DataFrame(), otlezka, today=TODAY)
+    assert out.iloc[0]["partner"] == "Partner A"
 
 
 def test_registry_reenable_date_uses_partner_days():

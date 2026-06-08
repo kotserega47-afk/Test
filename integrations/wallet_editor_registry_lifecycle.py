@@ -14,6 +14,7 @@ from openpyxl.styles import PatternFill
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, EXCEL_DATE_FORMAT, now_msk
 
 ACTION_REMOVE_PARTNER = "remove_partner"
+ACTION_ADD_PARTNER = "add_partner"
 HOLD_MARK = "HOLD"
 MISSING_OTLEZKA_DATE_TEXT = "Нет даты отлёжки"
 MISSING_OTLEZKA_STATUS = "НЕТ ДАТЫ ОТЛЁЖКИ"
@@ -140,7 +141,8 @@ def _normalize_key(value: object) -> str:
 
 
 def partner_from_row(action: str, value: str) -> str:
-    if (action or "").strip().lower() == ACTION_REMOVE_PARTNER:
+    action_norm = (action or "").strip().lower()
+    if action_norm in {ACTION_REMOVE_PARTNER, ACTION_ADD_PARTNER}:
         return (value or "").strip()
     return ""
 
