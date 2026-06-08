@@ -198,6 +198,43 @@ def test_registry_runs_columns_order(registry_env, tmp_path):
     assert list(sheets["runs"].columns) == RUNS_COLUMNS
 
 
+def test_registry_output_file_uses_user_visible_name(registry_env, tmp_path):
+    store, _, _ = registry_env
+    staged_path = tmp_path / "we_registry_result_staged.xlsx"
+    user_visible = "wallet_editor_result_batch_DENIS.xlsx"
+    _write_result_xlsx(staged_path)
+
+    append_run_to_dropbox_registry(
+        _make_task(run_id="run-output-file-user"),
+        str(staged_path),
+        Stats(ok=1, fail=0, skip=0),
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+        output_file=user_visible,
+    )
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert sheets["runs"].iloc[-1]["output_file"] == user_visible
+    assert sheets["runs"].iloc[-1]["output_file"] != staged_path.name
+
+
+def test_registry_output_file_fallback_to_result_basename(registry_env, tmp_path):
+    store, _, _ = registry_env
+    result_path = tmp_path / "result.xlsx"
+    _write_result_xlsx(result_path)
+
+    append_run_to_dropbox_registry(
+        _make_task(run_id="run-output-file-fallback"),
+        str(result_path),
+        Stats(ok=1, fail=0, skip=0),
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+    )
+
+    sheets = _read_registry(store[DROPBOX_PATH])
+    assert sheets["runs"].iloc[-1]["output_file"] == "result.xlsx"
+
+
 def test_registry_creates_hold_sheet(registry_env, tmp_path):
     store, _, _ = registry_env
     result_path = tmp_path / "result.xlsx"

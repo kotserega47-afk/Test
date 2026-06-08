@@ -186,6 +186,7 @@ def append_run_to_dropbox_registry(
     run_started_at: datetime,
     run_finished_at: datetime,
     settings: RegistrySettings | None = None,
+    output_file: str | None = None,
 ) -> None:
     """
     Download registry from Dropbox, append this run, upload back.
@@ -229,6 +230,7 @@ def append_run_to_dropbox_registry(
                         dropbox_path=dropbox_path,
                         run_started_at=run_started_at,
                         run_finished_at=run_finished_at,
+                        output_file=output_file,
                     )
             except Exception:
                 log.exception(
@@ -274,8 +276,9 @@ def _append_attempt(
     dropbox_path: str,
     run_started_at: datetime,
     run_finished_at: datetime,
+    output_file: str | None = None,
 ) -> _AppendOutcome:
-    output_file = os.path.basename(result_path)
+    runs_output_file = output_file or os.path.basename(result_path)
 
     with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
         local_path = Path(tmp) / "wallet_editor.xlsx"
@@ -324,7 +327,7 @@ def _append_attempt(
             stats_ok=stats.ok,
             stats_fail=stats.fail,
             stats_skip=stats.skip,
-            output_file=output_file,
+            output_file=runs_output_file,
         )
         merged_runs = pd.concat([runs_df, new_run], ignore_index=True)
 

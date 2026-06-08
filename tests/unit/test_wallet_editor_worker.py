@@ -191,3 +191,58 @@ def test_import_safe_without_workers() -> None:
         importlib.reload(worker_mod)
         assert worker_mod._profile_workers == {}
         worker_mod.ensure_worker_started()
+
+
+def test_worker_passes_user_output_file_to_registry_schedule(tmp_path) -> None:
+    import automation.worker as worker_mod
+
+    user_result = tmp_path / "wallet_editor_result_batch_DENIS.xlsx"
+    staged_result = tmp_path / "we_registry_result_abc123.xlsx"
+    user_result.write_text("result", encoding="utf-8")
+    staged_result.write_text("staged", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_run(file_path: str, cfg):  # noqa: ARG001
+        stats = MagicMock()
+        stats.summary.return_value = "ok"
+        return str(user_result), stats
+
+    def fake_stage(result_path: str) -> tuple[str, bool]:
+        assert result_path == str(user_result)
+        return str(staged_result), True
+
+    def fake_schedule(
+        task,
+        result_path,
+        stats,
+        *,
+        run_started_at,
+        run_finished_at,
+        is_staged_copy=False,
+        output_file=None,
+    ):
+        captured["result_path"] = result_path
+        captured["output_file"] = output_file
+        captured["is_staged_copy"] = is_staged_copy
+
+    with patch("automation.worker.run", side_effect=fake_run):
+        with patch("automation.worker.send_text"):
+            with patch("automation.worker.send_document"):
+                with patch("automation.worker.stage_registry_result_copy", side_effect=fake_stage):
+                    with patch(
+                        "automation.worker.schedule_registry_append",
+                        side_effect=fake_schedule,
+                    ):
+                        with patch("automation.worker.delayed_cleanup"):
+                            worker_mod.add_task(_make_task(profile="DENIS"))
+                            deadline = time.time() + 3
+                            while worker_mod._profile_workers["DENIS"].queue.unfinished_tasks > 0:
+                                if time.time() > deadline:
+                                    break
+                                time.sleep(0.02)
+
+    assert captured["result_path"] == str(staged_result)
+    assert captured["output_file"] == user_result.name
+    assert captured["output_file"] != staged_result.name
+    assert captured["is_staged_copy"] is True

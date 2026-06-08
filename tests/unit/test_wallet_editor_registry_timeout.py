@@ -367,6 +367,40 @@ def test_registry_async_does_not_race_cleanup(tmp_path):
     assert not Path(staged_path).exists()
 
 
+def test_schedule_registry_append_forwards_output_file(tmp_path):
+    from integrations.wallet_editor_registry_async import schedule_registry_append
+
+    staged_path = tmp_path / "we_registry_result_xyz.xlsx"
+    staged_path.write_text("x", encoding="utf-8")
+    user_visible = "wallet_editor_result_input_DENIS.xlsx"
+    captured: dict[str, object] = {}
+
+    def fake_append(task, result_path, stats, **kwargs):
+        captured["result_path"] = result_path
+        captured["output_file"] = kwargs.get("output_file")
+
+    task = _make_task(run_id="async-output-file")
+    with patch(
+        "integrations.wallet_editor_registry_async.append_run_to_dropbox_registry",
+        side_effect=fake_append,
+    ):
+        schedule_registry_append(
+            task,
+            str(staged_path),
+            Stats(ok=1, fail=0, skip=0),
+            run_started_at=RUN_STARTED,
+            run_finished_at=RUN_FINISHED,
+            is_staged_copy=True,
+            output_file=user_visible,
+        )
+        deadline = time.time() + 2
+        while not captured and time.time() < deadline:
+            time.sleep(0.02)
+
+    assert captured["result_path"] == str(staged_path)
+    assert captured["output_file"] == user_visible
+
+
 def test_registry_success_fast_no_warning(registry_store, tmp_path):
     store, revs, root = registry_store
     messages: list[str] = []

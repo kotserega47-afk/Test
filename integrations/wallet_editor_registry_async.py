@@ -59,6 +59,7 @@ def schedule_registry_append(
     run_started_at: datetime,
     run_finished_at: datetime,
     is_staged_copy: bool = False,
+    output_file: str | None = None,
 ) -> None:
     """Fire-and-forget daemon thread; never blocks caller."""
 
@@ -70,6 +71,7 @@ def schedule_registry_append(
                 stats,
                 run_started_at=run_started_at,
                 run_finished_at=run_finished_at,
+                output_file=output_file,
             )
         finally:
             remove_staged_result(result_path, is_staged_copy=is_staged_copy)

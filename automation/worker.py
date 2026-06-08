@@ -191,6 +191,7 @@ def _run_disable_task(profile_key: str, task: WalletEditorTask) -> None:
         caption="Результат обработки",
     )
 
+    user_output_file = os.path.basename(result_file)
     registry_result_path, registry_is_copy = stage_registry_result_copy(result_file)
     schedule_registry_append(
         task,
@@ -199,6 +200,7 @@ def _run_disable_task(profile_key: str, task: WalletEditorTask) -> None:
         run_started_at=run_started_at,
         run_finished_at=run_finished_at,
         is_staged_copy=registry_is_copy,
+        output_file=user_output_file,
     )
 
     threading.Thread(
