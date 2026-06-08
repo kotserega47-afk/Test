@@ -53,6 +53,15 @@ from integrations.conversion_wallet_editor_bridge import (
 from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
 from integrations.wallet_editor_auto_enable_eligibility import is_run_limited
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
+from integrations.wallet_editor_hold import (
+    ERROR_HOLD,
+    ERROR_HOLD_CHECK_FAILED,
+    HOLD_CHECK_FAILED_AUTO_COMMENT,
+    HOLD_SKIP_COMMENT,
+    HoldPairsSnapshot,
+    is_card_partner_on_hold,
+    load_hold_pairs_from_dropbox,
+)
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -382,6 +391,7 @@ def process_enable_candidate(
     cfg: RunConfig,
     working_statuses: frozenset[str] | None = None,
     auto_return_statuses: frozenset[str] | None = None,
+    hold_snapshot: HoldPairsSnapshot | None = None,
     open_card_fn: Callable[[Page, str], None] = open_card,
     get_status_fn: Callable[[Page], str] = _get_current_card_status,
     get_chips_fn: Callable[[Page], list[str]] = _chip_texts,
@@ -395,6 +405,35 @@ def process_enable_candidate(
         settings.auto_return_statuses
     )
     target_status = settings.auto_return_target_status
+    hold_snapshot = hold_snapshot or HoldPairsSnapshot.empty_available()
+
+    if not hold_snapshot.available:
+        log.error(
+            "[AutoEnable] hold check failed card=%s partner=%s error=%s",
+            candidate.card,
+            candidate.partner,
+            hold_snapshot.error,
+        )
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment=HOLD_CHECK_FAILED_AUTO_COMMENT,
+            error_code=ERROR_HOLD_CHECK_FAILED,
+            raw_error=hold_snapshot.error,
+        )
+
+    if is_card_partner_on_hold(candidate.card, candidate.partner, hold_snapshot.pairs):
+        log.info(
+            "[AutoEnable] hold blocked card=%s partner=%s",
+            candidate.card,
+            candidate.partner,
+        )
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_SKIP,
+            registry_comment=HOLD_SKIP_COMMENT,
+            error_code=ERROR_HOLD,
+        )
 
     try:
         open_card_fn(page, candidate.card)
@@ -587,6 +626,7 @@ def execute_enable_batch(
     )
 
     with log_step_duration(profile=profile, scope="auto_enable", step="batch"):
+        hold_snapshot = load_hold_pairs_from_dropbox()
         with sync_playwright() as playwright:
             browser = None
             context = None
@@ -624,6 +664,7 @@ def execute_enable_batch(
                                 cfg=cfg,
                                 working_statuses=working,
                                 auto_return_statuses=auto_return,
+                                hold_snapshot=hold_snapshot,
                             )
                         )
             finally:
@@ -752,6 +793,8 @@ def build_batch_execution_report(
         f"- unknown_status: {_count(ERROR_UNKNOWN_STATUS)}",
         f"- card_not_found: {_count(ERROR_CARD_NOT_FOUND)}",
         f"- partner_not_available: {_count(ERROR_PARTNER_NOT_AVAILABLE)}",
+        f"- hold_blocked: {_count(ERROR_HOLD)}",
+        f"- hold_check_failed: {_count(ERROR_HOLD_CHECK_FAILED)}",
         f"- technical: {_count_technical()}",
         *registry_lines,
         "",

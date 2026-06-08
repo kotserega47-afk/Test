@@ -30,6 +30,13 @@ from automation.runtime import (
     wallet_editor_row_match_timeout_ms,
 )
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
+from integrations.wallet_editor_hold import (
+    HOLD_CHECK_FAILED_MANUAL_COMMENT,
+    HOLD_SKIP_COMMENT,
+    HoldPairsSnapshot,
+    is_card_partner_on_hold,
+    load_hold_pairs_from_dropbox,
+)
 
 
 BASE_DIR = "/tmp"
@@ -1218,10 +1225,51 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
     return df
 
 
+def _apply_add_partner_hold_precheck(
+    df: pd.DataFrame,
+    hold_snapshot: HoldPairsSnapshot,
+    stats: Stats,
+) -> None:
+    now_str = now_msk().strftime(EXCEL_DATETIME_FORMAT)
+    for idx, row in df.iterrows():
+        status = str(row.get("status", "")).strip().upper()
+        if status in {"FAIL", "SKIP"}:
+            continue
+        if str(row.get("action", "")).strip().lower() != "add_partner":
+            continue
+
+        card = str(row.get("card", "")).strip()
+        partner = str(row.get("value", "")).strip()
+
+        if not hold_snapshot.available:
+            log.error(
+                "[Hold] blocked add_partner card=%s partner=%s reason=hold_check_failed error=%s",
+                mask_card(card),
+                partner,
+                hold_snapshot.error,
+            )
+            df.at[idx, "status"] = "SKIP"
+            df.at[idx, "comment"] = HOLD_CHECK_FAILED_MANUAL_COMMENT
+            df.at[idx, "Дата отключения"] = now_str
+            stats.skip += 1
+            continue
+
+        if is_card_partner_on_hold(card, partner, hold_snapshot.pairs):
+            log.info(
+                "[Hold] blocked add_partner card=%s partner=%s reason=on_hold",
+                mask_card(card),
+                partner,
+            )
+            df.at[idx, "status"] = "SKIP"
+            df.at[idx, "comment"] = HOLD_SKIP_COMMENT
+            df.at[idx, "Дата отключения"] = now_str
+            stats.skip += 1
+
+
 def _group_actions(df: pd.DataFrame):
     grouped = defaultdict(list)
     for idx, row in df.iterrows():
-        if str(row.get("status", "")).strip() == "FAIL":
+        if str(row.get("status", "")).strip().upper() in {"FAIL", "SKIP"}:
             continue
         grouped[str(row["card"])].append((idx, row["action"], row["value"]))
     log.info(f"🗂️ [Input] grouped cards={len(grouped)}")
@@ -1256,6 +1304,8 @@ def run(file_path: str, cfg: RunConfig):
             df.insert(0, "Дата отключения", col)
 
         _validate_set_direction_pre_playwright(df)
+        hold_snapshot = load_hold_pairs_from_dropbox()
+        _apply_add_partner_hold_precheck(df, hold_snapshot, stats)
         stats.fail += int((df["status"] == "FAIL").sum())
 
         grouped = _group_actions(df)
