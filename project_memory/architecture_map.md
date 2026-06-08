@@ -2,9 +2,9 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.3 |
+| **KB версия** | v1.4 |
 | **Статус документа** | draft |
-| **Последнее обновление** | 2026-06-04 |
+| **Последнее обновление** | 2026-06-07 |
 
 ---
 
@@ -63,6 +63,9 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 - **Wallet Hang Patch A** — `downloader_wallets.py`: explicit Playwright timeouts + stage logs + `record_progress("wallet", stage)`.
 - **Wallet Hang Patch B** — scheduled jobs via `dispatch_job_background` (no `future.result()` in `schedule_loop`); TG/manual still blocking via `dispatch_job_sync` / `dispatch_job_async`.
 - **Job Health Guard C1** — observe-only: `core/job_progress.py` + `core/job_health.py` → `/status` `job_health:` block; recovery **off**.
+- **WalletEditor Auto-Enable** — plan/execute from recalculated Dropbox registry; TG `/auto_enable_plan`, `/auto_enable_run`; Antares via profile worker batch queue; B2 registry patch.
+- **WalletEditor HOLD enforcement** — runtime block on `add_partner` before Antares when card+partner on hold sheet.
+- **Telegram token sanitization** — errors/logs redact bot token (E-SEC-01).
 
 ---
 
@@ -434,7 +437,33 @@ result xlsx (wallet_editor_result_<INPUT>_<OPERATOR>.xlsx)
 Telegram summary + document reply
         ↓
 Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort; job_params timeout)
+        ↓
+[optional] Auto-Enable: eligibility → batches → Antares enable → patch Включено/Комментарий включения
 ```
+
+**Auto-Enable pipeline (Phase A → B2):**
+
+```
+Dropbox registry download → recalculate_all_results
+        ↓
+build_auto_enable_plan (eligibility, dedup, max_rows_per_run, batch split)
+        ↓
+/auto_enable_plan → plan report only (TG route wallet_editor_auto_enable)
+        ↓
+/auto_enable_run → fresh plan → [dry_run=0] enqueue_auto_enable_batch per batch
+        ↓
+automation/worker.py WalletEditorAutoEnableBatchTask → execute_enable_batch
+        ↓
+HOLD check (wallet_editor_hold) → open_card → add_partner/set_status → save
+        ↓
+patch_enable_results_in_dropbox_registry (Включено, Комментарий включения)
+        ↓
+batch report + optional batch xlsx to TG route
+```
+
+**Registry write (UX-A):** `save_registry_workbook` → `_sync_all_results_sheet` / `_sync_runs_sheet` copy template row styles for new data rows; value-only updates on existing rows.
+
+**HOLD enforcement:** manual `engine.run` pre-pass; auto-enable executor before `open_card`; fail-closed if hold sheet unreadable.
 
 **Архитектурные ограничения:**
 
@@ -450,11 +479,11 @@ Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort; job_para
 
 **Failure path:** chat denied / non-xlsx / unmapped user / incomplete credentials → reply с отказом, `get_file` не вызывается; engine error → TG error text.
 
-**Outbound health (Option B):** jobs/workers use `telegram_bot` queue; health-state tracks enqueue vs delivery; `scheduler.schedule_loop` emits periodic `[TelegramSender/health]` logs.
+**Outbound health (Option B):** jobs/workers use `telegram_bot` queue; health-state tracks enqueue vs delivery; `scheduler.schedule_loop` emits periodic `[TelegramSender/health]` logs. Error paths sanitize bot token (E-SEC-01).
 
 **Статус** | CONFIRMED |
 
-См. `decisions.md` **E-WE-01 … E-WE-06**.
+См. `decisions.md` **E-WE-01 … E-WE-15**, **E-SEC-01**.
 
 ---
 
@@ -494,7 +523,7 @@ raccoon_wallet_downloader
 | Job / loop | Trigger | Function | Lock / single-flight | Side effects | Failure behavior | Статус |
 |------------|---------|----------|----------------------|--------------|------------------|--------|
 | `schedule_loop` | daemon thread, ~5s tick | `scheduler.schedule_loop` | n/a | `dispatch_job_background` for due jobs; `record_tick` + `evaluate_job_health_if_due` each iteration | load fail → sleep 10s; job errors logged in worker callback | CONFIRMED |
-| `wallet` | rules schedule or TG | `run_wallet_cycle` | `{STATE_DIR}/locks/wallet.lock` | Antares DL (bounded PW timeouts), progress stages, TG wallet chat, state | timeout → exception → `job_failed`; lock released in `finally` | CONFIRMED |
+| `wallet` | rules schedule or TG | `run_wallet_cycle` | `{STATE_DIR}/locks/wallet.lock` | Antares DL (bounded PW timeouts), progress stages, payout datepicker `data-date` navigation, TG wallet chat, state | timeout → exception → `job_failed`; lock released in `finally` | CONFIRMED |
 | `hourly` | rules schedule (+ job_params gate) or TG | `run_hourly_job` | `{STATE_DIR}/locks/hourly.lock` | Antares DL, TG hourly chat, state | skip events; exception → `job_failed` | CONFIRMED |
 | `download` | rules schedule or TG | `run_download` | job lock + `/tmp/dropbox_pipeline.lock` | Antares DL, Dropbox, analyze, TG analiz chat | TG notify + raise | CONFIRMED |
 | `rate` | rules schedule or TG | `run_rate_monitor_safe` | `{STATE_DIR}/locks/rate.lock` | Playwright scrape, TG rate chats | 3 retries; final TG alert | CONFIRMED |
@@ -563,3 +592,4 @@ Database: not present in active runtime chain.
 | 2026-06-03 | **Registry format-safe** — openpyxl in-place; rev conflict; E-WE-09 |
 | 2026-06-03 | **Registry async + timeout** — job_params; TG before registry; E-WE-10 |
 | 2026-06-04 | **Wallet hang mitigation** — Patch A (PW timeouts + stage logs); Patch B (`dispatch_job_background`); Job Health Guard C1 (observe-only `/status` `job_health:`) |
+| 2026-06-07 | **WalletEditor Auto-Enable** (Phase A/B1/B2); **HOLD enforcement**; **registry UX-A** formatting; token sanitization; wallet datepicker fix |

@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-04 |
+| **KB версия** | v1.4 |
+| **Последнее обновление** | 2026-06-07 |
 
 ---
 
@@ -19,6 +19,8 @@
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 | **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
 | **Job Health Guard** | C1 observe **done**; C2/C3 **planned** — see roadmap below |
+| **WalletEditor Auto-Enable** | Phase A/B1/B1.1/B2 **complete**; Scheduler Phase C (daily 08:00) **open** |
+| **WalletEditor registry UX** | UX-A formatting **complete**; UX-B `Дата операции` **open**; UX-C filenames **open** |
 
 ---
 
@@ -123,6 +125,9 @@
 | WE-8 | **complete** | Registry lifecycle: `hold`, `Отлёжка`, re-enable date/status, warnings; E-WE-08 |
 | WE-9 | **complete** | Registry format-safe write + Dropbox rev conflict protection; E-WE-09 |
 | WE-10 | **complete** | Registry async append after TG; job_params timeout/warning/retry; E-WE-10 |
+| WE-AE | **complete** | Auto-enable Phase A (plan) + B1 (Antares) + B1.1 (`max_rows_per_run`) + B2 (registry patch); `/auto_enable_plan` + `/auto_enable_run` |
+| WE-HOLD | **complete** | HOLD enforcement for `add_partner` (manual + auto-enable); fail-closed |
+| WE-UX-A | **complete** | Registry row formatting preservation on append/patch |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
@@ -222,6 +227,13 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 |---------|--------|---------------|--------------|
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
+| **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
+| **WE-UX-C** | **OPEN** | Readable WalletEditor result filenames (manual / conversion / auto-enable / registry staging) | Independent of UX-B |
+| **WE-AE-SCHEDULER-C** | **OPEN** | Scheduled daily auto-enable at 08:00 MSK via Rules `schedules` | Phase B2 complete; prod `rules.xlsx` row + ACL for commands |
+| **WE-REG-WATCHDOG** | **OPEN** | Registry append timeout/watchdog alerts; stale append detection | E-WE-10 partial coverage via job_params |
+| **WE-LIFECYCLE-REFRESH** | **OPEN** | Optional lifecycle refresh job / write-back for external workbook edits | Not implemented |
+| **WE-AE-SUMMARY** | **OPTIONAL** | Final aggregated auto-enable summary message across batches | Per-batch reports exist today |
+| **WE-POSTGRES-HISTORY** | **OPTIONAL** | Postgres/history model for registry beyond xlsx | Future; not scoped |
 
 **Phase 1B scope (planned, not started):**
 
@@ -257,3 +269,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — Raccoon Wallet Rules V2 migration complete (E-CONFIG-12) |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-4A/4B complete — payout rules workbook + mode=1 validation |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-4C complete — Payout Rules V2 production cutover (E-CONFIG-13); Phase 4D observation open |
+| 2026-06-07 | WE-AE, WE-HOLD, WE-UX-A closed; WE-UX-B/C, WE-AE-SCHEDULER-C added to open tasks |

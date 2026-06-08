@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.3 |
-| **Последнее обновление** | 2026-06-02 |
+| **KB версия** | v1.4 |
+| **Последнее обновление** | 2026-06-07 |
 
 ---
 
@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-10**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13**, **E-OPS-01…E-OPS-04** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -93,8 +93,13 @@
 | E-WE-06 | 2026-06-01 | Отдельный Playwright auth-state на профиль: `/tmp/auth_state_wallet_editor_<PROFILE>.json` | CONFIRMED | `automation/runtime.py`; worker passes per-task `auth_state_path` |
 | E-WE-07 | 2026-06-03 | Cumulative WE results in Dropbox (`DROPBOX_WALLET_EDITOR_PATH`); sheets `all_results` + `runs`; append after successful `engine.run`, before TG send; best-effort; idempotent by `run_id`; in-process lock | CONFIRMED | `integrations/wallet_editor_registry.py`; `automation/worker.py` |
 | E-WE-08 | 2026-06-03 | Registry lifecycle: sheets `hold`, `Отлёжка`; recalc all `all_results` on append; `Дата включения` / `Статус включения`; missing-Отлёжка TG warning once per partner; future auto-enable columns reserved (`Включено`, `Комментарий включения`) | CONFIRMED | `wallet_editor_registry_lifecycle.py` |
-| E-WE-09 | 2026-06-03 | Registry format-safe write: openpyxl in-place updates (`wallet_editor_registry_xlsx.py`); preserve workbook formatting; `hold`/`Отлёжка` read-only if present; `value` removed from `all_results`; `card` as text; Dropbox rev conflict skips upload + TG warning | CONFIRMED | `wallet_editor_registry_xlsx.py`; `dropbox_watcher.upload_file_if_rev` |
+| E-WE-09 | 2026-06-03 | Registry format-safe write: openpyxl in-place updates (`wallet_editor_registry_xlsx.py`); preserve workbook formatting (column widths, freeze panes, header styles); **UX-A (2026-06-07):** new data rows copy template row styles; patch value-only updates preserve borders/alignment; `hold`/`Отлёжка` read-only if present; `value` removed from `all_results`; `card` as text; Dropbox rev conflict skips upload + TG warning | CONFIRMED | `wallet_editor_registry_xlsx.py`; `dropbox_watcher.upload_file_if_rev` |
 | E-WE-10 | 2026-06-03 | Registry append async after Telegram result; timeout/warning/retry from Rules `job_params` (`registry_*_seconds`); staged result copy avoids cleanup race | CONFIRMED | `wallet_editor_registry_settings.py`; `wallet_editor_registry_async.py`; `automation/worker.py` |
+| E-WE-11 | 2026-06-07 | WalletEditor Auto-Enable Phase A: plan-only from recalculated registry; eligibility + dedup + batch split + timeout estimate; TG report via `telegram_route_report`; no Antares in plan mode | CONFIRMED | `integrations/wallet_editor_auto_enable.py`; `wallet_editor_auto_enable_eligibility.py` |
+| E-WE-12 | 2026-06-07 | Auto-Enable Phase B1/B1.1: Antares execution via dedicated worker batch queue; sequential `open_card` per candidate; settings `working_statuses`, `auto_return_statuses`, `auto_return_target_status`, `max_rows_per_batch`, `max_rows_per_run` | CONFIRMED | `wallet_editor_auto_enable_executor.py`; `automation/worker.py` |
+| E-WE-13 | 2026-06-07 | Auto-Enable Phase B2: after batch execution patch registry `Включено` + `Комментарий включения`; lifecycle recalc maps OK→ВКЛЮЧЕНО, SKIP→ПРОПУЩЕНО, FAIL→ОШИБКА; `/auto_enable_plan` plan-only; `/auto_enable_run` fresh plan + execute (manual ignores `approval_required`) | CONFIRMED | `wallet_editor_auto_enable.py`; `wallet_editor_registry.py` `patch_enable_results_in_dropbox_registry` |
+| E-WE-14 | 2026-06-07 | HOLD sheet enforces runtime block on `add_partner` before Antares: manual → SKIP; auto-enable → SKIP; hold-list unavailable → manual add_partner SKIP (fail-closed) / auto-enable FAIL; shared `wallet_editor_hold.py`; `remove_partner`/`set_status` unaffected | CONFIRMED | `automation/engine.py`; `wallet_editor_auto_enable_executor.py` |
+| E-WE-15 | 2026-06-07 | Registry append maps `partner` from `value` for both `remove_partner` and `add_partner` rows (`partner_from_row`) | CONFIRMED | `wallet_editor_registry_lifecycle.py` |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -135,6 +140,13 @@
 | E-OPS-01 | 2026-06-04 | Scheduled jobs use `dispatch_job_background` (executor submit, no `future.result()` in `schedule_loop`); single-flight preserved via `job_runner` lock; overlap → `job_rejected_busy` | CONFIRMED | `core/job_dispatch.py`; `scheduler.py` |
 | E-OPS-02 | 2026-06-04 | Wallet downloader: explicit Playwright timeouts aligned with `hourly_downloader`; stage logs; timeout → exception → `job_failed` + lock release in `finally` | CONFIRMED | `integrations/downloader_wallets.py` |
 | E-OPS-03 | 2026-06-04 | Job Health Guard v2 rollout: **C1** = observe only (`job_health` in `/status`, `job_health_degraded` events); **C2** planned = ghost_lock_only; **C3** planned = stuck recovery (manual/flag-gated) | CONFIRMED | `core/job_health.py`; `core/job_progress.py`; `tasks.md` JOB-HEALTH-GUARD-V2 |
+| E-OPS-04 | 2026-06-07 | Wallet payout downloader datepicker: navigate calendar to target month (`Previous month` loop) then select `[data-date='YYYY-MM-DD']`; fixes prior-month wrong-date selection | CONFIRMED | `integrations/downloader_wallets.py` `_find_and_pick_date` |
+
+### Security decisions (E-SEC-*)
+
+| ID | Дата | Решение | Статус | Источник |
+|----|------|---------|--------|----------|
+| E-SEC-01 | 2026-06-07 | Telegram bot token must not appear in logs, exception text, or health alerts; sanitize via `sanitize_telegram_error()` — replace token and `/bot<TOKEN>/` URLs with `<redacted>` / `bot<redacted>` | CONFIRMED | `integrations/telegram_bot.py`; `tests/unit/test_telegram_token_sanitization.py` |
 
 ---
 
@@ -201,3 +213,4 @@
 | 2026-06-03 | Telegram routes Phase 3C — E-TG-ROUTES-04; `conversion_wallet_editor` / Conversion→WE bridge |
 | 2026-06-03 | Telegram routes Phase 3D — E-TG-ROUTES-05; Bakai rate routes |
 | 2026-06-04 | Wallet hang mitigation — E-OPS-01…03; Patch A/B + Job Health Guard C1 |
+| 2026-06-07 | WalletEditor auto-enable E-WE-11…13; HOLD E-WE-14; partner mapping E-WE-15; registry UX-A; E-SEC-01; E-OPS-04 wallet datepicker |

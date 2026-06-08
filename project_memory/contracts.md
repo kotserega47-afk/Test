@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.4 |
-| **Последнее обновление** | 2026-06-04 |
+| **KB версия** | v1.5 |
+| **Последнее обновление** | 2026-06-07 |
 
 ---
 
@@ -217,9 +217,11 @@ Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py
 
 **`runs` columns:** `started_at`, `finished_at`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`
 
-**Write model:** openpyxl in-place (`load_workbook` → update cells by header → `save`); no `pandas.to_excel` overwrite. Preserves column widths, freeze panes, fonts/fills where untouched. `card` written as Excel text (`number_format` `@`).
+**Write model:** openpyxl in-place (`load_workbook` → update cells by header → `save`); no `pandas.to_excel` overwrite. Preserves column widths, freeze panes, header fonts/fills. **UX-A (2026-06-07):** new data rows in `all_results` / `runs` copy cell styles (font, border, fill, alignment, protection, number_format) from template row (last existing data row, else row 2); existing rows updated via value-only writes; new header cells appended on the right copy neighbor header style. `card` written as Excel text (`number_format` `@`).
 
-**Rules:** `partner` from row or migrated from legacy `value` when `action=remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). `Включено` OK/SKIP/FAIL overrides lifecycle status. Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
+**Rules:** `partner` from row via `partner_from_row()` when `action` ∈ `{remove_partner, add_partner}` (value → partner); migrated from legacy `value` on read for `remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). **`Включено` lifecycle override:** OK → `Статус включения`=ВКЛЮЧЕНО; SKIP → ПРОПУЩЕНО; FAIL → ОШИБКА. Auto-enable Phase B2 patches only `Включено` + `Комментарий включения` (matching row by card+partner+`Дата отключения` on `remove_partner` rows). Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
+
+**HOLD enforcement (2026-06-07):** sheet `hold` = business block for `add_partner` (not just lifecycle recalc). Shared loader `integrations/wallet_editor_hold.py` reads hold pairs from Dropbox registry. Manual `engine.run`: held/failed-check `add_partner` → `status=SKIP` before Playwright. Auto-enable executor: held candidate → `registry_value=SKIP` before `open_card`; hold-list read failure → manual SKIP / auto-enable FAIL (fail-closed). `remove_partner` / `set_status` **not** blocked.
 
 **Dropbox rev protection:** download stores `rev`; upload via `upload_file_if_rev` only if remote `rev` unchanged; on conflict — retry until timeout; per-run WE TG result never blocked.
 
@@ -236,6 +238,46 @@ Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py
 | `registry_retry_interval_seconds` | `10` | sleep between retries (rev conflict / transient Dropbox) |
 
 Invariant: `registry_warning_seconds < registry_timeout_seconds` (auto-adjusted if violated). Reader: `integrations/wallet_editor_registry_settings.py` via `BaseRulesAccessor.get_job_param`.
+
+### WalletEditor auto-enable (`job_params`, `job=wallet_editor_auto_enable`)
+
+| key | default | purpose |
+|-----|---------|---------|
+| `enabled` | `0` | master switch |
+| `dry_run` | `1` | plan/report only; no Antares when `1` |
+| `approval_required` | `1` | scheduled runs respect; manual `/auto_enable_run` ignores |
+| `max_rows_per_batch` | `200` | batch split size for Antares execution |
+| `max_rows_per_run` | `0` | cap candidates per run (`0` = no limit) — Phase B1.1 |
+| `seconds_per_card_timeout` | `10` | per-card timeout estimate |
+| `batch_timeout_buffer_seconds` | `300` | batch timeout buffer |
+| `working_statuses` | готов к работе, активный вход, активный выход | whitelist for enable |
+| `auto_return_statuses` | (empty) | non-working statuses eligible for status change + enable |
+| `auto_return_target_status` | `Готов к работе` | target status after auto-return path |
+| `include_overdue` | `1` | include overdue re-enable candidates |
+| `telegram_route_report` | `wallet_editor_auto_enable` | plan/batch reports |
+| `telegram_route_alert` | `wallet_editor_auto_enable_alert` | registry patch failure alerts |
+
+**TG commands (Rules `commands` sheet ACL):** `/auto_enable_plan` — fresh plan + report only; `/auto_enable_run` — fresh plan + Antares execution when `dry_run=0`. Reader: `integrations/wallet_editor_auto_enable_settings.py`.
+
+**Phases:** A = plan/dry-run/report; B1 = Antares execution (no registry patch); B1.1 = `max_rows_per_run`; B2 = patch `Включено` / `Комментарий включения` via `patch_enable_results_in_dropbox_registry`.
+
+### Telegram token sanitization (security)
+
+| Contract | Rule |
+|----------|------|
+| API | `integrations/telegram_bot.sanitize_telegram_error()` / `_sanitize_error_message()` |
+| Scope | enqueue errors, direct HTTP exceptions, health failure logs/state |
+| Behavior | replace bot token with `<redacted>`; normalize `https://api.telegram.org/bot<TOKEN>/…` → `bot<redacted>` |
+| Tests | `tests/unit/test_telegram_token_sanitization.py` |
+
+### Wallet downloader payout datepicker
+
+| Contract | Rule |
+|----------|------|
+| Module | `integrations/downloader_wallets.py` `_find_and_pick_date()` |
+| Navigation | click `button[aria-label='Previous month']` until target month visible (max 12 steps) |
+| Selection | click `[data-date='YYYY-MM-DD']` |
+| Fix | prevents wrong-month date selection on payout calendar |
 
 | `/tmp/auth_state_wallet_editor_<PROFILE>.json` | json (Playwright) | `automation/engine.py` | Playwright per operator | нет | re-login for profile | IMPORTANT | CONFIRMED |
 | `/tmp/auth_state_wallet_editor.json` | json (Playwright) | `RunConfig` default only | legacy default path | нет | legacy / tests | OPTIONAL | CONFIRMED |
@@ -467,3 +509,4 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 | 2026-05-31 | **G5 closed (material)** — TASK-2026-05-31-03 |
 | 2026-06-01 | WalletEditor env + file contracts (WE-0…WE-6) |
 | 2026-06-01 | Telegram sender health env (Option B) |
+| 2026-06-07 | WalletEditor auto-enable, HOLD enforcement, registry UX-A, add_partner partner mapping, token sanitization, wallet datepicker |

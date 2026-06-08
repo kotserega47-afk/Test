@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.4 |
-| **Снимок на дату** | 2026-06-04 |
+| **KB версия** | v1.5 |
+| **Снимок на дату** | 2026-06-07 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -58,6 +58,12 @@
 - **Wallet hang Patch A** — `downloader_wallets.py`: explicit Playwright timeouts (`GOTO`/`networkidle`/`calendar` 60s/15s); stage logs + `record_progress("wallet", …)` (E-OPS-02).
 - **Wallet hang Patch B** — `schedule_loop` uses `dispatch_job_background`; scheduler `tick_age` independent of long jobs; TG/manual dispatch still blocking (E-OPS-01).
 - **Job Health Guard C1** — observe-only: `JOB_HEALTH_GUARD_ENABLED=1` → `/status` `job_health:` with `state`/`stage`/`progress_age`; recovery **off**; enable on Railway for ops (E-OPS-03).
+- **WalletEditor Auto-Enable** — Phase A plan/dry-run; Phase B1 Antares execution; Phase B1.1 `max_rows_per_run`; Phase B2 registry patch (`Включено` / `Комментарий включения`); TG `/auto_enable_plan` (plan-only) + `/auto_enable_run` (fresh plan + execute); settings via Rules `job_params` `wallet_editor_auto_enable` (E-WE-11…E-WE-13).
+- **WalletEditor HOLD enforcement** — `hold` sheet blocks `add_partner` before Antares (manual SKIP; auto-enable SKIP); fail-closed on hold-list read failure (manual SKIP / auto-enable FAIL); shared helper `integrations/wallet_editor_hold.py` (E-WE-14).
+- **WalletEditor registry UX-A** — new `all_results` / `runs` rows copy style from template data row; patch updates values without losing border/alignment (E-WE-09 extended).
+- **WalletEditor registry `add_partner`** — `partner=value` written to `all_results` on append (E-WE-15).
+- **Telegram bot token sanitization** — token redaction in error paths/logs/alerts; no raw `/bot<TOKEN>/` URLs in app output (E-SEC-01).
+- **Wallet downloader datepicker fix** — payout calendar navigates to target month/year; selects by `data-date=YYYY-MM-DD` (E-OPS-04).
 
 ---
 
@@ -220,7 +226,9 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
-| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe write; async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10) |
+| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe openpyxl write (UX-A row style copy); async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10, UX-A) |
+| **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from recalculated registry; plan `/auto_enable_plan`; execute `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения`; HOLD check before `open_card` |
+| **HOLD enforcement** | `integrations/wallet_editor_hold.py`; manual engine pre-pass; auto-enable executor batch check; fail-closed |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
 | **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
 | **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production |
@@ -297,3 +305,9 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-02 | Raccoon Wallet feature flag removed — E-CONFIG-11; CONFIG-MIGRATION-PHASE-3B-7 complete |
 | 2026-06-02 | CONFIG-MIGRATION-RACCOON-WALLET epic closed — E-CONFIG-12; Rules V2 sole config source |
 | 2026-06-02 | Payout Rules V2 production cutover — `PAYOUT_CONFIG_FROM_RULES_V2=1`; status `PROD_MODE_1` (E-CONFIG-13) |
+| 2026-06-07 | WalletEditor Auto-Enable Phase A/B1/B1.1/B2 + split TG commands — E-WE-11…E-WE-13 |
+| 2026-06-07 | WalletEditor HOLD enforcement for `add_partner` — E-WE-14 |
+| 2026-06-07 | WalletEditor registry UX-A row formatting preservation — E-WE-09 extended |
+| 2026-06-07 | WalletEditor `add_partner` → registry `partner` mapping — E-WE-15 |
+| 2026-06-07 | Telegram bot token sanitization in error paths — E-SEC-01 |
+| 2026-06-07 | Wallet downloader payout datepicker navigation fix — E-OPS-04 |
