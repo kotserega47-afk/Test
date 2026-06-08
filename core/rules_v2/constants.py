@@ -60,6 +60,7 @@ ALLOWED_TELEGRAM_ROUTE_KEYS: frozenset[str] = frozenset(
         "wallet_editor_registry_warnings",
         "wallet_editor_auto_enable",
         "wallet_editor_auto_enable_alert",
+        "wallet_editor_registry_refresh",
     }
 )
 

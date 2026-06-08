@@ -23,6 +23,7 @@ KNOWN_JOB_TYPES: Tuple[str, ...] = (
     "raccoon_wallet",
     "raccoon_hourly",
     "raccoon_daily_conversion",
+    "wallet_editor_registry_refresh",
 )
 
 

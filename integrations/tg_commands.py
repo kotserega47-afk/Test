@@ -31,6 +31,7 @@ from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job ty
 from analyzers.hourly_report import run_hourly_report
 from integrations.telegram_routes import ROUTE_PLATFORM_HOURLY_REPORT, send_message_to_route
 from integrations.wallet_editor_tg import handle_wallet_editor_document
+from integrations.wallet_editor_registry_refresh import run_wallet_editor_registry_refresh_job
 from core.state_store import state_get, state_update
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
@@ -206,6 +207,7 @@ JOB_REGISTRY.update(
         "hourly": run_hourly_job,
         "rate": run_rate_monitor_safe,
         "download": run_download_job,
+        "wallet_editor_registry_refresh": run_wallet_editor_registry_refresh_job,
     }
 )
 
@@ -243,6 +245,7 @@ def _help_text() -> str:
         "/rules_validate\n"
         "/auto_enable_plan\n"
         "/auto_enable_run\n"
+        "/wallet_editor_refresh\n"
         "/help"
     )
 
@@ -465,6 +468,12 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
 
 
+async def cmd_wallet_editor_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "wallet_editor_refresh"):
+        return
+    await _run_job_async(update, "wallet_editor_registry_refresh")
+
+
 def get_handlers():
     return [
         CommandHandler("start", cmd_start),
@@ -481,5 +490,6 @@ def get_handlers():
         CommandHandler("rules_validate", cmd_rules_validate),
         CommandHandler("auto_enable_plan", cmd_auto_enable_plan),
         CommandHandler("auto_enable_run", cmd_auto_enable_run),
+        CommandHandler("wallet_editor_refresh", cmd_wallet_editor_refresh),
         MessageHandler(filters.Document.ALL, handle_wallet_editor_document),
     ]
