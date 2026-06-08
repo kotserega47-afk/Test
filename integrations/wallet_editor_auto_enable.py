@@ -62,6 +62,16 @@ log = get_logger(name, icon)
 
 PHASE_A_LABEL = "Phase A dry-run"
 PHASE_B2_LABEL = "Phase B2 execution + registry patch"
+PLAN_ONLY_LABEL = "plan-only"
+
+
+@dataclass(frozen=True, slots=True)
+class AutoEnablePlan:
+    eligibility: EligibilityResult
+    selected_after_dedup: int
+    selected_for_run: int
+    candidates_for_run: tuple[CandidateRow, ...]
+    batches: tuple[tuple[CandidateRow, ...], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +163,125 @@ def load_registry_frames_for_planning(
         today=today,
     )
     return recalculated, hold_df, otlezka_df, all_df
+
+
+def build_auto_enable_plan(
+    recalculated: pd.DataFrame,
+    *,
+    settings: AutoEnableSettings,
+) -> AutoEnablePlan:
+    eligibility = select_auto_enable_candidates(
+        recalculated,
+        include_overdue=settings.include_overdue,
+    )
+    selected_after_dedup = len(eligibility.selected)
+    candidates_for_run = apply_run_limit(
+        eligibility.selected,
+        max_rows_per_run=settings.max_rows_per_run,
+    )
+    selected_for_run = len(candidates_for_run)
+    batches = split_batches(
+        candidates_for_run,
+        max_rows_per_batch=settings.max_rows_per_batch,
+    )
+    return AutoEnablePlan(
+        eligibility=eligibility,
+        selected_after_dedup=selected_after_dedup,
+        selected_for_run=selected_for_run,
+        candidates_for_run=candidates_for_run,
+        batches=batches,
+    )
+
+
+def build_plan_report(
+    *,
+    settings: AutoEnableSettings,
+    plan: AutoEnablePlan,
+    manual: bool,
+    actor: Actor | None = None,
+    trigger: str,
+    execution_note: str | None = None,
+) -> str:
+    batch_sizes = [len(batch) for batch in plan.batches]
+    timeout_lines = [
+        (
+            f"  batch {index + 1}: size={size}, "
+            f"timeout_est={calculate_batch_timeout(size, seconds_per_card_timeout=settings.seconds_per_card_timeout, batch_timeout_buffer_seconds=settings.batch_timeout_buffer_seconds)}s"
+        )
+        for index, size in enumerate(batch_sizes)
+    ]
+    remaining_after_limit = max(0, plan.selected_after_dedup - plan.selected_for_run)
+
+    if execution_note is None:
+        execution_note = "plan-only: Antares execution not requested."
+
+    actor_line = ""
+    if actor is not None:
+        actor_line = (
+            f"actor: kind={actor.kind} chat_id={actor.chat_id} user_id={actor.user_id}\n"
+        )
+
+    lines = [
+        "🧩 WalletEditor Auto-Enable",
+        f"mode: {PLAN_ONLY_LABEL}",
+        f"trigger: {trigger}",
+        actor_line.rstrip(),
+        "",
+        "job_params:",
+        f"- enabled: {settings.enabled}",
+        f"- dry_run: {settings.dry_run}",
+        f"- approval_required: {settings.approval_required}",
+        f"- include_overdue: {settings.include_overdue}",
+        f"- max_rows_per_batch: {settings.max_rows_per_batch}",
+        f"- max_rows_per_run: {settings.max_rows_per_run}",
+        f"- seconds_per_card_timeout: {settings.seconds_per_card_timeout}",
+        f"- batch_timeout_buffer_seconds: {settings.batch_timeout_buffer_seconds}",
+        f"- working_statuses: {list(settings.working_statuses)}",
+        f"- auto_return_statuses: {list(settings.auto_return_statuses)}",
+        f"- auto_return_target_status: {settings.auto_return_target_status}",
+        *(
+            [
+                "⚠️ working_statuses loaded from deprecated allowed_statuses_for_enable fallback.",
+            ]
+            if settings.deprecated_working_statuses_fallback
+            else []
+        ),
+        "",
+        "selection:",
+        f"- eligible before dedup: {plan.eligibility.eligible_before_dedup}",
+        f"- selected after dedup: {plan.selected_after_dedup}",
+        f"- duplicates skipped: {plan.eligibility.duplicates_skipped}",
+        *_run_limit_report_lines(
+            settings,
+            selected_after_dedup=plan.selected_after_dedup,
+            selected_for_run=plan.selected_for_run,
+        ),
+        f"- remaining candidates after limit: {remaining_after_limit}",
+        "",
+        "breakdown (selected):",
+        f"- К ВКЛЮЧЕНИЮ: {plan.eligibility.breakdown.k_vklyucheniyu}",
+        f"- ПРОСРОЧЕНО: {plan.eligibility.breakdown.prosrocheno}",
+        f"- FAIL retry: {plan.eligibility.breakdown.fail_retry}",
+        f"- empty Включено: {plan.eligibility.breakdown.empty_vklyucheno}",
+        "",
+        "batches:",
+        f"- batch count: {len(plan.batches)}",
+        f"- batch sizes: {batch_sizes or '[]'}",
+        "timeout estimates:",
+        *(timeout_lines or ["  (none)"]),
+        "",
+        execution_note,
+        "⚠️ Antares не изменялся. Registry не изменялся.",
+    ]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def build_pre_run_summary(plan: AutoEnablePlan) -> str:
+    return (
+        f"Найдено {plan.selected_after_dedup}, "
+        f"будет обработано {plan.selected_for_run}, "
+        f"batch count {len(plan.batches)}"
+    )
 
 
 def build_phase_a_report(
@@ -248,15 +377,21 @@ def build_phase_a_report(
     return "\n".join(line for line in lines if line is not None)
 
 
-def _disabled_report(settings: AutoEnableSettings, *, manual: bool, actor: Actor | None) -> str:
+def _disabled_report(
+    settings: AutoEnableSettings,
+    *,
+    manual: bool,
+    actor: Actor | None,
+    trigger: str,
+) -> str:
     actor_line = ""
     if actor is not None:
         actor_line = f"actor: kind={actor.kind} chat_id={actor.chat_id} user_id={actor.user_id}\n"
     return "\n".join(
         [
             "🧩 WalletEditor Auto-Enable",
-            f"mode: {PHASE_A_LABEL}",
-            f"trigger: {'manual /auto_enable_run' if manual else 'scheduled'}",
+            f"mode: {PLAN_ONLY_LABEL}",
+            f"trigger: {trigger}",
             actor_line.rstrip(),
             "",
             "status: disabled (job_params enabled=0)",
@@ -266,8 +401,12 @@ def _disabled_report(settings: AutoEnableSettings, *, manual: bool, actor: Actor
     ).strip()
 
 
-def _should_execute_phase_b2(settings: AutoEnableSettings) -> bool:
-    return settings.enabled and not settings.dry_run and not settings.approval_required
+def _should_execute_phase_b2(settings: AutoEnableSettings, *, manual: bool) -> bool:
+    if not settings.enabled or settings.dry_run:
+        return False
+    if manual:
+        return True
+    return not settings.approval_required
 
 
 def outcomes_to_registry_updates(
@@ -385,6 +524,62 @@ def _run_phase_b2_batches(
     return any_sent, last_report
 
 
+def run_auto_enable_plan(
+    actor: Actor | None = None,
+    *,
+    manual: bool = False,
+    settings: AutoEnableSettings | None = None,
+    today: date | None = None,
+    registry_frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None = None,
+) -> AutoEnableRunResult:
+    """Build a fresh auto-enable plan and send plan-only report. No Antares, no registry patch."""
+    settings = settings or load_auto_enable_settings()
+    trigger = "manual /auto_enable_plan" if manual else "scheduled plan"
+
+    if not settings.enabled:
+        report = _disabled_report(settings, manual=manual, actor=actor, trigger=trigger)
+        log.info("[AutoEnable] plan skipped: enabled=0")
+        sent = _send_to_route(settings.telegram_route_report, report)
+        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
+
+    try:
+        if registry_frames is None:
+            recalculated, _hold_df, _otlezka_df, _raw = load_registry_frames_for_planning(today=today)
+        else:
+            recalculated = registry_frames[0]
+
+        plan = build_auto_enable_plan(recalculated, settings=settings)
+        report = build_plan_report(
+            settings=settings,
+            plan=plan,
+            manual=manual,
+            actor=actor,
+            trigger=trigger,
+        )
+        log.info(
+            "[AutoEnable] plan ready selected_after_dedup=%s selected_for_run=%s batches=%s (plan-only)",
+            plan.selected_after_dedup,
+            plan.selected_for_run,
+            len(plan.batches),
+        )
+        sent = _send_to_route(settings.telegram_route_report, report)
+        return AutoEnableRunResult(sent=sent, report_text=report, phase=PLAN_ONLY_LABEL)
+
+    except Exception as exc:
+        log.exception("[AutoEnable] plan failed")
+        report = "\n".join(
+            [
+                "🧩 WalletEditor Auto-Enable",
+                f"mode: {PLAN_ONLY_LABEL}",
+                "",
+                f"status: error — {exc}",
+                "⚠️ Antares не изменялся. Registry не изменялся.",
+            ]
+        )
+        sent = _send_to_route(settings.telegram_route_report, report)
+        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="error")
+
+
 def run_auto_enable(
     actor: Actor | None = None,
     *,
@@ -394,15 +589,17 @@ def run_auto_enable(
     registry_frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None = None,
 ) -> AutoEnableRunResult:
     """
-    Auto-enable entrypoint.
+    Auto-enable execution entrypoint.
 
-    Phase A when dry_run=1 or approval_required=1.
-    Phase B2 when dry_run=0 and approval_required=0 (Antares + registry patch).
+    Always rebuilds a fresh plan. Manual /auto_enable_run executes when dry_run=0,
+    ignoring approval_required (operator invocation is the confirmation).
+    Scheduled runs still respect approval_required for future scheduler use.
     """
     settings = settings or load_auto_enable_settings()
+    trigger = "manual /auto_enable_run" if manual else "scheduled"
 
     if not settings.enabled:
-        report = _disabled_report(settings, manual=manual, actor=actor)
+        report = _disabled_report(settings, manual=manual, actor=actor, trigger=trigger)
         log.info("[AutoEnable] skipped: enabled=0")
         sent = _send_to_route(settings.telegram_route_report, report)
         return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
@@ -413,59 +610,66 @@ def run_auto_enable(
         else:
             recalculated = registry_frames[0]
 
-        eligibility = select_auto_enable_candidates(
-            recalculated,
-            include_overdue=settings.include_overdue,
-        )
-        selected_after_dedup = len(eligibility.selected)
-        candidates_for_run = apply_run_limit(
-            eligibility.selected,
-            max_rows_per_run=settings.max_rows_per_run,
-        )
-        selected_for_run = len(candidates_for_run)
-        batches = split_batches(
-            candidates_for_run,
-            max_rows_per_batch=settings.max_rows_per_batch,
-        )
+        plan = build_auto_enable_plan(recalculated, settings=settings)
 
-        if not _should_execute_phase_b2(settings):
-            report = build_phase_a_report(
+        if not _should_execute_phase_b2(settings, manual=manual):
+            execution_note = "dry_run=1: execution blocked by settings."
+            if not settings.dry_run and not manual and settings.approval_required:
+                execution_note = (
+                    "approval_required=1: execution blocked for scheduled run."
+                )
+            report = build_plan_report(
                 settings=settings,
-                eligibility=eligibility,
-                batches=batches,
+                plan=plan,
                 manual=manual,
                 actor=actor,
-                selected_for_run=selected_for_run,
+                trigger=trigger,
+                execution_note=execution_note,
             )
             log.info(
-                "[AutoEnable] plan ready selected_after_dedup=%s selected_for_run=%s batches=%s (no execution)",
-                selected_after_dedup,
-                selected_for_run,
-                len(batches),
+                "[AutoEnable] execution blocked selected_after_dedup=%s selected_for_run=%s batches=%s",
+                plan.selected_after_dedup,
+                plan.selected_for_run,
+                len(plan.batches),
             )
             sent = _send_to_route(settings.telegram_route_report, report)
-            return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_A_LABEL)
+            return AutoEnableRunResult(sent=sent, report_text=report, phase=PLAN_ONLY_LABEL)
+
+        pre_run_summary = build_pre_run_summary(plan)
+        if manual and settings.approval_required:
+            pre_run_summary = (
+                f"{pre_run_summary}\n"
+                "approval_required=1 (informational for manual run; execution proceeds)."
+            )
+        _send_to_route(settings.telegram_route_report, pre_run_summary)
 
         sent, report = _run_phase_b2_batches(
-            batches,
+            plan.batches,
             settings,
-            selected_after_dedup=selected_after_dedup,
-            selected_for_run=selected_for_run,
+            selected_after_dedup=plan.selected_after_dedup,
+            selected_for_run=plan.selected_for_run,
         )
         log.info(
             "[AutoEnable] Phase B2 finished batches=%s selected_after_dedup=%s selected_for_run=%s",
-            len(batches),
-            selected_after_dedup,
-            selected_for_run,
+            len(plan.batches),
+            plan.selected_after_dedup,
+            plan.selected_for_run,
         )
-        return AutoEnableRunResult(sent=sent, report_text=report, phase=PHASE_B2_LABEL)
+        final_report = "\n".join(
+            [
+                pre_run_summary,
+                "",
+                report,
+            ]
+        )
+        return AutoEnableRunResult(sent=sent, report_text=final_report, phase=PHASE_B2_LABEL)
 
     except Exception as exc:
         log.exception("[AutoEnable] run failed")
         report = "\n".join(
             [
                 "🧩 WalletEditor Auto-Enable",
-                f"mode: error",
+                "mode: error",
                 "",
                 f"status: error — {exc}",
                 "⚠️ Registry patch not attempted.",

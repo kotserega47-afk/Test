@@ -104,10 +104,43 @@ def test_dry_run_does_not_call_executor(registry_frames):
             )
 
     execute.assert_not_called()
-    assert "Phase A dry-run" in result.report_text
+    assert "dry_run=1: execution blocked by settings." in result.report_text
+    assert result.phase == "plan-only"
 
 
-def test_approval_required_does_not_call_executor(registry_frames):
+def test_manual_run_executes_with_approval_required(registry_frames):
+    settings = _settings(dry_run=False, approval_required=True)
+    with patch(
+        "integrations.wallet_editor_auto_enable._send_to_route",
+        return_value=True,
+    ):
+        with patch(
+            "integrations.wallet_editor_auto_enable.send_file_to_route",
+            return_value=True,
+        ):
+            with patch(
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
+                return_value=[_ok_outcome()],
+            ) as execute:
+                with patch(
+                    "integrations.wallet_editor_auto_enable.write_outcomes_report",
+                ):
+                    with patch(
+                        "integrations.wallet_editor_auto_enable.os.remove",
+                    ):
+                        with _patch_success():
+                            result = run_auto_enable(
+                                settings=settings,
+                                manual=True,
+                                registry_frames=registry_frames,
+                            )
+
+    execute.assert_called_once()
+    assert result.phase == "Phase B2 execution + registry patch"
+    assert "approval_required=1 (informational for manual run" in result.report_text
+
+
+def test_scheduled_run_respects_approval_required(registry_frames):
     settings = _settings(dry_run=False, approval_required=True)
     with patch(
         "integrations.wallet_editor_auto_enable._send_to_route",
@@ -118,12 +151,12 @@ def test_approval_required_does_not_call_executor(registry_frames):
         ) as execute:
             result = run_auto_enable(
                 settings=settings,
-                manual=True,
+                manual=False,
                 registry_frames=registry_frames,
             )
 
     execute.assert_not_called()
-    assert "approval_required=1: plan only, execution skipped" in result.report_text
+    assert "approval_required=1: execution blocked for scheduled run." in result.report_text
 
 
 def test_phase_b1_calls_executor_and_sends_batch_report(registry_frames):

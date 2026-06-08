@@ -93,13 +93,42 @@ def test_dry_run_does_not_patch_registry(registry_frames):
     patch_registry.assert_not_called()
 
 
-def test_approval_required_does_not_patch_registry(registry_frames):
+def test_manual_run_patches_registry_with_approval_required(registry_frames):
+    settings = _settings(dry_run=False, approval_required=True)
+    with patch("integrations.wallet_editor_auto_enable._send_to_route", return_value=True):
+        with patch("integrations.wallet_editor_auto_enable.send_file_to_route", return_value=True):
+            with patch(
+                "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
+                return_value=[_ok_outcome()],
+            ):
+                with patch(
+                    "integrations.wallet_editor_auto_enable.write_outcomes_report",
+                ):
+                    with patch("integrations.wallet_editor_auto_enable.os.remove"):
+                        with patch(
+                            "integrations.wallet_editor_auto_enable.patch_enable_results_in_dropbox_registry",
+                            return_value=EnablePatchResult(
+                                success=True,
+                                patched_count=1,
+                                requested_count=1,
+                            ),
+                        ) as patch_registry:
+                            run_auto_enable(
+                                settings=settings,
+                                manual=True,
+                                registry_frames=registry_frames,
+                            )
+
+    patch_registry.assert_called_once()
+
+
+def test_scheduled_run_does_not_patch_registry(registry_frames):
     settings = _settings(dry_run=False, approval_required=True)
     with patch("integrations.wallet_editor_auto_enable._send_to_route", return_value=True):
         with patch(
             "integrations.wallet_editor_auto_enable.patch_enable_results_in_dropbox_registry",
         ) as patch_registry:
-            run_auto_enable(settings=settings, manual=True, registry_frames=registry_frames)
+            run_auto_enable(settings=settings, manual=False, registry_frames=registry_frames)
 
     patch_registry.assert_not_called()
 

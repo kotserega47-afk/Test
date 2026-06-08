@@ -7,7 +7,14 @@ import pandas as pd
 import pytest
 
 from core.job_runner import Actor
-from integrations.wallet_editor_auto_enable import build_phase_a_report, run_auto_enable
+from integrations.wallet_editor_auto_enable import (
+    PLAN_ONLY_LABEL,
+    build_auto_enable_plan,
+    build_phase_a_report,
+    build_plan_report,
+    run_auto_enable,
+    run_auto_enable_plan,
+)
 from integrations.wallet_editor_auto_enable_eligibility import (
     select_auto_enable_candidates,
     split_batches,
@@ -71,25 +78,70 @@ def test_run_auto_enable_disabled_sends_disabled_report():
     send_route.assert_called_once()
 
 
-def test_run_auto_enable_phase_a_plan_only():
+def test_run_auto_enable_plan_only():
     settings = _enabled_settings()
     df = _sample_df()
     with patch(
         "integrations.wallet_editor_auto_enable._send_to_route",
         return_value=True,
     ) as send_route:
-        result = run_auto_enable(
-            actor=Actor(kind="tg", chat_id=-1, user_id=42),
-            manual=True,
-            settings=settings,
-            registry_frames=(df, pd.DataFrame(), pd.DataFrame(), df),
-        )
+        with patch(
+            "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
+        ) as execute:
+            with patch(
+                "integrations.wallet_editor_auto_enable.patch_enable_results_in_dropbox_registry",
+            ) as patch_registry:
+                result = run_auto_enable_plan(
+                    actor=Actor(kind="tg", chat_id=-1, user_id=42),
+                    manual=True,
+                    settings=settings,
+                    registry_frames=(df, pd.DataFrame(), pd.DataFrame(), df),
+                )
 
+    execute.assert_not_called()
+    patch_registry.assert_not_called()
     assert result.skipped_reason is None
-    assert "Phase A dry-run" in result.report_text
+    assert PLAN_ONLY_LABEL in result.report_text
+    assert "mode: plan-only" in result.report_text
+    assert "manual /auto_enable_plan" in result.report_text
     assert "Antares не изменялся" in result.report_text
     assert "eligible before dedup: 1" in result.report_text
     send_route.assert_called_once()
+
+
+def test_run_auto_enable_dry_run_blocks_execution():
+    settings = _enabled_settings(dry_run=True)
+    df = _sample_df()
+    with patch(
+        "integrations.wallet_editor_auto_enable._send_to_route",
+        return_value=True,
+    ):
+        with patch(
+            "integrations.wallet_editor_auto_enable.enqueue_auto_enable_batch",
+        ) as execute:
+            result = run_auto_enable(
+                manual=True,
+                settings=settings,
+                registry_frames=(df, pd.DataFrame(), pd.DataFrame(), df),
+            )
+
+    execute.assert_not_called()
+    assert "dry_run=1: execution blocked by settings." in result.report_text
+    assert result.phase == PLAN_ONLY_LABEL
+
+
+def test_build_plan_report_includes_remaining_candidates():
+    settings = _enabled_settings(max_rows_per_run=1)
+    df = pd.concat([_sample_df(), _sample_df().assign(card="4222")], ignore_index=True)
+    plan = build_auto_enable_plan(df, settings=settings)
+    report = build_plan_report(
+        settings=settings,
+        plan=plan,
+        manual=True,
+        trigger="manual /auto_enable_plan",
+    )
+    assert "remaining candidates after limit: 1" in report
+    assert "mode: plan-only" in report
 
 
 def test_build_phase_a_report_includes_status_whitelists():
@@ -125,6 +177,36 @@ def test_build_phase_a_report_notes_approval_required_skips_execution():
         actor=None,
     )
     assert "approval_required=1: plan only, execution skipped" in report
+
+
+def test_cmd_auto_enable_plan_uses_guard_and_runs_plan_only():
+    from integrations.tg_commands import cmd_auto_enable_plan
+
+    update = MagicMock()
+    update.effective_chat.id = -100
+    update.effective_user.id = 123
+    update.message.reply_text = AsyncMock()
+
+    with patch(
+        "integrations.tg_commands._guard_or_deny",
+        new=AsyncMock(return_value=False),
+    ) as guard:
+        with patch("integrations.tg_commands.run_auto_enable_plan") as plan_fn:
+            asyncio.run(cmd_auto_enable_plan(update, MagicMock()))
+            guard.assert_awaited_once_with(update, "auto_enable_plan")
+            plan_fn.assert_not_called()
+
+    with patch(
+        "integrations.tg_commands._guard_or_deny",
+        new=AsyncMock(return_value=True),
+    ):
+        with patch(
+            "integrations.tg_commands.run_auto_enable_plan",
+            return_value=MagicMock(skipped_reason=None, sent=True),
+        ) as plan_fn:
+            asyncio.run(cmd_auto_enable_plan(update, MagicMock()))
+            plan_fn.assert_called_once()
+            assert plan_fn.call_args.kwargs["manual"] is True
 
 
 def test_cmd_auto_enable_run_uses_guard_and_runs_orchestrator():
