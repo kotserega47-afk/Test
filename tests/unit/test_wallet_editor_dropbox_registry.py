@@ -860,3 +860,93 @@ def test_registry_open_without_rev_change_allows_upload(registry_env, tmp_path):
 
     sheets = _read_registry(store[DROPBOX_PATH])
     assert len(sheets["all_results"]) == 1
+
+
+def _style_all_results_data_row(ws, row_idx: int) -> None:
+    from openpyxl.styles import Alignment, Border, Side
+
+    card_col = ALL_RESULTS_COLUMNS.index("card") + 1
+    status_col = ALL_RESULTS_COLUMNS.index("status") + 1
+    comment_col = ALL_RESULTS_COLUMNS.index("comment") + 1
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+
+    for col_idx in range(1, len(ALL_RESULTS_COLUMNS) + 1):
+        cell = ws.cell(row=row_idx, column=col_idx)
+        cell.border = border
+        if col_idx in {card_col, status_col, comment_col}:
+            cell.alignment = center
+    ws.cell(row=row_idx, column=card_col).number_format = "@"
+
+
+def _style_runs_data_row(ws, row_idx: int) -> None:
+    from openpyxl.styles import Border, Side
+
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col_idx in range(1, len(RUNS_COLUMNS) + 1):
+        ws.cell(row=row_idx, column=col_idx).border = border
+
+
+def _store_workbook_bytes(wb) -> bytes:
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+    return buf.getvalue()
+
+
+def test_registry_append_copies_all_results_row_style(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-style-append"
+
+    _append_once(registry_env, tmp_path, run_id="style-seed-row")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    _style_all_results_data_row(ws, 2)
+    store[DROPBOX_PATH] = _store_workbook_bytes(wb)
+
+    _append_once(registry_env, tmp_path, run_id="style-second-row")
+
+    wb2 = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws2 = wb2[SHEET_ALL_RESULTS]
+    card_col = ALL_RESULTS_COLUMNS.index("card") + 1
+    status_col = ALL_RESULTS_COLUMNS.index("status") + 1
+    new_row = 3
+
+    assert ws2.cell(row=new_row, column=card_col).border.left.style == "thin"
+    assert ws2.cell(row=new_row, column=status_col).alignment.horizontal == "center"
+    assert ws2.cell(row=new_row, column=card_col).number_format == "@"
+    assert ws2.column_dimensions["A"].width == 22.5
+    assert ws2.column_dimensions["F"].width == 18.0
+    wb2.close()
+
+
+def test_registry_append_copies_runs_row_style(registry_env, tmp_path):
+    store, _, revs = registry_env
+    styled = tmp_path / "styled.xlsx"
+    create_styled_registry_workbook(styled)
+    store[DROPBOX_PATH] = styled.read_bytes()
+    revs[DROPBOX_PATH] = "rev-runs-style"
+
+    _append_once(registry_env, tmp_path, run_id="runs-style-seed")
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    _style_runs_data_row(wb[SHEET_RUNS], 2)
+    store[DROPBOX_PATH] = _store_workbook_bytes(wb)
+
+    _append_once(registry_env, tmp_path, run_id="runs-style-second")
+
+    wb2 = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws_runs = wb2[SHEET_RUNS]
+    assert ws_runs.cell(row=3, column=1).border.left.style == "thin"
+    assert ws_runs.cell(row=3, column=len(RUNS_COLUMNS)).border.left.style == "thin"
+    wb2.close()

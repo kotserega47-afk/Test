@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import copy
 from pathlib import Path
+
 import pandas as pd
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell import Cell
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -30,6 +33,56 @@ from integrations.wallet_editor_registry_lifecycle import (
 
 CARD_TEXT_FORMAT = "@"
 TEXT_COLUMNS = frozenset({"card"})
+
+
+def copy_cell_style(src_cell: Cell, dst_cell: Cell) -> None:
+    """Copy visual cell style without changing value."""
+    dst_cell.font = copy(src_cell.font)
+    dst_cell.border = copy(src_cell.border)
+    dst_cell.fill = copy(src_cell.fill)
+    dst_cell.number_format = src_cell.number_format
+    dst_cell.protection = copy(src_cell.protection)
+    dst_cell.alignment = copy(src_cell.alignment)
+
+
+def copy_row_style(
+    ws: Worksheet,
+    src_row: int,
+    dst_row: int,
+    column_indices: list[int],
+) -> None:
+    for col_idx in column_indices:
+        copy_cell_style(ws.cell(row=src_row, column=col_idx), ws.cell(row=dst_row, column=col_idx))
+
+
+def _column_indices(header_map: dict[str, int], columns: list[str]) -> list[int]:
+    return [header_map[col] for col in columns if col in header_map]
+
+
+def _count_data_rows(ws: Worksheet, headers: dict[str, int]) -> int:
+    count = 0
+    for row_idx in range(2, ws.max_row + 1):
+        if _row_has_data(ws, row_idx, headers):
+            count += 1
+    return count
+
+
+def _style_template_row(ws: Worksheet, headers: dict[str, int], previous_data_rows: int) -> int | None:
+    if previous_data_rows > 0:
+        last_row: int | None = None
+        for row_idx in range(2, ws.max_row + 1):
+            if _row_has_data(ws, row_idx, headers):
+                last_row = row_idx
+        return last_row
+    if ws.max_row >= 2:
+        return 2
+    return None
+
+
+def _copy_header_style_from_neighbor(ws: Worksheet, col_idx: int) -> None:
+    if col_idx <= 1:
+        return
+    copy_cell_style(ws.cell(row=1, column=col_idx - 1), ws.cell(row=1, column=col_idx))
 
 
 def card_as_text(value: object) -> str:
@@ -206,13 +259,23 @@ def _sync_all_results_sheet(ws: Worksheet, df: pd.DataFrame) -> None:
             if col_name not in header_map:
                 next_col = ws.max_column + 1
                 ws.cell(row=1, column=next_col, value=col_name)
+                _copy_header_style_from_neighbor(ws, next_col)
                 header_map[col_name] = next_col
         header_map = {k: header_map[k] for k in ALL_RESULTS_COLUMNS if k in header_map}
 
     data_rows = len(df)
+    previous_data_rows = _count_data_rows(ws, header_map) if header_map else 0
+    template_row = _style_template_row(ws, header_map, previous_data_rows)
+    style_columns = _column_indices(header_map, ALL_RESULTS_COLUMNS)
 
     for row_offset in range(data_rows):
         row_idx = row_offset + 2
+        if (
+            row_offset >= previous_data_rows
+            and template_row is not None
+            and row_idx != template_row
+        ):
+            copy_row_style(ws, template_row, row_idx, style_columns)
         for col_name in ALL_RESULTS_COLUMNS:
             col_idx = header_map.get(col_name)
             if not col_idx:
@@ -241,10 +304,21 @@ def _sync_runs_sheet(ws: Worksheet, runs_df: pd.DataFrame) -> None:
             if col_name not in header_map:
                 next_col = ws.max_column + 1
                 ws.cell(row=1, column=next_col, value=col_name)
+                _copy_header_style_from_neighbor(ws, next_col)
                 header_map[col_name] = next_col
+
+    previous_data_rows = _count_data_rows(ws, header_map) if header_map else 0
+    template_row = _style_template_row(ws, header_map, previous_data_rows)
+    style_columns = _column_indices(header_map, RUNS_COLUMNS)
 
     for row_offset in range(len(runs_df)):
         row_idx = row_offset + 2
+        if (
+            row_offset >= previous_data_rows
+            and template_row is not None
+            and row_idx != template_row
+        ):
+            copy_row_style(ws, template_row, row_idx, style_columns)
         for col_name in RUNS_COLUMNS:
             col_idx = header_map.get(col_name)
             if not col_idx:

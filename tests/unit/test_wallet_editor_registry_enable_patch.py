@@ -17,6 +17,7 @@ from integrations.wallet_editor_registry import (
 from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
     ALL_RESULTS_COLUMNS,
+    SHEET_ALL_RESULTS,
     STATUS_K_VKLUCHENIYU,
     STATUS_OSHIBKA,
     STATUS_PROPUSHENO,
@@ -275,3 +276,47 @@ def test_patch_enable_results_upload_failure(registry_env):
     assert result.success is False
     assert result.patched_count == 0
     assert result.error_reason is not None
+
+
+def test_patch_preserves_existing_row_styles(registry_env):
+    store, _revs = registry_env
+    from openpyxl import load_workbook
+    from openpyxl.styles import Alignment, Border, Side
+
+    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws = wb[SHEET_ALL_RESULTS]
+    card_col = ALL_RESULTS_COLUMNS.index("card") + 1
+    vklyucheno_col = ALL_RESULTS_COLUMNS.index("Включено") + 1
+    comment_col = ALL_RESULTS_COLUMNS.index("comment") + 1
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+
+    for col_idx in range(1, len(ALL_RESULTS_COLUMNS) + 1):
+        cell = ws.cell(row=2, column=col_idx)
+        cell.border = border
+        if col_idx in {card_col, comment_col}:
+            cell.alignment = center
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+    store[DROPBOX_PATH] = buf.getvalue()
+
+    result = patch_enable_results_in_dropbox_registry(
+        [_update(vklyucheno="OK", comment="styled patch")],
+        settings=RegistrySettings(60, 180, 1),
+    )
+    assert result.success is True
+    assert result.patched_count == 1
+
+    wb2 = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
+    ws2 = wb2[SHEET_ALL_RESULTS]
+    assert ws2.cell(row=2, column=card_col).border.left.style == "thin"
+    assert ws2.cell(row=2, column=comment_col).alignment.horizontal == "center"
+    assert ws2.cell(row=2, column=vklyucheno_col).border.left.style == "thin"
+    assert ws2.cell(row=2, column=vklyucheno_col).value == "OK"
+    assert ws2.cell(row=2, column=ALL_RESULTS_COLUMNS.index("Комментарий включения") + 1).value == (
+        "styled patch"
+    )
+    wb2.close()
