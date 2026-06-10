@@ -16,7 +16,14 @@ from utils.log_profiles import LOG_PROFILES
 
 from core.schedules import load_schedules, Schedule
 from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
-from core.scheduler_health import record_error, record_schedules_loaded, record_tick
+from core.scheduler_health import (
+    record_error,
+    record_hourly_gate_fire,
+    record_hourly_gate_skip,
+    record_schedules_loaded,
+    record_tick,
+)
+from core.event_log import append_event
 from core.job_health import evaluate_job_health_if_due
 from core.job_dispatch import dispatch_job_background
 from core.job_runner import Actor
@@ -122,26 +129,45 @@ class HourlyGate:
     last_final_key: Optional[str] = None     # YYYYMMDD final date key
 
 
-def _hourly_should_fire(now: datetime, gate: HourlyGate) -> bool:
+_GATE_SKIP_EVENT_INTERVAL_SEC = 300.0
+_last_gate_skip_event_ts: Dict[str, float] = {}
+
+
+def _reset_hourly_gate_skip_throttle_for_tests() -> None:
+    _last_gate_skip_event_ts.clear()
+
+
+def evaluate_hourly_gate(now: datetime, gate: HourlyGate) -> tuple[bool, str]:
+    """
+    Decide whether scheduler may dispatch job_type=hourly.
+
+    Returns (should_fire, reason). Reason describes the fire trigger or skip cause.
+    Intraday dedup uses wall-clock buckets (total_minutes // interval), so the first
+    schedule tick inside a new bucket fires even when minute % interval != 0.
+    """
     params = get_job_params(job="hourly")
 
     intraday_min = int(params.get("intraday_interval_minutes") or 0)
     final_time = _parse_hhmm(str(params.get("final_daily_time") or ""))
 
-    fired = False
+    if intraday_min <= 0 and final_time is None:
+        return False, (
+            "no_gate_config: set job_params intraday_interval_minutes or "
+            "final_daily_time for job=hourly"
+        )
 
-    # intraday every N minutes: bucket by floor(minute/N)
+    fired = False
+    fire_parts: list[str] = []
+
     if intraday_min > 0:
-        bucket = (now.hour * 60 + now.minute) // intraday_min
+        total_min = now.hour * 60 + now.minute
+        bucket = total_min // intraday_min
         key = f"{now:%Y%m%d}-{bucket:04d}"
         if gate.last_intraday_key != key:
-            # только на границе интервала
-            # чтобы не запускать на каждом тике schedule_loop
-            if (now.minute % intraday_min) == 0:
-                gate.last_intraday_key = key
-                fired = True
+            gate.last_intraday_key = key
+            fired = True
+            fire_parts.append(f"intraday_interval_minutes={intraday_min} bucket={key}")
 
-    # final daily at HH:MM (once per day)
     if final_time is not None:
         hh, mm = final_time
         if now.hour == hh and now.minute == mm:
@@ -149,8 +175,54 @@ def _hourly_should_fire(now: datetime, gate: HourlyGate) -> bool:
             if gate.last_final_key != key:
                 gate.last_final_key = key
                 fired = True
+                fire_parts.append(f"final_daily_time={hh:02d}:{mm:02d}")
 
-    return fired
+    if fired:
+        return True, "; ".join(fire_parts)
+
+    if intraday_min > 0:
+        total_min = now.hour * 60 + now.minute
+        bucket = total_min // intraday_min
+        key = f"{now:%Y%m%d}-{bucket:04d}"
+        if gate.last_intraday_key == key:
+            return False, f"intraday_already_fired bucket={key}"
+        return False, f"intraday_waiting bucket={key} interval={intraday_min}m"
+
+    hh, mm = final_time  # type: ignore[misc]
+    return False, (
+        f"final_not_due now={now.hour:02d}:{now.minute:02d} "
+        f"target={hh:02d}:{mm:02d}"
+    )
+
+
+def _hourly_should_fire(now: datetime, gate: HourlyGate) -> bool:
+    """Backward-compatible bool wrapper for evaluate_hourly_gate."""
+    should_fire, _reason = evaluate_hourly_gate(now, gate)
+    return should_fire
+
+
+def _emit_hourly_gate_skip(reason: str) -> None:
+    record_hourly_gate_skip(reason)
+    now = time.time()
+    prev = _last_gate_skip_event_ts.get(reason, 0.0)
+    if now - prev < _GATE_SKIP_EVENT_INTERVAL_SEC:
+        return
+    _last_gate_skip_event_ts[reason] = now
+    log.info("[scheduler] hourly gate skipped: %s", reason)
+    append_event(
+        type="job_gate_skipped",
+        job_type="hourly",
+        payload={"reason": reason},
+    )
+
+
+def _apply_hourly_gate(now: datetime, gate: HourlyGate) -> bool:
+    should_fire, reason = evaluate_hourly_gate(now, gate)
+    if should_fire:
+        record_hourly_gate_fire(reason)
+        return True
+    _emit_hourly_gate_skip(reason)
+    return False
 
 
 # =============================================================================
@@ -216,7 +288,7 @@ def schedule_loop() -> None:
                 if ts_now >= ts_next:
                     # hourly is gated by job_params
                     if jt == "hourly":
-                        if not _hourly_should_fire(now, hourly_gate):
+                        if not _apply_hourly_gate(now, hourly_gate):
                             next_every[jt] = ts_now + max(1, int(s.every_seconds))
                             continue
 
@@ -241,7 +313,7 @@ def schedule_loop() -> None:
                 if now >= dt_next:
                     # hourly still gated (cron может быть "каждый час", но intraday=5)
                     if jt == "hourly":
-                        if not _hourly_should_fire(now, hourly_gate):
+                        if not _apply_hourly_gate(now, hourly_gate):
                             try:
                                 next_cron[jt] = _next_cron_run(datetime.now(MSK), s.cron)
                             except Exception:

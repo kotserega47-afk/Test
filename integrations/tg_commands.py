@@ -100,6 +100,14 @@ def _format_observation_status() -> str:
 
         lines.append(f"scheduler: tick_age={tick_age}s last_tick={tick_human}")
         lines.append(f"scheduler: active_schedules={active_count} last_error={last_error}")
+        lines.append(
+            f"scheduler: hourly_gate_skip={health.get('hourly_gate_last_skip_reason', 'unknown')} "
+            f"age={health.get('hourly_gate_last_skip_age_sec', 'unknown')}s"
+        )
+        lines.append(
+            f"scheduler: hourly_gate_fire={health.get('hourly_gate_last_fire_reason', 'unknown')} "
+            f"age={health.get('hourly_gate_last_fire_age_sec', 'unknown')}s"
+        )
     except Exception:
         lines.append("scheduler: unknown")
 
