@@ -50,6 +50,27 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
     "ttl_clean": {
         "interval_minutes": "int",
     },
+    "wallet_editor": {
+        "registry_warning_seconds": "int",
+        "registry_timeout_seconds": "int",
+        "registry_retry_interval_seconds": "int",
+    },
+    "wallet_editor_auto_enable": {
+        "enabled": "bool",
+        "dry_run": "bool",
+        "approval_required": "bool",
+        "max_rows_per_batch": "int",
+        "max_rows_per_run": "int",
+        "seconds_per_card_timeout": "int",
+        "batch_timeout_buffer_seconds": "int",
+        "allowed_statuses_for_enable": "csv",
+        "working_statuses": "csv",
+        "auto_return_statuses": "csv",
+        "auto_return_target_status": "str",
+        "include_overdue": "bool",
+        "telegram_route_report": "str",
+        "telegram_route_alert": "str",
+    },
 }
 
 # =============================================================================
