@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-14**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -133,6 +133,7 @@
 | E-CONFIG-12 | 2026-06-02 | Raccoon Wallet configuration migration completed — Rules V2 is the only supported configuration source; legacy YAML configuration path is retired and must not be reintroduced | CONFIRMED | CONFIG-MIGRATION-RACCOON-WALLET epic; Phases 3A, 3B-1…3B-7 |
 | E-CONFIG-13 | 2026-06-02 | Payout runtime switched to Rules V2 in production — `PAYOUT_CONFIG_FROM_RULES_V2=1` on Railway; prod `rules.xlsx` with `payout_info_rules` / `payout_ignore_phrases` deployed to Dropbox; logs `[payout_config] source=rules_v2`; YAML retained as fallback; rollback via `PAYOUT_CONFIG_FROM_RULES_V2=0` | CONFIRMED | CONFIG-MIGRATION-PHASE-4C; `analyzers/payout_config_loader.py` |
 | E-CONFIG-14 | 2026-06-15 | Legacy `config_manager` `ALLOWED_JOB_PARAMS` whitelist must stay synchronized with Rules V2 job registry — new `job_params` jobs/keys added to rules must be whitelisted in legacy validator or `get_job_params()` fails closed to `{}` and can break hourly gate / other consumers | CONFIRMED | `core/config_manager.py`; incident hourly `no_gate_config`; commit `e4b31fb` |
+| E-CONFIG-15 | 2026-06-16 | Legacy validator whitelist expanded with `conversion` / `valid_status` (`str`) so multiple conversion status rows in `job_params` do not fail-closed the sheet and break hourly gate or raccoon_wallet scalars | CONFIRMED | `core/config_manager.py`; `tests/test_job_params_legacy_whitelist.py`; commit `194d99e` |
 | E-TG-ROUTES-01 | 2026-06-03 | Telegram **delivery** destinations migrate via optional Rules V2 sheet `telegram_routes`; Phase 2 = model + validator + index + accessor + ENV↔rules shadow compare only; **no** `send_message` switch; `TELEGRAM_CHAT_ID_EMERGENCY` ENV-only (never business fallback); `access_rules.chat_id` ≠ delivery route | CONFIRMED | `core/rules_v2/*`; `integrations/telegram_routes.py`; Phase 3 = `send_to_route` cutover |
 | E-TG-ROUTES-02 | 2026-06-03 | Phase 3A: first runtime route — `platform_hourly_report` behind `TELEGRAM_ROUTES_FROM_RULES_V2` (default `0`); `send_message_to_route` / `resolve_route_chat_id`; hourly job only; missing/disabled → skip (no emergency) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/tg_commands.py` `run_hourly_job` |
 | E-TG-ROUTES-03 | 2026-06-03 | Phase 3B: second runtime route — `platform_wallet_download_report` / `TELEGRAM_CHAT_ID_WALLET`; `downloader_wallets.run_wallet_cycle` → `send_message_to_route`; same flag; text reports (not files) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/downloader_wallets.py` |
@@ -219,3 +220,4 @@
 | 2026-06-07 | WalletEditor auto-enable E-WE-11…13; HOLD E-WE-14; partner mapping E-WE-15; registry UX-A; E-SEC-01; E-OPS-04 wallet datepicker |
 | 2026-06-11 | Hourly gate bucket tolerance — E-OPS-05 (`f936078`) |
 | 2026-06-15 | Hourly incident whitelist fix — E-CONFIG-14 (`e4b31fb`); payin group spacing — E-HOURLY-01 |
+| 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |

@@ -63,7 +63,7 @@
 | S1 | Two lock systems | `run_once_guard.py` vs `job_runner.py` | med | Impact before unification |
 | S2 | Raccoon in docs, absent in code | `EXPERT_REVIEW.md` | low | DOCS_ONLY |
 | S3 | Partner column spelling in conversion mapping | resolved — single source `main.py` `CONVERSION_COLUMNS` (`Партнёр`) | low | closed (E-CONFIG-03) |
-| S4 | Dual validation path: legacy `config_manager` whitelist vs Rules V2 validator — different strictness can reject valid `job_params` rows and silently break consumers (`get_job_params` → `{}`, hourly `no_gate_config`) | `core/config_manager.py` vs `core/rules_v2` | **high** | Keep `ALLOWED_JOB_PARAMS` synced with Rules V2 job registry (E-CONFIG-14); add regression test on new job_params keys |
+| S4 | Dual validation path: legacy `config_manager` whitelist vs Rules V2 validator — different strictness can reject valid `job_params` rows and silently break consumers (`get_job_params` → `{}`, hourly `no_gate_config`) | `core/config_manager.py` vs `core/rules_v2` | **high** | Keep `ALLOWED_JOB_PARAMS` synced with Rules V2 job registry (E-CONFIG-14, E-CONFIG-15); regression `tests/test_job_params_legacy_whitelist.py` |
 
 ---
 

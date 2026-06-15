@@ -65,7 +65,7 @@
 - **Telegram bot token sanitization** — token redaction in error paths/logs/alerts; no raw `/bot<TOKEN>/` URLs in app output (E-SEC-01).
 - **Wallet downloader datepicker fix** — payout calendar navigates to target month/year; selects by `data-date=YYYY-MM-DD` (E-OPS-04).
 - **Hourly scheduler gate** — bucket-based gate tolerates delayed cron ticks; gate observability in `/status` (E-OPS-05, commit `f936078`).
-- **Legacy job_params whitelist** — `wallet_editor` and `wallet_editor_auto_enable` keys allowed in `config_manager` validator; prevents `get_job_params(hourly)` → `{}` (E-CONFIG-14, commit `e4b31fb`).
+- **Legacy job_params whitelist** — `wallet_editor`, `wallet_editor_auto_enable`, and `conversion.valid_status` allowed in `config_manager` validator; prevents `get_job_params(hourly)` → `{}` when extra job rows exist (E-CONFIG-14 `e4b31fb`, E-CONFIG-15 `194d99e`).
 - **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
 - **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
 
@@ -331,3 +331,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-07 | Wallet downloader payout datepicker navigation fix — E-OPS-04 |
 | 2026-06-11 | Hourly scheduler gate bucket tolerance + `/status` observability — E-OPS-05 (`f936078`) |
 | 2026-06-15 | Hourly auto-report incident resolved — legacy job_params whitelist fix E-CONFIG-14 (`e4b31fb`); payin group spacing with `hide_inactive_rows` E-HOURLY-01; Raccoon hourly log prefixes |
+| 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
