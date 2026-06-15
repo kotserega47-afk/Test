@@ -3,6 +3,7 @@ LOG_PROFILES = {
     "WALLET":    ("💼", "WalletDownloader"),
     "WALLET_REPORTER": ("💼", "WalletReporter"),  # Raccoon: накопительный PayIn, каждые N мин
     "HOURLY":    ("🕒", "HourlyReporter"),
+    "RACCOON_HOURLY": ("🦝", "RaccoonHourlyReporter"),
     "RATE":      ("📈", "RateMonitor"),
     "ANALYZER":  ("📦", "Analyzer"),
     "PAYOUT":    ("💸", "PayoutAnalyzer"),

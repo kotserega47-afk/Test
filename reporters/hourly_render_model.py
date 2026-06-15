@@ -215,38 +215,62 @@ def _render_payout_items(dto: HourlyDTO, snapshot, *, hide_inactive_rows: bool) 
     return _finalize_hourly_section_lines(lines, hide_inactive_rows=hide_inactive_rows)
 
 
+def _payin_item_has_group_break_after(snapshot, item_key: str) -> bool:
+    return any(
+        m.member_type == "group_break_after" and str(m.member_key) == "1"
+        for m in _members_for_item(snapshot, item_key)
+    )
+
+
+def _split_payin_items_into_segments(payin_items, snapshot) -> List[List]:
+    segments: List[List] = []
+    current: List = []
+    for item in payin_items:
+        current.append(item)
+        if _payin_item_has_group_break_after(snapshot, item.item_key):
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _render_payin_items(dto: HourlyDTO, snapshot, *, hide_inactive_rows: bool) -> List[str]:
     section_key = "hourly.config_payins"
     payin_items = _hourly_items(snapshot, section_key, item_type="payin_row")
     payin_fact = _build_payin_fact(dto)
+    segments = _split_payin_items_into_segments(payin_items, snapshot)
 
-    lines: List[str] = []
+    rendered_segments: List[List[str]] = []
     visible_idx = 0
 
-    for item in payin_items:
-        source_key = str(item.source_key or "").strip()
-        fact = payin_fact.get(source_key)
+    for segment in segments:
+        segment_lines: List[str] = []
+        for item in segment:
+            source_key = str(item.source_key or "").strip()
+            fact = payin_fact.get(source_key)
 
-        amount = float(fact.amount) if fact else 0.0
-        if hide_inactive_rows and not _is_active_row(amount=amount, count=None):
-            continue
+            amount = float(fact.amount) if fact else 0.0
+            if hide_inactive_rows and not _is_active_row(amount=amount, count=None):
+                continue
 
-        visible_idx += 1
-        comment = _clean_comment(item.comment)
-        if not comment and fact:
-            comment = _clean_comment(fact.comment)
+            visible_idx += 1
+            comment = _clean_comment(item.comment)
+            if not comment and fact:
+                comment = _clean_comment(fact.comment)
 
-        suffix = f" ({comment})" if comment else ""
-        title = str(item.display_name or source_key).strip()
+            suffix = f" ({comment})" if comment else ""
+            title = str(item.display_name or source_key).strip()
+            segment_lines.append(f"{visible_idx}) {title} – {_fmt_amount(amount)}{suffix}")
 
-        lines.append(f"{visible_idx}) {title} – {_fmt_amount(amount)}{suffix}")
+        if segment_lines:
+            rendered_segments.append(segment_lines)
 
-        has_break = any(
-            m.member_type == "group_break_after" and str(m.member_key) == "1"
-            for m in _members_for_item(snapshot, item.item_key)
-        )
-        if has_break:
+    lines: List[str] = []
+    for seg_idx, segment_lines in enumerate(rendered_segments):
+        if seg_idx > 0:
             lines.append("")
+        lines.extend(segment_lines)
 
     return _finalize_hourly_section_lines(lines, hide_inactive_rows=hide_inactive_rows)
 

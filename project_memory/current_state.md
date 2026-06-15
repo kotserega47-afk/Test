@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.5 |
-| **Снимок на дату** | 2026-06-07 |
+| **KB версия** | v1.6 |
+| **Снимок на дату** | 2026-06-15 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -64,6 +64,24 @@
 - **WalletEditor registry `add_partner`** — `partner=value` written to `all_results` on append (E-WE-15).
 - **Telegram bot token sanitization** — token redaction in error paths/logs/alerts; no raw `/bot<TOKEN>/` URLs in app output (E-SEC-01).
 - **Wallet downloader datepicker fix** — payout calendar navigates to target month/year; selects by `data-date=YYYY-MM-DD` (E-OPS-04).
+- **Hourly scheduler gate** — bucket-based gate tolerates delayed cron ticks; gate observability in `/status` (E-OPS-05, commit `f936078`).
+- **Legacy job_params whitelist** — `wallet_editor` and `wallet_editor_auto_enable` keys allowed in `config_manager` validator; prevents `get_job_params(hourly)` → `{}` (E-CONFIG-14, commit `e4b31fb`).
+- **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
+- **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
+
+---
+
+## Incidents (resolved)
+
+### INCIDENT: Hourly auto report stopped (2026-06)
+
+| Field | Detail |
+|-------|--------|
+| **Symptom** | Scheduled hourly job skipped every tick; logs `job_gate_skipped` with `no_gate_config` |
+| **Root cause** | Legacy `config_manager` strict whitelist rejected `wallet_editor` and `wallet_editor_auto_enable` rows in `job_params`. Validation failure caused `get_job_params(hourly)` → `{}`; hourly gate had no config and skipped all runs |
+| **Contributing factor** | Dual validation path: legacy `config_manager` vs Rules V2 validator — different strictness (see S4 in `tasks.md`) |
+| **Fix** | `f936078` — bucket-based hourly gate; `e4b31fb` — whitelist `wallet_editor` / `wallet_editor_auto_enable` job params |
+| **Verification** | Post-fix prod logs: `job_requested` → `job_started` → `job_finished` for scheduler `hourly` |
 
 ---
 
@@ -253,7 +271,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 
 | Тип | Где | Покрывает |
 |-----|-----|-----------|
-| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render, **WalletEditor** (`test_wallet_editor_*`, `test_wallet_editor_dropbox_registry`), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
+| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render (`test_hourly_scheduler_gate`, `test_job_params_legacy_whitelist`, `test_hourly_hide_inactive_rows`, `test_hourly_render_golden`), **WalletEditor** (`test_wallet_editor_*`, `test_wallet_editor_dropbox_registry`), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
 | CLI tools | `tools/validate_rules_xlsx.py` | rules validation (DEV_ONLY) |
 | Manual scripts | `scripts/test_wallet_pipeline.py`, `scripts/test_bridge_legacy.py` | DEV_ONLY |
 
@@ -311,3 +329,5 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-07 | WalletEditor `add_partner` → registry `partner` mapping — E-WE-15 |
 | 2026-06-07 | Telegram bot token sanitization in error paths — E-SEC-01 |
 | 2026-06-07 | Wallet downloader payout datepicker navigation fix — E-OPS-04 |
+| 2026-06-11 | Hourly scheduler gate bucket tolerance + `/status` observability — E-OPS-05 (`f936078`) |
+| 2026-06-15 | Hourly auto-report incident resolved — legacy job_params whitelist fix E-CONFIG-14 (`e4b31fb`); payin group spacing with `hide_inactive_rows` E-HOURLY-01; Raccoon hourly log prefixes |

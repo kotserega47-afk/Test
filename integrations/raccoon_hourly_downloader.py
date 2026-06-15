@@ -8,7 +8,7 @@ from core.playwright_cleanup import close_playwright_stack
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
-icon, name = LOG_PROFILES["HOURLY"]
+icon, name = LOG_PROFILES["RACCOON_HOURLY"]
 logger = get_logger(name, icon)
 
 BASE_DIR = "/tmp/hourly_raccoon"
@@ -27,7 +27,7 @@ def _ensure_logged_in(page, context):
     if os.path.exists(AUTH_STATE):
         return
 
-    logger.info("[hourly_dl] Логинимся…")
+    logger.info("[raccoon_hourly_dl] Логинимся…")
     page.goto("https://raccoon.it.com/partner/#/login", timeout=5000)
     page.fill("input[type='email']", LOGIN)
     page.fill("input[type='password']", PASSWORD)
@@ -35,14 +35,14 @@ def _ensure_logged_in(page, context):
     page.wait_for_load_state("networkidle")
     time.sleep(2)
     context.storage_state(path=AUTH_STATE)
-    logger.info("[hourly_dl] Сессия сохранена")
+    logger.info("[raccoon_hourly_dl] Сессия сохранена")
 
 
 def _download_payin(page):
     """PayIn за сегодня."""
     tz_now = datetime.now(MSK).strftime("%Y-%m-%d")
 
-    logger.info("[hourly_dl] PayIn → выбираем дату…")
+    logger.info("[raccoon_hourly_dl] PayIn → выбираем дату…")
 
     page.goto("https://raccoon.it.com/partner/#/payin")
     page.wait_for_load_state("networkidle")
@@ -53,7 +53,7 @@ def _download_payin(page):
     try:
         page.click(f"[data-date='{tz_now}']")
     except:
-        logger.warning("[hourly_dl] Не удалось выбрать дату")
+        logger.warning("[raccoon_hourly_dl] Не удалось выбрать дату")
 
     page.click("button:has-text('Применить')")
     page.wait_for_load_state("networkidle")
@@ -65,7 +65,7 @@ def _download_payin(page):
 
     path = os.path.join(BASE_DIR, "payin.xlsx")
     dl.save_as(path)
-    logger.info(f"[hourly_dl] PayIn сохранён: {path}")
+    logger.info(f"[raccoon_hourly_dl] PayIn сохранён: {path}")
 
     return path
 
@@ -91,5 +91,5 @@ def run_hourly_raccoon_cycle():
         finally:
             close_playwright_stack(page=page, context=context, browser=browser)
 
-    logger.info("[hourly_dl] Скачивание завершено")
+    logger.info("[raccoon_hourly_dl] Скачивание завершено")
     return True

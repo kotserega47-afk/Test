@@ -18,7 +18,7 @@ from integrations.telegram_bot import send_message_sync
 from utils.normalization import normalize_partner_name
 from core.rules_provider import get_rules_snapshot
 
-icon, name = LOG_PROFILES["WALLET_REPORTER"]
+icon, name = LOG_PROFILES["RACCOON_HOURLY"]
 logger = get_logger(name, icon)
 
 # ---------------------------------------
@@ -236,7 +236,7 @@ def _save_last_state(state: dict) -> None:
         with open(STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.warning(f"[wallet_report] failed to save state: {e}")
+        logger.warning(f"[raccoon_hourly_report] failed to save state: {e}")
 
 
 def filter_dt(df, col, start_dt, end_dt):
@@ -558,7 +558,7 @@ def run_hourly_report():
     df_payin = df_window[df_window["Статус"].map(_conversion_status_norm) == SUCCESS_STATUS].copy()
 
     if df_payin.empty:
-        logger.info(f"[wallet_report] interval empty ({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) -> skip send")
+        logger.info(f"[raccoon_hourly_report] interval empty ({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) -> skip send")
         return None
 
     cur_state = _calc_fingerprint(df_payin, None, header_date)
@@ -566,7 +566,7 @@ def run_hourly_report():
 
     if last_state.get("hash") == cur_state.get("hash"):
         logger.info(
-            f"[wallet_report] no changes since last send "
+            f"[raccoon_hourly_report] no changes since last send "
             f"({start_dt:%d.%m %H:%M}–{end_dt:%H:%M}) hash={cur_state.get('hash', '')[:8]} -> skip report"
         )
         return None
@@ -577,7 +577,7 @@ def run_hourly_report():
     txt = format_report(method_blocks, header_date, end_dt, total_payin)
 
     send_message_sync(txt, chat_id=_hourly_chat_id())
-    logger.info("[wallet_report] Отчёт отправлен")
+    logger.info("[raccoon_hourly_report] Отчёт отправлен")
     _save_last_state(cur_state)
 
     return txt

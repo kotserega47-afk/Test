@@ -395,6 +395,195 @@ def test_hide_true_group_break_no_double_blank_no_trailing_blank() -> None:
     joined = "\n".join(payins)
     assert "\n\n\n" not in joined
     assert not payins or payins[-1] != ""
+    assert payins == ["1) R1 – 1", "", "2) R3 – 3"]
+
+
+def _snapshot_payin_groups_with_hidden_break_row() -> RulesSnapshotV2:
+    """Group A: 2 visible rows + hidden row with group_break_after; Group B: 1 visible row."""
+    meta = MetaInfo(ruleset_version="t", updated_at=_base_dt(), updated_by="t")
+    report_items = [
+        ReportItem(
+            item_key="hourly.payin.a1",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="a1",
+            method_key=None,
+            display_name="А-мобайл 1",
+            sort_order=1,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.a2",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="a2",
+            method_key=None,
+            display_name="А-мобайл 2",
+            sort_order=2,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.a3",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="a3",
+            method_key=None,
+            display_name="А-мобайл hidden",
+            sort_order=3,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.b1",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="b1",
+            method_key=None,
+            display_name="Кибит",
+            sort_order=4,
+            enabled=True,
+        ),
+    ]
+    members = [
+        ReportItemMember(
+            item_key="hourly.payin.a3",
+            member_type="group_break_after",
+            member_key="1",
+            sort_order=1,
+            enabled=True,
+        ),
+    ]
+    return RulesSnapshotV2(meta=meta, report_items=report_items, report_item_members=members)
+
+
+def test_hide_true_payin_group_break_survives_hidden_break_row() -> None:
+    snap = _snapshot_payin_groups_with_hidden_break_row()
+    dto = HourlyDTO(
+        start_dt=_base_dt(),
+        end_dt=_base_dt(),
+        header_date=_base_dt(),
+        payout=[],
+        payin=[
+            HourlyRow(entity_code="a1", title="А-мобайл 1", amount=100.0, comment=""),
+            HourlyRow(entity_code="a2", title="А-мобайл 2", amount=200.0, comment=""),
+            HourlyRow(entity_code="b1", title="Кибит", amount=300.0, comment=""),
+        ],
+    )
+    with patch(
+        "reporters.hourly_render_model.get_job_params", return_value={"hide_inactive_rows": True}
+    ), patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap):
+        rm = build_hourly_render_model(dto)
+    payins = rm.model["payins.items"]
+    assert payins == [
+        "1) А-мобайл 1 – 100",
+        "2) А-мобайл 2 – 200",
+        "",
+        "3) Кибит – 300",
+    ]
+
+
+def _snapshot_payin_empty_middle_segment() -> RulesSnapshotV2:
+    """Group A visible; Group B all zero; Group C visible."""
+    meta = MetaInfo(ruleset_version="t", updated_at=_base_dt(), updated_by="t")
+    report_items = [
+        ReportItem(
+            item_key="hourly.payin.g1",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="g1",
+            method_key=None,
+            display_name="Group A",
+            sort_order=1,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.g2",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="g2",
+            method_key=None,
+            display_name="Group B zero",
+            sort_order=2,
+            enabled=True,
+        ),
+        ReportItem(
+            item_key="hourly.payin.g3",
+            report_key="hourly",
+            section_key="hourly.config_payins",
+            item_type="payin_row",
+            source_key="g3",
+            method_key=None,
+            display_name="Group C",
+            sort_order=3,
+            enabled=True,
+        ),
+    ]
+    members = [
+        ReportItemMember(
+            item_key="hourly.payin.g1",
+            member_type="group_break_after",
+            member_key="1",
+            sort_order=1,
+            enabled=True,
+        ),
+        ReportItemMember(
+            item_key="hourly.payin.g2",
+            member_type="group_break_after",
+            member_key="1",
+            sort_order=1,
+            enabled=True,
+        ),
+    ]
+    return RulesSnapshotV2(meta=meta, report_items=report_items, report_item_members=members)
+
+
+def test_hide_true_payin_skips_empty_middle_segment_without_extra_blank() -> None:
+    snap = _snapshot_payin_empty_middle_segment()
+    dto = HourlyDTO(
+        start_dt=_base_dt(),
+        end_dt=_base_dt(),
+        header_date=_base_dt(),
+        payout=[],
+        payin=[
+            HourlyRow(entity_code="g1", title="Group A", amount=10.0, comment=""),
+            HourlyRow(entity_code="g3", title="Group C", amount=30.0, comment=""),
+        ],
+    )
+    with patch(
+        "reporters.hourly_render_model.get_job_params", return_value={"hide_inactive_rows": True}
+    ), patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap):
+        rm = build_hourly_render_model(dto)
+    payins = rm.model["payins.items"]
+    assert payins == ["1) Group A – 10", "", "2) Group C – 30"]
+    assert "\n\n\n" not in "\n".join(payins)
+
+
+def test_hide_true_payin_group_numbering_continuous_across_segments() -> None:
+    snap = _snapshot_payin_groups_with_hidden_break_row()
+    dto = HourlyDTO(
+        start_dt=_base_dt(),
+        end_dt=_base_dt(),
+        header_date=_base_dt(),
+        payout=[],
+        payin=[
+            HourlyRow(entity_code="a1", title="А-мобайл 1", amount=1.0, comment=""),
+            HourlyRow(entity_code="a2", title="А-мобайл 2", amount=2.0, comment=""),
+            HourlyRow(entity_code="b1", title="Кибит", amount=3.0, comment=""),
+        ],
+    )
+    with patch(
+        "reporters.hourly_render_model.get_job_params", return_value={"hide_inactive_rows": True}
+    ), patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap):
+        rm = build_hourly_render_model(dto)
+    payins = [line for line in rm.model["payins.items"] if line]
+    assert payins[0].startswith("1)")
+    assert payins[1].startswith("2)")
+    assert payins[2].startswith("3)")
 
 
 def test_comment_only_zero_amount_not_active(snap_two_payins: RulesSnapshotV2) -> None:

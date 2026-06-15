@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.4 |
-| **Последнее обновление** | 2026-06-07 |
+| **KB версия** | v1.5 |
+| **Последнее обновление** | 2026-06-15 |
 
 ---
 
@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-13**, **E-OPS-01…E-OPS-04** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-14**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I11 — см. таблицы |
 
 ---
@@ -132,6 +132,7 @@
 | E-CONFIG-11 | 2026-06-02 | Raccoon Wallet Rules V2 flag retired — `RACCOON_WALLET_CONFIG_FROM_RULES_V2` env removed; no alternative runtime mode; Rules V2 is the unconditional config source | CONFIRMED | `raccoon_wallet_config_loader.py`; CONFIG-MIGRATION-PHASE-3B-7 |
 | E-CONFIG-12 | 2026-06-02 | Raccoon Wallet configuration migration completed — Rules V2 is the only supported configuration source; legacy YAML configuration path is retired and must not be reintroduced | CONFIRMED | CONFIG-MIGRATION-RACCOON-WALLET epic; Phases 3A, 3B-1…3B-7 |
 | E-CONFIG-13 | 2026-06-02 | Payout runtime switched to Rules V2 in production — `PAYOUT_CONFIG_FROM_RULES_V2=1` on Railway; prod `rules.xlsx` with `payout_info_rules` / `payout_ignore_phrases` deployed to Dropbox; logs `[payout_config] source=rules_v2`; YAML retained as fallback; rollback via `PAYOUT_CONFIG_FROM_RULES_V2=0` | CONFIRMED | CONFIG-MIGRATION-PHASE-4C; `analyzers/payout_config_loader.py` |
+| E-CONFIG-14 | 2026-06-15 | Legacy `config_manager` `ALLOWED_JOB_PARAMS` whitelist must stay synchronized with Rules V2 job registry — new `job_params` jobs/keys added to rules must be whitelisted in legacy validator or `get_job_params()` fails closed to `{}` and can break hourly gate / other consumers | CONFIRMED | `core/config_manager.py`; incident hourly `no_gate_config`; commit `e4b31fb` |
 | E-TG-ROUTES-01 | 2026-06-03 | Telegram **delivery** destinations migrate via optional Rules V2 sheet `telegram_routes`; Phase 2 = model + validator + index + accessor + ENV↔rules shadow compare only; **no** `send_message` switch; `TELEGRAM_CHAT_ID_EMERGENCY` ENV-only (never business fallback); `access_rules.chat_id` ≠ delivery route | CONFIRMED | `core/rules_v2/*`; `integrations/telegram_routes.py`; Phase 3 = `send_to_route` cutover |
 | E-TG-ROUTES-02 | 2026-06-03 | Phase 3A: first runtime route — `platform_hourly_report` behind `TELEGRAM_ROUTES_FROM_RULES_V2` (default `0`); `send_message_to_route` / `resolve_route_chat_id`; hourly job only; missing/disabled → skip (no emergency) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/tg_commands.py` `run_hourly_job` |
 | E-TG-ROUTES-03 | 2026-06-03 | Phase 3B: second runtime route — `platform_wallet_download_report` / `TELEGRAM_CHAT_ID_WALLET`; `downloader_wallets.run_wallet_cycle` → `send_message_to_route`; same flag; text reports (not files) | CONFIRMED | `integrations/telegram_routes.py`; `integrations/downloader_wallets.py` |
@@ -141,6 +142,8 @@
 | E-OPS-02 | 2026-06-04 | Wallet downloader: explicit Playwright timeouts aligned with `hourly_downloader`; stage logs; timeout → exception → `job_failed` + lock release in `finally` | CONFIRMED | `integrations/downloader_wallets.py` |
 | E-OPS-03 | 2026-06-04 | Job Health Guard v2 rollout: **C1** = observe only (`job_health` in `/status`, `job_health_degraded` events); **C2** planned = ghost_lock_only; **C3** planned = stuck recovery (manual/flag-gated) | CONFIRMED | `core/job_health.py`; `core/job_progress.py`; `tasks.md` JOB-HEALTH-GUARD-V2 |
 | E-OPS-04 | 2026-06-07 | Wallet payout downloader datepicker: navigate calendar to target month (`Previous month` loop) then select `[data-date='YYYY-MM-DD']`; fixes prior-month wrong-date selection | CONFIRMED | `integrations/downloader_wallets.py` `_find_and_pick_date` |
+| E-OPS-05 | 2026-06-11 | Hourly scheduler gate uses bucket-based eligibility (not `minute % interval == 0` only) so delayed cron ticks still fire; gate state exposed in `/status` | CONFIRMED | `scheduler.py`; `core/scheduler_health.py`; commit `f936078` |
+| E-HOURLY-01 | 2026-06-15 | Hourly payins `group_break_after` boundaries are resolved in render model **before** `hide_inactive_rows` filtering; blank line between non-empty segments is presentation-only (no DTO/analyzer change) | CONFIRMED | `reporters/hourly_render_model.py`; `tests/test_hourly_hide_inactive_rows.py` |
 
 ### Security decisions (E-SEC-*)
 
@@ -214,3 +217,5 @@
 | 2026-06-03 | Telegram routes Phase 3D — E-TG-ROUTES-05; Bakai rate routes |
 | 2026-06-04 | Wallet hang mitigation — E-OPS-01…03; Patch A/B + Job Health Guard C1 |
 | 2026-06-07 | WalletEditor auto-enable E-WE-11…13; HOLD E-WE-14; partner mapping E-WE-15; registry UX-A; E-SEC-01; E-OPS-04 wallet datepicker |
+| 2026-06-11 | Hourly gate bucket tolerance — E-OPS-05 (`f936078`) |
+| 2026-06-15 | Hourly incident whitelist fix — E-CONFIG-14 (`e4b31fb`); payin group spacing — E-HOURLY-01 |
