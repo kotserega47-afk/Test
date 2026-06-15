@@ -71,6 +71,9 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
         "telegram_route_report": "str",
         "telegram_route_alert": "str",
     },
+    "conversion": {
+        "valid_status": "str",
+    },
 }
 
 # =============================================================================

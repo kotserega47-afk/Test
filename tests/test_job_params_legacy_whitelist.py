@@ -1,4 +1,4 @@
-"""Legacy job_params whitelist — WalletEditor rows must not break hourly gate."""
+"""Legacy job_params whitelist — extra job rows must not break hourly/raccoon consumers."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -42,12 +42,22 @@ def _job_param_row(
 
 
 def _prod_like_job_params_df() -> pd.DataFrame:
-    """Hourly + wallet jobs plus WalletEditor rows that previously broke the whole sheet."""
+    """Hourly + wallet jobs plus rows that previously broke the whole sheet."""
     rows = [
         _job_param_row("JP-00001", job="hourly", key="intraday_interval_minutes", value_type="int", value=5),
         _job_param_row("JP-00002", job="hourly", key="final_daily_time", value_type="str", value="02:00"),
         _job_param_row("JP-00003", job="wallet", key="window_minutes", value_type="int", value=30),
         _job_param_row("JP-00004", job="raccoon_wallet", key="window_minutes", value_type="int", value=10),
+        _job_param_row("JP-00004a", job="raccoon_wallet", key="offset_minutes", value_type="int", value=2),
+        _job_param_row("JP-00004b", job="raccoon_wallet", key="min_events", value_type="int", value=3),
+        _job_param_row(
+            "JP-00004c",
+            job="raccoon_wallet",
+            key="pending_payin_minutes",
+            value_type="int",
+            value=15,
+        ),
+        _job_param_row("JP-00004d", job="raccoon_wallet", key="payin_days_back", value_type="int", value=7),
         _job_param_row(
             "JP-00005",
             job="wallet_editor",
@@ -78,6 +88,13 @@ def _prod_like_job_params_df() -> pd.DataFrame:
             value_type="int",
             value=50,
         ),
+        _job_param_row(
+            "JP-00011",
+            job="conversion",
+            key="valid_status",
+            value_type="str",
+            value="Готов к работе",
+        ),
     ]
     return pd.DataFrame(rows)
 
@@ -100,6 +117,8 @@ def test_mixed_job_params_sheet_passes_validation_with_wallet_editor_rows() -> N
     assert "hourly" in overrides
     assert "wallet_editor" in overrides
     assert "wallet_editor_auto_enable" in overrides
+    assert "conversion" in overrides
+    assert "raccoon_wallet" in overrides
 
 
 def test_get_job_params_hourly_returns_gate_config_when_wallet_editor_rows_present() -> None:
@@ -111,6 +130,51 @@ def test_get_job_params_hourly_returns_gate_config_when_wallet_editor_rows_prese
 
     assert hourly["intraday_interval_minutes"] == 5
     assert hourly["final_daily_time"] == "02:00"
+
+
+def test_get_job_params_raccoon_wallet_returns_all_scalars_when_conversion_rows_present() -> None:
+    overrides, _ = build_job_params_overrides(_prod_like_job_params_df())
+    raccoon = _resolved_job_params(overrides, "raccoon_wallet")
+
+    with patch("core.config_manager.get_job_params_overrides", return_value=overrides):
+        assert get_job_params(job="raccoon_wallet") == raccoon
+
+    assert raccoon == {
+        "window_minutes": 10,
+        "offset_minutes": 2,
+        "min_events": 3,
+        "pending_payin_minutes": 15,
+        "payin_days_back": 7,
+    }
+
+
+def test_invalid_key_under_conversion_still_fails_validation() -> None:
+    df = _prod_like_job_params_df()
+    df = pd.concat(
+        [
+            df,
+            pd.DataFrame(
+                [
+                    _job_param_row(
+                        "JP-99998",
+                        job="conversion",
+                        key="not_a_valid_key",
+                        value_type="str",
+                        value="foo",
+                    )
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    res = validate_job_params(df)
+    assert res.ok is False
+    assert any("invalid key 'not_a_valid_key' for job 'conversion'" in e for e in res.errors)
+
+    overrides, errs = build_job_params_overrides(df)
+    assert overrides == {}
+    assert errs
 
 
 def test_truly_unknown_job_still_fails_validation() -> None:
