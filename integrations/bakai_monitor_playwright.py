@@ -1,5 +1,6 @@
 # integrations/bakai_monitor_playwright.py
 import os
+import re
 from datetime import datetime, time
 from core.datetime_utils import now_msk
 from playwright.sync_api import sync_playwright
@@ -25,6 +26,10 @@ logger = get_logger(name, icon)
 
 URL = "https://bakai.kg/ru/"
 LAST_RATE_FILE = "/tmp/bakai_last_buy_rate.txt"
+MAX_SCROLL_STEPS = 60
+SCROLL_DELTA_PX = 250
+SCROLL_WAIT_MS = 350
+RATE_FLOAT_PATTERN = re.compile(r"\d+[.,]\d+")
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -118,6 +123,112 @@ def _in_time_window() -> bool:
     return time(8, 0) <= now <= time(23, 55)
 
 
+def normalize_rate_text(text: str) -> str:
+    """Strip NBSP/spaces and normalize decimal separator for rate parsing."""
+    return text.replace("\xa0", "").replace(" ", "").replace(",", ".")
+
+
+def parse_buy_rate_text(buy_text: str) -> float:
+    """Parse buy-rate float from raw cell text."""
+    normalized = normalize_rate_text(buy_text)
+    match = RATE_FLOAT_PATTERN.search(normalized)
+    if not match:
+        raise RuntimeError(f"buy rate parse failed: cannot extract rate from {buy_text!r}")
+    return float(match.group().replace(",", "."))
+
+
+def _find_visible_transfer_select(page):
+    """Scroll until a visible select with option[value=transfer] appears."""
+    operation_select = None
+    last_count = 0
+    for step in range(MAX_SCROLL_STEPS):
+        transfer_selects = page.locator("select:visible").filter(
+            has=page.locator("option[value='transfer']")
+        )
+        last_count = transfer_selects.count()
+        logger.info(
+            "[rate_monitor] scroll step=%s, visible transfer selects=%s",
+            step,
+            last_count,
+        )
+        if last_count > 0:
+            operation_select = transfer_selects.first
+            return operation_select, step, last_count
+        page.mouse.wheel(0, SCROLL_DELTA_PX)
+        page.wait_for_timeout(SCROLL_WAIT_MS)
+    return None, MAX_SCROLL_STEPS, last_count
+
+
+def _find_rub_row(rates_table, rows_count: int):
+    """Locate RUB row inside scoped rates table."""
+    rub_rows = rates_table.locator("tbody tr:has(img[src*='rub'])")
+    if rub_rows.count() > 0:
+        return rub_rows.first
+    if rows_count >= 3:
+        return rates_table.locator("tbody tr").nth(2)
+    raise RuntimeError(
+        f"RUB row not found: rub image row missing and only {rows_count} table rows"
+    )
+
+
+def _extract_rub_buy_rate_from_loaded_page(page) -> float:
+    """Extract RUB buy rate from an already-loaded Bakai page."""
+    operation_select, scroll_steps, visible_count = _find_visible_transfer_select(page)
+    if operation_select is None:
+        raise RuntimeError(
+            f"transfer select not found after {scroll_steps} scroll steps "
+            f"(last visible transfer selects={visible_count})"
+        )
+
+    operation_select.wait_for(state="visible", timeout=15000)
+    logger.info(
+        "[rate_monitor] operation_select enabled=%s",
+        operation_select.is_enabled(),
+    )
+    operation_select.select_option(value="transfer", timeout=15000)
+    page.wait_for_timeout(1500)
+    logger.info("[rate_monitor] Выбран режим Онлайн переводы")
+
+    rates_table = operation_select.locator(
+        "xpath=ancestor::div[contains(@class, 'CurrencyWidget_widget_content')][1]//table"
+    ).first
+    rates_table.wait_for(state="visible", timeout=15000)
+
+    rows = rates_table.locator("tbody tr")
+    rows_count = rows.count()
+    logger.info("[rate_monitor] Найдено строк курсов: %s", rows_count)
+    if rows_count < 2:
+        raise RuntimeError(f"RUB row not found: insufficient table rows ({rows_count})")
+
+    rub_row = _find_rub_row(rates_table, rows_count)
+    row_text = rub_row.inner_text().strip()
+    logger.info("[rate_monitor] Строка RUB: %r", row_text)
+
+    cells = rub_row.locator("th, td")
+    cells_count = cells.count()
+    logger.info("[rate_monitor] Количество ячеек RUB: %s", cells_count)
+    if cells_count < 2:
+        raise RuntimeError(f"RUB row not found: invalid row structure: {row_text!r}")
+
+    buy_text = cells.nth(1).inner_text().strip()
+    logger.info("[rate_monitor] Сырой курс покупки RUB: %r", buy_text)
+
+    buy_rate = parse_buy_rate_text(buy_text)
+    logger.info("[rate_monitor] Курс покупки RUB: %s", buy_rate)
+    return buy_rate
+
+
+def _scrape_rub_buy_rate_from_page(page) -> float:
+    """Scrape RUB buy rate using Platform_2.0 scroll + scoped widget logic."""
+    page.goto(URL, timeout=60000, wait_until="domcontentloaded")
+    page.wait_for_timeout(5000)
+
+    logger.info("[rate_monitor] page url: %s", page.url)
+    logger.info("[rate_monitor] title: %s", page.title())
+
+    return _extract_rub_buy_rate_from_loaded_page(page)
+
+
 # -------------------------- основной мониторинг --------------------------
 
 def check_bakai_rate(chat_id: str | None = None):
@@ -155,32 +266,7 @@ def check_bakai_rate(chat_id: str | None = None):
             """)
 
             page = context.new_page()
-            page.goto(URL, timeout=60000)
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(1500)
-
-            page.select_option("select", value="transfer")
-            page.wait_for_timeout(1200)
-
-            # поиск строки RUB
-            rub_row = None
-            for step in range(7):
-                rows = page.locator("tr:has(img[src*='rub'])")
-                if rows.count() > 0:
-                    rub_row = rows.first
-                    break
-                page.mouse.wheel(0, 700)
-                page.wait_for_timeout(600)
-
-            if rub_row is None:
-                raise RuntimeError("Строка RUB не найдена.")
-
-            cells = rub_row.locator("th,td")
-            if cells.count() < 2:
-                raise RuntimeError("Неверная структура строки RUB.")
-
-            buy_text = cells.nth(1).inner_text().strip()
-            buy_rate = float(buy_text.replace(",", "."))
+            buy_rate = _scrape_rub_buy_rate_from_page(page)
     except Exception as e:
         logger.error(f"[rate_monitor] Ошибка мониторинга: {e}")
 
