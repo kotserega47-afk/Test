@@ -2,6 +2,7 @@
 import os
 import re
 from datetime import datetime, time
+from pathlib import Path
 from core.datetime_utils import now_msk
 from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
@@ -25,7 +26,6 @@ icon, name = LOG_PROFILES["RATE"]
 logger = get_logger(name, icon)
 
 URL = "https://bakai.kg/ru/"
-LAST_RATE_FILE = "/tmp/bakai_last_buy_rate.txt"
 MAX_SCROLL_STEPS = 60
 SCROLL_DELTA_PX = 250
 SCROLL_WAIT_MS = 350
@@ -38,6 +38,18 @@ UA = (
 )
 
 MSK = ZoneInfo("Europe/Moscow")
+
+
+def _state_dir() -> Path:
+    return Path(os.getenv("STATE_DIR", "/data/state"))
+
+
+def _last_rate_file_path() -> Path:
+    return _state_dir() / "bakai" / "last_buy_rate.txt"
+
+
+def _ensure_bakai_state_dir() -> None:
+    (_state_dir() / "bakai").mkdir(parents=True, exist_ok=True)
 
 
 def _legacy_env_chat(env_name: str) -> str | None:
@@ -101,9 +113,10 @@ class RateMonitorError(Exception):
 def _load_rate():
     """Загружает последний сохранённый курс"""
     try:
-        if not os.path.exists(LAST_RATE_FILE):
+        path = _last_rate_file_path()
+        if not path.is_file():
             return None
-        return float(open(LAST_RATE_FILE).read().strip())
+        return float(path.read_text(encoding="utf-8").strip())
     except Exception:
         return None
 
@@ -111,8 +124,8 @@ def _load_rate():
 def _save_rate(v: float):
     """Сохраняет текущий курс"""
     try:
-        with open(LAST_RATE_FILE, "w") as f:
-            f.write(str(v))
+        _ensure_bakai_state_dir()
+        _last_rate_file_path().write_text(str(v), encoding="utf-8")
     except Exception as e:
         logger.error(f"[rate_monitor] Ошибка при сохранении курса: {e}")
 
