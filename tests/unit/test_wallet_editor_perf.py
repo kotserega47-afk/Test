@@ -439,6 +439,66 @@ def test_open_card_submits_search_with_enter():
     card_input.press.assert_called_once_with("Enter")
 
 
+def test_submit_card_filter_normalizes_excel_float_suffix():
+    from automation.engine import _submit_card_filter
+
+    page = MagicMock()
+    card_input = MagicMock()
+    rows = MagicMock()
+    rows.count.return_value = 1
+    page.locator.side_effect = lambda sel: {
+        'input[placeholder="Карта"]': card_input,
+        "tr.pointer": rows,
+    }.get(sel, MagicMock())
+
+    _submit_card_filter(page, "9990110810347534.0")
+
+    card_input.fill.assert_any_call("")
+    card_input.fill.assert_any_call("9990110810347534")
+
+
+def test_submit_card_filter_normalizes_spaces():
+    from automation.engine import _submit_card_filter
+
+    page = MagicMock()
+    card_input = MagicMock()
+    rows = MagicMock()
+    rows.count.return_value = 1
+    page.locator.side_effect = lambda sel: {
+        'input[placeholder="Карта"]': card_input,
+        "tr.pointer": rows,
+    }.get(sel, MagicMock())
+
+    _submit_card_filter(page, "9990 1108 1034 7534")
+
+    card_input.fill.assert_any_call("9990110810347534")
+
+
+def test_submit_card_filter_clean_card_unchanged():
+    from automation.engine import _resolve_search_card
+
+    search, changed = _resolve_search_card("9990110810347534")
+    assert search == "9990110810347534"
+    assert changed is False
+
+
+def test_submit_card_filter_empty_card_raises():
+    from automation.engine import OpenCardStageError, _submit_card_filter
+
+    page = MagicMock()
+    with pytest.raises(OpenCardStageError) as exc_info:
+        _submit_card_filter(page, "")
+    assert exc_info.value.stage == "search_input"
+
+
+def test_submit_card_filter_no_digits_falls_back_to_raw():
+    from automation.engine import _resolve_search_card
+
+    search, changed = _resolve_search_card("abc")
+    assert search == "abc"
+    assert changed is False
+
+
 def test_open_card_does_not_require_apply_button_for_first_search():
     from automation.engine import APPLY_BUTTON, open_card
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError

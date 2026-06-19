@@ -602,14 +602,42 @@ def _verify_modal_card_number(card: str, modal_card_value: str) -> None:
         )
 
 
+def _resolve_search_card(card: str) -> tuple[str, bool]:
+    """Digits-only card string for Antares filter input; fallback or fail if invalid."""
+    raw = (card or "").strip()
+    search = normalize_card_digits(card)
+    if search:
+        return search, search != raw
+    if raw:
+        log.warning(
+            "[Card] search card has no digits; using raw card raw_tail=%s",
+            mask_card(raw),
+        )
+        return raw, False
+    raise OpenCardStageError(
+        "search_input",
+        card or "",
+        message="open_card failed stage=search_input: empty or invalid card number",
+    )
+
+
 def _submit_card_filter(page: Page, card: str) -> None:
+    search_card, normalized_changed = _resolve_search_card(card)
     card_input = page.locator(CARD_INPUT)
     card_input.fill("")
-    card_input.fill(card)
-    log.info("[Card] search input filled card=%s", card)
+    card_input.fill(search_card)
+    log.info(
+        "[Card] search input filled raw_tail=%s search_tail=%s normalized_changed=%s",
+        mask_card(card),
+        mask_card(search_card),
+        normalized_changed,
+    )
 
     card_input.press("Enter")
-    log.info("[Card] search submitted via enter card=%s", card)
+    log.info(
+        "[Card] search submitted via enter search_tail=%s",
+        mask_card(search_card),
+    )
 
     deadline = time.monotonic() + _CARD_SEARCH_ENTER_CHECK_MS / 1000.0
     while time.monotonic() < deadline:
@@ -617,15 +645,18 @@ def _submit_card_filter(page: Page, card: str) -> None:
             return
         page.wait_for_timeout(_ROW_MATCH_POLL_MS)
 
-    log.info("[Card] search fallback apply card=%s", card)
+    log.info(
+        "[Card] search fallback apply search_tail=%s",
+        mask_card(search_card),
+    )
     try:
         page.locator(APPLY_BUTTON).click(
             timeout=_CARD_SEARCH_FALLBACK_CLICK_TIMEOUT_MS,
         )
     except PlaywrightTimeoutError:
         log.info(
-            "[Card] search fallback apply skipped card=%s reason=button unavailable",
-            card,
+            "[Card] search fallback apply skipped search_tail=%s reason=button unavailable",
+            mask_card(search_card),
         )
 
 
@@ -634,7 +665,7 @@ def open_card(page: Page, card: str) -> None:
 
     _close_stale_modal(page)
 
-    log.info(f"🔎 [Card] searching card={card}")
+    log.info("🔎 [Card] searching card raw_tail=%s", mask_card(card))
     _submit_card_filter(page, card)
     page.wait_for_selector(ROW_SELECTOR, timeout=10000)
 
