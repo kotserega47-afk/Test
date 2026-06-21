@@ -22,6 +22,7 @@ from automation.add_wallet_engine import (
     _detect_aggregate_expansion,
     _fill_gender_radio,
     _fill_kyc_checkbox,
+    _find_kyc_checkbox,
     _fill_optional_select_by_label,
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
@@ -562,17 +563,115 @@ def test_fill_kyc_checkbox_checks_when_true():
     modal = MagicMock()
     page.locator.return_value = modal
     checkbox = MagicMock()
-    checkbox.is_checked.return_value = False
-    with patch("automation.add_wallet_engine._find_checkbox_by_exact_label", return_value=checkbox):
+    checkbox.is_checked.side_effect = [False, True]
+    with patch("automation.add_wallet_engine._find_kyc_checkbox", return_value=checkbox):
         _fill_kyc_checkbox(page, "yes")
     checkbox.check.assert_called_once_with(force=True)
 
 
+def test_fill_kyc_checkbox_da_checks_kus_label():
+    page = MagicMock()
+    modal = MagicMock()
+    page.locator.return_value = modal
+    checkbox = MagicMock()
+    checkbox.is_checked.side_effect = [False, True]
+    with patch("automation.add_wallet_engine._find_kyc_checkbox", return_value=checkbox) as mock_find:
+        _fill_kyc_checkbox(page, "да")
+    mock_find.assert_called_once_with(modal)
+    checkbox.check.assert_called_once_with(force=True)
+
+
+def test_fill_kyc_checkbox_skips_when_already_checked():
+    page = MagicMock()
+    modal = MagicMock()
+    page.locator.return_value = modal
+    checkbox = MagicMock()
+    checkbox.is_checked.return_value = True
+    with patch("automation.add_wallet_engine._find_kyc_checkbox", return_value=checkbox):
+        _fill_kyc_checkbox(page, "да")
+    checkbox.check.assert_not_called()
+
+
 def test_fill_kyc_checkbox_skips_false():
     page = MagicMock()
-    with patch("automation.add_wallet_engine._find_checkbox_by_exact_label") as mock_find:
+    with patch("automation.add_wallet_engine._find_kyc_checkbox") as mock_find:
         _fill_kyc_checkbox(page, "no")
     mock_find.assert_not_called()
+
+
+def test_find_kyc_checkbox_matches_kus_label():
+    modal = MagicMock()
+    label_kus = MagicMock()
+    label_kus.inner_text.return_value = "КУС"
+    checkbox = MagicMock()
+    checkbox.count.return_value = 1
+    checkbox.first = MagicMock()
+    label_kus.locator.return_value = checkbox
+
+    labels = MagicMock()
+    labels.count.return_value = 1
+    labels.nth.return_value = label_kus
+    modal.locator.return_value = labels
+
+    with patch("automation.add_wallet_engine._checkbox_for_label", return_value=checkbox):
+        found = _find_kyc_checkbox(modal)
+    assert found is checkbox.first
+
+
+@patch("automation.add_wallet_engine._fill_phase2_top_level_fields")
+@patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
+@patch("automation.add_wallet_engine._fill_multiselect_list")
+@patch("automation.add_wallet_engine._find_select_by_label")
+@patch("automation.add_wallet_engine._find_text_input_by_label")
+def test_fill_add_wallet_form_omitted_fields_not_filled(
+    mock_find_text,
+    mock_find_select,
+    mock_multi,
+    mock_select_agg,
+    mock_phase2,
+):
+    page = MagicMock()
+    field = MagicMock()
+    mock_find_text.return_value = field
+    row = _row()
+
+    fill_add_wallet_form(page, row)
+
+    select_labels = [call.args[1] for call in mock_find_select.call_args_list]
+    assert select_labels == ["Статус"]
+    mock_select_agg.assert_not_called()
+
+
+@patch("automation.add_wallet_engine._fill_phase2_top_level_fields")
+@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
+@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
+@patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
+@patch("automation.add_wallet_engine._fill_multiselect_list")
+@patch("automation.add_wallet_engine._find_select_by_label")
+@patch("automation.add_wallet_engine._find_text_input_by_label")
+def test_fill_add_wallet_form_explicit_fields_still_filled(
+    mock_find_text,
+    mock_find_select,
+    mock_multi,
+    mock_select_agg,
+    mock_wait_fields,
+    mock_fill_modal,
+    mock_phase2,
+):
+    page = MagicMock()
+    modal = MagicMock()
+    page.locator.return_value = modal
+    field = MagicMock()
+    select = MagicMock()
+    mock_find_text.return_value = field
+    mock_find_select.return_value = select
+    row = _row(direction="in", state="enabled", pool="ЧБР", aggregate="ЧБР")
+
+    fill_add_wallet_form(page, row)
+
+    select_labels = [call.args[1] for call in mock_find_select.call_args_list]
+    assert select_labels == ["Направление", "Статус", "Состояние", "Пул"]
+    mock_select_agg.assert_called_once_with(page, "ЧБР")
 
 
 @patch("automation.add_wallet_engine._fill_kyc_checkbox")

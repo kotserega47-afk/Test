@@ -6,9 +6,6 @@ import pandas as pd
 import pytest
 
 from automation.add_wallet_contract import (
-    DEFAULT_DIRECTION,
-    DEFAULT_POOL,
-    DEFAULT_STATE,
     DEFAULT_STATUS,
     ExcelRouting,
     PHASE2_OPTIONAL_COLUMNS,
@@ -39,9 +36,10 @@ def test_accepts_minimal_file(tmp_path):
     assert row.card == "9990110810347534"
     assert row.phone == "79491103311"
     assert row.status == DEFAULT_STATUS
-    assert row.state == DEFAULT_STATE
-    assert row.direction == DEFAULT_DIRECTION
-    assert row.pool == DEFAULT_POOL
+    assert row.state == ""
+    assert row.direction == ""
+    assert row.pool == ""
+    assert row.aggregate == ""
 
 
 def test_rejects_missing_card(tmp_path):
@@ -96,9 +94,10 @@ def test_applies_default_values(tmp_path):
     _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311"}])
     row = prepare_add_wallet_batch(str(path)).rows[0]
     assert row.status == DEFAULT_STATUS
-    assert row.state == DEFAULT_STATE
-    assert row.direction == DEFAULT_DIRECTION
-    assert row.pool == DEFAULT_POOL
+    assert row.state == ""
+    assert row.direction == ""
+    assert row.pool == ""
+    assert row.aggregate == ""
 
 
 def test_invalid_row_empty_card(tmp_path):
@@ -271,3 +270,39 @@ def test_default_status_is_test(tmp_path):
     _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311"}])
     row = prepare_add_wallet_batch(str(path)).rows[0]
     assert row.status == "Тест"
+
+
+def test_omitted_direction_state_pool_remain_empty(tmp_path):
+    path = tmp_path / "minimal.xlsx"
+    _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311"}])
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.direction == ""
+    assert row.state == ""
+    assert row.pool == ""
+
+
+def test_omitted_aggregate_remains_empty(tmp_path):
+    path = tmp_path / "no_agg.xlsx"
+    _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311"}])
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.aggregate == ""
+
+
+def test_explicit_direction_state_pool_preserved(tmp_path):
+    path = tmp_path / "explicit.xlsx"
+    _write_xlsx(
+        path,
+        [
+            {
+                "card": "9990110810347534",
+                "phone": "79491103311",
+                "direction": "in",
+                "state": "enabled",
+                "pool": "ЧБР",
+            }
+        ],
+    )
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.direction == "in"
+    assert row.state == "enabled"
+    assert row.pool == "ЧБР"

@@ -16,9 +16,6 @@ from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
 LOG_PREFIX = "[WalletEditorAdd]"
 
 DEFAULT_STATUS = "Тест"
-DEFAULT_STATE = "enabled"
-DEFAULT_DIRECTION = "in"
-DEFAULT_POOL = "ЧБР"
 
 V1_REQUIRED_COLUMNS = frozenset({"card", "phone"})
 PHASE2_OPTIONAL_COLUMNS = frozenset(
@@ -189,9 +186,9 @@ class AddWalletRow:
     card: str
     phone: str
     status: str = DEFAULT_STATUS
-    state: str = DEFAULT_STATE
-    direction: str = DEFAULT_DIRECTION
-    pool: str = DEFAULT_POOL
+    state: str = ""
+    direction: str = ""
+    pool: str = ""
     partners: str = ""
     groups: str = ""
     aggregate: str = ""
@@ -459,9 +456,9 @@ def prepare_add_wallet_batch(
         seen_cards[card] = row_number
 
         status = _cell_str(row.get("status")) or DEFAULT_STATUS
-        state = _cell_str(row.get("state")) or DEFAULT_STATE
-        direction = _cell_str(row.get("direction")) or DEFAULT_DIRECTION
-        pool = _cell_str(row.get("pool")) or DEFAULT_POOL
+        state = _cell_str(row.get("state"))
+        direction = _cell_str(row.get("direction"))
+        pool = _cell_str(row.get("pool"))
         partners = _split_list_field(_cell_str(row.get("partners")))
         groups = _split_list_field(_cell_str(row.get("groups")))
         aggregates_raw = _cell_str(row.get("aggregates"))

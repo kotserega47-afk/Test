@@ -373,6 +373,7 @@ _GENDER_VALUE_TO_OPTION = {
     "female": "Ж",
 }
 _KYC_TRUE_VALUES = frozenset({"1", "true", "yes", "да", "y", "checked"})
+_KYC_LABELS = ("KYC", "КУС", "Кус")
 
 PHASE2_OPTIONAL_TEXT_FIELDS = (
     ("surname", "Фамилия"),
@@ -481,15 +482,80 @@ def _find_checkbox_by_exact_label(modal, label_text: str):
     return None
 
 
+def _find_kyc_checkbox(modal):
+    for label_text in _KYC_LABELS:
+        checkbox = _find_checkbox_by_exact_label(modal, label_text)
+        if checkbox is not None:
+            return checkbox
+
+    labels = modal.locator("label")
+    for i in range(labels.count()):
+        label_el = labels.nth(i)
+        try:
+            text = label_el.inner_text(timeout=500).strip()
+        except Exception:
+            continue
+        normalized = _normalize_label_text(text)
+        if normalized not in {"kyc", "кус"}:
+            continue
+        checkbox = _checkbox_for_label(label_el)
+        if checkbox.count() > 0:
+            return checkbox.first
+    return None
+
+
 def _fill_kyc_checkbox(page: Page, value: str) -> None:
-    if not value or not is_kyc_true(value):
+    value_repr = (value or "").strip()
+    if not value_repr or not is_kyc_true(value_repr):
         return
+
     modal = page.locator(MODAL_BODY)
-    checkbox = _find_checkbox_by_exact_label(modal, "KYC")
+    checkbox = _find_kyc_checkbox(modal)
     if checkbox is None:
+        _log(
+            "kyc_not_found",
+            extra=f"kyc_value={value_repr!r} kyc_control_found=false",
+        )
         return
-    if not checkbox.is_checked():
-        checkbox.check(force=True)
+
+    try:
+        initial_checked = checkbox.is_checked()
+    except Exception:
+        initial_checked = False
+
+    _log(
+        "kyc_control_found",
+        extra=(
+            f"kyc_value={value_repr!r} kyc_control_found=true "
+            f"kyc_initial_checked={initial_checked}"
+        ),
+    )
+
+    if not initial_checked:
+        try:
+            checkbox.check(force=True)
+        except Exception:
+            try:
+                checkbox.click(force=True)
+            except Exception as exc:
+                _log(
+                    "kyc_not_found",
+                    extra=f"kyc_value={value_repr!r} kyc_check_failed={exc}",
+                )
+                return
+
+    try:
+        checked = checkbox.is_checked()
+    except Exception:
+        checked = True
+
+    _log(
+        "kyc_checked",
+        extra=(
+            f"kyc_value={value_repr!r} kyc_initial_checked={initial_checked} "
+            f"kyc_checked={checked}"
+        ),
+    )
 
 
 def _fill_phase2_top_level_fields(page: Page, row: AddWalletRow) -> None:
