@@ -696,3 +696,107 @@ def test_clear_aggregate_nested_hidden_block_fails(mock_assert_block):
             page,
             _row(cleared_columns=frozenset({"account"}), provided_columns=frozenset()),
         )
+
+
+@patch("automation.edit_wallet_engine.card_exists_strict", return_value=False)
+def test_skip_not_found_emits_pre_search_timing(mock_exists, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    page = MagicMock()
+    result = _process_row(page, _row(card="9999999999990007"), operator_profile="DENIS")
+    assert result.result == RESULT_SKIP_NOT_FOUND
+
+    timing_lines = [r.message for r in caplog.records if "[timing]" in r.message]
+    assert any(
+        "step=pre_search" in line and "outcome=skip" in line and "0007" in line
+        for line in timing_lines
+    )
+    assert any("step=row_total" in line and "outcome=skip" in line for line in timing_lines)
+    assert not any("step=open_card_strict" in line for line in timing_lines)
+    assert not any("step=post_search" in line for line in timing_lines)
+
+
+@patch("automation.edit_wallet_engine.save_add_wallet_modal")
+@patch("automation.edit_wallet_engine.fill_edit_wallet_form")
+@patch("automation.edit_wallet_engine._assert_edit_modal")
+@patch("automation.edit_wallet_engine.open_card_strict")
+@patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, True])
+def test_ok_row_emits_row_timing_steps(
+    mock_exists,
+    mock_open,
+    mock_assert,
+    mock_fill,
+    mock_save,
+    caplog,
+):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    mock_save.return_value = SaveWaitOutcome(status="closed")
+    page = MagicMock()
+    result = _process_row(
+        page,
+        _row(
+            provided_columns=frozenset({"phone", "partners", "groups", "status"}),
+            cleared_columns=frozenset({"kyc"}),
+            phone="79491103311",
+            partners="P1",
+            groups="G1",
+            status="Тест",
+        ),
+        operator_profile="DENIS",
+    )
+    assert result.result == RESULT_OK
+
+    timing_lines = [r.message for r in caplog.records if "[timing]" in r.message]
+    for step in (
+        "pre_search",
+        "open_card_strict",
+        "fill_total",
+        "save_total",
+        "post_search",
+        "row_total",
+    ):
+        assert any(f"step={step}" in line for line in timing_lines), step
+    assert any("step=pre_search" in line and "outcome=ok" in line for line in timing_lines)
+    assert any("step=row_total" in line and "outcome=ok" in line for line in timing_lines)
+
+
+@patch("automation.edit_wallet_engine._clear_field_kyc", return_value=False)
+@patch("automation.edit_wallet_engine._clear_field_multiselect", return_value=False)
+@patch("automation.edit_wallet_engine._set_multiselect_list")
+@patch("automation.edit_wallet_engine._fill_optional_text_by_label")
+@patch("automation.edit_wallet_engine._select_by_label")
+def test_fill_form_emits_field_timing(
+    mock_select,
+    mock_text,
+    mock_set_multiselect,
+    mock_clear_multiselect,
+    mock_clear_kyc,
+    caplog,
+):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(
+            provided_columns=frozenset({"phone", "partners", "groups", "status"}),
+            cleared_columns=frozenset({"partners", "groups", "kyc"}),
+            phone="79491103311",
+            partners="P1",
+            groups="G1",
+            status="Тест",
+        ),
+    )
+
+    timing_lines = [r.message for r in caplog.records if "[timing]" in r.message]
+    for step in ("clear_total", "update_total"):
+        assert any(f"step={step}" in line for line in timing_lines), step
+    for column in ("partners", "groups", "kyc", "phone", "status"):
+        field_step = "field_clear" if column in {"partners", "groups", "kyc"} else "field_update"
+        assert any(
+            f"step={field_step}" in line and f"column={column}" in line for line in timing_lines
+        ), column

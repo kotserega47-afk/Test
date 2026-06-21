@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
@@ -91,6 +92,119 @@ def _log(stage: str, *, card: str | None = None, extra: str = "") -> None:
     tail = f" card_tail={mask_card(card)}" if card else ""
     suffix = f" {extra}" if extra else ""
     log.info(f"{LOG_PREFIX} stage={stage}{tail}{suffix}")
+
+
+def _timing_outcome_for_result(result: str) -> str:
+    if result == RESULT_OK:
+        return "ok"
+    if result == RESULT_SKIP_NOT_FOUND:
+        return "skip"
+    return "fail"
+
+
+def _log_timing_row(
+    row: EditWalletRow,
+    step: str,
+    duration_ms: int,
+    outcome: str,
+    *,
+    column: str | None = None,
+) -> None:
+    try:
+        column_suffix = f" column={column}" if column else ""
+        log.info(
+            f"{LOG_PREFIX}[timing] row={row.row_number} "
+            f"card_tail={mask_card(row.card)} step={step} "
+            f"duration_ms={duration_ms} outcome={outcome}{column_suffix}"
+        )
+    except Exception:
+        pass
+
+
+def _log_timing_batch(step: str, duration_ms: int, outcome: str) -> None:
+    try:
+        log.info(
+            f"{LOG_PREFIX}[timing] batch step={step} "
+            f"duration_ms={duration_ms} outcome={outcome}"
+        )
+    except Exception:
+        pass
+
+
+@contextmanager
+def _row_timing_step(row: EditWalletRow, step: str, *, success_outcome: str = "ok"):
+    start = time.perf_counter()
+    outcome = "fail"
+    try:
+        yield
+        outcome = success_outcome
+    except Exception:
+        outcome = "fail"
+        raise
+    finally:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        _log_timing_row(row, step, duration_ms, outcome)
+
+
+@contextmanager
+def _batch_timing_step(step: str, *, success_outcome: str = "ok"):
+    start = time.perf_counter()
+    outcome = "fail"
+    try:
+        yield
+        outcome = success_outcome
+    except Exception:
+        outcome = "fail"
+        raise
+    finally:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        _log_timing_batch(step, duration_ms, outcome)
+
+
+def _run_timed_field_clear(row: EditWalletRow, column: str, action) -> None:
+    start = time.perf_counter()
+    outcome = "ok"
+    try:
+        if action():
+            outcome = "noop"
+    except Exception:
+        outcome = "fail"
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        _log_timing_row(row, "field_clear", duration_ms, outcome, column=column)
+        raise
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    _log_timing_row(row, "field_clear", duration_ms, outcome, column=column)
+
+
+def _run_timed_field_update(row: EditWalletRow, column: str, action) -> None:
+    start = time.perf_counter()
+    outcome = "ok"
+    try:
+        if action():
+            outcome = "skip"
+    except Exception:
+        outcome = "fail"
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        _log_timing_row(row, "field_update", duration_ms, outcome, column=column)
+        raise
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    _log_timing_row(row, "field_update", duration_ms, outcome, column=column)
+
+
+def _finish_row(
+    row: EditWalletRow,
+    result_item: EditWalletRowResult,
+    *,
+    row_started_at: float,
+) -> EditWalletRowResult:
+    duration_ms = int((time.perf_counter() - row_started_at) * 1000)
+    _log_timing_row(
+        row,
+        "row_total",
+        duration_ms,
+        _timing_outcome_for_result(result_item.result),
+    )
+    return result_item
 
 
 def _try_find_strict_row_index(rows, card_digits: str, card: str) -> int | None:
@@ -392,7 +506,8 @@ def _clear_field_textarea(page, column: str, label: str) -> None:
     _log("field_clear_completed", extra=f"column={column}")
 
 
-def _clear_field_multiselect(page, column: str, label: str) -> None:
+def _clear_field_multiselect(page, column: str, label: str) -> bool:
+    """Clear multiselect; returns True when already empty (noop)."""
     _log("multiselect_clear_started", extra=f"column={column} label={label}")
     try:
         noop = _clear_multiselect_list(page, label, column=column)
@@ -401,12 +516,14 @@ def _clear_field_multiselect(page, column: str, label: str) -> None:
         raise
     if noop:
         _log("field_clear_noop", extra=f"column={column} reason=already_empty")
-        return
+        return True
     _log("multiselect_clear_completed", extra=f"column={column}")
     _log("field_clear_completed", extra=f"column={column}")
+    return False
 
 
-def _clear_field_kyc(page) -> None:
+def _clear_field_kyc(page) -> bool:
+    """Uncheck KYC; returns True when already unchecked (noop)."""
     _log("kyc_uncheck_started")
     try:
         noop = _uncheck_kyc_checkbox(page, log_prefix=LOG_PREFIX)
@@ -416,9 +533,10 @@ def _clear_field_kyc(page) -> None:
     if noop:
         _log("kyc_uncheck_noop", extra="reason=already_unchecked")
         _log("field_clear_noop", extra="column=kyc reason=already_unchecked")
-        return
+        return True
     _log("kyc_uncheck_completed", extra="checked=false")
     _log("field_clear_completed", extra="column=kyc")
+    return False
 
 
 def _clear_edit_wallet_fields(page, row: EditWalletRow) -> None:
@@ -427,74 +545,133 @@ def _clear_edit_wallet_fields(page, row: EditWalletRow) -> None:
         return
 
     if "partners" in cleared:
-        _clear_field_multiselect(page, "partners", "Привязан к партнеру")
+        _run_timed_field_clear(
+            row,
+            "partners",
+            lambda: _clear_field_multiselect(page, "partners", "Привязан к партнеру"),
+        )
 
     if "groups" in cleared:
-        for group_label in ("Группа", "Группы"):
-            try:
-                _clear_field_multiselect(page, "groups", group_label)
-                break
-            except RuntimeError:
-                if group_label == "Группы":
-                    raise
+        def _clear_groups() -> bool:
+            for group_label in ("Группа", "Группы"):
+                try:
+                    return _clear_field_multiselect(page, "groups", group_label)
+                except RuntimeError:
+                    if group_label == "Группы":
+                        raise
+            return False
+
+        _run_timed_field_clear(row, "groups", _clear_groups)
 
     nested_cleared = _provided_aggregate_nested(frozenset(), cleared)
     if nested_cleared:
         _assert_aggregate_block_visible(page)
         modal = page.locator(MODAL_BODY)
         if "account" in cleared:
-            _log("field_clear_started", extra="column=account control=text")
-            _clear_edit_aggregate_field(modal, ("Аккаунт",))
-            _log("field_clear_completed", extra="column=account")
+            def _clear_account() -> bool:
+                _log("field_clear_started", extra="column=account control=text")
+                _clear_edit_aggregate_field(modal, ("Аккаунт",))
+                _log("field_clear_completed", extra="column=account")
+                return False
+
+            _run_timed_field_clear(row, "account", _clear_account)
         if "merchant_id_sbp" in cleared:
-            _log("field_clear_started", extra="column=merchant_id_sbp control=text")
-            _clear_edit_aggregate_field(modal, ("MerchantId СБП",))
-            _log("field_clear_completed", extra="column=merchant_id_sbp")
+            def _clear_merchant_id_sbp() -> bool:
+                _log("field_clear_started", extra="column=merchant_id_sbp control=text")
+                _clear_edit_aggregate_field(modal, ("MerchantId СБП",))
+                _log("field_clear_completed", extra="column=merchant_id_sbp")
+                return False
+
+            _run_timed_field_clear(row, "merchant_id_sbp", _clear_merchant_id_sbp)
         if "account_number" in cleared:
-            _log("field_clear_started", extra="column=account_number control=text")
-            _clear_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS)
-            _log("field_clear_completed", extra="column=account_number")
+            def _clear_account_number() -> bool:
+                _log("field_clear_started", extra="column=account_number control=text")
+                _clear_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS)
+                _log("field_clear_completed", extra="column=account_number")
+                return False
+
+            _run_timed_field_clear(row, "account_number", _clear_account_number)
 
     if "phone" in cleared:
-        _clear_field_text(page, "phone", "Телефон")
+        _run_timed_field_clear(
+            row,
+            "phone",
+            lambda: (_clear_field_text(page, "phone", "Телефон"), False)[1],
+        )
 
     for attr, label in PHASE2_OPTIONAL_TEXT_FIELDS:
         if attr in cleared:
-            _clear_field_text(page, attr, label)
+            _run_timed_field_clear(
+                row,
+                attr,
+                lambda a=attr, lbl=label: (_clear_field_text(page, a, lbl), False)[1],
+            )
 
     for attr, label in PHASE2_OPTIONAL_TEXTAREA_FIELDS:
         if attr in cleared:
-            _clear_field_textarea(page, attr, label)
+            _run_timed_field_clear(
+                row,
+                attr,
+                lambda a=attr, lbl=label: (_clear_field_textarea(page, a, lbl), False)[1],
+            )
 
     if "kyc" in cleared:
-        _clear_field_kyc(page)
+        _run_timed_field_clear(row, "kyc", lambda: _clear_field_kyc(page))
 
 
 def _update_edit_wallet_form(page, row: EditWalletRow) -> None:
     provided = row.provided_columns
 
     if "phone" in provided:
-        _fill_optional_text_by_label(page, "Телефон", row.phone)
+        _run_timed_field_update(
+            row,
+            "phone",
+            lambda: (not row.phone, _fill_optional_text_by_label(page, "Телефон", row.phone))[0],
+        )
     if "status" in provided:
-        _select_by_label(page, "Статус", row.status)
+        _run_timed_field_update(
+            row,
+            "status",
+            lambda: (False, _select_by_label(page, "Статус", row.status))[0],
+        )
     if "state" in provided:
-        _select_by_label(page, "Состояние", row.state)
+        _run_timed_field_update(
+            row,
+            "state",
+            lambda: (False, _select_by_label(page, "Состояние", row.state))[0],
+        )
     if "direction" in provided:
-        _select_by_label(page, "Направление", row.direction)
+        _run_timed_field_update(
+            row,
+            "direction",
+            lambda: (False, _select_by_label(page, "Направление", row.direction))[0],
+        )
     if "pool" in provided:
-        _select_by_label(page, "Пул", row.pool)
+        _run_timed_field_update(
+            row,
+            "pool",
+            lambda: (False, _select_by_label(page, "Пул", row.pool))[0],
+        )
 
     if "partners" in provided:
-        _set_multiselect_list(page, "Привязан к партнеру", row.partners)
+        _run_timed_field_update(
+            row,
+            "partners",
+            lambda: (False, _set_multiselect_list(page, "Привязан к партнеру", row.partners))[0],
+        )
 
     if "groups" in provided:
-        for group_label in ("Группа", "Группы"):
-            try:
-                _set_multiselect_list(page, group_label, row.groups)
-                break
-            except RuntimeError:
-                if group_label == "Группы":
-                    raise
+        def _update_groups() -> bool:
+            for group_label in ("Группа", "Группы"):
+                try:
+                    _set_multiselect_list(page, group_label, row.groups)
+                    return False
+                except RuntimeError:
+                    if group_label == "Группы":
+                        raise
+            return False
+
+        _run_timed_field_update(row, "groups", _update_groups)
 
     expected_aggregate = _expected_aggregate_name(row)
     nested_provided = _provided_aggregate_nested(provided, frozenset())
@@ -507,30 +684,85 @@ def _update_edit_wallet_form(page, row: EditWalletRow) -> None:
     if nested_provided:
         modal = page.locator(MODAL_BODY)
         if "account" in provided:
-            _fill_edit_aggregate_field(modal, ("Аккаунт",), row.account)
+            _run_timed_field_update(
+                row,
+                "account",
+                lambda: (
+                    not row.account,
+                    _fill_edit_aggregate_field(modal, ("Аккаунт",), row.account),
+                )[0],
+            )
         if "merchant_id_sbp" in provided:
-            _fill_edit_aggregate_field(modal, ("MerchantId СБП",), row.merchant_id_sbp)
+            _run_timed_field_update(
+                row,
+                "merchant_id_sbp",
+                lambda: (
+                    not row.merchant_id_sbp,
+                    _fill_edit_aggregate_field(modal, ("MerchantId СБП",), row.merchant_id_sbp),
+                )[0],
+            )
         if "account_number" in provided:
-            _fill_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS, row.account_number)
+            _run_timed_field_update(
+                row,
+                "account_number",
+                lambda: (
+                    not row.account_number,
+                    _fill_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS, row.account_number),
+                )[0],
+            )
 
     for attr, label in PHASE2_OPTIONAL_TEXT_FIELDS:
         if attr in provided:
-            _fill_optional_text_by_label(page, label, getattr(row, attr, ""))
+            value = getattr(row, attr, "")
+            _run_timed_field_update(
+                row,
+                attr,
+                lambda v=value, lbl=label: (
+                    not v,
+                    _fill_optional_text_by_label(page, lbl, v),
+                )[0],
+            )
     for attr, label in PHASE2_OPTIONAL_TEXTAREA_FIELDS:
         if attr in provided:
-            _fill_optional_textarea_by_label(page, label, getattr(row, attr, ""))
+            value = getattr(row, attr, "")
+            _run_timed_field_update(
+                row,
+                attr,
+                lambda v=value, lbl=label: (
+                    not v,
+                    _fill_optional_textarea_by_label(page, lbl, v),
+                )[0],
+            )
     for attr, label in PHASE2_OPTIONAL_SELECT_FIELDS:
         if attr in provided:
-            _fill_optional_select_by_label(page, label, getattr(row, attr, ""))
+            value = getattr(row, attr, "")
+            _run_timed_field_update(
+                row,
+                attr,
+                lambda v=value, lbl=label: (
+                    not v,
+                    _fill_optional_select_by_label(page, lbl, v),
+                )[0],
+            )
     if "gender" in provided:
-        _fill_gender_radio(page, row.gender)
+        _run_timed_field_update(
+            row,
+            "gender",
+            lambda: (not row.gender, _fill_gender_radio(page, row.gender))[0],
+        )
     if "kyc" in provided:
-        _fill_kyc_checkbox(page, row.kyc)
+        _run_timed_field_update(
+            row,
+            "kyc",
+            lambda: (False, _fill_kyc_checkbox(page, row.kyc))[0],
+        )
 
 
 def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
-    _clear_edit_wallet_fields(page, row)
-    _update_edit_wallet_form(page, row)
+    with _row_timing_step(row, "clear_total"):
+        _clear_edit_wallet_fields(page, row)
+    with _row_timing_step(row, "update_total"):
+        _update_edit_wallet_form(page, row)
 
 
 def _process_row(
@@ -539,6 +771,7 @@ def _process_row(
     *,
     operator_profile: str,
 ) -> EditWalletRowResult:
+    row_started_at = time.perf_counter()
     _log("row_started", card=row.card, extra=f"row={row.row_number}")
     _log(
         "row_intents",
@@ -551,95 +784,184 @@ def _process_row(
     )
 
     try:
-        if not card_exists_strict(page, row.card):
-            return make_row_result(
+        pre_search_started = time.perf_counter()
+        pre_search_exists = card_exists_strict(page, row.card)
+        pre_search_outcome = "ok" if pre_search_exists else "skip"
+        _log_timing_row(
+            row,
+            "pre_search",
+            int((time.perf_counter() - pre_search_started) * 1000),
+            pre_search_outcome,
+        )
+        if not pre_search_exists:
+            return _finish_row(
                 row,
-                row_number=row.row_number,
-                result=RESULT_SKIP_NOT_FOUND,
-                comment="карта не найдена в Antares",
-                operator_profile=operator_profile,
+                make_row_result(
+                    row,
+                    row_number=row.row_number,
+                    result=RESULT_SKIP_NOT_FOUND,
+                    comment="карта не найдена в Antares",
+                    operator_profile=operator_profile,
+                ),
+                row_started_at=row_started_at,
             )
 
         try:
-            open_card_strict(page, row.card)
-            _assert_edit_modal(page)
-            _log("modal_opened", card=row.card)
+            with _row_timing_step(row, "open_card_strict"):
+                open_card_strict(page, row.card)
+                _assert_edit_modal(page)
+                _log("modal_opened", card=row.card)
         except (OpenCardStageError, RuntimeError) as exc:
-            return make_row_result(
+            return _finish_row(
                 row,
-                row_number=row.row_number,
-                result=RESULT_FAIL_OPEN_CARD,
-                comment=str(exc),
-                operator_profile=operator_profile,
+                make_row_result(
+                    row,
+                    row_number=row.row_number,
+                    result=RESULT_FAIL_OPEN_CARD,
+                    comment=str(exc),
+                    operator_profile=operator_profile,
+                ),
+                row_started_at=row_started_at,
             )
 
         try:
-            fill_edit_wallet_form(page, row)
+            with _row_timing_step(row, "fill_total"):
+                fill_edit_wallet_form(page, row)
             _log("form_filled", card=row.card)
         except AggregateNotActiveError as exc:
-            return make_row_result(
+            return _finish_row(
                 row,
-                row_number=row.row_number,
-                result=RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
-                comment=str(exc),
-                operator_profile=operator_profile,
+                make_row_result(
+                    row,
+                    row_number=row.row_number,
+                    result=RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
+                    comment=str(exc),
+                    operator_profile=operator_profile,
+                ),
+                row_started_at=row_started_at,
             )
         except Exception as exc:
-            return make_row_result(
+            return _finish_row(
                 row,
-                row_number=row.row_number,
-                result=RESULT_FAIL_FILL,
-                comment=str(exc),
-                operator_profile=operator_profile,
+                make_row_result(
+                    row,
+                    row_number=row.row_number,
+                    result=RESULT_FAIL_FILL,
+                    comment=str(exc),
+                    operator_profile=operator_profile,
+                ),
+                row_started_at=row_started_at,
             )
 
-        _log("save_clicked", card=row.card)
-        save_outcome = save_add_wallet_modal(page)
+        save_total_started = time.perf_counter()
+        save_total_outcome = "ok"
+        try:
+            _log("save_clicked", card=row.card)
+            save_outcome = save_add_wallet_modal(page)
 
-        if save_outcome.status == "validation":
-            return make_row_result(
-                row,
-                row_number=row.row_number,
-                result=RESULT_FAIL_VALIDATION,
-                comment=save_outcome.detail or "validation error",
-                operator_profile=operator_profile,
-            )
-        if save_outcome.status == "timeout":
-            return make_row_result(
-                row,
-                row_number=row.row_number,
-                result=RESULT_FAIL_SAVE_TIMEOUT,
-                comment="modal did not close after save",
-                operator_profile=operator_profile,
-            )
+            if save_outcome.status == "validation":
+                save_total_outcome = "fail"
+                _log_timing_row(
+                    row,
+                    "save_total",
+                    int((time.perf_counter() - save_total_started) * 1000),
+                    save_total_outcome,
+                )
+                return _finish_row(
+                    row,
+                    make_row_result(
+                        row,
+                        row_number=row.row_number,
+                        result=RESULT_FAIL_VALIDATION,
+                        comment=save_outcome.detail or "validation error",
+                        operator_profile=operator_profile,
+                    ),
+                    row_started_at=row_started_at,
+                )
+            if save_outcome.status == "timeout":
+                save_total_outcome = "fail"
+                _log_timing_row(
+                    row,
+                    "save_total",
+                    int((time.perf_counter() - save_total_started) * 1000),
+                    save_total_outcome,
+                )
+                return _finish_row(
+                    row,
+                    make_row_result(
+                        row,
+                        row_number=row.row_number,
+                        result=RESULT_FAIL_SAVE_TIMEOUT,
+                        comment="modal did not close after save",
+                        operator_profile=operator_profile,
+                    ),
+                    row_started_at=row_started_at,
+                )
 
-        _log("modal_closed", card=row.card)
-        _log("post_search", card=row.card)
-        if card_exists_strict(page, row.card):
-            _log("row_result", card=row.card, extra="OK")
-            return make_row_result(
+            _log("modal_closed", card=row.card)
+        except Exception:
+            save_total_outcome = "fail"
+            _log_timing_row(
                 row,
-                row_number=row.row_number,
-                result=RESULT_OK,
-                comment=build_success_comment(row),
-                operator_profile=operator_profile,
+                "save_total",
+                int((time.perf_counter() - save_total_started) * 1000),
+                save_total_outcome,
             )
-
-        return make_row_result(
+            raise
+        _log_timing_row(
             row,
-            row_number=row.row_number,
-            result=RESULT_FAIL_NOT_FOUND,
-            comment="card not found after save",
-            operator_profile=operator_profile,
+            "save_total",
+            int((time.perf_counter() - save_total_started) * 1000),
+            save_total_outcome,
+        )
+
+        post_search_started = time.perf_counter()
+        post_search_exists = card_exists_strict(page, row.card)
+        post_search_outcome = "ok" if post_search_exists else "fail"
+        _log_timing_row(
+            row,
+            "post_search",
+            int((time.perf_counter() - post_search_started) * 1000),
+            post_search_outcome,
+        )
+        _log("post_search", card=row.card)
+        if post_search_exists:
+            _log("row_result", card=row.card, extra="OK")
+            return _finish_row(
+                row,
+                make_row_result(
+                    row,
+                    row_number=row.row_number,
+                    result=RESULT_OK,
+                    comment=build_success_comment(row),
+                    operator_profile=operator_profile,
+                ),
+                row_started_at=row_started_at,
+            )
+
+        return _finish_row(
+            row,
+            make_row_result(
+                row,
+                row_number=row.row_number,
+                result=RESULT_FAIL_NOT_FOUND,
+                comment="card not found after save",
+                operator_profile=operator_profile,
+            ),
+            row_started_at=row_started_at,
         )
     except Exception as exc:
         log.exception(f"{LOG_PREFIX} stage=row_result card_tail={mask_card(row.card)} error={exc}")
-        return make_row_result(
+        return _finish_row(
             row,
-            row_number=row.row_number,
-            result=RESULT_FAIL_TECHNICAL,
-            comment=str(exc),
-            operator_profile=operator_profile,
+            make_row_result(
+                row,
+                row_number=row.row_number,
+                result=RESULT_FAIL_TECHNICAL,
+                comment=str(exc),
+                operator_profile=operator_profile,
+            ),
+            row_started_at=row_started_at,
         )
 
 
@@ -649,72 +971,92 @@ def run(
     *,
     result_file_path: str | None = None,
 ) -> tuple[str, EditWalletBatchSummary]:
-    _log("contract_validated", extra=f"file={file_path}")
-    require_wallet_editor_antares_credentials(cfg)
-    profile = (cfg.operator_profile or "unknown").strip()
+    batch_started_at = time.perf_counter()
+    batch_outcome = "ok"
+    try:
+        with _batch_timing_step("contract_parse"):
+            _log("contract_validated", extra=f"file={file_path}")
+            require_wallet_editor_antares_credentials(cfg)
+            profile = (cfg.operator_profile or "unknown").strip()
 
-    batch = prepare_edit_wallet_batch(file_path)
-    summary = EditWalletBatchSummary()
-    results: list[EditWalletRowResult] = []
+            batch = prepare_edit_wallet_batch(file_path)
+            summary = EditWalletBatchSummary()
+            results: list[EditWalletRowResult] = []
 
-    for invalid in batch.invalid_rows:
-        row_number = invalid.row.row_number if invalid.row else 0
-        item = make_row_result(
-            invalid.row,
-            row_number=row_number,
-            result=invalid.result,
-            comment=invalid.comment,
-            operator_profile=profile,
-        )
-        results.append(item)
-        summary.record(invalid.result)
-
-    if not batch.rows and not results:
-        out_path = result_file_path or os.path.join("/tmp/wallet_editor", "wallet_edit_result_empty.xlsx")
-        write_result_excel(results, out_path)
-        return out_path, summary
-
-    slow_mo = wallet_editor_playwright_slow_mo_ms()
-    _log("batch_summary", extra=f"rows={len(batch.rows)}")
-
-    with sync_playwright() as p:
-        browser = None
-        context = None
-        page = None
-        try:
-            browser = p.chromium.launch(
-                headless=cfg.headless,
-                slow_mo=slow_mo,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            if os.path.exists(cfg.auth_state_path):
-                context = browser.new_context(storage_state=cfg.auth_state_path)
-            else:
-                context = browser.new_context()
-            page = context.new_page()
-            _ensure_logged_in(page, context, cfg)
-            goto_wallet_page(page)
-
-            for row in batch.rows:
-                item = _process_row(page, row, operator_profile=profile)
-                results.append(item)
-                summary.record(item.result)
-                _log(
-                    "row_result",
-                    card=row.card,
-                    extra=f"result={item.result}",
+            for invalid in batch.invalid_rows:
+                row_number = invalid.row.row_number if invalid.row else 0
+                item = make_row_result(
+                    invalid.row,
+                    row_number=row_number,
+                    result=invalid.result,
+                    comment=invalid.comment,
+                    operator_profile=profile,
                 )
-        finally:
-            close_playwright_stack(page=page, context=context, browser=browser)
+                results.append(item)
+                summary.record(invalid.result)
 
-    if result_file_path is None:
-        result_file_path = os.path.join(
-            "/tmp/wallet_editor",
-            f"wallet_edit_result_{profile}.xlsx",
+        if not batch.rows and not results:
+            out_path = result_file_path or os.path.join(
+                "/tmp/wallet_editor",
+                "wallet_edit_result_empty.xlsx",
+            )
+            with _batch_timing_step("result_write"):
+                write_result_excel(results, out_path)
+            return out_path, summary
+
+        slow_mo = wallet_editor_playwright_slow_mo_ms()
+        _log("batch_summary", extra=f"rows={len(batch.rows)}")
+
+        with sync_playwright() as p:
+            browser = None
+            context = None
+            page = None
+            try:
+                with _batch_timing_step("browser_auth"):
+                    browser = p.chromium.launch(
+                        headless=cfg.headless,
+                        slow_mo=slow_mo,
+                        args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    )
+                    if os.path.exists(cfg.auth_state_path):
+                        context = browser.new_context(storage_state=cfg.auth_state_path)
+                    else:
+                        context = browser.new_context()
+                    page = context.new_page()
+                    _ensure_logged_in(page, context, cfg)
+                    goto_wallet_page(page)
+
+                with _batch_timing_step("rows_total"):
+                    for row in batch.rows:
+                        item = _process_row(page, row, operator_profile=profile)
+                        results.append(item)
+                        summary.record(item.result)
+                        _log(
+                            "row_result",
+                            card=row.card,
+                            extra=f"result={item.result}",
+                        )
+            finally:
+                close_playwright_stack(page=page, context=context, browser=browser)
+
+        if result_file_path is None:
+            result_file_path = os.path.join(
+                "/tmp/wallet_editor",
+                f"wallet_edit_result_{profile}.xlsx",
+            )
+        with _batch_timing_step("result_write"):
+            write_result_excel(results, result_file_path)
+        _log(
+            "batch_summary",
+            extra=f"total={summary.total} ok={summary.ok} skip={summary.skip} fail={summary.fail}",
         )
-    write_result_excel(results, result_file_path)
-    _log(
-        "batch_summary",
-        extra=f"total={summary.total} ok={summary.ok} skip={summary.skip} fail={summary.fail}",
-    )
-    return result_file_path, summary
+        return result_file_path, summary
+    except Exception:
+        batch_outcome = "fail"
+        raise
+    finally:
+        _log_timing_batch(
+            "batch_total",
+            int((time.perf_counter() - batch_started_at) * 1000),
+            batch_outcome,
+        )
