@@ -15,17 +15,17 @@ from automation.add_wallet_contract import (
     RESULT_SKIP_DUP_CARD,
 )
 from automation.add_wallet_engine import (
-    ACCOUNT_NUMBER_LABELS,
     SaveWaitOutcome,
+    _detect_aggregate_expansion,
     _process_row,
     card_exists_strict,
     checkbox_label_matches,
     detect_add_wallet_validation_error,
     fill_add_wallet_form,
-    fill_aggregate_block_fields,
-    fill_text_by_label_if_present,
-    get_selected_aggregate_block,
+    fill_aggregate_field_if_present,
+    fill_aggregate_modal_fields,
     select_single_aggregate_checkbox,
+    wait_for_aggregate_fields_visible,
     wait_modal_closed_or_error,
 )
 from automation.audit import row_matches_card_strict
@@ -270,7 +270,7 @@ class _FakeBlock:
         return MagicMock()
 
 
-def test_fill_aggregate_block_fields_nested_values():
+def test_fill_aggregate_modal_fields_nested_values():
     block = _FakeBlock(
         [
             _FakeRow("Карта"),
@@ -285,7 +285,7 @@ def test_fill_aggregate_block_fields_nested_values():
         merchant_id_sbp="mid-7",
         account_number="40817810",
     )
-    fill_aggregate_block_fields(block, row)
+    fill_aggregate_modal_fields(block, row)
 
     assert block.rows[0]._input.values[-1] == row.card
     assert block.rows[1]._input.values[-1] == row.phone
@@ -294,19 +294,42 @@ def test_fill_aggregate_block_fields_nested_values():
     assert block.rows[4]._input.values[-1] == "40817810"
 
 
-def test_fill_aggregate_block_skips_missing_optional_field():
+def test_fill_aggregate_modal_fields_uses_last_duplicate_card():
+    block = _FakeBlock([_FakeRow("Карта"), _FakeRow("Карта"), _FakeRow("Аккаунт")])
+    row = _row(card="9990110810347534")
+    fill_aggregate_modal_fields(block, row)
+    assert block.rows[0]._input.values == []
+    assert block.rows[1]._input.values[-1] == row.card
+
+
+def test_fill_aggregate_modal_skips_missing_optional_field():
     block = _FakeBlock([_FakeRow("Карта"), _FakeRow("Телефон")])
-    fill_aggregate_block_fields(block, _row(account="unused"))
+    fill_aggregate_modal_fields(block, _row(account="unused"))
 
 
-def test_fill_text_by_label_if_present_required_missing_value():
+def test_fill_aggregate_field_if_present_required_missing_value():
     block = _FakeBlock([_FakeRow("Карта")])
     with pytest.raises(RuntimeError, match="требует значение"):
-        fill_text_by_label_if_present(block, ("Карта",), "", required=True)
+        fill_aggregate_field_if_present(block, ("Карта",), "", required=True)
 
 
-@patch("automation.add_wallet_engine.fill_aggregate_block_fields")
-@patch("automation.add_wallet_engine.get_selected_aggregate_block")
+def test_detect_aggregate_expansion_by_unique_label():
+    block = _FakeBlock([_FakeRow("Аккаунт")])
+    assert _detect_aggregate_expansion(block) == "Аккаунт"
+
+
+def test_detect_aggregate_expansion_by_second_card():
+    block = _FakeBlock([_FakeRow("Карта"), _FakeRow("Карта")])
+    assert _detect_aggregate_expansion(block) == "Карта"
+
+
+def test_detect_aggregate_expansion_none():
+    block = _FakeBlock([_FakeRow("Карта")])
+    assert _detect_aggregate_expansion(block) is None
+
+
+@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
+@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
 @patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
 @patch("automation.add_wallet_engine._fill_multiselect_list")
 @patch("automation.add_wallet_engine._select_by_label")
@@ -316,23 +339,23 @@ def test_fill_add_wallet_form_selects_single_aggregate(
     mock_select,
     mock_multi,
     mock_select_agg,
-    mock_block,
-    mock_fill_block,
+    mock_wait_fields,
+    mock_fill_modal,
 ):
     page = MagicMock()
-    block = MagicMock()
-    mock_block.return_value = block
+    modal = MagicMock()
+    page.locator.return_value = modal
     row = _row(aggregate="ЧБР")
 
     fill_add_wallet_form(page, row)
 
     mock_select_agg.assert_called_once_with(page, "ЧБР")
-    mock_block.assert_called_once_with(page, "ЧБР")
-    mock_fill_block.assert_called_once_with(block, row)
+    mock_wait_fields.assert_called_once_with(page, "ЧБР")
+    mock_fill_modal.assert_called_once_with(modal, row)
 
 
-@patch("automation.add_wallet_engine.fill_aggregate_block_fields")
-@patch("automation.add_wallet_engine.get_selected_aggregate_block")
+@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
+@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
 @patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
 @patch("automation.add_wallet_engine._fill_multiselect_list")
 @patch("automation.add_wallet_engine._select_by_label")
@@ -342,8 +365,8 @@ def test_fill_add_wallet_form_tinkoff_aggregate(
     mock_select,
     mock_multi,
     mock_select_agg,
-    mock_block,
-    mock_fill_block,
+    mock_wait_fields,
+    mock_fill_modal,
 ):
     page = MagicMock()
     row = _row(aggregate="Тинькофф АПК")
@@ -389,30 +412,22 @@ def test_select_single_aggregate_unknown_raises():
 
 
 @patch("automation.add_wallet_engine.time.monotonic", side_effect=[0, 0, 10])
-def test_get_selected_aggregate_block_not_visible_raises(mock_mono):
+@patch("automation.add_wallet_engine._detect_aggregate_expansion", return_value=None)
+def test_wait_for_aggregate_fields_not_visible_raises(mock_detect, mock_mono):
     page = MagicMock()
     modal = MagicMock()
     page.locator.return_value = modal
     page.wait_for_timeout = MagicMock()
 
-    label_el = MagicMock()
-    labels = MagicMock()
-    labels.count.return_value = 1
-    labels.nth.return_value = label_el
-    modal.locator.return_value = labels
+    with pytest.raises(RuntimeError, match="aggregate fields not visible"):
+        wait_for_aggregate_fields_visible(page, "ЧБР")
 
-    container = MagicMock()
-    label_el.locator.return_value = container
-    container.count.return_value = 1
 
-    hidden = MagicMock()
-    hidden.count.return_value = 1
-    hidden.first.is_visible.return_value = False
-    container.locator.return_value = hidden
-
-    with patch("automation.add_wallet_engine._find_aggregate_checkbox_label", return_value=label_el):
-        with pytest.raises(RuntimeError, match="aggregate block not visible"):
-            get_selected_aggregate_block(page, "ЧБР")
+@patch("automation.add_wallet_engine.time.monotonic", side_effect=[0, 0])
+@patch("automation.add_wallet_engine._detect_aggregate_expansion", return_value="Аккаунт")
+def test_wait_for_aggregate_fields_visible_success(mock_detect, mock_mono):
+    page = MagicMock()
+    wait_for_aggregate_fields_visible(page, "ЧБР")
 
 
 @patch("automation.add_wallet_engine.save_add_wallet_modal")
@@ -429,11 +444,11 @@ def test_dry_run_does_not_open_modal(mock_exists, mock_assert, mock_open, mock_s
 
 
 @patch("automation.add_wallet_engine.save_add_wallet_modal")
-@patch("automation.add_wallet_engine.fill_add_wallet_form", side_effect=RuntimeError("aggregate block not visible: ЧБР"))
+@patch("automation.add_wallet_engine.fill_add_wallet_form", side_effect=RuntimeError("aggregate fields not visible: ЧБР"))
 @patch("automation.add_wallet_engine.open_add_wallet_modal")
 @patch("automation.add_wallet_engine._assert_create_modal")
 @patch("automation.add_wallet_engine.card_exists_strict", return_value=False)
-def test_missing_aggregate_block_fail_fill(
+def test_missing_aggregate_fields_fail_fill(
     mock_exists,
     mock_assert,
     mock_open,
@@ -444,4 +459,4 @@ def test_missing_aggregate_block_fail_fill(
     cfg = RunConfig(login="u", password="p", dry_run=False)
     result = _process_row(page, _row(aggregate="ЧБР"), cfg=cfg, operator_profile="DENIS")
     assert result.result == RESULT_FAIL_FILL
-    assert "aggregate block not visible" in result.comment
+    assert "aggregate fields not visible" in result.comment

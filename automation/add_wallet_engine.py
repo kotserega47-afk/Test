@@ -65,6 +65,18 @@ ACCOUNT_NUMBER_LABELS = (
     "Номер расчёта",
     "Номер расчета",
 )
+AGGREGATE_VISIBILITY_LABELS = (
+    "Аккаунт",
+    "Карта",
+    "MerchantId СБП",
+    *ACCOUNT_NUMBER_LABELS,
+)
+_AGGREGATE_UNIQUE_VISIBILITY_LABELS = (
+    "Аккаунт",
+    "MerchantId СБП",
+    *ACCOUNT_NUMBER_LABELS,
+)
+_DUPLICATE_TOP_LEVEL_LABELS = frozenset({"Карта", "Телефон"})
 
 
 @dataclass
@@ -194,6 +206,41 @@ def _find_text_input_by_label_in(scope, label_text: str):
             continue
         return inputs.first
     return None
+
+
+def _find_all_text_inputs_by_label_in(scope, label_text: str) -> list:
+    matches = []
+    rows = scope.locator("div.row")
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        try:
+            if not row.is_visible():
+                continue
+        except Exception:
+            continue
+        labels = row.locator("label")
+        if labels.count() == 0:
+            continue
+        try:
+            label = labels.first.inner_text(timeout=1_000).strip()
+        except Exception:
+            continue
+        if not _labels_match(label, label_text):
+            continue
+        inputs = row.locator("input[type='text'], input:not([type='checkbox']):not([type='radio'])")
+        if inputs.count() == 0:
+            continue
+        matches.append(inputs.first)
+    return matches
+
+
+def _find_aggregate_field_input(modal, label_text: str):
+    matches = _find_all_text_inputs_by_label_in(modal, label_text)
+    if not matches:
+        return None
+    if label_text in _DUPLICATE_TOP_LEVEL_LABELS and len(matches) > 1:
+        return matches[-1]
+    return matches[-1]
 
 
 def _find_text_input_by_label(page: Page, label_text: str):
@@ -369,42 +416,54 @@ def select_single_aggregate_checkbox(page: Page, aggregate_name: str) -> None:
         checkbox.first.check(force=True)
 
 
-def get_selected_aggregate_block(page: Page, aggregate_name: str):
+def _detect_aggregate_expansion(modal) -> str | None:
+    for label in _AGGREGATE_UNIQUE_VISIBILITY_LABELS:
+        field = _find_text_input_by_label_in(modal, label)
+        if field is None:
+            continue
+        try:
+            if field.is_visible():
+                return label
+        except Exception:
+            return label
+
+    card_matches = _find_all_text_inputs_by_label_in(modal, "Карта")
+    if len(card_matches) >= 2:
+        try:
+            if card_matches[-1].is_visible():
+                return "Карта"
+        except Exception:
+            return "Карта"
+    return None
+
+
+def wait_for_aggregate_fields_visible(page: Page, aggregate_name: str) -> None:
     modal = page.locator(MODAL_BODY)
-    label_el = _find_aggregate_checkbox_label(modal, aggregate_name)
-    if label_el is None:
-        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
-
-    container = label_el.locator(
-        "xpath=ancestor::div[contains(@class,'form-check') or contains(@class,'custom-control')][1]"
-    )
-    if container.count() == 0:
-        container = label_el.locator("xpath=..")
-
-    block_selectors = (
-        "xpath=following-sibling::div[1]",
-        "xpath=ancestor::div[contains(@class,'form-group')][1]//div[contains(@class,'collapse')]",
-    )
     deadline = time.monotonic() + _AGGREGATE_BLOCK_WAIT_MS / 1000.0
     while time.monotonic() < deadline:
-        for selector in block_selectors:
-            block = container.locator(selector)
-            if block.count() > 0:
-                candidate = block.first
-                try:
-                    if candidate.is_visible():
-                        return candidate
-                except Exception:
-                    continue
+        detected = _detect_aggregate_expansion(modal)
+        if detected:
+            _log(
+                "aggregate_fields_visible",
+                extra=f"aggregate={aggregate_name} label={detected}",
+            )
+            return
         page.wait_for_timeout(_POLL_MS)
-    raise RuntimeError(f"aggregate block not visible: {aggregate_name}")
+    _log("aggregate_fields_not_visible", extra=f"aggregate={aggregate_name}")
+    raise RuntimeError(f"aggregate fields not visible: {aggregate_name}")
 
 
-def fill_text_by_label_if_present(scope, labels: tuple[str, ...], value: str, *, required: bool = False) -> None:
+def fill_aggregate_field_if_present(
+    modal,
+    labels: tuple[str, ...],
+    value: str,
+    *,
+    required: bool = False,
+) -> None:
     field = None
     matched_label: str | None = None
     for label in labels:
-        field = _find_text_input_by_label_in(scope, label)
+        field = _find_aggregate_field_input(modal, label)
         if field is not None:
             matched_label = label
             break
@@ -423,20 +482,24 @@ def fill_text_by_label_if_present(scope, labels: tuple[str, ...], value: str, *,
         raise
 
 
-def fill_aggregate_block_fields(block, row: AddWalletRow) -> None:
-    fill_text_by_label_if_present(block, ("Карта",), row.card, required=True)
-    fill_text_by_label_if_present(block, ("Телефон",), row.phone, required=True)
-    fill_text_by_label_if_present(block, ("Аккаунт",), row.account)
-    fill_text_by_label_if_present(block, ("MerchantId СБП",), row.merchant_id_sbp)
-    fill_text_by_label_if_present(block, ACCOUNT_NUMBER_LABELS, row.account_number)
+def fill_aggregate_modal_fields(modal, row: AddWalletRow) -> None:
+    fill_aggregate_field_if_present(modal, ("Карта",), row.card, required=True)
+    fill_aggregate_field_if_present(modal, ("Телефон",), row.phone, required=True)
+    fill_aggregate_field_if_present(modal, ("Аккаунт",), row.account)
+    fill_aggregate_field_if_present(modal, ("MerchantId СБП",), row.merchant_id_sbp)
+    fill_aggregate_field_if_present(modal, ACCOUNT_NUMBER_LABELS, row.account_number)
 
 
 def _fill_single_aggregate(page: Page, row: AddWalletRow) -> None:
     if not row.aggregate:
         return
     select_single_aggregate_checkbox(page, row.aggregate)
-    block = get_selected_aggregate_block(page, row.aggregate)
-    fill_aggregate_block_fields(block, row)
+    _log("aggregate_selected", extra=f"aggregate={row.aggregate}")
+    wait_for_aggregate_fields_visible(page, row.aggregate)
+    modal = page.locator(MODAL_BODY)
+    _log("aggregate_fill_started", extra=f"aggregate={row.aggregate}")
+    fill_aggregate_modal_fields(modal, row)
+    _log("aggregate_fill_completed", extra=f"aggregate={row.aggregate}")
 
 
 def fill_add_wallet_form(page: Page, row: AddWalletRow) -> None:
