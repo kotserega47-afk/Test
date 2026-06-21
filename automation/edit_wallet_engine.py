@@ -17,6 +17,7 @@ from automation.add_wallet_engine import (
     _detect_aggregate_expansion,
     _fill_gender_radio,
     _fill_kyc_checkbox,
+    _fill_locator_text,
     _find_aggregate_checkbox_label,
     _find_aggregate_field_input,
     _fill_multiselect_list,
@@ -135,8 +136,12 @@ def _fill_edit_aggregate_field(modal, labels: tuple[str, ...], value: str) -> No
     if not visible:
         raise AggregateNotActiveError(f"aggregate field not visible: {matched_label or labels[0]}")
 
-    field.fill("")
-    field.fill(value)
+    _fill_locator_text(
+        field,
+        matched_label or labels[0],
+        value,
+        log_prefix=LOG_PREFIX,
+    )
 
 
 def fill_edit_wallet_form(page, row: EditWalletRow) -> None:

@@ -99,6 +99,47 @@ def _labels_match(actual: str, expected: str) -> bool:
     return _normalize_label_text(actual) == _normalize_label_text(expected)
 
 
+class FieldNotEditableError(Exception):
+    """Raised when a target input/textarea is readonly or disabled."""
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        super().__init__(f"field is readonly/disabled: {label}")
+
+
+def _attribute_is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    normalized = str(value).strip().casefold()
+    return normalized not in {"", "false", "0", "none"}
+
+
+def _is_field_editable(field) -> bool:
+    try:
+        return bool(field.evaluate("el => !el.readOnly && !el.disabled"))
+    except Exception:
+        pass
+    try:
+        readonly = _attribute_is_truthy(field.get_attribute("readonly"))
+        disabled = _attribute_is_truthy(field.get_attribute("disabled"))
+        return not (readonly or disabled)
+    except Exception:
+        return True
+
+
+def _assert_field_editable(field, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
+    if _is_field_editable(field):
+        return
+    log.info(f"{log_prefix} field_not_editable label={label}")
+    raise FieldNotEditableError(label)
+
+
+def _fill_locator_text(field, label: str, value: str, *, log_prefix: str = LOG_PREFIX) -> None:
+    _assert_field_editable(field, label, log_prefix=log_prefix)
+    field.fill("")
+    field.fill(value)
+
+
 def goto_wallet_page(page: Page) -> None:
     page.goto(WALLET_URL)
     page.locator(CARD_INPUT).wait_for(state="visible", timeout=_PAGE_READY_TIMEOUT_MS)
@@ -335,8 +376,7 @@ def _fill_optional_text_by_label(page: Page, label: str, value: str) -> None:
     field = _find_text_input_by_label(page, label)
     if field is None:
         return
-    field.fill("")
-    field.fill(value)
+    _fill_locator_text(field, label, value)
 
 
 def _fill_optional_textarea_by_label(page: Page, label: str, value: str) -> None:
@@ -345,8 +385,7 @@ def _fill_optional_textarea_by_label(page: Page, label: str, value: str) -> None
     field = _find_textarea_by_label(page, label)
     if field is None:
         return
-    field.fill("")
-    field.fill(value)
+    _fill_locator_text(field, label, value)
 
 
 def _fill_optional_select_by_label(page: Page, label: str, value: str) -> None:
@@ -663,8 +702,7 @@ def _fill_text_by_label(page: Page, label: str, value: str) -> None:
     field = _find_text_input_by_label(page, label)
     if field is None:
         raise RuntimeError(f"поле не найдено: {label}")
-    field.fill("")
-    field.fill(value)
+    _fill_locator_text(field, label, value)
 
 
 def _select_by_label(page: Page, label: str, value: str) -> None:
@@ -834,9 +872,11 @@ def fill_aggregate_field_if_present(
         if required:
             raise RuntimeError(f"поле {matched_label} требует значение")
         return
+    label_for_error = matched_label or labels[0]
     try:
-        field.fill("")
-        field.fill(value)
+        _fill_locator_text(field, label_for_error, value)
+    except FieldNotEditableError:
+        raise
     except Exception as exc:
         if required:
             raise RuntimeError(f"не удалось заполнить поле {matched_label}: {exc}") from exc

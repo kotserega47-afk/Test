@@ -16,6 +16,7 @@ from automation.add_wallet_contract import (
 )
 from automation.add_wallet_engine import (
     ADD_WALLET_LOWER_FORM_CONTROL_TYPES,
+    FieldNotEditableError,
     SaveWaitOutcome,
     PHASE2_OPTIONAL_SELECT_FIELDS,
     PHASE2_OPTIONAL_TEXT_FIELDS,
@@ -537,19 +538,62 @@ def test_fill_optional_text_skips_empty_and_missing():
     with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=None):
         _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
     field = MagicMock()
+    field.evaluate.return_value = True
     with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=field):
         _fill_optional_text_by_label(page, "Фамилия", "")
         field.fill.assert_not_called()
+        field.evaluate.assert_not_called()
         _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
-        field.fill.assert_called()
+        assert field.fill.call_count == 2
+
+
+def test_fill_optional_text_readonly_raises_without_fill():
+    page = MagicMock()
+    field = MagicMock()
+    field.evaluate.return_value = False
+    with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=field):
+        with pytest.raises(FieldNotEditableError, match="field is readonly/disabled: Фамилия"):
+            _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
+    field.fill.assert_not_called()
+
+
+def test_fill_optional_text_disabled_raises_without_fill():
+    page = MagicMock()
+    field = MagicMock()
+    field.evaluate.side_effect = RuntimeError("no js")
+    field.get_attribute.side_effect = lambda name: "disabled" if name == "disabled" else None
+    with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=field):
+        with pytest.raises(FieldNotEditableError, match="field is readonly/disabled: Баланс"):
+            _fill_optional_text_by_label(page, "Баланс", "100")
+    field.fill.assert_not_called()
+
+
+def test_fill_optional_text_editable_fills():
+    page = MagicMock()
+    field = MagicMock()
+    field.evaluate.return_value = True
+    with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=field):
+        _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
+    assert field.fill.call_count == 2
+
+
+def test_fill_optional_textarea_readonly_raises():
+    page = MagicMock()
+    field = MagicMock()
+    field.evaluate.return_value = False
+    with patch("automation.add_wallet_engine._find_textarea_by_label", return_value=field):
+        with pytest.raises(FieldNotEditableError):
+            _fill_optional_textarea_by_label(page, "Комментарий", "hello")
+    field.fill.assert_not_called()
 
 
 def test_fill_optional_textarea_fills():
     page = MagicMock()
     field = MagicMock()
+    field.evaluate.return_value = True
     with patch("automation.add_wallet_engine._find_textarea_by_label", return_value=field):
         _fill_optional_textarea_by_label(page, "Комментарий", "hello")
-    field.fill.assert_called()
+    assert field.fill.call_count == 2
 
 
 def test_fill_optional_select_fills():

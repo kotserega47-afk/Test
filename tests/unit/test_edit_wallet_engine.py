@@ -7,6 +7,7 @@ import pytest
 from automation.edit_wallet_contract import (
     EditWalletRow,
     RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
+    RESULT_FAIL_FILL,
     RESULT_FAIL_NOT_FOUND,
     RESULT_FAIL_OPEN_CARD,
     RESULT_FAIL_SAVE_TIMEOUT,
@@ -14,7 +15,7 @@ from automation.edit_wallet_contract import (
     RESULT_OK,
     RESULT_SKIP_NOT_FOUND,
 )
-from automation.add_wallet_engine import SaveWaitOutcome
+from automation.add_wallet_engine import FieldNotEditableError, SaveWaitOutcome
 from automation.edit_wallet_engine import (
     AggregateNotActiveError,
     _process_row,
@@ -258,6 +259,24 @@ def test_account_number_without_visible_block_fails(mock_assert_block, mock_fill
             ),
         )
     mock_fill_field.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine._assert_edit_modal")
+@patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
+def test_readonly_field_returns_fail_fill_form(mock_exists, mock_assert, mock_open):
+    page = MagicMock()
+    with patch(
+        "automation.edit_wallet_engine.fill_edit_wallet_form",
+        side_effect=FieldNotEditableError("Баланс"),
+    ):
+        result = _process_row(
+            page,
+            _row(provided_columns=frozenset({"balance"}), balance="100"),
+            operator_profile="DENIS",
+        )
+    assert result.result == RESULT_FAIL_FILL
+    assert "readonly/disabled" in result.comment
 
 
 @patch("automation.edit_wallet_engine._select_by_label")
