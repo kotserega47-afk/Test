@@ -15,7 +15,10 @@ from automation.add_wallet_contract import (
     RESULT_SKIP_DUP_CARD,
 )
 from automation.add_wallet_engine import (
+    ADD_WALLET_LOWER_FORM_CONTROL_TYPES,
     SaveWaitOutcome,
+    PHASE2_OPTIONAL_SELECT_FIELDS,
+    PHASE2_OPTIONAL_TEXT_FIELDS,
     _detect_aggregate_expansion,
     _fill_gender_radio,
     _fill_kyc_checkbox,
@@ -598,3 +601,22 @@ def test_fill_phase2_top_level_fields(
     mock_select.assert_any_call(page, "Шлюз", "GW")
     mock_gender.assert_called_once_with(page, "M")
     mock_kyc.assert_called_once_with(page, "1")
+
+
+def test_cluster_uses_select_strategy():
+    select_attrs = {attr for attr, _ in PHASE2_OPTIONAL_SELECT_FIELDS}
+    text_attrs = {attr for attr, _ in PHASE2_OPTIONAL_TEXT_FIELDS}
+    assert "cluster" in select_attrs
+    assert "cluster" not in text_attrs
+    assert ADD_WALLET_LOWER_FORM_CONTROL_TYPES["cluster"] == ("Кластер", "select")
+
+
+def test_lower_form_control_types_match_fill_strategies():
+    select_attrs = {attr for attr, _ in PHASE2_OPTIONAL_SELECT_FIELDS}
+    text_attrs = {attr for attr, _ in PHASE2_OPTIONAL_TEXT_FIELDS}
+    for column, (label, control_type) in ADD_WALLET_LOWER_FORM_CONTROL_TYPES.items():
+        if control_type == "select":
+            assert column in select_attrs or column == "pool"
+        elif control_type == "text":
+            assert column in text_attrs
+        assert label

@@ -263,3 +263,11 @@ def test_phase2_row_echoes_input_columns(tmp_path):
     row = prepare_add_wallet_batch(str(path)).rows[0]
     assert row.input_columns["surname"] == "Ivanov"
     assert row.input_columns["login"] == "u1"
+
+
+def test_default_status_is_test(tmp_path):
+    assert DEFAULT_STATUS == "Тест"
+    path = tmp_path / "defaults.xlsx"
+    _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311"}])
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.status == "Тест"

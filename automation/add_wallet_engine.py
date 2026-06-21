@@ -390,7 +390,6 @@ PHASE2_OPTIONAL_TEXT_FIELDS = (
     ("cluster_phone", "Номер телефона внутри кластера"),
     ("cluster_sim_slot", "Номер слота симкарты внутри телефона"),
     ("server_id", "Сервер ID"),
-    ("cluster", "Кластер"),
     ("queue_length", "Длина очереди"),
     ("queue_depth", "Глубина очереди"),
     ("bakai_customer_id", "Bakai customer_id"),
@@ -405,8 +404,22 @@ PHASE2_OPTIONAL_SELECT_FIELDS = (
     ("topup_method", "Метод пополнения"),
     ("role", "Роль"),
     ("ours", "Наш"),
+    ("cluster", "Кластер"),
     ("payout_priority", "Приоритет для выплат"),
 )
+
+# Lower-form control types verified against Antares «Добавление кошелька» modal UI.
+ADD_WALLET_LOWER_FORM_CONTROL_TYPES: dict[str, tuple[str, str]] = {
+    "gateway": ("Шлюз", "select"),
+    "role": ("Роль", "select"),
+    "marker": ("Маркер", "text"),
+    "pool": ("Пул", "select"),
+    "cluster_sim": ("Кластер sim", "text"),
+    "server_id": ("Сервер ID", "text"),
+    "ours": ("Наш", "select"),
+    "cluster": ("Кластер", "select"),
+    "payout_priority": ("Приоритет для выплат", "select"),
+}
 
 
 def normalize_gender_option(value: str) -> str | None:

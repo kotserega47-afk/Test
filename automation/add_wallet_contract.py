@@ -15,7 +15,7 @@ from core.datetime_utils import EXCEL_DATETIME_FORMAT, now_msk
 
 LOG_PREFIX = "[WalletEditorAdd]"
 
-DEFAULT_STATUS = "Готов к работе"
+DEFAULT_STATUS = "Тест"
 DEFAULT_STATE = "enabled"
 DEFAULT_DIRECTION = "in"
 DEFAULT_POOL = "ЧБР"
