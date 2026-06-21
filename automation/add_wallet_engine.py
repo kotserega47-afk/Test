@@ -374,6 +374,18 @@ _GENDER_VALUE_TO_OPTION = {
 }
 _KYC_TRUE_VALUES = frozenset({"1", "true", "yes", "да", "y", "checked"})
 _KYC_LABELS = ("KYC", "КУС", "Кус")
+_KYC_EXACT_LABELS = frozenset(_normalize_label_text(label) for label in _KYC_LABELS)
+_KYC_SEARCH_ANCHOR_LABELS = (
+    "Приоритет для выплат",
+    "Длина очереди",
+    "Глубина очереди",
+    "Bakai customer_id",
+)
+_POST_AGGREGATE_SECTION_LABELS = (
+    "Привязан к партнеру",
+    "Группа",
+    "Группы",
+)
 
 PHASE2_OPTIONAL_TEXT_FIELDS = (
     ("surname", "Фамилия"),
@@ -482,25 +494,101 @@ def _find_checkbox_by_exact_label(modal, label_text: str):
     return None
 
 
-def _find_kyc_checkbox(modal):
-    for label_text in _KYC_LABELS:
-        checkbox = _find_checkbox_by_exact_label(modal, label_text)
-        if checkbox is not None:
-            return checkbox
-
-    labels = modal.locator("label")
+def _row_label_texts(row) -> list[str]:
+    texts: list[str] = []
+    labels = row.locator("label")
     for i in range(labels.count()):
         label_el = labels.nth(i)
         try:
-            text = label_el.inner_text(timeout=500).strip()
+            texts.append(label_el.inner_text(timeout=500).strip())
         except Exception:
             continue
-        normalized = _normalize_label_text(text)
-        if normalized not in {"kyc", "кус"}:
-            continue
-        checkbox = _checkbox_for_label(label_el)
-        if checkbox.count() > 0:
-            return checkbox.first
+    return texts
+
+
+def _row_has_label(row, label_text: str) -> bool:
+    for text in _row_label_texts(row):
+        if _labels_match(text, label_text):
+            return True
+    return False
+
+
+def _is_kyc_label_text(text: str) -> bool:
+    return _normalize_label_text(text) in _KYC_EXACT_LABELS
+
+
+def _find_kyc_search_start_row_index(modal) -> int:
+    rows = modal.locator("div.row")
+    count = rows.count()
+
+    for i in range(count):
+        row = rows.nth(i)
+        for anchor in _KYC_SEARCH_ANCHOR_LABELS:
+            if _row_has_label(row, anchor):
+                return i
+
+    last_post_section = -1
+    for i in range(count):
+        row = rows.nth(i)
+        for section_label in _POST_AGGREGATE_SECTION_LABELS:
+            if _row_has_label(row, section_label):
+                last_post_section = i
+    if last_post_section >= 0:
+        return last_post_section + 1
+
+    return count
+
+
+def _kyc_checkbox_for_label(label_el):
+    checkbox = label_el.locator(
+        "xpath=ancestor::div[contains(@class,'form-check') or contains(@class,'custom-control')]"
+        "[1]//input[@type='checkbox']"
+    )
+    if checkbox.count() > 0:
+        return checkbox.first
+
+    checkbox = label_el.locator("input[type='checkbox']")
+    if checkbox.count() > 0:
+        return checkbox.first
+
+    parent = label_el.locator("xpath=..")
+    checkbox = parent.locator("input[type='checkbox']")
+    if checkbox.count() > 0:
+        return checkbox.first
+
+    checkbox = label_el.locator(
+        "xpath=preceding-sibling::input[@type='checkbox'][1] | "
+        "following-sibling::input[@type='checkbox'][1]"
+    )
+    if checkbox.count() > 0:
+        return checkbox.first
+
+    return None
+
+
+def _find_kyc_checkbox(modal):
+    start_index = _find_kyc_search_start_row_index(modal)
+    rows = modal.locator("div.row")
+    count = rows.count()
+    if start_index >= count:
+        return None
+
+    for preferred in _KYC_LABELS:
+        normalized_preferred = _normalize_label_text(preferred)
+        for i in range(start_index, count):
+            row = rows.nth(i)
+            labels = row.locator("label")
+            for j in range(labels.count()):
+                label_el = labels.nth(j)
+                try:
+                    text = label_el.inner_text(timeout=500).strip()
+                except Exception:
+                    continue
+                if _normalize_label_text(text) != normalized_preferred:
+                    continue
+                checkbox = _kyc_checkbox_for_label(label_el)
+                if checkbox is not None:
+                    return checkbox
     return None
 
 

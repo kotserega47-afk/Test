@@ -23,6 +23,8 @@ from automation.add_wallet_engine import (
     _fill_gender_radio,
     _fill_kyc_checkbox,
     _find_kyc_checkbox,
+    _find_kyc_search_start_row_index,
+    _kyc_checkbox_for_label,
     _fill_optional_select_by_label,
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
@@ -52,6 +54,30 @@ def _row(**kwargs) -> AddWalletRow:
     }
     defaults.update(kwargs)
     return AddWalletRow(**defaults)
+
+
+def _modal_with_label_rows(label_rows: list[list[str]]):
+    row_mocks = []
+    for row_labels in label_rows:
+        label_els = []
+        for text in row_labels:
+            label_el = MagicMock()
+            label_el.inner_text.return_value = text
+            label_els.append(label_el)
+        labels_loc = MagicMock()
+        labels_loc.count.return_value = len(label_els)
+        labels_loc.nth.side_effect = lambda i, els=label_els: els[i]
+        row = MagicMock()
+        row.locator.return_value = labels_loc
+        row_mocks.append(row)
+
+    rows_loc = MagicMock()
+    rows_loc.count.return_value = len(row_mocks)
+    rows_loc.nth.side_effect = lambda i: row_mocks[i]
+
+    modal = MagicMock()
+    modal.locator.return_value = rows_loc
+    return modal, row_mocks
 
 
 def test_row_matches_card_strict_equality_only():
@@ -599,23 +625,130 @@ def test_fill_kyc_checkbox_skips_false():
     mock_find.assert_not_called()
 
 
-def test_find_kyc_checkbox_matches_kus_label():
-    modal = MagicMock()
-    label_kus = MagicMock()
-    label_kus.inner_text.return_value = "КУС"
-    checkbox = MagicMock()
-    checkbox.count.return_value = 1
-    checkbox.first = MagicMock()
-    label_kus.locator.return_value = checkbox
-
-    labels = MagicMock()
-    labels.count.return_value = 1
-    labels.nth.return_value = label_kus
-    modal.locator.return_value = labels
-
-    with patch("automation.add_wallet_engine._checkbox_for_label", return_value=checkbox):
+def test_find_kyc_checkbox_matches_kus_label_in_lower_form():
+    modal, _ = _modal_with_label_rows(
+        [
+            ["ЧБР"],
+            ["Приоритет для выплат"],
+            ["КУС"],
+        ]
+    )
+    kus_checkbox = MagicMock()
+    with patch("automation.add_wallet_engine._kyc_checkbox_for_label", return_value=kus_checkbox):
         found = _find_kyc_checkbox(modal)
-    assert found is checkbox.first
+    assert found is kus_checkbox
+
+
+def test_find_kyc_checkbox_matches_kyc_label():
+    modal, _ = _modal_with_label_rows(
+        [
+            ["ЧБР"],
+            ["Длина очереди"],
+            ["KYC"],
+        ]
+    )
+    kyc_checkbox = MagicMock()
+    with patch("automation.add_wallet_engine._kyc_checkbox_for_label", return_value=kyc_checkbox):
+        found = _find_kyc_checkbox(modal)
+    assert found is kyc_checkbox
+
+
+def test_find_kyc_checkbox_ignores_chbr_when_no_kyc_label():
+    modal, _ = _modal_with_label_rows(
+        [
+            ["ЧБР"],
+            ["Привязан к партнеру"],
+        ]
+    )
+    assert _find_kyc_checkbox(modal) is None
+
+
+def test_find_kyc_checkbox_clicks_only_kyc_when_both_present():
+    modal, row_mocks = _modal_with_label_rows(
+        [
+            ["ЧБР"],
+            ["Приоритет для выплат"],
+            ["KYC"],
+        ]
+    )
+    chbr_label = row_mocks[0].locator.return_value.nth(0)
+    kyc_label = row_mocks[2].locator.return_value.nth(0)
+    chbr_checkbox = MagicMock(name="chbr_checkbox")
+    kyc_checkbox = MagicMock(name="kyc_checkbox")
+
+    def resolve_checkbox(label_el):
+        if label_el is kyc_label:
+            return kyc_checkbox
+        if label_el is chbr_label:
+            return chbr_checkbox
+        return None
+
+    with patch("automation.add_wallet_engine._kyc_checkbox_for_label", side_effect=resolve_checkbox):
+        found = _find_kyc_checkbox(modal)
+    assert found is kyc_checkbox
+
+
+def test_find_kyc_search_start_after_partner_section():
+    modal, _ = _modal_with_label_rows(
+        [
+            ["ЧБР"],
+            ["Привязан к партнеру"],
+            ["KYC"],
+        ]
+    )
+    assert _find_kyc_search_start_row_index(modal) == 2
+
+
+def test_kyc_checkbox_for_label_does_not_use_document_preceding():
+    label_el = MagicMock()
+    empty = MagicMock()
+    empty.count.return_value = 0
+    parent = MagicMock()
+    parent.locator.return_value = empty
+
+    def locator_side_effect(selector):
+        if selector == "xpath=..":
+            return parent
+        return empty
+
+    label_el.locator.side_effect = locator_side_effect
+    assert _kyc_checkbox_for_label(label_el) is None
+    xpath_calls = [call.args[0] for call in label_el.locator.call_args_list if call.args]
+    assert not any("preceding::input" in arg for arg in xpath_calls)
+
+
+@patch("automation.add_wallet_engine._log")
+def test_fill_kyc_checkbox_logs_not_found_without_kyc_label(mock_log):
+    page = MagicMock()
+    modal, _ = _modal_with_label_rows([["ЧБР"], ["Привязан к партнеру"]])
+    page.locator.return_value = modal
+    chbr_checkbox = MagicMock()
+    with patch("automation.add_wallet_engine.select_single_aggregate_checkbox") as mock_agg:
+        _fill_kyc_checkbox(page, "да")
+    mock_agg.assert_not_called()
+    mock_log.assert_any_call("kyc_not_found", extra="kyc_value='да' kyc_control_found=false")
+
+
+@patch("automation.add_wallet_engine._fill_phase2_top_level_fields")
+@patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
+@patch("automation.add_wallet_engine._fill_multiselect_list")
+@patch("automation.add_wallet_engine._find_select_by_label")
+@patch("automation.add_wallet_engine._find_text_input_by_label")
+def test_fill_add_wallet_form_kyc_only_does_not_select_aggregate(
+    mock_find_text,
+    mock_find_select,
+    mock_multi,
+    mock_select_agg,
+    mock_phase2,
+):
+    page = MagicMock()
+    field = MagicMock()
+    mock_find_text.return_value = field
+    row = _row(kyc="да")
+
+    fill_add_wallet_form(page, row)
+
+    mock_select_agg.assert_not_called()
 
 
 @patch("automation.add_wallet_engine._fill_phase2_top_level_fields")
