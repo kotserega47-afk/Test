@@ -17,6 +17,7 @@ from automation.add_wallet_contract import (
     RESULT_SKIP_DUP_FILE,
     AddWalletBatchSummary,
     detect_excel_routing,
+    parse_single_aggregate,
     prepare_add_wallet_batch,
 )
 from automation.audit import normalize_card_digits as audit_normalize
@@ -139,3 +140,73 @@ def test_batch_summary_counts():
     assert summary.skip == 1
     assert summary.fail == 1
     assert "[WalletEditorAdd]" in summary.telegram_summary()
+
+
+def test_aggregate_column_accepted(tmp_path):
+    path = tmp_path / "agg.xlsx"
+    _write_xlsx(
+        path,
+        [
+            {
+                "card": "9990110810347534",
+                "phone": "79491103311",
+                "aggregate": "ЧБР",
+                "account": "acc-1",
+            }
+        ],
+    )
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.aggregate == "ЧБР"
+    assert row.account == "acc-1"
+
+
+def test_aggregates_single_value_backward_compat(tmp_path):
+    path = tmp_path / "legacy.xlsx"
+    _write_xlsx(path, [{"card": "9990110810347534", "phone": "79491103311", "aggregates": "Тинькофф АПК"}])
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.aggregate == "Тинькофф АПК"
+
+
+def test_aggregates_multiple_values_rejected(tmp_path):
+    path = tmp_path / "multi.xlsx"
+    _write_xlsx(
+        path,
+        [{"card": "9990110810347534", "phone": "79491103311", "aggregates": "ЧБР;Тинькофф АПК"}],
+    )
+    batch = prepare_add_wallet_batch(str(path))
+    assert batch.rows == []
+    assert len(batch.invalid_rows) == 1
+    assert batch.invalid_rows[0].result == RESULT_FAIL_INVALID
+    assert "несколько значений" in batch.invalid_rows[0].comment
+
+
+def test_optional_account_fields(tmp_path):
+    path = tmp_path / "opt.xlsx"
+    _write_xlsx(
+        path,
+        [
+            {
+                "card": "9990110810347534",
+                "phone": "79491103311",
+                "aggregate": "ЧБР",
+                "merchant_id_sbp": "mid-42",
+                "account_number": "40817810",
+            }
+        ],
+    )
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.merchant_id_sbp == "mid-42"
+    assert row.account_number == "40817810"
+    assert row.account == ""
+
+
+def test_parse_single_aggregate_prefers_aggregate_column():
+    name, err = parse_single_aggregate(aggregate="ЧБР", aggregates="Тинькофф АПК")
+    assert name == "ЧБР"
+    assert err is None
+
+
+def test_parse_single_aggregate_rejects_multiple():
+    name, err = parse_single_aggregate(aggregates="ЧБР;Тинькофф АПК")
+    assert name is None
+    assert err is not None

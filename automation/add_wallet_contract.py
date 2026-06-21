@@ -23,13 +23,17 @@ DEFAULT_POOL = "ЧБР"
 V1_REQUIRED_COLUMNS = frozenset({"card", "phone"})
 V1_OPTIONAL_COLUMNS = frozenset(
     {
+        "aggregate",
+        "aggregates",
+        "account",
+        "merchant_id_sbp",
+        "account_number",
         "partners",
         "groups",
         "status",
         "state",
         "direction",
         "pool",
-        "aggregates",
     }
 )
 DISABLE_MARKERS = frozenset({"action", "value"})
@@ -76,9 +80,20 @@ _COLUMN_ALIASES = {
     "направление": "direction",
     "pool": "pool",
     "пул": "pool",
+    "aggregate": "aggregate",
+    "агрегат": "aggregate",
     "aggregates": "aggregates",
     "аккаунты": "aggregates",
     "агрегаты": "aggregates",
+    "account": "account",
+    "аккаунт": "account",
+    "merchant_id_sbp": "merchant_id_sbp",
+    "merchantid сбп": "merchant_id_sbp",
+    "account_number": "account_number",
+    "номер счёта": "account_number",
+    "номер счета": "account_number",
+    "номер расчёта": "account_number",
+    "номер расчета": "account_number",
     "action": "action",
     "value": "value",
 }
@@ -101,6 +116,10 @@ class AddWalletRow:
     pool: str = DEFAULT_POOL
     partners: str = ""
     groups: str = ""
+    aggregate: str = ""
+    account: str = ""
+    merchant_id_sbp: str = ""
+    account_number: str = ""
     aggregates: str = ""
     input_columns: dict[str, str] = field(default_factory=dict)
 
@@ -228,6 +247,23 @@ def _split_list_field(raw: str) -> str:
     return ";".join(parts)
 
 
+def parse_single_aggregate(
+    *,
+    aggregate: str = "",
+    aggregates: str = "",
+) -> tuple[str | None, str | None]:
+    """Return (single aggregate name, error comment). error is set when aggregates has >1 value."""
+    name = (aggregate or "").strip()
+    if name:
+        return name, None
+    parts = [p.strip() for p in re.split(r"[;,]", aggregates or "") if p.strip()]
+    if len(parts) > 1:
+        return None, f"aggregates: несколько значений ({len(parts)}), допустимо одно"
+    if len(parts) == 1:
+        return parts[0], None
+    return None, None
+
+
 def _validate_status(value: str) -> str | None:
     if value not in ALLOWED_STATUSES:
         return f"недопустимый status: {value}"
@@ -317,7 +353,30 @@ def prepare_add_wallet_batch(
         pool = _cell_str(row.get("pool")) or DEFAULT_POOL
         partners = _split_list_field(_cell_str(row.get("partners")))
         groups = _split_list_field(_cell_str(row.get("groups")))
-        aggregates = _split_list_field(_cell_str(row.get("aggregates")))
+        aggregates_raw = _cell_str(row.get("aggregates"))
+        aggregate_name, aggregate_error = parse_single_aggregate(
+            aggregate=_cell_str(row.get("aggregate")),
+            aggregates=aggregates_raw,
+        )
+        account = _cell_str(row.get("account"))
+        merchant_id_sbp = _cell_str(row.get("merchant_id_sbp"))
+        account_number = _cell_str(row.get("account_number"))
+
+        if aggregate_error:
+            invalid.append(
+                PreparedAddWalletRow(
+                    AddWalletRow(
+                        row_number=row_number,
+                        card=card,
+                        phone=phone,
+                        aggregates=aggregates_raw,
+                        input_columns=input_columns,
+                    ),
+                    RESULT_FAIL_INVALID,
+                    aggregate_error,
+                )
+            )
+            continue
 
         status_error = _validate_status(status)
         if status_error:
@@ -346,7 +405,11 @@ def prepare_add_wallet_batch(
                 pool=pool,
                 partners=partners,
                 groups=groups,
-                aggregates=aggregates,
+                aggregate=aggregate_name or "",
+                account=account,
+                merchant_id_sbp=merchant_id_sbp,
+                account_number=account_number,
+                aggregates=aggregates_raw,
                 input_columns=input_columns,
             )
         )

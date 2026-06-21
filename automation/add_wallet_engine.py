@@ -56,7 +56,15 @@ _SEARCH_SETTLE_MS = 2_000
 _ROW_READ_TIMEOUT_MS = 500
 _SAVE_WAIT_TIMEOUT_MS = 10_000
 _MODAL_OPEN_TIMEOUT_MS = 10_000
+_AGGREGATE_BLOCK_WAIT_MS = 5_000
 _POLL_MS = 150
+
+ACCOUNT_NUMBER_LABELS = (
+    "Номер счёта",
+    "Номер счета",
+    "Номер расчёта",
+    "Номер расчета",
+)
 
 
 @dataclass
@@ -166,9 +174,8 @@ def _assert_create_modal(page: Page) -> None:
         raise RuntimeError(f"ожидалась модалка «{CREATE_TITLE}», получено: {text!r}")
 
 
-def _find_text_input_by_label(page: Page, label_text: str):
-    modal = page.locator(MODAL_BODY)
-    rows = modal.locator("div.row")
+def _find_text_input_by_label_in(scope, label_text: str):
+    rows = scope.locator("div.row")
     for i in range(rows.count()):
         row = rows.nth(i)
         if not row.is_visible():
@@ -187,6 +194,11 @@ def _find_text_input_by_label(page: Page, label_text: str):
             continue
         return inputs.first
     return None
+
+
+def _find_text_input_by_label(page: Page, label_text: str):
+    modal = page.locator(MODAL_BODY)
+    return _find_text_input_by_label_in(modal, label_text)
 
 
 def _find_select_by_label(page: Page, label_text: str):
@@ -314,39 +326,122 @@ def _fill_multiselect_list(page: Page, label: str, raw: str) -> None:
         _multiselect_add_option(page, multiselect, value)
 
 
-def _fill_aggregates(page: Page, raw: str) -> None:
-    values = [part.strip() for part in (raw or "").split(";") if part.strip()]
-    if not values:
-        return
+def checkbox_label_matches(text: str, aggregate_name: str) -> bool:
+    return _labels_match(text, aggregate_name)
+
+
+def _checkbox_for_label(label_el):
+    checkbox = label_el.locator(
+        "xpath=ancestor::div[contains(@class,'form-check') or contains(@class,'custom-control')]"
+        "//input[@type='checkbox']"
+    )
+    if checkbox.count() == 0:
+        checkbox = label_el.locator("xpath=preceding::input[@type='checkbox'][1]")
+    if checkbox.count() == 0:
+        checkbox = label_el.locator("xpath=following::input[@type='checkbox'][1]")
+    return checkbox
+
+
+def _find_aggregate_checkbox_label(modal, aggregate_name: str):
+    labels = modal.locator("label")
+    for i in range(labels.count()):
+        label_el = labels.nth(i)
+        try:
+            text = label_el.inner_text(timeout=500).strip()
+        except Exception:
+            continue
+        if not checkbox_label_matches(text, aggregate_name):
+            continue
+        if _checkbox_for_label(label_el).count() > 0:
+            return label_el
+    return None
+
+
+def select_single_aggregate_checkbox(page: Page, aggregate_name: str) -> None:
     modal = page.locator(MODAL_BODY)
-    for value in values:
-        matched = False
-        labels = modal.locator("label")
-        for i in range(labels.count()):
-            label_el = labels.nth(i)
-            try:
-                text = label_el.inner_text(timeout=500).strip()
-            except Exception:
-                continue
-            if not _labels_match(text, value) and value.lower() not in text.lower():
-                continue
-            checkbox = label_el.locator("xpath=ancestor::div[contains(@class,'form-check') or contains(@class,'custom-control')]//input[@type='checkbox']")
-            if checkbox.count() == 0:
-                checkbox = label_el.locator("xpath=following::input[@type='checkbox'][1]")
-            if checkbox.count() == 0:
-                continue
-            if not checkbox.first.is_checked():
-                checkbox.first.check(force=True)
-            matched = True
+    label_el = _find_aggregate_checkbox_label(modal, aggregate_name)
+    if label_el is None:
+        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
+    checkbox = _checkbox_for_label(label_el)
+    if checkbox.count() == 0:
+        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
+    if not checkbox.first.is_checked():
+        checkbox.first.check(force=True)
+
+
+def get_selected_aggregate_block(page: Page, aggregate_name: str):
+    modal = page.locator(MODAL_BODY)
+    label_el = _find_aggregate_checkbox_label(modal, aggregate_name)
+    if label_el is None:
+        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
+
+    container = label_el.locator(
+        "xpath=ancestor::div[contains(@class,'form-check') or contains(@class,'custom-control')][1]"
+    )
+    if container.count() == 0:
+        container = label_el.locator("xpath=..")
+
+    block_selectors = (
+        "xpath=following-sibling::div[1]",
+        "xpath=ancestor::div[contains(@class,'form-group')][1]//div[contains(@class,'collapse')]",
+    )
+    deadline = time.monotonic() + _AGGREGATE_BLOCK_WAIT_MS / 1000.0
+    while time.monotonic() < deadline:
+        for selector in block_selectors:
+            block = container.locator(selector)
+            if block.count() > 0:
+                candidate = block.first
+                try:
+                    if candidate.is_visible():
+                        return candidate
+                except Exception:
+                    continue
+        page.wait_for_timeout(_POLL_MS)
+    raise RuntimeError(f"aggregate block not visible: {aggregate_name}")
+
+
+def fill_text_by_label_if_present(scope, labels: tuple[str, ...], value: str, *, required: bool = False) -> None:
+    field = None
+    matched_label: str | None = None
+    for label in labels:
+        field = _find_text_input_by_label_in(scope, label)
+        if field is not None:
+            matched_label = label
             break
-        if not matched:
-            raise RuntimeError(f"checkbox агрегата не найден: {value}")
+    if field is None:
+        return
+    if not value:
+        if required:
+            raise RuntimeError(f"поле {matched_label} требует значение")
+        return
+    try:
+        field.fill("")
+        field.fill(value)
+    except Exception as exc:
+        if required:
+            raise RuntimeError(f"не удалось заполнить поле {matched_label}: {exc}") from exc
+        raise
+
+
+def fill_aggregate_block_fields(block, row: AddWalletRow) -> None:
+    fill_text_by_label_if_present(block, ("Карта",), row.card, required=True)
+    fill_text_by_label_if_present(block, ("Телефон",), row.phone, required=True)
+    fill_text_by_label_if_present(block, ("Аккаунт",), row.account)
+    fill_text_by_label_if_present(block, ("MerchantId СБП",), row.merchant_id_sbp)
+    fill_text_by_label_if_present(block, ACCOUNT_NUMBER_LABELS, row.account_number)
+
+
+def _fill_single_aggregate(page: Page, row: AddWalletRow) -> None:
+    if not row.aggregate:
+        return
+    select_single_aggregate_checkbox(page, row.aggregate)
+    block = get_selected_aggregate_block(page, row.aggregate)
+    fill_aggregate_block_fields(block, row)
 
 
 def fill_add_wallet_form(page: Page, row: AddWalletRow) -> None:
     _fill_text_by_label(page, "Карта", row.card)
     _fill_text_by_label(page, "Телефон", row.phone)
-    _fill_aggregates(page, row.aggregates)
     _select_by_label(page, "Направление", row.direction)
     _select_by_label(page, "Статус", row.status)
     _select_by_label(page, "Состояние", row.state)
@@ -359,6 +454,7 @@ def fill_add_wallet_form(page: Page, row: AddWalletRow) -> None:
             if group_label == "Группы":
                 raise
     _fill_multiselect_list(page, "Привязан к партнеру", row.partners)
+    _fill_single_aggregate(page, row)
 
 
 def detect_add_wallet_validation_error(page: Page) -> str | None:
