@@ -79,7 +79,7 @@ def test_omitted_fields_do_not_call_fillers(mock_select, mock_text):
     mock_text.assert_not_called()
 
 
-@patch("automation.edit_wallet_engine._fill_multiselect_list")
+@patch("automation.edit_wallet_engine._set_multiselect_list")
 @patch("automation.edit_wallet_engine._select_by_label")
 @patch("automation.edit_wallet_engine._fill_optional_text_by_label")
 def test_provided_text_and_select_fields_call_fillers(mock_text, mock_select, mock_multiselect):
@@ -99,8 +99,8 @@ def test_provided_text_and_select_fields_call_fillers(mock_text, mock_select, mo
     assert mock_multiselect.call_count == 2
 
 
-@patch("automation.edit_wallet_engine._fill_multiselect_list")
-def test_partners_groups_add_only(mock_multiselect):
+@patch("automation.edit_wallet_engine._set_multiselect_list")
+def test_partners_groups_use_set_helper(mock_multiselect):
     page = MagicMock()
     fill_edit_wallet_form(
         page,
@@ -110,6 +110,15 @@ def test_partners_groups_add_only(mock_multiselect):
         ),
     )
     mock_multiselect.assert_called_once_with(page, "Привязан к партнеру", "PartnerA;PartnerB")
+
+
+@patch("automation.edit_wallet_engine._set_multiselect_list")
+@patch("automation.edit_wallet_engine._select_by_label")
+def test_empty_partners_column_not_in_provided_skips_multiselect(mock_select, mock_multiselect):
+    page = MagicMock()
+    fill_edit_wallet_form(page, _row(provided_columns=frozenset({"status"}), status="Тест"))
+    mock_multiselect.assert_not_called()
+    mock_select.assert_called_once()
 
 
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")

@@ -896,3 +896,172 @@ def test_lower_form_control_types_match_fill_strategies():
         elif control_type == "text":
             assert column in text_attrs
         assert label
+
+
+def _mock_multiselect_page():
+    page = MagicMock()
+    multiselect = MagicMock()
+    return page, multiselect
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_removes_extra_values(
+    mock_find,
+    mock_labels,
+    mock_remove,
+    mock_add,
+):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.side_effect = [
+        ["Partner A", "Partner B", "Partner C"],
+        ["Partner A", "Partner B", "Partner C"],
+        ["Partner A", "Partner C"],
+        ["Partner A", "Partner C"],
+        ["Partner A", "Partner C"],
+        ["Partner A", "Partner C"],
+    ]
+    mock_remove.return_value = True
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    _set_multiselect_list(page, "Привязан к партнеру", "Partner A;Partner C")
+
+    mock_remove.assert_called_once_with(multiselect, "Partner B")
+    mock_add.assert_not_called()
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_adds_missing_values_only(
+    mock_find,
+    mock_labels,
+    mock_remove,
+    mock_add,
+):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.side_effect = [
+        ["Partner A"],
+        ["Partner A"],
+        ["Partner A"],
+        ["Partner A"],
+        ["Partner A", "Partner C"],
+    ]
+    mock_remove.return_value = True
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    _set_multiselect_list(page, "Привязан к партнеру", "Partner A;Partner C")
+
+    mock_remove.assert_not_called()
+    mock_add.assert_called_once_with(
+        page,
+        multiselect,
+        "Partner C",
+        field_label="Привязан к партнеру",
+    )
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_no_ops_when_already_exact(
+    mock_find,
+    mock_labels,
+    mock_remove,
+    mock_add,
+):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.return_value = ["Partner A", "Partner C"]
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    _set_multiselect_list(page, "Привязан к партнеру", "Partner A;Partner C")
+
+    mock_remove.assert_not_called()
+    mock_add.assert_not_called()
+
+
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_empty_values_no_touch(mock_find):
+    page = MagicMock()
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    _set_multiselect_list(page, "Привязан к партнеру", "")
+
+    mock_find.assert_not_called()
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_unknown_option_raises(mock_find, mock_labels, mock_remove, mock_add):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.side_effect = [[], [], []]
+    mock_remove.return_value = True
+    mock_add.side_effect = RuntimeError("multiselect option not found: Группа=Missing")
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    with pytest.raises(RuntimeError, match="multiselect option not found: Группа=Missing"):
+        _set_multiselect_list(page, "Группа", "Missing")
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_remove_failure_raises(mock_find, mock_labels, mock_remove, mock_add):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.side_effect = [
+        ["Group G1", "Group G2"],
+        ["Group G1", "Group G2"],
+    ]
+    mock_remove.return_value = False
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    with pytest.raises(RuntimeError, match="failed to remove multiselect option: Группа=Group G2"):
+        _set_multiselect_list(page, "Группа", "Group G1")
+
+
+@patch("automation.add_wallet_engine._multiselect_add_option_for_set")
+@patch("automation.add_wallet_engine._multiselect_remove_label")
+@patch("automation.add_wallet_engine._get_selected_multiselect_labels")
+@patch("automation.add_wallet_engine._find_multiselect_by_label")
+def test_set_multiselect_idempotent_on_second_call(
+    mock_find,
+    mock_labels,
+    mock_remove,
+    mock_add,
+):
+    page, multiselect = _mock_multiselect_page()
+    mock_find.return_value = multiselect
+    mock_labels.side_effect = [
+        ["Partner A", "Partner B"],
+        ["Partner A", "Partner B"],
+        ["Partner A"],
+        ["Partner A"],
+        ["Partner A"],
+        ["Partner A"],
+    ]
+    mock_remove.return_value = True
+
+    from automation.add_wallet_engine import _set_multiselect_list
+
+    _set_multiselect_list(page, "Привязан к партнеру", "Partner A")
+    _set_multiselect_list(page, "Привязан к партнеру", "Partner A")
+
+    mock_remove.assert_called_once_with(multiselect, "Partner B")
+    mock_add.assert_not_called()

@@ -20,7 +20,7 @@ from automation.add_wallet_engine import (
     _fill_locator_text,
     _find_aggregate_checkbox_label,
     _find_aggregate_field_input,
-    _fill_multiselect_list,
+    _set_multiselect_list,
     _fill_optional_select_by_label,
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
@@ -159,12 +159,12 @@ def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
         _select_by_label(page, "Пул", row.pool)
 
     if "partners" in provided:
-        _fill_multiselect_list(page, "Привязан к партнеру", row.partners)
+        _set_multiselect_list(page, "Привязан к партнеру", row.partners)
 
     if "groups" in provided:
         for group_label in ("Группа", "Группы"):
             try:
-                _fill_multiselect_list(page, group_label, row.groups)
+                _set_multiselect_list(page, group_label, row.groups)
                 break
             except RuntimeError:
                 if group_label == "Группы":

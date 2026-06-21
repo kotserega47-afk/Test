@@ -772,6 +772,111 @@ def _fill_multiselect_list(page: Page, label: str, raw: str) -> None:
         _multiselect_add_option(page, multiselect, value)
 
 
+def _multiselect_value_matches_chip(chip_text: str, value: str) -> bool:
+    value_norm = (value or "").strip()
+    if not value_norm:
+        return False
+    chip_norm = (chip_text or "").strip()
+    return value_norm.lower() in chip_norm.lower()
+
+
+def _multiselect_value_already_selected(selected: list[str], value: str) -> bool:
+    return any(_multiselect_value_matches_chip(text, value) for text in selected)
+
+
+def _chip_matches_any_desired(chip_text: str, desired_values: list[str]) -> bool:
+    return any(_multiselect_value_matches_chip(chip_text, value) for value in desired_values)
+
+
+def _multiselect_selection_matches_desired(selected: list[str], desired_values: list[str]) -> bool:
+    for value in desired_values:
+        if not _multiselect_value_already_selected(selected, value):
+            return False
+    for chip in selected:
+        if not _chip_matches_any_desired(chip, desired_values):
+            return False
+    return True
+
+
+def _get_selected_multiselect_labels(multiselect) -> list[str]:
+    chips = multiselect.locator(".multiselect__tag")
+    try:
+        chips.first.wait_for(timeout=3_000)
+    except Exception:
+        pass
+
+    result: list[str] = []
+    for i in range(chips.count()):
+        result.append(chips.nth(i).inner_text().strip())
+    return result
+
+
+def _multiselect_remove_label(multiselect, label: str) -> bool:
+    chips = multiselect.locator(".multiselect__tag")
+    for i in range(chips.count()):
+        chip = chips.nth(i)
+        text = chip.inner_text().strip()
+        if _multiselect_value_matches_chip(text, label):
+            chip.locator(".multiselect__tag-icon").click()
+            return True
+    return False
+
+
+def _multiselect_add_option_for_set(
+    page: Page,
+    multiselect,
+    option: str,
+    *,
+    field_label: str,
+) -> None:
+    selected = _get_selected_multiselect_labels(multiselect)
+    if _multiselect_value_already_selected(selected, option):
+        return
+    try:
+        _multiselect_add_option(page, multiselect, option)
+    except RuntimeError as exc:
+        if "опция multiselect не найдена" in str(exc):
+            raise RuntimeError(f"multiselect option not found: {field_label}={option}") from exc
+        raise
+
+
+def _set_multiselect_list(page: Page, label: str, raw: str) -> None:
+    """Set multiselect selection exactly to provided values (remove extras, add missing)."""
+    values = [part.strip() for part in (raw or "").split(";") if part.strip()]
+    if not values:
+        return
+
+    multiselect = _find_multiselect_by_label(page, label)
+    if multiselect is None:
+        raise RuntimeError(f"multiselect не найден: {label}")
+
+    selected = _get_selected_multiselect_labels(multiselect)
+    if _multiselect_selection_matches_desired(selected, values):
+        return
+
+    for _ in range(10):
+        selected = _get_selected_multiselect_labels(multiselect)
+        extras = [chip for chip in selected if not _chip_matches_any_desired(chip, values)]
+        if not extras:
+            break
+        for extra in extras:
+            if not _multiselect_remove_label(multiselect, extra):
+                raise RuntimeError(f"failed to remove multiselect option: {label}={extra}")
+        page.wait_for_timeout(200)
+
+    for value in values:
+        selected = _get_selected_multiselect_labels(multiselect)
+        if _multiselect_value_already_selected(selected, value):
+            continue
+        _multiselect_add_option_for_set(page, multiselect, value, field_label=label)
+
+    final_selected = _get_selected_multiselect_labels(multiselect)
+    if not _multiselect_selection_matches_desired(final_selected, values):
+        raise RuntimeError(
+            f"multiselect final state mismatch: {label} expected={values!r} actual={final_selected!r}"
+        )
+
+
 def checkbox_label_matches(text: str, aggregate_name: str) -> bool:
     return _labels_match(text, aggregate_name)
 
