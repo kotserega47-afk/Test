@@ -101,7 +101,7 @@ def test_auto_enable_enqueued_to_conversion_auto_worker() -> None:
                     enqueue_auto_enable_batch([_candidate()], _settings())
 
     assert len(captured) == 1
-    assert isinstance(captured[0], WalletEditorAutoEnableBatchTask)
+    assert isinstance(captured[0], worker_mod.WalletEditorAutoEnableBatchTask)
     assert captured[0].operator_profile == OPERATOR_PROFILE
     assert worker_mod._profile_workers[OPERATOR_PROFILE].thread is not None
     assert worker_mod._profile_workers[OPERATOR_PROFILE].thread.name == (

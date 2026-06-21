@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 from telegram.ext import CommandHandler, MessageHandler
 
@@ -14,6 +15,7 @@ from integrations.tg_commands import cmd_status, get_handlers
 from automation.runtime import (
     MSG_OPERATOR_INCOMPLETE,
     MSG_OPERATOR_UNMAPPED,
+    WalletEditorAddWalletTask,
     WalletEditorTask,
     normalize_profile_key,
     operator_auth_state_path,
@@ -29,6 +31,32 @@ from integrations.wallet_editor_tg import (
 
 DEFAULT_USER_ID = 123456789
 DEFAULT_PROFILE = "DENIS"
+
+
+def _write_disable_xlsx(path: str | Path) -> None:
+    pd.DataFrame(
+        [{"card": "4111111111111111", "action": "remove_partner", "value": "Ostin"}]
+    ).to_excel(path, index=False)
+
+
+def _mock_disable_xlsx_download(tg_file: AsyncMock) -> None:
+    async def _download(*, custom_path=None, **kwargs):
+        _write_disable_xlsx(custom_path)
+
+    tg_file.download_to_drive = AsyncMock(side_effect=_download)
+
+
+def _write_add_wallet_xlsx(path: str | Path) -> None:
+    pd.DataFrame([{"card": "9990110810347534", "phone": "79491103311"}]).to_excel(
+        path, index=False
+    )
+
+
+def _mock_add_wallet_xlsx_download(tg_file: AsyncMock) -> None:
+    async def _download(*, custom_path=None, **kwargs):
+        _write_add_wallet_xlsx(custom_path)
+
+    tg_file.download_to_drive = AsyncMock(side_effect=_download)
 
 
 def _operator_env(
@@ -153,7 +181,7 @@ def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         with patch.dict(
             "os.environ",
@@ -183,7 +211,7 @@ def test_document_without_file_path_does_not_crash() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
@@ -251,7 +279,7 @@ def test_xlsx_calls_get_file_with_document_file_id() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
@@ -272,7 +300,7 @@ def test_xlsx_document_queues_task() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         allowed = frozenset({update.effective_chat.id})
         with patch.dict("os.environ", _operator_env(), clear=True):
@@ -357,7 +385,7 @@ def test_handler_does_not_call_engine_run_directly() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
@@ -462,7 +490,7 @@ def test_mapped_user_queues_task_with_operator_credentials() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
         env = {
             **_operator_env(user_id=111, profile="DENIS", login="d-login", password="d-pass"),
             "WALLET_EDITOR_ALLOWED_CHAT_IDS": "-1003429793111",
@@ -554,7 +582,7 @@ def test_handler_uses_profile_queue_size_from_add_task() -> None:
         context = MagicMock()
         tg_file = AsyncMock()
         context.bot.get_file = AsyncMock(return_value=tg_file)
-        tg_file.download_to_drive = AsyncMock()
+        _mock_disable_xlsx_download(tg_file)
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
@@ -574,13 +602,69 @@ def test_handler_uses_profile_queue_size_from_add_task() -> None:
     asyncio.run(run())
 
 
+def test_add_wallet_xlsx_routes_to_add_wallet_task() -> None:
+    async def run() -> None:
+        update = _make_document_update(file_name="add_wallet_batch.xlsx")
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+        _mock_add_wallet_xlsx_download(tg_file)
+
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    with patch(
+                        "integrations.wallet_editor_tg.add_add_wallet_task",
+                        return_value=2,
+                    ) as add_add_wallet_task:
+                        await handle_wallet_editor_document(update, context)
+
+        add_task.assert_not_called()
+        add_add_wallet_task.assert_called_once()
+        task = add_add_wallet_task.call_args.args[0]
+        assert isinstance(task, WalletEditorAddWalletTask)
+        assert task.operator_profile == DEFAULT_PROFILE
+        texts = [c.args[0] for c in update.message.reply_text.await_args_list]
+        assert any("Add Wallet" in t for t in texts)
+
+    asyncio.run(run())
+
+
+def test_ambiguous_xlsx_rejected_without_queueing() -> None:
+    async def run() -> None:
+        update = _make_document_update(file_name="unknown.xlsx")
+        context = MagicMock()
+        tg_file = AsyncMock()
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+
+        async def _download(*, custom_path=None, **kwargs):
+            pd.DataFrame([{"card": "4111111111111111"}]).to_excel(custom_path, index=False)
+
+        tg_file.download_to_drive = AsyncMock(side_effect=_download)
+
+        with patch.dict("os.environ", _operator_env(), clear=True):
+            with patch(
+                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                return_value=True,
+            ):
+                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                    with patch("integrations.wallet_editor_tg.add_add_wallet_task") as add_add:
+                        await handle_wallet_editor_document(update, context)
+
+        add_task.assert_not_called()
+        add_add.assert_not_called()
+        texts = [c.args[0] for c in update.message.reply_text.await_args_list]
+        assert any("Не удалось определить тип Excel" in t for t in texts)
+
+    asyncio.run(run())
+
+
 def test_import_safe_without_operator_map() -> None:
     with patch.dict("os.environ", {}, clear=True):
-        import importlib
-        import automation.runtime as runtime_mod
-
-        importlib.reload(runtime_mod)
-        assert runtime_mod.parse_operator_map() == {}
-        creds, msg = runtime_mod.resolve_operator_for_user(123)
+        assert parse_operator_map() == {}
+        creds, msg = resolve_operator_for_user(123)
         assert creds is None
         assert msg == MSG_OPERATOR_UNMAPPED

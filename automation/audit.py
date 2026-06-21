@@ -78,6 +78,23 @@ def row_matches_card(row_text: str, card_digits: str) -> bool:
     )
 
 
+def row_matches_card_strict(row_text: str, card_digits: str) -> bool:
+    """Exact digit-sequence equality in row — for Add Wallet search (no substring matching)."""
+    if not card_digits:
+        return False
+    normalized_card = normalize_card_digits(card_digits)
+    if not normalized_card:
+        return False
+    text = str(row_text or "").replace("\u00a0", " ")
+    for match in re.finditer(r"\d+", text):
+        if normalize_card_digits(match.group(0)) == normalized_card:
+            return True
+    row_digits = normalize_card_digits(text)
+    if row_digits == normalized_card:
+        return True
+    return False
+
+
 def shorten_for_log(text: str, *, max_len: int = 80) -> str:
     cleaned = re.sub(r"\s+", " ", (text or "").replace("\u00a0", " ")).strip()
     if len(cleaned) <= max_len:

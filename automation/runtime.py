@@ -32,6 +32,8 @@ WALLET_EDITOR_RESULT_DIR = "/tmp/wallet_editor"
 CONVERSION_AUTO_PROFILE = "CONVERSION_AUTO"
 MAX_INPUT_NAME_LEN = 80
 RESULT_NAME_PREFIX = "wallet_editor_result_"
+ADD_WALLET_RESULT_PREFIX = "wallet_add_result_"
+_WALLET_EDITOR_ADD_WALLET_DRY_RUN_ENV = "WALLET_EDITOR_ADD_WALLET_DRY_RUN"
 
 MSG_OPERATOR_UNMAPPED = "⛔ Для вашего Telegram user_id не настроен профиль WalletEditor."
 MSG_OPERATOR_INCOMPLETE = (
@@ -284,6 +286,51 @@ class WalletEditorTask:
     auth_state_path: str
     run_id: str = field(default_factory=lambda: uuid4().hex)
     queued_at: float = field(default_factory=time.perf_counter)
+
+
+@dataclass(frozen=True)
+class WalletEditorAddWalletTask:
+    file_path: str
+    original_filename: str
+    operator_profile: str
+    chat_id: int
+    user_id: int
+    login: str
+    password: str
+    auth_state_path: str
+    dry_run: bool = False
+    created_at: float = field(default_factory=time.perf_counter)
+    queued_at: float = field(default_factory=time.perf_counter)
+
+
+def wallet_editor_add_wallet_dry_run_enabled() -> bool:
+    raw = os.getenv(_WALLET_EDITOR_ADD_WALLET_DRY_RUN_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def build_add_wallet_result_path(
+    source_file_name: str,
+    operator_profile: str,
+    *,
+    base_dir: str = WALLET_EDITOR_RESULT_DIR,
+) -> str:
+    input_name = sanitize_input_name(source_file_name)
+    operator = normalize_profile_key(operator_profile) or "UNKNOWN"
+    file_name = f"{ADD_WALLET_RESULT_PREFIX}{input_name}_{operator}.xlsx"
+    directory = Path(base_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / file_name
+
+    if not path.exists():
+        return str(path)
+
+    stem = path.stem
+    for suffix in range(2, 100):
+        candidate = directory / f"{stem}_{suffix}.xlsx"
+        if not candidate.exists():
+            return str(candidate)
+
+    return str(directory / f"{stem}_{uuid4().hex[:8]}.xlsx")
 
 
 def resolve_operator_for_user(telegram_user_id: int) -> tuple[OperatorCredentials | None, str | None]:
