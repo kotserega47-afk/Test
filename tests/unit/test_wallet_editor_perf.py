@@ -331,9 +331,9 @@ def test_open_card_logs_modal_stages(caplog):
                 open_card(page, "9990080818592862")
 
     text = caplog.text
-    assert "[Card] row clicked card=9990080818592862" in text
-    assert "[Card] modal container visible card=9990080818592862" in text
-    assert "[Card] modal card verified card=9990080818592862" in text
+    assert "[Card] row_clicked card=9990080818592862" in text
+    assert "[Card] modal_container_visible card=9990080818592862" in text
+    assert "[Card] modal_card_verified card=9990080818592862" in text
 
 
 def test_open_card_waits_for_modal_data_before_verify():

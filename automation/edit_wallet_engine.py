@@ -38,7 +38,7 @@ from automation.add_wallet_engine import (
     save_add_wallet_modal,
 )
 from automation.add_wallet_engine import ACCOUNT_NUMBER_LABELS
-from automation.audit import log, mask_card, normalize_card_digits, row_matches_card_strict
+from automation.audit import log, mask_card
 from automation.edit_wallet_contract import (
     LOG_PREFIX,
     RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
@@ -59,29 +59,24 @@ from automation.edit_wallet_contract import (
     build_success_comment,
 )
 from automation.engine import (
-    CARD_INPUT,
-    ROW_SELECTOR,
     OpenCardStageError,
     _close_stale_modal,
-    _read_row_text,
-    _resolve_search_card,
-    _submit_card_filter,
-    _verify_modal_card_number,
-    _wait_modal_card_data_ready,
-    _wait_modal_container_visible,
-    _ROW_MATCH_POLL_MS,
+    _wait_for_strict_matching_row,
+    open_card_with_row_matcher,
 )
 from automation.add_wallet_engine import _ensure_logged_in
 from automation.runtime import (
     RunConfig,
     require_wallet_editor_antares_credentials,
     wallet_editor_playwright_slow_mo_ms,
-    wallet_editor_row_match_timeout_ms,
 )
 from core.playwright_cleanup import close_playwright_stack
 
 EDIT_TITLE = "Изменение кошелька"
 AGGREGATE_NESTED_COLUMNS = frozenset({"account", "merchant_id_sbp", "account_number"})
+
+_OPEN_CARD_STRICT_ATTEMPTS = 3
+_OPEN_CARD_STRICT_RETRY_STAGES = frozenset({"modal_container", "modal_data", "card_verify"})
 
 
 class AggregateNotActiveError(Exception):
@@ -207,171 +202,42 @@ def _finish_row(
     return result_item
 
 
-def _try_find_strict_row_index(rows, card_digits: str, card: str) -> int | None:
-    for i in range(rows.count()):
-        row_text = _read_row_text(rows.nth(i), row_index=i, card=card)
-        if row_text is None:
-            continue
-        if row_matches_card_strict(row_text, card_digits):
-            return i
-    return None
-
-
-def _wait_for_visible_strict_row(page, card: str, card_digits: str) -> int:
-    rows = page.locator(ROW_SELECTOR)
-    timeout_ms = wallet_editor_row_match_timeout_ms()
-
-    if timeout_ms <= 0:
-        match_index = _try_find_strict_row_index(rows, card_digits, card)
-        if match_index is not None:
-            return match_index
-        raise OpenCardStageError(
-            "row_match",
-            card,
-            message=f"Карта не найдена (strict row_match): {card}",
-        )
-
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    while time.monotonic() < deadline:
-        if rows.count() > 0:
-            match_index = _try_find_strict_row_index(rows, card_digits, card)
-            if match_index is not None:
-                return match_index
-        page.wait_for_timeout(_ROW_MATCH_POLL_MS)
-
-    raise OpenCardStageError(
-        "row_match",
-        card,
-        message=f"Карта не найдена (strict row_match): {card}",
-    )
-
-
-def _press_enter_on_search(page) -> None:
-    page.locator(CARD_INPUT).press("Enter")
-
-
-def _search_input_has_target_card(page, card: str) -> bool:
-    search_card, _ = _resolve_search_card(card)
-    current = page.locator(CARD_INPUT).input_value().strip()
-    return normalize_card_digits(current) == normalize_card_digits(search_card)
-
-
-def _resubmit_search_after_modal_container_fail(page, card: str) -> None:
-    _close_stale_modal(page)
-    if _search_input_has_target_card(page, card):
-        _log("open_card_search_resubmitted", card=card)
-        _press_enter_on_search(page)
-    else:
-        _log("open_card_modal_container_refresh", card=card)
-        _submit_card_filter(page, card)
-
-
-def _search_for_strict_row(page, card: str, *, submit_search: bool = True) -> int:
-    card_digits = normalize_card_digits(card)
-
-    if submit_search:
-        _log("open_card_search", card=card, extra="attempt=1")
-        _submit_card_filter(page, card)
-    else:
-        _log("open_card_search", card=card, extra="attempt=1 skip_submit=1")
-
-    for attempt in (1, 2, 3):
-        if attempt == 2:
-            _log("open_card_search_retry", card=card, extra="reason=no_strict_row")
-            _log("open_card_search", card=card, extra="attempt=2")
-            _press_enter_on_search(page)
-        elif attempt == 3:
-            _log("open_card_search_retry", card=card, extra="reason=no_strict_row")
-            _log("open_card_search", card=card, extra="attempt=3")
-            _submit_card_filter(page, card)
-
-        try:
-            page.wait_for_selector(ROW_SELECTOR, timeout=10_000)
-            return _wait_for_visible_strict_row(page, card, card_digits)
-        except OpenCardStageError:
-            if attempt == 3:
-                raise
-            continue
-        except Exception as exc:
-            if attempt == 3:
-                raise OpenCardStageError(
-                    "row_match",
-                    card,
-                    message=f"Карта не найдена (strict row_match): {card}",
-                ) from exc
-            continue
-
-    raise OpenCardStageError(
-        "row_match",
-        card,
-        message=f"Карта не найдена (strict row_match): {card}",
-    )
-
-
-def _click_strict_row_and_verify_modal(page, card: str, row_index: int) -> None:
-    modal = page.locator(MODAL_BODY)
-    rows = page.locator(ROW_SELECTOR)
-    card_digits = normalize_card_digits(card)
-
-    row_text = _read_row_text(rows.nth(row_index), row_index=row_index, card=card)
-    if not row_text or not row_matches_card_strict(row_text, card_digits):
-        raise OpenCardStageError(
-            "row_match",
-            card,
-            message=f"strict row match lost before click: {card}",
-        )
-
-    rows.nth(row_index).click()
-    _wait_modal_container_visible(modal, card)
-    modal_card_value = _wait_modal_card_data_ready(page, card)
-    try:
-        _verify_modal_card_number(card, modal_card_value)
-    except OpenCardStageError as exc:
-        if exc.stage == "card_verify":
-            _log(
-                "open_card_modal_mismatch",
-                card=card,
-                extra=f"expected={card} actual={modal_card_value}",
-            )
-        raise
-
-
-def _open_strict_row_with_modal_container_refresh(
-    page,
-    card: str,
-    row_index: int,
-) -> None:
-    """Click strict row and verify modal; refresh search once on modal_container timeout."""
-    try:
-        _click_strict_row_and_verify_modal(page, card, row_index)
-    except OpenCardStageError as exc:
-        if exc.stage != "modal_container":
-            raise
-        _log("open_card_modal_container_timeout", card=card)
-        _resubmit_search_after_modal_container_fail(page, card)
-        refreshed_index = _search_for_strict_row(page, card, submit_search=False)
-        _log("open_card_strict_found_after_refresh", card=card)
-        _click_strict_row_and_verify_modal(page, card, refreshed_index)
-
-
 def open_card_strict(page, card: str) -> None:
-    """Edit Wallet card open: strict row match, search retries, modal verify with one retry."""
-    _close_stale_modal(page)
+    """Edit Wallet: shared stable open_card flow + strict row match + strict modal verify."""
+    last_exc: OpenCardStageError | None = None
 
-    for open_attempt in (1, 2):
-        if open_attempt == 2:
-            _log("open_card_retry_after_mismatch", card=card)
+    for open_attempt in range(1, _OPEN_CARD_STRICT_ATTEMPTS + 1):
+        if open_attempt > 1:
+            _log("retry_after_no_modal", card=card, extra=f"attempt={open_attempt}")
             _close_stale_modal(page)
 
+        _log("open_card_search", card=card, extra=f"attempt={open_attempt}")
         try:
-            row_index = _search_for_strict_row(page, card)
-            _open_strict_row_with_modal_container_refresh(page, card, row_index)
+            open_card_with_row_matcher(page, card, _wait_for_strict_matching_row)
             _log("open_card_strict_found", card=card)
             return
         except OpenCardStageError as exc:
-            if exc.stage == "card_verify" and open_attempt == 1:
-                continue
-            raise
+            last_exc = exc
+            if exc.stage == "card_verify":
+                _log(
+                    "open_card_modal_mismatch",
+                    card=card,
+                    extra=f"attempt={open_attempt}",
+                )
+            elif exc.stage == "modal_container":
+                _log(
+                    "open_card_modal_container_timeout",
+                    card=card,
+                    extra=f"attempt={open_attempt}",
+                )
+            if (
+                exc.stage not in _OPEN_CARD_STRICT_RETRY_STAGES
+                or open_attempt >= _OPEN_CARD_STRICT_ATTEMPTS
+            ):
+                raise
+
+    if last_exc is not None:
+        raise last_exc
 
 
 def _assert_edit_modal(page) -> None:

@@ -309,50 +309,27 @@ def test_omitted_aggregate_has_no_aggregate_interaction(
     mock_fill_field.assert_not_called()
 
 
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._wait_for_visible_strict_row")
-@patch("automation.edit_wallet_engine._press_enter_on_search")
-@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_second_enter_finds_row(
-    mock_close,
-    mock_submit,
-    mock_press_enter,
-    mock_wait_row,
-    mock_click_verify,
-):
-    from automation.engine import OpenCardStageError
+def test_open_card_strict_uses_shared_stable_open_path(mock_close, mock_open_shared):
+    from automation.engine import _wait_for_strict_matching_row
 
     page = MagicMock()
-    page.wait_for_selector.return_value = True
     card = "9999999999990010"
-    mock_wait_row.side_effect = [
-        OpenCardStageError("row_match", card, message="no strict row"),
-        0,
-    ]
 
     open_card_strict(page, card)
 
-    mock_press_enter.assert_called_once_with(page)
-    mock_click_verify.assert_called_once_with(page, card, 0)
+    mock_open_shared.assert_called_once_with(page, card, _wait_for_strict_matching_row)
 
 
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._wait_for_visible_strict_row")
-@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_stale_row_never_clicked(
-    mock_close,
-    mock_submit,
-    mock_wait_row,
-    mock_click_verify,
-):
+def test_open_card_strict_row_not_found_never_retries(mock_close, mock_open_shared):
     from automation.engine import OpenCardStageError
 
     page = MagicMock()
-    page.wait_for_selector.return_value = True
     card = "9999999999990010"
-    mock_wait_row.side_effect = OpenCardStageError(
+    mock_open_shared.side_effect = OpenCardStageError(
         "row_match",
         card,
         message="no strict row",
@@ -361,22 +338,17 @@ def test_open_card_strict_stale_row_never_clicked(
     with pytest.raises(OpenCardStageError):
         open_card_strict(page, card)
 
-    mock_click_verify.assert_not_called()
+    mock_open_shared.assert_called_once()
 
 
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_modal_mismatch_retries_once(
-    mock_close,
-    mock_search,
-    mock_click_verify,
-):
+def test_open_card_strict_modal_mismatch_retries_once(mock_close, mock_open_shared):
     from automation.engine import OpenCardStageError
 
     page = MagicMock()
     card = "9999999999990010"
-    mock_click_verify.side_effect = [
+    mock_open_shared.side_effect = [
         OpenCardStageError(
             "card_verify",
             card,
@@ -387,24 +359,18 @@ def test_open_card_strict_modal_mismatch_retries_once(
 
     open_card_strict(page, card)
 
-    assert mock_close.call_count == 2
-    assert mock_search.call_count == 2
-    assert mock_click_verify.call_count == 2
+    assert mock_close.call_count == 1
+    assert mock_open_shared.call_count == 2
 
 
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_modal_mismatch_fails_after_retry(
-    mock_close,
-    mock_search,
-    mock_click_verify,
-):
+def test_open_card_strict_modal_mismatch_fails_after_retry(mock_close, mock_open_shared):
     from automation.engine import OpenCardStageError
 
     page = MagicMock()
     card = "9999999999990010"
-    mock_click_verify.side_effect = OpenCardStageError(
+    mock_open_shared.side_effect = OpenCardStageError(
         "card_verify",
         card,
         message="Модалка не соответствует карте: 9999999999990010",
@@ -413,7 +379,7 @@ def test_open_card_strict_modal_mismatch_fails_after_retry(
     with pytest.raises(OpenCardStageError):
         open_card_strict(page, card)
 
-    assert mock_click_verify.call_count == 2
+    assert mock_open_shared.call_count == 3
 
 
 @patch("automation.edit_wallet_engine.open_card_strict")
@@ -437,8 +403,7 @@ def test_modal_mismatch_via_process_row_returns_fail_open_card(mock_exists, mock
 
 def test_engine_open_card_row_match_remains_loose():
     from automation.audit import row_matches_card, row_matches_card_strict
-    from automation.engine import _try_match_row_index
-    from automation.edit_wallet_engine import _try_find_strict_row_index
+    from automation.engine import _try_match_row_index, _try_match_strict_row_index
 
     stale_row_text = "99999999999900101"
     card = "9999999999990010"
@@ -453,102 +418,36 @@ def test_engine_open_card_row_match_remains_loose():
 
     loose_index, _, _ = _try_match_row_index(rows, card, card)
     assert loose_index == 0
-    assert _try_find_strict_row_index(rows, card, card) is None
+    strict_index, _, _ = _try_match_strict_row_index(rows, card, card)
+    assert strict_index is None
 
 
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._search_for_strict_row")
-@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_modal_container_refresh_succeeds(
-    mock_close,
-    mock_resubmit,
-    mock_search,
-    mock_click_verify,
-):
+def test_open_card_strict_modal_container_retries_like_disable(mock_close, mock_open_shared):
     from automation.engine import OpenCardStageError
 
     page = MagicMock()
     card = "9999999999990010"
-    mock_search.side_effect = [0, 1]
-    mock_click_verify.side_effect = [
+    mock_open_shared.side_effect = [
         OpenCardStageError("modal_container", card, message="timeout"),
         None,
     ]
 
     open_card_strict(page, card)
 
-    mock_resubmit.assert_called_once_with(page, card)
-    assert mock_search.call_count == 2
-    mock_search.assert_any_call(page, card)
-    mock_search.assert_any_call(page, card, submit_search=False)
-    assert mock_click_verify.call_count == 2
-    mock_click_verify.assert_any_call(page, card, 0)
-    mock_click_verify.assert_any_call(page, card, 1)
+    assert mock_close.call_count == 1
+    assert mock_open_shared.call_count == 2
 
 
-@patch("automation.edit_wallet_engine._wait_modal_container_visible")
-@patch("automation.edit_wallet_engine._wait_modal_card_data_ready", return_value="9999999999990010")
-@patch("automation.edit_wallet_engine._verify_modal_card_number")
-@patch("automation.edit_wallet_engine._read_row_text", return_value="9999999999990010")
-@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
-@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
+@patch("automation.edit_wallet_engine.open_card_with_row_matcher")
 @patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_modal_container_does_not_reclick_stale_row(
-    mock_close,
-    mock_resubmit,
-    mock_search,
-    mock_read_row,
-    mock_verify,
-    mock_modal_data,
-    mock_modal_container,
-):
+def test_open_card_strict_modal_container_fails_after_retries(mock_close, mock_open_shared):
     from automation.engine import OpenCardStageError
 
     page = MagicMock()
     card = "9999999999990010"
-    mock_search.side_effect = [0, 1]
-    rows = MagicMock()
-    stale_row = MagicMock(name="stale_row")
-    fresh_row = MagicMock(name="fresh_row")
-    rows.nth.side_effect = lambda idx: stale_row if idx == 0 else fresh_row
-    page.locator.return_value = rows
-
-    click_calls: list[MagicMock] = []
-
-    def track_click(_self):
-        click_calls.append(_self)
-
-    stale_row.click.side_effect = lambda: track_click(stale_row)
-    fresh_row.click.side_effect = lambda: track_click(fresh_row)
-
-    mock_modal_container.side_effect = [
-        OpenCardStageError("modal_container", card, message="timeout"),
-        None,
-    ]
-
-    open_card_strict(page, card)
-
-    assert click_calls == [stale_row, fresh_row]
-    mock_resubmit.assert_called_once_with(page, card)
-    assert mock_search.call_count == 2
-
-
-@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
-@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
-@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
-@patch("automation.edit_wallet_engine._close_stale_modal")
-def test_open_card_strict_modal_container_fails_after_refresh(
-    mock_close,
-    mock_resubmit,
-    mock_search,
-    mock_click_verify,
-):
-    from automation.engine import OpenCardStageError
-
-    page = MagicMock()
-    card = "9999999999990010"
-    mock_click_verify.side_effect = OpenCardStageError(
+    mock_open_shared.side_effect = OpenCardStageError(
         "modal_container",
         card,
         message="timeout",
@@ -558,49 +457,8 @@ def test_open_card_strict_modal_container_fails_after_refresh(
         open_card_strict(page, card)
 
     assert exc_info.value.stage == "modal_container"
-    mock_resubmit.assert_called_once_with(page, card)
-    assert mock_search.call_count == 2
-    assert mock_click_verify.call_count == 2
-
-
-@patch("automation.edit_wallet_engine._submit_card_filter")
-@patch("automation.edit_wallet_engine._press_enter_on_search")
-@patch("automation.edit_wallet_engine._close_stale_modal")
-def test_resubmit_search_uses_enter_when_input_has_card(
-    mock_close,
-    mock_press_enter,
-    mock_submit,
-):
-    page = MagicMock()
-    page.locator.return_value.input_value.return_value = "9999999999990010"
-    card = "9999999999990010"
-
-    from automation.edit_wallet_engine import _resubmit_search_after_modal_container_fail
-
-    _resubmit_search_after_modal_container_fail(page, card)
-
-    mock_press_enter.assert_called_once_with(page)
-    mock_submit.assert_not_called()
-
-
-@patch("automation.edit_wallet_engine._submit_card_filter")
-@patch("automation.edit_wallet_engine._press_enter_on_search")
-@patch("automation.edit_wallet_engine._close_stale_modal")
-def test_resubmit_search_clears_and_fills_when_input_empty(
-    mock_close,
-    mock_press_enter,
-    mock_submit,
-):
-    page = MagicMock()
-    page.locator.return_value.input_value.return_value = ""
-    card = "9999999999990010"
-
-    from automation.edit_wallet_engine import _resubmit_search_after_modal_container_fail
-
-    _resubmit_search_after_modal_container_fail(page, card)
-
-    mock_submit.assert_called_once_with(page, card)
-    mock_press_enter.assert_not_called()
+    assert mock_close.call_count == 2
+    assert mock_open_shared.call_count == 3
 
 
 @patch("automation.edit_wallet_engine._update_edit_wallet_form")

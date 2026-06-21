@@ -19,6 +19,7 @@ from automation.audit import (
     mask_card,
     normalize_card_digits,
     row_matches_card,
+    row_matches_card_strict,
     shorten_for_log,
 )
 from automation.runtime import (
@@ -434,6 +435,70 @@ def _log_row_match_failure(
     )
 
 
+def _try_match_strict_row_index(
+    rows,
+    card_digits: str,
+    card: str,
+) -> tuple[int | None, int, str]:
+    row_count = rows.count()
+    first_text = ""
+    for i in range(row_count):
+        row_text = _read_row_text(rows.nth(i), row_index=i, card=card)
+        if row_text is None:
+            continue
+        if not first_text:
+            first_text = row_text
+        if row_matches_card_strict(row_text, card_digits):
+            return i, row_count, row_text
+    return None, row_count, first_text
+
+
+def _wait_for_strict_matching_row(page: Page, rows, card: str, card_digits: str) -> int:
+    log.info("[Card] waiting strict row text card=%s", card)
+    timeout_ms = wallet_editor_row_match_timeout_ms()
+
+    def attempt() -> tuple[int | None, int, str]:
+        return _try_match_strict_row_index(rows, card_digits, card)
+
+    if timeout_ms <= 0:
+        match_index, rows_count, first_text = attempt()
+        if match_index is not None:
+            log.info("[Card] strict row text loaded card=%s", card)
+            log.info("[Card] matched strict row index=%s card=%s", match_index, card)
+            return match_index
+        _log_row_match_failure(card, card_digits, rows_count, first_text)
+        log.info("[Card] row_not_found card=%s stage=strict_row_match", card)
+        raise OpenCardStageError(
+            "row_match",
+            card,
+            message=f"Карта не найдена (strict row_match): {card}",
+        )
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    last_count = 0
+    last_first = ""
+    while time.monotonic() < deadline:
+        match_index, rows_count, first_text = attempt()
+        last_count = rows_count
+        last_first = first_text
+        if match_index is not None:
+            log.info("[Card] strict row text loaded card=%s", card)
+            log.info("[Card] matched strict row index=%s card=%s", match_index, card)
+            return match_index
+        if rows_count > 0:
+            page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+        else:
+            page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    _log_row_match_failure(card, card_digits, last_count, last_first)
+    log.info("[Card] row_not_found card=%s stage=strict_row_match", card)
+    raise OpenCardStageError(
+        "row_match",
+        card,
+        message=f"Карта не найдена (strict row_match): {card}",
+    )
+
+
 def _wait_for_matching_row(page: Page, rows, card: str, card_digits: str) -> int:
     log.info("[Card] waiting row text card=%s", card)
     timeout_ms = wallet_editor_row_match_timeout_ms()
@@ -660,7 +725,8 @@ def _submit_card_filter(page: Page, card: str) -> None:
         )
 
 
-def open_card(page: Page, card: str) -> None:
+def open_card_with_row_matcher(page: Page, card: str, wait_for_row) -> None:
+    """Stable card open flow shared by Disable Wallet and Edit Wallet."""
     modal = page.locator(MODAL_BODY)
 
     _close_stale_modal(page)
@@ -674,15 +740,61 @@ def open_card(page: Page, card: str) -> None:
     log.info(f"📋 [Card] rows found={row_count} for card={card}")
 
     card_digits = normalize_card_digits(card)
-    match_index = _wait_for_matching_row(page, rows, card, card_digits)
-    rows.nth(match_index).click()
-    log.info("[Card] row clicked card=%s", card)
+    match_index = wait_for_row(page, rows, card, card_digits)
 
-    _wait_modal_container_visible(modal, card)
+    row_text = _read_row_text(rows.nth(match_index), row_index=match_index, card=card)
+    if row_text is None:
+        log.info(
+            "[Card] row_not_found card=%s reason=row_text_unreadable index=%s",
+            card,
+            match_index,
+        )
+        raise OpenCardStageError(
+            "row_match",
+            card,
+            message=f"row text unreadable before click: {card}",
+        )
+
+    rows.nth(match_index).click()
+    log.info(
+        "[Card] row_clicked card=%s index=%s selector=%s",
+        card,
+        match_index,
+        ROW_SELECTOR,
+    )
+
+    try:
+        _wait_modal_container_visible(modal, card)
+    except OpenCardStageError:
+        log.info(
+            "[Card] modal_container failed card=%s row_index=%s row_clicked=true",
+            card,
+            match_index,
+        )
+        raise
+    log.info("[Card] modal_container_visible card=%s", card)
+
     modal_card_value = _wait_modal_card_data_ready(page, card)
-    _verify_modal_card_number(card, modal_card_value)
-    log.info("[Card] modal card verified card=%s", card)
+    log.info("[Card] modal_data_visible card=%s", card)
+
+    try:
+        _verify_modal_card_number(card, modal_card_value)
+    except OpenCardStageError as exc:
+        if exc.stage == "card_verify":
+            log.info(
+                "[Card] modal_card_mismatch card=%s expected_tail=%s actual_tail=%s",
+                card,
+                mask_card(card),
+                mask_card(modal_card_value),
+            )
+        raise
+
+    log.info("[Card] modal_card_verified card=%s", card)
     log.info(f"✅ [Card] card modal opened card={card}")
+
+
+def open_card(page: Page, card: str) -> None:
+    open_card_with_row_matcher(page, card, _wait_for_matching_row)
 
 
 def _partner_matches_chip(chip_text: str, partner: str) -> bool:
