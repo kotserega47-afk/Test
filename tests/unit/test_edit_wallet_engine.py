@@ -20,6 +20,7 @@ from automation.edit_wallet_engine import (
     AggregateNotActiveError,
     _process_row,
     fill_edit_wallet_form,
+    open_card_strict,
 )
 from automation.runtime import RunConfig
 
@@ -46,9 +47,9 @@ def test_skip_not_found_when_pre_check_false(mock_exists):
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")
 @patch("automation.edit_wallet_engine.fill_edit_wallet_form")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, True])
-def test_open_card_called_when_exists(
+def test_open_card_strict_called_when_exists(
     mock_exists,
     mock_open,
     mock_assert,
@@ -62,9 +63,9 @@ def test_open_card_called_when_exists(
     assert result.result == RESULT_OK
 
 
-@patch("automation.edit_wallet_engine.open_card", side_effect=RuntimeError("modal fail"))
+@patch("automation.edit_wallet_engine.open_card_strict", side_effect=RuntimeError("modal fail"))
 @patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
-def test_fail_open_card(mock_exists, mock_open):
+def test_fail_open_card_strict(mock_exists, mock_open):
     page = MagicMock()
     result = _process_row(page, _row(), operator_profile="DENIS")
     assert result.result == RESULT_FAIL_OPEN_CARD
@@ -124,7 +125,7 @@ def test_empty_partners_column_not_in_provided_skips_multiselect(mock_select, mo
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")
 @patch("automation.edit_wallet_engine.fill_edit_wallet_form")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, True])
 def test_save_validation_fail(
     mock_exists,
@@ -142,7 +143,7 @@ def test_save_validation_fail(
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")
 @patch("automation.edit_wallet_engine.fill_edit_wallet_form")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, True])
 def test_save_timeout_fail(
     mock_exists,
@@ -160,7 +161,7 @@ def test_save_timeout_fail(
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")
 @patch("automation.edit_wallet_engine.fill_edit_wallet_form")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, False])
 def test_post_save_not_found(
     mock_exists,
@@ -178,7 +179,7 @@ def test_post_save_not_found(
 @patch("automation.edit_wallet_engine.save_add_wallet_modal")
 @patch("automation.edit_wallet_engine.fill_edit_wallet_form")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine.card_exists_strict", side_effect=[True, True])
 def test_success_ok(
     mock_exists,
@@ -236,7 +237,7 @@ def test_aggregate_provided_but_not_active_fails(mock_assert_active):
         )
 
 
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
 @patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
 def test_aggregate_not_active_returns_fail_code(mock_exists, mock_assert, mock_open):
@@ -270,7 +271,7 @@ def test_account_number_without_visible_block_fails(mock_assert_block, mock_fill
     mock_fill_field.assert_not_called()
 
 
-@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine.open_card_strict")
 @patch("automation.edit_wallet_engine._assert_edit_modal")
 @patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
 def test_readonly_field_returns_fail_fill_form(mock_exists, mock_assert, mock_open):
@@ -304,3 +305,150 @@ def test_omitted_aggregate_has_no_aggregate_interaction(
     mock_assert_active.assert_not_called()
     mock_assert_block.assert_not_called()
     mock_fill_field.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._wait_for_visible_strict_row")
+@patch("automation.edit_wallet_engine._press_enter_on_search")
+@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_second_enter_finds_row(
+    mock_close,
+    mock_submit,
+    mock_press_enter,
+    mock_wait_row,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    page.wait_for_selector.return_value = True
+    card = "9999999999990010"
+    mock_wait_row.side_effect = [
+        OpenCardStageError("row_match", card, message="no strict row"),
+        0,
+    ]
+
+    open_card_strict(page, card)
+
+    mock_press_enter.assert_called_once_with(page)
+    mock_click_verify.assert_called_once_with(page, card, 0)
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._wait_for_visible_strict_row")
+@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_stale_row_never_clicked(
+    mock_close,
+    mock_submit,
+    mock_wait_row,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    page.wait_for_selector.return_value = True
+    card = "9999999999990010"
+    mock_wait_row.side_effect = OpenCardStageError(
+        "row_match",
+        card,
+        message="no strict row",
+    )
+
+    with pytest.raises(OpenCardStageError):
+        open_card_strict(page, card)
+
+    mock_click_verify.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_modal_mismatch_retries_once(
+    mock_close,
+    mock_search,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    card = "9999999999990010"
+    mock_click_verify.side_effect = [
+        OpenCardStageError(
+            "card_verify",
+            card,
+            message="Модалка не соответствует карте: 9999999999990010",
+        ),
+        None,
+    ]
+
+    open_card_strict(page, card)
+
+    assert mock_close.call_count == 2
+    assert mock_search.call_count == 2
+    assert mock_click_verify.call_count == 2
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_modal_mismatch_fails_after_retry(
+    mock_close,
+    mock_search,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    card = "9999999999990010"
+    mock_click_verify.side_effect = OpenCardStageError(
+        "card_verify",
+        card,
+        message="Модалка не соответствует карте: 9999999999990010",
+    )
+
+    with pytest.raises(OpenCardStageError):
+        open_card_strict(page, card)
+
+    assert mock_click_verify.call_count == 2
+
+
+@patch("automation.edit_wallet_engine.open_card_strict")
+@patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
+def test_modal_mismatch_via_process_row_returns_fail_open_card(mock_exists, mock_open):
+    from automation.engine import OpenCardStageError
+
+    mock_open.side_effect = OpenCardStageError(
+        "card_verify",
+        "9999999999990010",
+        message="Модалка не соответствует карте: 9999999999990010",
+    )
+    page = MagicMock()
+    result = _process_row(
+        page,
+        _row(card="9999999999990010"),
+        operator_profile="DENIS",
+    )
+    assert result.result == RESULT_FAIL_OPEN_CARD
+
+
+def test_engine_open_card_row_match_remains_loose():
+    from automation.audit import row_matches_card, row_matches_card_strict
+    from automation.engine import _try_match_row_index
+    from automation.edit_wallet_engine import _try_find_strict_row_index
+
+    stale_row_text = "99999999999900101"
+    card = "9999999999990010"
+    assert row_matches_card(stale_row_text, card) is True
+    assert row_matches_card_strict(stale_row_text, card) is False
+
+    rows = MagicMock()
+    row = MagicMock()
+    row.inner_text.return_value = stale_row_text
+    rows.count.return_value = 1
+    rows.nth.return_value = row
+
+    loose_index, _, _ = _try_match_row_index(rows, card, card)
+    assert loose_index == 0
+    assert _try_find_strict_row_index(rows, card, card) is None
