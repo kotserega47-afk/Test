@@ -140,6 +140,75 @@ def _fill_locator_text(field, label: str, value: str, *, log_prefix: str = LOG_P
     field.fill(value)
 
 
+def _clear_locator_text(field, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
+    _assert_field_editable(field, label, log_prefix=log_prefix)
+    field.fill("")
+
+
+def _clear_text_by_label(page: Page, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
+    field = _find_text_input_by_label(page, label)
+    if field is None:
+        raise RuntimeError(f"field not found: {label}")
+    _clear_locator_text(field, label, log_prefix=log_prefix)
+
+
+def _clear_textarea_by_label(page: Page, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
+    field = _find_textarea_by_label(page, label)
+    if field is None:
+        raise RuntimeError(f"field not found: {label}")
+    _clear_locator_text(field, label, log_prefix=log_prefix)
+
+
+def _clear_multiselect_list(page: Page, label: str, *, column: str) -> bool:
+    """Clear all multiselect chips. Returns True when already empty (no-op)."""
+    multiselect = _find_multiselect_by_label(page, label)
+    if multiselect is None:
+        raise RuntimeError(f"multiselect не найден: {label}")
+
+    selected = _get_selected_multiselect_labels(multiselect)
+    if not selected:
+        return True
+
+    for _ in range(10):
+        selected = _get_selected_multiselect_labels(multiselect)
+        if not selected:
+            return False
+        for chip_text in list(selected):
+            if not _multiselect_remove_label(multiselect, chip_text):
+                raise RuntimeError(f"failed to clear multiselect: {column}")
+        page.wait_for_timeout(200)
+
+    remaining = _get_selected_multiselect_labels(multiselect)
+    if remaining:
+        raise RuntimeError(f"failed to clear multiselect: {column}")
+    return False
+
+
+def _uncheck_kyc_checkbox(page: Page, *, log_prefix: str = LOG_PREFIX) -> bool:
+    modal = page.locator(MODAL_BODY)
+    checkbox = _find_kyc_checkbox(modal)
+    if checkbox is None:
+        raise RuntimeError("KYC checkbox not found")
+
+    try:
+        checked = checkbox.is_checked()
+    except Exception as exc:
+        raise RuntimeError("KYC checkbox not found") from exc
+
+    if not checked:
+        return True
+
+    try:
+        checkbox.uncheck(force=True)
+    except Exception:
+        try:
+            checkbox.click(force=True)
+        except Exception as exc:
+            raise RuntimeError("KYC checkbox not found") from exc
+
+    return False
+
+
 def goto_wallet_page(page: Page) -> None:
     page.goto(WALLET_URL)
     page.locator(CARD_INPUT).wait_for(state="visible", timeout=_PAGE_READY_TIMEOUT_MS)

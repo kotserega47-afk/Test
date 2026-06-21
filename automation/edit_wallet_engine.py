@@ -14,14 +14,20 @@ from automation.add_wallet_engine import (
     PHASE2_OPTIONAL_TEXT_FIELDS,
     PHASE2_OPTIONAL_TEXTAREA_FIELDS,
     SaveWaitOutcome,
+    FieldNotEditableError,
     _checkbox_for_label,
     _detect_aggregate_expansion,
     _fill_gender_radio,
     _fill_kyc_checkbox,
     _fill_locator_text,
+    _clear_locator_text,
     _find_aggregate_checkbox_label,
     _find_aggregate_field_input,
     _set_multiselect_list,
+    _clear_multiselect_list,
+    _clear_text_by_label,
+    _clear_textarea_by_label,
+    _uncheck_kyc_checkbox,
     _fill_optional_select_by_label,
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
@@ -49,6 +55,7 @@ from automation.edit_wallet_contract import (
     make_row_result,
     prepare_edit_wallet_batch,
     write_result_excel,
+    build_success_comment,
 )
 from automation.engine import (
     CARD_INPUT,
@@ -56,6 +63,7 @@ from automation.engine import (
     OpenCardStageError,
     _close_stale_modal,
     _read_row_text,
+    _resolve_search_card,
     _submit_card_filter,
     _verify_modal_card_number,
     _wait_modal_card_data_ready,
@@ -128,11 +136,30 @@ def _press_enter_on_search(page) -> None:
     page.locator(CARD_INPUT).press("Enter")
 
 
-def _search_for_strict_row(page, card: str) -> int:
+def _search_input_has_target_card(page, card: str) -> bool:
+    search_card, _ = _resolve_search_card(card)
+    current = page.locator(CARD_INPUT).input_value().strip()
+    return normalize_card_digits(current) == normalize_card_digits(search_card)
+
+
+def _resubmit_search_after_modal_container_fail(page, card: str) -> None:
+    _close_stale_modal(page)
+    if _search_input_has_target_card(page, card):
+        _log("open_card_search_resubmitted", card=card)
+        _press_enter_on_search(page)
+    else:
+        _log("open_card_modal_container_refresh", card=card)
+        _submit_card_filter(page, card)
+
+
+def _search_for_strict_row(page, card: str, *, submit_search: bool = True) -> int:
     card_digits = normalize_card_digits(card)
 
-    _log("open_card_search", card=card, extra="attempt=1")
-    _submit_card_filter(page, card)
+    if submit_search:
+        _log("open_card_search", card=card, extra="attempt=1")
+        _submit_card_filter(page, card)
+    else:
+        _log("open_card_search", card=card, extra="attempt=1 skip_submit=1")
 
     for attempt in (1, 2, 3):
         if attempt == 2:
@@ -195,6 +222,24 @@ def _click_strict_row_and_verify_modal(page, card: str, row_index: int) -> None:
         raise
 
 
+def _open_strict_row_with_modal_container_refresh(
+    page,
+    card: str,
+    row_index: int,
+) -> None:
+    """Click strict row and verify modal; refresh search once on modal_container timeout."""
+    try:
+        _click_strict_row_and_verify_modal(page, card, row_index)
+    except OpenCardStageError as exc:
+        if exc.stage != "modal_container":
+            raise
+        _log("open_card_modal_container_timeout", card=card)
+        _resubmit_search_after_modal_container_fail(page, card)
+        refreshed_index = _search_for_strict_row(page, card, submit_search=False)
+        _log("open_card_strict_found_after_refresh", card=card)
+        _click_strict_row_and_verify_modal(page, card, refreshed_index)
+
+
 def open_card_strict(page, card: str) -> None:
     """Edit Wallet card open: strict row match, search retries, modal verify with one retry."""
     _close_stale_modal(page)
@@ -206,7 +251,7 @@ def open_card_strict(page, card: str) -> None:
 
         try:
             row_index = _search_for_strict_row(page, card)
-            _click_strict_row_and_verify_modal(page, card, row_index)
+            _open_strict_row_with_modal_container_refresh(page, card, row_index)
             _log("open_card_strict_found", card=card)
             return
         except OpenCardStageError as exc:
@@ -228,8 +273,8 @@ def _expected_aggregate_name(row: EditWalletRow) -> str | None:
     return None
 
 
-def _provided_aggregate_nested(provided: frozenset[str]) -> frozenset[str]:
-    return AGGREGATE_NESTED_COLUMNS & provided
+def _provided_aggregate_nested(provided: frozenset[str], cleared: frozenset[str]) -> frozenset[str]:
+    return AGGREGATE_NESTED_COLUMNS & (provided | cleared)
 
 
 def _assert_aggregate_active(page, aggregate_name: str) -> None:
@@ -291,7 +336,141 @@ def _fill_edit_aggregate_field(modal, labels: tuple[str, ...], value: str) -> No
     )
 
 
-def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
+def _clear_edit_aggregate_field(modal, labels: tuple[str, ...]) -> None:
+    field = None
+    matched_label: str | None = None
+    for label in labels:
+        field = _find_aggregate_field_input(modal, label)
+        if field is not None:
+            matched_label = label
+            break
+
+    if field is None:
+        label_name = matched_label or labels[0]
+        raise AggregateNotActiveError(f"aggregate field not visible: {label_name}")
+
+    try:
+        visible = field.is_visible()
+    except Exception as exc:
+        raise AggregateNotActiveError(
+            f"aggregate field not visible: {matched_label or labels[0]}"
+        ) from exc
+
+    if not visible:
+        raise AggregateNotActiveError(f"aggregate field not visible: {matched_label or labels[0]}")
+
+    _clear_locator_text(
+        field,
+        matched_label or labels[0],
+        log_prefix=LOG_PREFIX,
+    )
+
+
+def _clear_field_text(page, column: str, label: str) -> None:
+    _log("field_clear_started", extra=f"column={column} control=text")
+    try:
+        _clear_text_by_label(page, label, log_prefix=LOG_PREFIX)
+    except FieldNotEditableError as exc:
+        _log("field_clear_failed", extra=f"column={column} reason={exc}")
+        raise
+    except Exception as exc:
+        _log("field_clear_failed", extra=f"column={column} reason={exc}")
+        raise RuntimeError(str(exc)) from exc
+    _log("field_clear_completed", extra=f"column={column}")
+
+
+def _clear_field_textarea(page, column: str, label: str) -> None:
+    _log("field_clear_started", extra=f"column={column} control=textarea")
+    try:
+        _clear_textarea_by_label(page, label, log_prefix=LOG_PREFIX)
+    except FieldNotEditableError as exc:
+        _log("field_clear_failed", extra=f"column={column} reason={exc}")
+        raise
+    except Exception as exc:
+        _log("field_clear_failed", extra=f"column={column} reason={exc}")
+        raise RuntimeError(str(exc)) from exc
+    _log("field_clear_completed", extra=f"column={column}")
+
+
+def _clear_field_multiselect(page, column: str, label: str) -> None:
+    _log("multiselect_clear_started", extra=f"column={column} label={label}")
+    try:
+        noop = _clear_multiselect_list(page, label, column=column)
+    except RuntimeError as exc:
+        _log("multiselect_clear_failed", extra=f"column={column} reason={exc}")
+        raise
+    if noop:
+        _log("field_clear_noop", extra=f"column={column} reason=already_empty")
+        return
+    _log("multiselect_clear_completed", extra=f"column={column}")
+    _log("field_clear_completed", extra=f"column={column}")
+
+
+def _clear_field_kyc(page) -> None:
+    _log("kyc_uncheck_started")
+    try:
+        noop = _uncheck_kyc_checkbox(page, log_prefix=LOG_PREFIX)
+    except RuntimeError as exc:
+        _log("field_clear_failed", extra="column=kyc reason=KYC checkbox not found")
+        raise
+    if noop:
+        _log("kyc_uncheck_noop", extra="reason=already_unchecked")
+        _log("field_clear_noop", extra="column=kyc reason=already_unchecked")
+        return
+    _log("kyc_uncheck_completed", extra="checked=false")
+    _log("field_clear_completed", extra="column=kyc")
+
+
+def _clear_edit_wallet_fields(page, row: EditWalletRow) -> None:
+    cleared = row.cleared_columns
+    if not cleared:
+        return
+
+    if "partners" in cleared:
+        _clear_field_multiselect(page, "partners", "Привязан к партнеру")
+
+    if "groups" in cleared:
+        for group_label in ("Группа", "Группы"):
+            try:
+                _clear_field_multiselect(page, "groups", group_label)
+                break
+            except RuntimeError:
+                if group_label == "Группы":
+                    raise
+
+    nested_cleared = _provided_aggregate_nested(frozenset(), cleared)
+    if nested_cleared:
+        _assert_aggregate_block_visible(page)
+        modal = page.locator(MODAL_BODY)
+        if "account" in cleared:
+            _log("field_clear_started", extra="column=account control=text")
+            _clear_edit_aggregate_field(modal, ("Аккаунт",))
+            _log("field_clear_completed", extra="column=account")
+        if "merchant_id_sbp" in cleared:
+            _log("field_clear_started", extra="column=merchant_id_sbp control=text")
+            _clear_edit_aggregate_field(modal, ("MerchantId СБП",))
+            _log("field_clear_completed", extra="column=merchant_id_sbp")
+        if "account_number" in cleared:
+            _log("field_clear_started", extra="column=account_number control=text")
+            _clear_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS)
+            _log("field_clear_completed", extra="column=account_number")
+
+    if "phone" in cleared:
+        _clear_field_text(page, "phone", "Телефон")
+
+    for attr, label in PHASE2_OPTIONAL_TEXT_FIELDS:
+        if attr in cleared:
+            _clear_field_text(page, attr, label)
+
+    for attr, label in PHASE2_OPTIONAL_TEXTAREA_FIELDS:
+        if attr in cleared:
+            _clear_field_textarea(page, attr, label)
+
+    if "kyc" in cleared:
+        _clear_field_kyc(page)
+
+
+def _update_edit_wallet_form(page, row: EditWalletRow) -> None:
     provided = row.provided_columns
 
     if "phone" in provided:
@@ -318,7 +497,7 @@ def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
                     raise
 
     expected_aggregate = _expected_aggregate_name(row)
-    nested_provided = _provided_aggregate_nested(provided)
+    nested_provided = _provided_aggregate_nested(provided, frozenset())
 
     if expected_aggregate:
         _assert_aggregate_active(page, expected_aggregate)
@@ -349,6 +528,11 @@ def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
         _fill_kyc_checkbox(page, row.kyc)
 
 
+def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
+    _clear_edit_wallet_fields(page, row)
+    _update_edit_wallet_form(page, row)
+
+
 def _process_row(
     page,
     row: EditWalletRow,
@@ -356,6 +540,15 @@ def _process_row(
     operator_profile: str,
 ) -> EditWalletRowResult:
     _log("row_started", card=row.card, extra=f"row={row.row_number}")
+    _log(
+        "row_intents",
+        card=row.card,
+        extra=(
+            f"row={row.row_number} "
+            f"update={sorted(row.provided_columns)} "
+            f"clear={sorted(row.cleared_columns)}"
+        ),
+    )
 
     try:
         if not card_exists_strict(page, row.card):
@@ -428,7 +621,7 @@ def _process_row(
                 row,
                 row_number=row.row_number,
                 result=RESULT_OK,
-                comment="card found after save",
+                comment=build_success_comment(row),
                 operator_profile=operator_profile,
             )
 

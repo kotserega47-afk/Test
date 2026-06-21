@@ -29,6 +29,58 @@ LOG_PREFIX = "[WalletEditorEdit]"
 
 EDIT_UPDATABLE_COLUMNS = frozenset({"phone"}) | V1_OPTIONAL_COLUMNS | PHASE2_OPTIONAL_COLUMNS
 
+CLEAR_WHITELIST_V1 = frozenset(
+    {
+        "partners",
+        "groups",
+        "phone",
+        "account",
+        "merchant_id_sbp",
+        "account_number",
+        "surname",
+        "first_name",
+        "patronymic",
+        "login",
+        "password",
+        "password_extra",
+        "security_question",
+        "bank_card_sim",
+        "merch",
+        "marker",
+        "cluster_sim",
+        "cluster_phone",
+        "cluster_sim_slot",
+        "server_id",
+        "bakai_customer_id",
+        "comment",
+        "comment_service",
+        "comment_deleted_account",
+        "kyc",
+    }
+)
+
+CLEAR_BLACKLIST_V1 = frozenset(
+    {
+        "card",
+        "aggregate",
+        "aggregates",
+        "status",
+        "state",
+        "direction",
+        "pool",
+        "gateway",
+        "topup_method",
+        "role",
+        "ours",
+        "cluster",
+        "payout_priority",
+        "balance",
+        "queue_length",
+        "queue_depth",
+        "gender",
+    }
+)
+
 RESULT_OK = "OK"
 RESULT_SKIP_NOT_FOUND = "SKIP_NOT_FOUND"
 RESULT_FAIL_INVALID = "FAIL_INVALID_ROW"
@@ -66,6 +118,7 @@ class EditWalletRow:
     row_number: int
     card: str
     provided_columns: frozenset[str]
+    cleared_columns: frozenset[str] = frozenset()
     phone: str = ""
     status: str = ""
     state: str = ""
@@ -177,14 +230,44 @@ def _validate_status(value: str) -> str | None:
     return None
 
 
-def _provided_columns_for_row(row: pd.Series, columns: set[str]) -> frozenset[str]:
+def is_clear_marker(value: object) -> bool:
+    return _cell_str(value).upper() == "CLEAR"
+
+
+def _clear_forbidden_comment(column: str) -> str:
+    return f"CLEAR not allowed for column: {column}"
+
+
+def _column_intents_for_row(
+    row: pd.Series,
+    columns: set[str],
+) -> tuple[frozenset[str], frozenset[str], str | None]:
     provided: set[str] = set()
+    cleared: set[str] = set()
+
     for col in columns:
         if col not in EDIT_UPDATABLE_COLUMNS:
             continue
-        if _cell_str(row.get(col)):
-            provided.add(col)
-    return frozenset(provided)
+        raw = _cell_str(row.get(col))
+        if not raw:
+            continue
+        if is_clear_marker(raw):
+            if col in CLEAR_BLACKLIST_V1 or col not in CLEAR_WHITELIST_V1:
+                return frozenset(), frozenset(), _clear_forbidden_comment(col)
+            cleared.add(col)
+            continue
+        provided.add(col)
+
+    if provided & cleared:
+        return frozenset(), frozenset(), "conflicting update and clear intents for the same column"
+
+    return frozenset(provided), frozenset(cleared), None
+
+
+def build_success_comment(row: EditWalletRow) -> str:
+    cleared = ",".join(sorted(row.cleared_columns))
+    updated = ",".join(sorted(row.provided_columns))
+    return f"card found after save; cleared={cleared}; updated={updated}"
 
 
 def _phase2_fields_from_row(row: pd.Series) -> dict[str, str]:
@@ -239,7 +322,7 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
         row_number = int(idx) + 2
         card_raw = _cell_str(row.get("card"))
         card = normalize_card_digits(card_raw)
-        provided_columns = _provided_columns_for_row(row, cols)
+        provided_columns, cleared_columns, intent_error = _column_intents_for_row(row, cols)
 
         input_columns = {
             str(col): _cell_str(row.get(col))
@@ -254,6 +337,7 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
                         row_number=row_number,
                         card="",
                         provided_columns=frozenset(),
+                        cleared_columns=frozenset(),
                         input_columns=input_columns,
                     ),
                     RESULT_FAIL_INVALID,
@@ -262,13 +346,30 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
             )
             continue
 
-        if not provided_columns:
+        if intent_error:
+            invalid.append(
+                PreparedEditWalletRow(
+                    EditWalletRow(
+                        row_number=row_number,
+                        card=card,
+                        provided_columns=provided_columns,
+                        cleared_columns=cleared_columns,
+                        input_columns=input_columns,
+                    ),
+                    RESULT_FAIL_INVALID,
+                    intent_error,
+                )
+            )
+            continue
+
+        if not provided_columns and not cleared_columns:
             invalid.append(
                 PreparedEditWalletRow(
                     EditWalletRow(
                         row_number=row_number,
                         card=card,
                         provided_columns=frozenset(),
+                        cleared_columns=frozenset(),
                         input_columns=input_columns,
                     ),
                     RESULT_FAIL_INVALID,
@@ -284,6 +385,7 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
                         row_number=row_number,
                         card=card,
                         provided_columns=provided_columns,
+                        cleared_columns=cleared_columns,
                         input_columns=input_columns,
                     ),
                     RESULT_FAIL_INVALID,
@@ -293,11 +395,15 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
             continue
         seen_cards[card] = row_number
 
+        aggregate_raw = _cell_str(row.get("aggregate"))
         aggregates_raw = _cell_str(row.get("aggregates"))
-        aggregate_name, aggregate_error = parse_single_aggregate(
-            aggregate=_cell_str(row.get("aggregate")),
-            aggregates=aggregates_raw,
-        )
+        if not is_clear_marker(aggregate_raw):
+            aggregate_name, aggregate_error = parse_single_aggregate(
+                aggregate=aggregate_raw,
+                aggregates=aggregates_raw if not is_clear_marker(aggregates_raw) else "",
+            )
+        else:
+            aggregate_name, aggregate_error = None, None
         if aggregate_error:
             invalid.append(
                 PreparedEditWalletRow(
@@ -305,6 +411,7 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
                         row_number=row_number,
                         card=card,
                         provided_columns=provided_columns,
+                        cleared_columns=cleared_columns,
                         aggregates=aggregates_raw,
                         input_columns=input_columns,
                     ),
@@ -324,6 +431,7 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
                             row_number=row_number,
                             card=card,
                             provided_columns=provided_columns,
+                            cleared_columns=cleared_columns,
                             input_columns=input_columns,
                         ),
                         RESULT_FAIL_INVALID,
@@ -332,19 +440,33 @@ def prepare_edit_wallet_batch(file_path: str) -> EditWalletBatchInput:
                 )
                 continue
 
+        partners_raw = _cell_str(row.get("partners"))
+        groups_raw = _cell_str(row.get("groups"))
+        partners = (
+            ""
+            if "partners" in cleared_columns
+            else _split_list_field(partners_raw)
+        )
+        groups = (
+            ""
+            if "groups" in cleared_columns
+            else _split_list_field(groups_raw)
+        )
+
         phase2 = _phase2_fields_from_row(row)
         runnable.append(
             EditWalletRow(
                 row_number=row_number,
                 card=card,
                 provided_columns=provided_columns,
+                cleared_columns=cleared_columns,
                 phone=_cell_str(row.get("phone")),
                 status=status,
                 state=_cell_str(row.get("state")),
                 direction=_cell_str(row.get("direction")),
                 pool=_cell_str(row.get("pool")),
-                partners=_split_list_field(_cell_str(row.get("partners"))),
-                groups=_split_list_field(_cell_str(row.get("groups"))),
+                partners=partners,
+                groups=groups,
                 aggregate=aggregate_name or "",
                 account=_cell_str(row.get("account")),
                 merchant_id_sbp=_cell_str(row.get("merchant_id_sbp")),

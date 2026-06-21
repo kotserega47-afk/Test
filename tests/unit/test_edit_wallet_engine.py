@@ -30,6 +30,7 @@ def _row(**kwargs) -> EditWalletRow:
         "row_number": 2,
         "card": "9990110810347534",
         "provided_columns": frozenset({"status"}),
+        "cleared_columns": frozenset(),
         "status": "Тест",
     }
     defaults.update(kwargs)
@@ -192,6 +193,7 @@ def test_success_ok(
     page = MagicMock()
     result = _process_row(page, _row(), operator_profile="DENIS")
     assert result.result == RESULT_OK
+    assert result.comment == "card found after save; cleared=; updated=status"
 
 
 @patch("automation.edit_wallet_engine._assert_aggregate_active")
@@ -452,3 +454,245 @@ def test_engine_open_card_row_match_remains_loose():
     loose_index, _, _ = _try_match_row_index(rows, card, card)
     assert loose_index == 0
     assert _try_find_strict_row_index(rows, card, card) is None
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._search_for_strict_row")
+@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_modal_container_refresh_succeeds(
+    mock_close,
+    mock_resubmit,
+    mock_search,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    card = "9999999999990010"
+    mock_search.side_effect = [0, 1]
+    mock_click_verify.side_effect = [
+        OpenCardStageError("modal_container", card, message="timeout"),
+        None,
+    ]
+
+    open_card_strict(page, card)
+
+    mock_resubmit.assert_called_once_with(page, card)
+    assert mock_search.call_count == 2
+    mock_search.assert_any_call(page, card)
+    mock_search.assert_any_call(page, card, submit_search=False)
+    assert mock_click_verify.call_count == 2
+    mock_click_verify.assert_any_call(page, card, 0)
+    mock_click_verify.assert_any_call(page, card, 1)
+
+
+@patch("automation.edit_wallet_engine._wait_modal_container_visible")
+@patch("automation.edit_wallet_engine._wait_modal_card_data_ready", return_value="9999999999990010")
+@patch("automation.edit_wallet_engine._verify_modal_card_number")
+@patch("automation.edit_wallet_engine._read_row_text", return_value="9999999999990010")
+@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_modal_container_does_not_reclick_stale_row(
+    mock_close,
+    mock_resubmit,
+    mock_search,
+    mock_read_row,
+    mock_verify,
+    mock_modal_data,
+    mock_modal_container,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    card = "9999999999990010"
+    mock_search.side_effect = [0, 1]
+    rows = MagicMock()
+    stale_row = MagicMock(name="stale_row")
+    fresh_row = MagicMock(name="fresh_row")
+    rows.nth.side_effect = lambda idx: stale_row if idx == 0 else fresh_row
+    page.locator.return_value = rows
+
+    click_calls: list[MagicMock] = []
+
+    def track_click(_self):
+        click_calls.append(_self)
+
+    stale_row.click.side_effect = lambda: track_click(stale_row)
+    fresh_row.click.side_effect = lambda: track_click(fresh_row)
+
+    mock_modal_container.side_effect = [
+        OpenCardStageError("modal_container", card, message="timeout"),
+        None,
+    ]
+
+    open_card_strict(page, card)
+
+    assert click_calls == [stale_row, fresh_row]
+    mock_resubmit.assert_called_once_with(page, card)
+    assert mock_search.call_count == 2
+
+
+@patch("automation.edit_wallet_engine._click_strict_row_and_verify_modal")
+@patch("automation.edit_wallet_engine._search_for_strict_row", return_value=0)
+@patch("automation.edit_wallet_engine._resubmit_search_after_modal_container_fail")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_open_card_strict_modal_container_fails_after_refresh(
+    mock_close,
+    mock_resubmit,
+    mock_search,
+    mock_click_verify,
+):
+    from automation.engine import OpenCardStageError
+
+    page = MagicMock()
+    card = "9999999999990010"
+    mock_click_verify.side_effect = OpenCardStageError(
+        "modal_container",
+        card,
+        message="timeout",
+    )
+
+    with pytest.raises(OpenCardStageError) as exc_info:
+        open_card_strict(page, card)
+
+    assert exc_info.value.stage == "modal_container"
+    mock_resubmit.assert_called_once_with(page, card)
+    assert mock_search.call_count == 2
+    assert mock_click_verify.call_count == 2
+
+
+@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine._press_enter_on_search")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_resubmit_search_uses_enter_when_input_has_card(
+    mock_close,
+    mock_press_enter,
+    mock_submit,
+):
+    page = MagicMock()
+    page.locator.return_value.input_value.return_value = "9999999999990010"
+    card = "9999999999990010"
+
+    from automation.edit_wallet_engine import _resubmit_search_after_modal_container_fail
+
+    _resubmit_search_after_modal_container_fail(page, card)
+
+    mock_press_enter.assert_called_once_with(page)
+    mock_submit.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine._submit_card_filter")
+@patch("automation.edit_wallet_engine._press_enter_on_search")
+@patch("automation.edit_wallet_engine._close_stale_modal")
+def test_resubmit_search_clears_and_fills_when_input_empty(
+    mock_close,
+    mock_press_enter,
+    mock_submit,
+):
+    page = MagicMock()
+    page.locator.return_value.input_value.return_value = ""
+    card = "9999999999990010"
+
+    from automation.edit_wallet_engine import _resubmit_search_after_modal_container_fail
+
+    _resubmit_search_after_modal_container_fail(page, card)
+
+    mock_submit.assert_called_once_with(page, card)
+    mock_press_enter.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine._update_edit_wallet_form")
+@patch("automation.edit_wallet_engine._clear_edit_wallet_fields")
+def test_fill_edit_wallet_form_clear_before_update(mock_clear, mock_update):
+    page = MagicMock()
+    row = _row(
+        provided_columns=frozenset({"phone"}),
+        cleared_columns=frozenset({"comment"}),
+    )
+    fill_edit_wallet_form(page, row)
+    mock_clear.assert_called_once_with(page, row)
+    mock_update.assert_called_once_with(page, row)
+
+
+@patch("automation.edit_wallet_engine._clear_text_by_label")
+def test_clear_text_field_called(mock_clear_text):
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"phone"}), provided_columns=frozenset()),
+    )
+    mock_clear_text.assert_called_once()
+
+
+@patch("automation.edit_wallet_engine._clear_textarea_by_label")
+def test_clear_textarea_field_called(mock_clear_textarea):
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"comment"}), provided_columns=frozenset()),
+    )
+    mock_clear_textarea.assert_called_once()
+
+
+@patch("automation.edit_wallet_engine._clear_multiselect_list")
+def test_clear_partners_called(mock_clear_multi):
+    mock_clear_multi.return_value = False
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"partners"}), provided_columns=frozenset()),
+    )
+    mock_clear_multi.assert_called()
+
+
+@patch("automation.edit_wallet_engine._uncheck_kyc_checkbox")
+def test_clear_kyc_called(mock_uncheck):
+    mock_uncheck.return_value = False
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"kyc"}), provided_columns=frozenset()),
+    )
+    mock_uncheck.assert_called_once()
+
+
+@patch("automation.edit_wallet_engine._uncheck_kyc_checkbox")
+def test_clear_kyc_already_unchecked_noop(mock_uncheck):
+    mock_uncheck.return_value = True
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"kyc"}), provided_columns=frozenset()),
+    )
+
+
+@patch("automation.edit_wallet_engine._clear_multiselect_list")
+def test_clear_multiselect_already_empty_noop(mock_clear_multi):
+    mock_clear_multi.return_value = True
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(cleared_columns=frozenset({"groups"}), provided_columns=frozenset()),
+    )
+
+
+@patch("automation.edit_wallet_engine._fill_optional_text_by_label")
+@patch("automation.edit_wallet_engine._clear_text_by_label")
+def test_provided_only_row_no_clear_helpers(mock_clear_text, mock_fill_text):
+    page = MagicMock()
+    fill_edit_wallet_form(page, _row(provided_columns=frozenset({"phone"}), phone="79491103311"))
+    mock_clear_text.assert_not_called()
+    mock_fill_text.assert_called_once()
+
+
+@patch("automation.edit_wallet_engine._assert_aggregate_block_visible")
+def test_clear_aggregate_nested_hidden_block_fails(mock_assert_block):
+    mock_assert_block.side_effect = AggregateNotActiveError("aggregate block not visible")
+    page = MagicMock()
+    with pytest.raises(AggregateNotActiveError, match="aggregate block not visible"):
+        fill_edit_wallet_form(
+            page,
+            _row(cleared_columns=frozenset({"account"}), provided_columns=frozenset()),
+        )
