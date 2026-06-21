@@ -13,12 +13,13 @@ from automation.runtime import (
     MSG_OPERATOR_INCOMPLETE,
     MSG_OPERATOR_UNMAPPED,
     WalletEditorAddWalletTask,
+    WalletEditorEditWalletTask,
     WalletEditorTask,
     resolve_operator_for_user,
     wallet_editor_add_wallet_dry_run_enabled,
 )
-from automation.add_wallet_contract import ExcelRouting, detect_excel_routing
-from automation.worker import add_add_wallet_task, add_task
+from automation.edit_wallet_contract import ExcelRouting, detect_excel_routing
+from automation.worker import add_add_wallet_task, add_edit_wallet_task, add_task
 
 ALLOWED_EXTENSION = ".xlsx"
 TMP_DIR = Path("/tmp/wallet_editor")
@@ -171,6 +172,30 @@ async def handle_wallet_editor_document(
             await message.reply_text(
                 f"📌 Add Wallet: файл в очереди профиля {operator.profile_key}. "
                 f"Очередь: {queue_size}. dry_run={dry_run}"
+            )
+            return
+
+        if routing == ExcelRouting.EDIT_WALLET:
+            queue_size = add_edit_wallet_task(
+                WalletEditorEditWalletTask(
+                    file_path=str(local_path),
+                    original_filename=document.file_name or "input.xlsx",
+                    operator_profile=operator.profile_key,
+                    chat_id=chat_id,
+                    user_id=telegram_user_id,
+                    login=operator.login,
+                    password=operator.password,
+                    auth_state_path=operator.auth_state_path,
+                )
+            )
+            log.info(
+                f"📌 [WalletEditorEdit] queued profile={operator.profile_key} "
+                f"user_id={telegram_user_id} chat_id={chat_id} "
+                f"queue_size={queue_size} file={local_path}"
+            )
+            await message.reply_text(
+                f"📌 Edit Wallet: файл в очереди профиля {operator.profile_key}. "
+                f"Очередь: {queue_size}."
             )
             return
 

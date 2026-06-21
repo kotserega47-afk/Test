@@ -19,8 +19,10 @@ from automation.engine import run, RunConfig
 from automation.runtime import (
     CONVERSION_AUTO_PROFILE,
     WalletEditorAddWalletTask,
+    WalletEditorEditWalletTask,
     WalletEditorTask,
     build_add_wallet_result_path,
+    build_edit_wallet_result_path,
     build_wallet_editor_result_path,
 )
 from core.datetime_utils import now_msk
@@ -40,6 +42,7 @@ _registry_lock = threading.Lock()
 ProfileQueueItem = Union[
     WalletEditorTask,
     WalletEditorAddWalletTask,
+    WalletEditorEditWalletTask,
     "WalletEditorAutoEnableBatchTask",
 ]
 
@@ -111,6 +114,17 @@ def add_add_wallet_task(task: WalletEditorAddWalletTask) -> int:
         f"📥 [Queue] add_wallet profile={task.operator_profile} queue_size={queue_size} "
         f"chat_id={task.chat_id} user_id={task.user_id} file={task.file_path} "
         f"dry_run={task.dry_run}"
+    )
+    return queue_size
+
+
+def add_edit_wallet_task(task: WalletEditorEditWalletTask) -> int:
+    worker = _ensure_profile_worker(task.operator_profile)
+    worker.queue.put(task)
+    queue_size = worker.queue.qsize()
+    log.info(
+        f"📥 [Queue] edit_wallet profile={task.operator_profile} queue_size={queue_size} "
+        f"chat_id={task.chat_id} user_id={task.user_id} file={task.file_path}"
     )
     return queue_size
 
@@ -273,6 +287,50 @@ def _run_add_wallet_task(profile_key: str, task: WalletEditorAddWalletTask) -> N
     ).start()
 
 
+def _run_edit_wallet_task(profile_key: str, task: WalletEditorEditWalletTask) -> None:
+    from automation.edit_wallet_engine import run as run_edit_wallet
+
+    log.info(
+        f"🚀 [Worker] edit_wallet profile={profile_key} file={task.file_path}"
+    )
+    cfg = RunConfig(
+        login=task.login,
+        password=task.password,
+        auth_state_path=task.auth_state_path,
+        operator_profile=profile_key,
+        result_file_path=build_edit_wallet_result_path(
+            task.original_filename,
+            task.operator_profile,
+        ),
+    )
+
+    try:
+        result_file, summary = run_edit_wallet(task.file_path, cfg, result_file_path=cfg.result_file_path)
+    except Exception as exc:
+        log.error(f"❌ [Worker] edit_wallet profile={profile_key} error: {exc}")
+        log.error(traceback.format_exc())
+        send_text(
+            chat_id=str(task.chat_id),
+            text=f"❌ [WalletEditorEdit] Ошибка: {exc}",
+        )
+        return
+
+    summary_text = summary.telegram_summary()
+    log.info(f"✅ [Worker] edit_wallet profile={profile_key} done: {summary_text}")
+    send_text(chat_id=str(task.chat_id), text=summary_text)
+    send_document(
+        path=result_file,
+        chat_id=str(task.chat_id),
+        caption="WalletEditor Edit Wallet result",
+    )
+
+    threading.Thread(
+        target=delayed_cleanup,
+        args=(result_file, task.file_path),
+        daemon=True,
+    ).start()
+
+
 def _run_auto_enable_batch_task(profile_key: str, task: WalletEditorAutoEnableBatchTask) -> None:
     from integrations.wallet_editor_auto_enable_executor import EnableOutcome, execute_enable_batch
 
@@ -324,6 +382,15 @@ def _is_add_wallet_task_item(item: ProfileQueueItem) -> bool:
     return isinstance(item, WalletEditorAddWalletTask) or (
         type(item).__name__ == "WalletEditorAddWalletTask"
         and hasattr(item, "original_filename")
+        and hasattr(item, "dry_run")
+    )
+
+
+def _is_edit_wallet_task_item(item: ProfileQueueItem) -> bool:
+    return isinstance(item, WalletEditorEditWalletTask) or (
+        type(item).__name__ == "WalletEditorEditWalletTask"
+        and hasattr(item, "original_filename")
+        and not hasattr(item, "dry_run")
     )
 
 
@@ -352,6 +419,8 @@ def worker_loop(profile_key: str, task_queue: Queue[ProfileQueueItem]) -> None:
         try:
             if _is_auto_enable_batch_item(item):
                 _run_auto_enable_batch_task(profile_key, item)  # type: ignore[arg-type]
+            elif _is_edit_wallet_task_item(item):
+                _run_edit_wallet_task(profile_key, item)  # type: ignore[arg-type]
             elif _is_add_wallet_task_item(item):
                 _run_add_wallet_task(profile_key, item)  # type: ignore[arg-type]
             elif _is_disable_task_item(item):
