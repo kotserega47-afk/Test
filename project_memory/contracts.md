@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.5 |
-| **Последнее обновление** | 2026-06-07 |
+| **KB версия** | v1.6 |
+| **Последнее обновление** | 2026-06-21 |
 
 ---
 
@@ -199,10 +199,47 @@ Rules:
 | Antares exports (`conversion_*`, `payout_*`, `card_*`, `cd_*`) | xlsx | analyzers via `main`/`download` | downloaders → Dropbox | P3 | pipeline skip/fail | IMPORTANT | CONFIRMED |
 | Output reports (`report_*.xlsx`) | xlsx | — | `conversion.py`, `payout.py` | output | — | OPTIONAL | CONFIRMED |
 | `/tmp/wallet_editor/wallet_editor_*.xlsx` | xlsx | WalletEditor worker | `wallet_editor_tg` download | P-WE input | re-download on retry | IMPORTANT | CONFIRMED |
-| `/tmp/wallet_editor/wallet_editor_result_<INPUT>_<PROFILE>.xlsx` | xlsx | — | `automation/engine.py` via worker | P-WE output | collision → `_2` / `_<uuid8>` suffix | IMPORTANT | CONFIRMED |
+| `/tmp/wallet_editor/wallet_editor_result_<INPUT>_<PROFILE>.xlsx` | xlsx | — | `automation/engine.py` via worker | P-WE disable output | collision → `_2` / `_<uuid8>` suffix | IMPORTANT | CONFIRMED |
+| `/tmp/wallet_editor/add_wallet_result_*.xlsx` (via `build_add_wallet_result_path`) | xlsx | — | `automation/add_wallet_engine.py` via worker | P-WE Add Wallet output | per-run TG result; **no** registry append | IMPORTANT | CONFIRMED |
 | Dropbox `{DROPBOX_WALLET_EDITOR_PATH}` (e.g. `/Ostin/platform/Tests/wallet_editor.xlsx`) | xlsx | WalletEditor registry read/write | `integrations/wallet_editor_registry.py` | P-WE cumulative history | download/upload fail → log only; per-run TG unchanged | IMPORTANT | CONFIRMED |
 
-Wallet Editor **result** xlsx columns (output): `Дата отключения` (MSK `ДД.ММ.ГГГГ ЧЧ:ММ:СС`, row processing time via `now_msk()`), `card`, `action`, `value`, `status`, `comment` — `automation/engine.py`.
+Wallet Editor **result** xlsx columns (disable output): `Дата отключения` (MSK `ДД.ММ.ГГГГ ЧЧ:ММ:СС`, row processing time via `now_msk()`), `card`, `action`, `value`, `status`, `comment` — `automation/engine.py`.
+
+Wallet Editor **Add Wallet input** xlsx (`automation/add_wallet_contract.py`):
+
+| Column group | Required | Default / fill rule | Notes |
+|--------------|----------|---------------------|-------|
+| `card`, `phone` | **да** | normalized digits | only required columns |
+| `status` | нет | **`Тест`** if column absent or empty | only allowed default |
+| `direction`, `state`, `pool` | нет | empty → **not filled** in UI | no implicit defaults |
+| `aggregate` / legacy `aggregates` | нет | empty → no aggregate checkbox | `aggregates` must resolve to exactly one value or row invalid |
+| `account`, `merchant_id_sbp`, `account_number` | нет | filled only when aggregate selected + column present | Phase 1.1 nested block |
+| `partners`, `groups` | нет | multiselect when non-empty | semicolon-separated lists |
+| Phase 2 optional (29 cols) | нет | filled only when column non-empty | text/textarea/select/radio/KYC; optional fields skip silently if UI label not found |
+
+**Routing:** file with `action`+`value` → disable contract (`engine.run`); file with `card`+`phone` without disable markers → Add Wallet; both or neither → ambiguous error. Filename prefix `add_wallet*` also routes Add Wallet when columns alone are ambiguous.
+
+**Add Wallet result** xlsx columns: `row_number`, `card`, `phone`, `result`, `comment`, `processed_at`, `operator_profile`, `dry_run`, plus echoed `input_*` columns from source row.
+
+**Add Wallet result codes** (`automation/add_wallet_contract.py`):
+
+| Code | Meaning |
+|------|---------|
+| `OK` | Saved and strict post-save card found |
+| `DRY_RUN_WOULD_CREATE` | dry-run; modal opened/filled logic skipped or would-create path |
+| `SKIP_DUPLICATE_CARD` | card already exists (pre-create strict search) |
+| `SKIP_DUPLICATE_IN_FILE` | duplicate card within same Excel |
+| `FAIL_INVALID_ROW` | validation (empty card/phone, bad status, multi-aggregate, etc.) |
+| `FAIL_OPEN_MODAL` | could not open create modal |
+| `FAIL_FILL_FORM` | Playwright fill error |
+| `FAIL_SAVE_VALIDATION` | modal validation error after save |
+| `FAIL_SAVE_TIMEOUT` | save/modal wait timeout |
+| `FAIL_NOT_FOUND_AFTER_SAVE` | modal closed but card not found in strict post-search |
+| `FAIL_TECHNICAL` | unexpected error |
+
+**Success invariant:** `OK` requires `card_exists_strict()` match via `row_matches_card_strict` — **modal close alone is not success** (E-WE-17).
+
+**Registry:** Add Wallet v1 does **not** append to Dropbox cumulative registry (E-WE-19). Disable flow registry contract unchanged.
 
 Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_lifecycle.py` + `wallet_editor_registry_xlsx.py`):
 
@@ -363,6 +400,24 @@ Statuses used: `ошибка`, `оплачен` — L107.
 
 Not in active routing; hardcoded fallback column `Amount` — **DORMANT**, not active contract. Still references removed `analysis_map.yaml` on import — activation requires code fix.
 
+### 3.8 WalletEditor Add Wallet input
+
+Contract owner: `automation/add_wallet_contract.py`. Column names normalized via aliases (RU/EN, e.g. `Карта`→`card`, `KYC`/`КУС`→`kyc`).
+
+| Column | Required | Consumer | Статус |
+|--------|----------|----------|--------|
+| `card` | да | batch prep + engine fill «Карта» | CONFIRMED |
+| `phone` | да | batch prep + engine fill «Телефон» | CONFIRMED |
+| `status` | нет (default `Тест`) | engine select «Статус»; must ∈ `ALLOWED_STATUSES` | CONFIRMED |
+| `direction`, `state`, `pool` | нет | engine select; **only if Excel non-empty** | CONFIRMED |
+| `aggregate` / `aggregates` | нет | single aggregate checkbox + nested fields | CONFIRMED |
+| `partners`, `groups` | нет | multiselect | CONFIRMED |
+| Phase 2 optional set | нет | `_fill_phase2_top_level_fields` | CONFIRMED |
+
+**KYC (`kyc` column):** truthy values (`1`, `true`, `yes`, `да`, `y`, `checked`) check checkbox with exact label `KYC` / `КУС` / `Кус` in **lower form scope** (after payout/queue anchors or partner section); must not click aggregate checkboxes (e.g. ЧБР). If label not found → log `kyc_not_found`, no click.
+
+**Dry-run:** `wallet_editor_add_wallet_dry_run_enabled()` from Rules/job config — rows may return `DRY_RUN_WOULD_CREATE` without persisting wallet.
+
 ---
 
 ## 4. CSV contracts
@@ -462,6 +517,7 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 | F10 | Dropbox `special_cards.xlsx` | optional merge | `conversion.py` special rules | filtered conversion | OPTIONAL | CONFIRMED |
 | F11 | Telegram `.xlsx` document | allowlist + operator map → `WalletEditorTask` | `automation/engine.py` → Antares UI | result xlsx → Telegram | IMPORTANT | CONFIRMED |
 | F12 | `ConversionAnalyzer.problem_cards` | bridge builds Excel (`card`, `action`, `value`) → `WalletEditorTask` | `integrations/conversion_wallet_editor_bridge.py` → `automation/worker.py` → Antares UI | rollout info TG + result xlsx → `CONVERSION_WALLET_EDITOR` chat | OPTIONAL | CONFIRMED |
+| F13 | Telegram `.xlsx` Add Wallet (`card`, `phone`) | `detect_excel_routing` → `prepare_add_wallet_batch` → `add_wallet_engine.run` | Antares «Добавление кошелька» modal | result xlsx + batch summary TG; **no** registry | IMPORTANT | CONFIRMED |
 
 ---
 
@@ -510,3 +566,4 @@ Internal Playwright schema — **UNKNOWN** (opaque to app).
 | 2026-06-01 | WalletEditor env + file contracts (WE-0…WE-6) |
 | 2026-06-01 | Telegram sender health env (Option B) |
 | 2026-06-07 | WalletEditor auto-enable, HOLD enforcement, registry UX-A, add_partner partner mapping, token sanitization, wallet datepicker |
+| 2026-06-21 | WalletEditor Add Wallet Excel + result contract (§3.8); data flow F13; E-WE-16…E-WE-19 |

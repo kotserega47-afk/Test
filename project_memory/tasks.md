@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.5 |
-| **Последнее обновление** | 2026-06-15 |
+| **KB версия** | v1.6 |
+| **Последнее обновление** | 2026-06-21 |
 
 ---
 
@@ -21,6 +21,7 @@
 | **Job Health Guard** | C1 observe **done**; C2/C3 **planned** — see roadmap below |
 | **WalletEditor Auto-Enable** | Phase A/B1/B1.1/B2 **complete**; Scheduler Phase C (daily 08:00) **open** |
 | **WalletEditor registry UX** | UX-A formatting **complete**; UX-B `Дата операции` **open**; UX-C filenames **open** |
+| **WalletEditor Add Wallet** | Phase 1 / 1.1 / 2 **complete**; real UI verified 2026-06-21 |
 
 ---
 
@@ -79,6 +80,9 @@
 | R-WE-06 | Result file name collision in `/tmp/wallet_editor` | suffix `_2` / `_<uuid8>` appended | `build_wallet_editor_result_path()` |
 | R-WE-07 | Concurrent Dropbox registry writes (multi-profile) | corrupt/missing rows in `wallet_editor.xlsx` | in-process `threading.Lock` in `wallet_editor_registry.py`; full download/upload per append; rev check before upload (lost-update skip) |
 | ~~R-TG-01~~ | ~~Silent Telegram sender failure (enqueue ≠ delivery)~~ | **mitigated** | Option B: health-state + periodic log in `telegram_bot.py` |
+| R-WE-08 | Add Wallet optional fields skip silently when Antares label/control not found | operator believes field set when UI control missing | Monitor `[WalletEditorAdd]` logs; extend label map after Antares UI changes |
+| R-WE-09 | Add Wallet UI labels/select options drift after Antares updates | fill skipped or wrong option | Contract tests + real UI smoke; tune `ADD_WALLET_LOWER_FORM_CONTROL_TYPES` |
+| R-WE-10 | KYC depends on real label `KYC`/`КУС` in lower form; non-standard DOM → unchecked | `kyc=да` ignored with `kyc_not_found` log | Real UI retest after Antares modal changes; scoped search may miss KYC above anchor rows |
 
 ### Telegram delivery risks (R-TG-*)
 
@@ -129,6 +133,9 @@
 | WE-AE | **complete** | Auto-enable Phase A (plan) + B1 (Antares) + B1.1 (`max_rows_per_run`) + B2 (registry patch); `/auto_enable_plan` + `/auto_enable_run` |
 | WE-HOLD | **complete** | HOLD enforcement for `add_partner` (manual + auto-enable); fail-closed |
 | WE-UX-A | **complete** | Registry row formatting preservation on append/patch |
+| WE-ADD-1 | **complete** | Add Wallet Phase 1: Excel routing (`detect_excel_routing`), contract, worker dispatch, create modal engine, strict post-save verification, result xlsx + TG summary; commits `6a28897`…`3de0b81` |
+| WE-ADD-1.1 | **complete** | Aggregate nested block: single checkbox, field-presence detection, nested account/merchant/card fill |
+| WE-ADD-2 | **complete** | Phase 2 optional columns (29 fields); status default `Тест`; no direction/state/pool/aggregate defaults; KYC scoped checkbox fix (`b68ded7`) |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 
@@ -181,6 +188,7 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | TASK-2026-05-31-02 | complete | Close G2 Runtime Architecture |
 | TASK-2026-05-31-03 | complete | Close G5 Data Contracts |
 | WALLET_EDITOR WE-0…WE-6 | complete | Integrate WalletEditor into main runtime |
+| WALLET_EDITOR ADD-WALLET | complete | Add Wallet Phase 1 / 1.1 / 2 — Excel ingest routing, create flow, optional fields |
 | TELEGRAM-SENDER-HEALTH-B | complete | Option B outbound delivery health + periodic log |
 | CONV-WE-HOOK | complete | ConversionAnalyzer problem_cards → Wallet Editor bridge |
 | CONFIG-MIGRATION-PHASE-1 | complete | `payout_config.yaml` → Rules V2 sheets + shadow compare + runtime switch |
@@ -271,3 +279,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-4A/4B complete — payout rules workbook + mode=1 validation |
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-4C complete — Payout Rules V2 production cutover (E-CONFIG-13); Phase 4D observation open |
 | 2026-06-07 | WE-AE, WE-HOLD, WE-UX-A closed; WE-UX-B/C, WE-AE-SCHEDULER-C added to open tasks |
+| 2026-06-21 | WE-ADD-1 / WE-ADD-1.1 / WE-ADD-2 closed; R-WE-08…R-WE-10 Add Wallet operational risks |

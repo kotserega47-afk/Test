@@ -2,9 +2,9 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.4 |
+| **KB версия** | v1.5 |
 | **Статус документа** | draft |
-| **Последнее обновление** | 2026-06-07 |
+| **Последнее обновление** | 2026-06-21 |
 
 ---
 
@@ -65,6 +65,7 @@ Deploy service name (Railway): `file-analyzer` — `railway.toml` L6.
 - **Job Health Guard C1** — observe-only: `core/job_progress.py` + `core/job_health.py` → `/status` `job_health:` block; recovery **off**.
 - **WalletEditor Auto-Enable** — plan/execute from recalculated Dropbox registry; TG `/auto_enable_plan`, `/auto_enable_run`; Antares via profile worker batch queue; B2 registry patch.
 - **WalletEditor HOLD enforcement** — runtime block on `add_partner` before Antares when card+partner on hold sheet.
+- **WalletEditor Add Wallet** — separate Excel routing + engine (`add_wallet_contract`, `add_wallet_engine`); per-profile worker queue; no registry write.
 - **Telegram token sanitization** — errors/logs redact bot token (E-SEC-01).
 
 ---
@@ -205,7 +206,9 @@ flowchart LR
 | `integrations/raccoon_jobs.py` | Raccoon job registry bindings | `JOB_REGISTRY` |
 | `integrations/wallet_editor_tg.py` | WalletEditor: TG document ingest, allowlist, operator routing | `tg_commands` MessageHandler |
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
-| `automation/engine.py` | WalletEditor Playwright business logic (Antares UI) | `automation/worker` |
+| `automation/engine.py` | WalletEditor Playwright business logic — disable flow (Antares UI) | `automation/worker` |
+| `automation/add_wallet_contract.py` | Add Wallet Excel contract, routing, batch prep, result dataframe | `wallet_editor_tg`, `add_wallet_engine` |
+| `automation/add_wallet_engine.py` | Add Wallet Playwright UI automation (create modal) | `automation/worker` `_run_add_wallet_task` |
 | `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming, `run_id` | worker, handler |
 | `integrations/wallet_editor_registry.py` | Dropbox registry append with retry/timeout/rev conflict | `wallet_editor_registry_async` (daemon) |
 | `integrations/wallet_editor_registry_async.py` | Stage result copy + schedule async append | `automation/worker` after TG send |
@@ -409,6 +412,7 @@ automation/worker.py add_task → engine.run → result xlsx → Telegram
 | **Entry** | `integrations/wallet_editor_tg.handle_wallet_editor_document` |
 | **Production path** | `scheduler.py` → PTB `app.run_polling()` → `integrations/tg_commands.py` MessageHandler |
 | **Input** | `.xlsx` из Telegram; operator credentials из env map |
+| **Routing** | `detect_excel_routing()`: disable = `card`+`action`+`value`; Add Wallet = `card`+`phone` (no `action`/`value`); ambiguous → reject |
 | **Output** | Result `.xlsx` в Telegram (`send_document`); summary text |
 
 **Pipeline (production):**
@@ -424,21 +428,47 @@ chat allowlist (WALLET_EDITOR_ALLOWED_CHAT_IDS)
         ↓
 operator routing (WALLET_EDITOR_OPERATOR_MAP → profile credentials)
         ↓
-WalletEditorTask
+detect_excel_routing()
+        ├─ disable (card+action+value) → WalletEditorTask → automation/engine.py
+        └─ add_wallet (card+phone)     → WalletEditorAddWalletTask → add_wallet_engine.run()
         ↓
 profile queue (per operator_profile)
         ↓
 profile worker (daemon thread per profile)
         ↓
-automation/engine.py (Playwright → Antares UI)
+[disable] automation/engine.py  OR  [add_wallet] automation/add_wallet_engine.py
         ↓
-result xlsx (wallet_editor_result_<INPUT>_<OPERATOR>.xlsx)
+result xlsx (wallet_editor_result_* / add_wallet result naming)
         ↓
 Telegram summary + document reply
         ↓
-Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort; job_params timeout)
+[disable only] Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort)
         ↓
 [optional] Auto-Enable: eligibility → batches → Antares enable → patch Включено/Комментарий включения
+```
+
+**Add Wallet pipeline (Phase 1 / 1.1 / 2 — complete):**
+
+```
+Telegram .xlsx (card + phone required)
+        ↓
+prepare_add_wallet_batch() — normalize columns/aliases; validate rows
+        ↓
+per row: pre-search duplicate (card_exists_strict) → open «Добавление кошелька» modal
+        ↓
+fill_add_wallet_form() — required Карта/Телефон; status default Тест; optional fields only if Excel non-empty
+        ↓
+[if aggregate column] select_single_aggregate_checkbox → nested aggregate fields (Phase 1.1)
+        ↓
+Phase 2 optional fields (text/textarea/select/radio/KYC in lower form)
+        ↓
+save → wait modal close OR validation error
+        ↓
+post-save strict card search (row_matches_card_strict) — modal close alone ≠ success
+        ↓
+result xlsx + Telegram batch summary ([WalletEditorAdd] log prefix)
+        ↓
+no Dropbox registry write (Add Wallet v1)
 ```
 
 **Auto-Enable pipeline (Phase A → B2):**
@@ -475,15 +505,17 @@ batch report + optional batch xlsx to TG route
 | Per-operator isolation | Отдельные credentials, auth-state, queue, worker на `operator_profile` |
 | Sequential per profile | Задачи одного профиля — последовательно; разные профили — параллельно |
 
-**Happy path:** allowlist OK → operator mapped → download to `/tmp/wallet_editor/` → `add_task(WalletEditorTask)` → profile worker → `engine.run()` → result file → TG summary + document → async registry append.
+**Happy path (disable):** allowlist OK → operator mapped → download to `/tmp/wallet_editor/` → `add_task(WalletEditorTask)` → profile worker → `engine.run()` → result file → TG summary + document → async registry append.
 
-**Failure path:** chat denied / non-xlsx / unmapped user / incomplete credentials → reply с отказом, `get_file` не вызывается; engine error → TG error text.
+**Happy path (Add Wallet):** allowlist OK → operator mapped → routing=ADD_WALLET → `add_add_wallet_task(WalletEditorAddWalletTask)` → `add_wallet_engine.run()` → result file → TG summary + document; **no** registry append.
+
+**Failure path:** chat denied / non-xlsx / unmapped user / incomplete credentials → reply с отказом, `get_file` не вызывается; engine error → TG error text; Add Wallet row failures captured in result xlsx with per-row `result` code.
 
 **Outbound health (Option B):** jobs/workers use `telegram_bot` queue; health-state tracks enqueue vs delivery; `scheduler.schedule_loop` emits periodic `[TelegramSender/health]` logs. Error paths sanitize bot token (E-SEC-01).
 
 **Статус** | CONFIRMED |
 
-См. `decisions.md` **E-WE-01 … E-WE-15**, **E-SEC-01**.
+См. `decisions.md` **E-WE-01 … E-WE-19**, **E-SEC-01**.
 
 ---
 
@@ -593,3 +625,4 @@ Database: not present in active runtime chain.
 | 2026-06-03 | **Registry async + timeout** — job_params; TG before registry; E-WE-10 |
 | 2026-06-04 | **Wallet hang mitigation** — Patch A (PW timeouts + stage logs); Patch B (`dispatch_job_background`); Job Health Guard C1 (observe-only `/status` `job_health:`) |
 | 2026-06-07 | **WalletEditor Auto-Enable** (Phase A/B1/B2); **HOLD enforcement**; **registry UX-A** formatting; token sanitization; wallet datepicker fix |
+| 2026-06-21 | **WalletEditor Add Wallet** — Excel routing fork; `add_wallet_contract` + `add_wallet_engine`; Phase 1/1.1/2 complete; KYC scoped checkbox; E-WE-16…E-WE-19 |

@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.5 |
-| **Последнее обновление** | 2026-06-15 |
+| **KB версия** | v1.6 |
+| **Последнее обновление** | 2026-06-21 |
 
 ---
 
@@ -12,8 +12,8 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-15**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
-| **Implicit invariants (I#)** | I1–I11 — см. таблицы |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-19**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Implicit invariants (I#)** | I1–I17 — см. таблицы |
 
 ---
 
@@ -100,6 +100,10 @@
 | E-WE-13 | 2026-06-07 | Auto-Enable Phase B2: after batch execution patch registry `Включено` + `Комментарий включения`; lifecycle recalc maps OK→ВКЛЮЧЕНО, SKIP→ПРОПУЩЕНО, FAIL→ОШИБКА; `/auto_enable_plan` plan-only; `/auto_enable_run` fresh plan + execute (manual ignores `approval_required`) | CONFIRMED | `wallet_editor_auto_enable.py`; `wallet_editor_registry.py` `patch_enable_results_in_dropbox_registry` |
 | E-WE-14 | 2026-06-07 | HOLD sheet enforces runtime block on `add_partner` before Antares: manual → SKIP; auto-enable → SKIP; hold-list unavailable → manual add_partner SKIP (fail-closed) / auto-enable FAIL; shared `wallet_editor_hold.py`; `remove_partner`/`set_status` unaffected | CONFIRMED | `automation/engine.py`; `wallet_editor_auto_enable_executor.py` |
 | E-WE-15 | 2026-06-07 | Registry append maps `partner` from `value` for both `remove_partner` and `add_partner` rows (`partner_from_row`) | CONFIRMED | `wallet_editor_registry_lifecycle.py` |
+| E-WE-16 | 2026-06-21 | Add Wallet duplicate detection is **card-only**: within-file dedup by normalized card; pre-create skip via strict card search; no phone-level uniqueness | CONFIRMED | `automation/add_wallet_contract.py`; `automation/add_wallet_engine.py` `card_exists_strict` |
+| E-WE-17 | 2026-06-21 | Add Wallet row success requires strict post-save card verification (`row_matches_card_strict`); **modal close ≠ OK**; `FAIL_NOT_FOUND_AFTER_SAVE` when card absent after save | CONFIRMED | `automation/add_wallet_engine.py`; `automation/audit.py` |
+| E-WE-18 | 2026-06-21 | Add Wallet v1 defaults: **only** `status=Тест` when column absent/empty; `direction` / `state` / `pool` / `aggregate` filled **only** when Excel provides explicit non-empty values — no implicit ЧБР or in/enabled defaults | CONFIRMED | `automation/add_wallet_contract.py`; real UI verified 2026-06-21 |
+| E-WE-19 | 2026-06-21 | Add Wallet v1 does **not** write Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); disable / auto-enable registry paths unchanged | CONFIRMED | `automation/worker.py` `_run_add_wallet_task` (no registry schedule) |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -173,6 +177,8 @@
 | I13 | Observation layer errors (write/retention/read) must not affect conversion pipeline outcome; `conversion_fingerprint_computed` payload unchanged | silent behavior change / contract drift | CONFIRMED |
 | I14 | `schedule_loop` must not block on job completion; health tick runs every loop iteration when guard enabled | false “scheduler dead” on long wallet | CONFIRMED |
 | I15 | Job Health Guard C1 must not clear locks or start duplicate jobs; recovery requires explicit C2/C3 + flag | split-brain wallet / zombie Chromium | CONFIRMED |
+| I16 | Add Wallet optional Phase 2 fields skip silently when UI control not found; required `card`/`phone` and explicit aggregate nested fields raise on missing control | partial form fill without operator notice | CONFIRMED |
+| I17 | Add Wallet KYC checkbox resolved only in lower-form scope by exact label KYC/КУС; must not use document-wide preceding checkbox xpath (aggregate isolation) | wrong aggregate selected | CONFIRMED |
 
 ---
 
@@ -221,3 +227,4 @@
 | 2026-06-11 | Hourly gate bucket tolerance — E-OPS-05 (`f936078`) |
 | 2026-06-15 | Hourly incident whitelist fix — E-CONFIG-14 (`e4b31fb`); payin group spacing — E-HOURLY-01 |
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
+| 2026-06-21 | WalletEditor Add Wallet — E-WE-16…E-WE-19; invariants I16–I17 |

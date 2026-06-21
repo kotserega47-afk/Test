@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.6 |
-| **Снимок на дату** | 2026-06-15 |
+| **KB версия** | v1.7 |
+| **Снимок на дату** | 2026-06-21 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -68,6 +68,7 @@
 - **Legacy job_params whitelist** — `wallet_editor`, `wallet_editor_auto_enable`, and `conversion.valid_status` allowed in `config_manager` validator; prevents `get_job_params(hourly)` → `{}` when extra job rows exist (E-CONFIG-14 `e4b31fb`, E-CONFIG-15 `194d99e`).
 - **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
 - **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
+- **WalletEditor Add Wallet** — Telegram Excel ingest routes Add Wallet files (`card`+`phone`) separately from disable (`card`+`action`+`value`); Playwright create flow via `automation/add_wallet_engine.py`; Phase 1 / 1.1 / 2 **complete**; real UI verified (2026-06-21); no Dropbox registry write (E-WE-16…E-WE-19).
 
 ---
 
@@ -246,6 +247,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
 | **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe openpyxl write (UX-A row style copy); async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10, UX-A) |
 | **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from recalculated registry; plan `/auto_enable_plan`; execute `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения`; HOLD check before `open_card` |
+| **Add Wallet** | Excel `card`+`phone` → `detect_excel_routing()` → `add_add_wallet_task()` → `add_wallet_engine.run()`; required cols: `card`, `phone`; default: `status=Тест` only; success = strict post-save card search (`row_matches_card_strict`); **no** registry append; disable/auto-enable/conversion paths unchanged |
 | **HOLD enforcement** | `integrations/wallet_editor_hold.py`; manual engine pre-pass; auto-enable executor batch check; fail-closed |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
 | **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
@@ -271,7 +273,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 
 | Тип | Где | Покрывает |
 |-----|-----|-----------|
-| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render (`test_hourly_scheduler_gate`, `test_job_params_legacy_whitelist`, `test_hourly_hide_inactive_rows`, `test_hourly_render_golden`), **WalletEditor** (`test_wallet_editor_*`, `test_wallet_editor_dropbox_registry`), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
+| Unit / integration | `tests/` | rules_v2, analyzers, scheduler health, lock status, hourly/wallet render (`test_hourly_scheduler_gate`, `test_job_params_legacy_whitelist`, `test_hourly_hide_inactive_rows`, `test_hourly_render_golden`), **WalletEditor** (`test_wallet_editor_*`, `test_wallet_editor_dropbox_registry`, **`test_add_wallet_contract`**, **`test_add_wallet_engine`**), **conversion** (`test_conversion_*`, characterization, observability, fingerprint, **fp observation** `test_conversion_fp_observation`) |
 | CLI tools | `tools/validate_rules_xlsx.py` | rules validation (DEV_ONLY) |
 | Manual scripts | `scripts/test_wallet_pipeline.py`, `scripts/test_bridge_legacy.py` | DEV_ONLY |
 
@@ -332,3 +334,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-11 | Hourly scheduler gate bucket tolerance + `/status` observability — E-OPS-05 (`f936078`) |
 | 2026-06-15 | Hourly auto-report incident resolved — legacy job_params whitelist fix E-CONFIG-14 (`e4b31fb`); payin group spacing with `hide_inactive_rows` E-HOURLY-01; Raccoon hourly log prefixes |
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
+| 2026-06-21 | WalletEditor Add Wallet Phase 1 / 1.1 / 2 complete — routing, contract, engine, KYC fix; real UI verified; E-WE-16…E-WE-19 |
