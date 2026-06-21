@@ -13,24 +13,26 @@ from automation.add_wallet_engine import (
     PHASE2_OPTIONAL_TEXT_FIELDS,
     PHASE2_OPTIONAL_TEXTAREA_FIELDS,
     SaveWaitOutcome,
+    _checkbox_for_label,
+    _detect_aggregate_expansion,
     _fill_gender_radio,
     _fill_kyc_checkbox,
+    _find_aggregate_checkbox_label,
+    _find_aggregate_field_input,
     _fill_multiselect_list,
     _fill_optional_select_by_label,
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
     _select_by_label,
     card_exists_strict,
-    fill_aggregate_field_if_present,
     goto_wallet_page,
     save_add_wallet_modal,
-    select_single_aggregate_checkbox,
-    wait_for_aggregate_fields_visible,
 )
 from automation.add_wallet_engine import ACCOUNT_NUMBER_LABELS
 from automation.audit import log, mask_card
 from automation.edit_wallet_contract import (
     LOG_PREFIX,
+    RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
     RESULT_FAIL_FILL,
     RESULT_FAIL_NOT_FOUND,
     RESULT_FAIL_OPEN_CARD,
@@ -52,6 +54,11 @@ from automation.runtime import RunConfig, require_wallet_editor_antares_credenti
 from core.playwright_cleanup import close_playwright_stack
 
 EDIT_TITLE = "Изменение кошелька"
+AGGREGATE_NESTED_COLUMNS = frozenset({"account", "merchant_id_sbp", "account_number"})
+
+
+class AggregateNotActiveError(Exception):
+    """Raised when Edit Wallet cannot update aggregate fields without switching aggregate."""
 
 
 def _log(stage: str, *, card: str | None = None, extra: str = "") -> None:
@@ -65,6 +72,71 @@ def _assert_edit_modal(page) -> None:
     text = header.inner_text(timeout=3_000)
     if EDIT_TITLE not in text:
         raise RuntimeError(f"ожидалась модалка «{EDIT_TITLE}», получено: {text!r}")
+
+
+def _expected_aggregate_name(row: EditWalletRow) -> str | None:
+    if row.aggregate and ({"aggregate", "aggregates"} & row.provided_columns):
+        return row.aggregate
+    return None
+
+
+def _provided_aggregate_nested(provided: frozenset[str]) -> frozenset[str]:
+    return AGGREGATE_NESTED_COLUMNS & provided
+
+
+def _assert_aggregate_active(page, aggregate_name: str) -> None:
+    modal = page.locator(MODAL_BODY)
+    label_el = _find_aggregate_checkbox_label(modal, aggregate_name)
+    if label_el is None:
+        raise AggregateNotActiveError(f"aggregate not active: {aggregate_name}")
+
+    checkbox = _checkbox_for_label(label_el)
+    if checkbox.count() == 0:
+        raise AggregateNotActiveError(f"aggregate not active: {aggregate_name}")
+
+    try:
+        checked = checkbox.first.is_checked()
+    except Exception as exc:
+        raise AggregateNotActiveError(f"aggregate not active: {aggregate_name}") from exc
+
+    if not checked:
+        raise AggregateNotActiveError(f"aggregate not active: {aggregate_name}")
+
+    if _detect_aggregate_expansion(modal) is None:
+        raise AggregateNotActiveError(f"aggregate not active: {aggregate_name}")
+
+
+def _assert_aggregate_block_visible(page) -> None:
+    modal = page.locator(MODAL_BODY)
+    if _detect_aggregate_expansion(modal) is None:
+        raise AggregateNotActiveError("aggregate block not visible")
+
+
+def _fill_edit_aggregate_field(modal, labels: tuple[str, ...], value: str) -> None:
+    field = None
+    matched_label: str | None = None
+    for label in labels:
+        field = _find_aggregate_field_input(modal, label)
+        if field is not None:
+            matched_label = label
+            break
+
+    if field is None:
+        label_name = matched_label or labels[0]
+        raise AggregateNotActiveError(f"aggregate field not visible: {label_name}")
+
+    try:
+        visible = field.is_visible()
+    except Exception as exc:
+        raise AggregateNotActiveError(
+            f"aggregate field not visible: {matched_label or labels[0]}"
+        ) from exc
+
+    if not visible:
+        raise AggregateNotActiveError(f"aggregate field not visible: {matched_label or labels[0]}")
+
+    field.fill("")
+    field.fill(value)
 
 
 def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
@@ -93,17 +165,22 @@ def fill_edit_wallet_form(page, row: EditWalletRow) -> None:
                 if group_label == "Группы":
                     raise
 
-    if "aggregate" in provided and row.aggregate:
-        select_single_aggregate_checkbox(page, row.aggregate)
-        wait_for_aggregate_fields_visible(page, row.aggregate)
+    expected_aggregate = _expected_aggregate_name(row)
+    nested_provided = _provided_aggregate_nested(provided)
 
-    modal = page.locator(MODAL_BODY)
-    if "account" in provided:
-        fill_aggregate_field_if_present(modal, ("Аккаунт",), row.account)
-    if "merchant_id_sbp" in provided:
-        fill_aggregate_field_if_present(modal, ("MerchantId СБП",), row.merchant_id_sbp)
-    if "account_number" in provided:
-        fill_aggregate_field_if_present(modal, ACCOUNT_NUMBER_LABELS, row.account_number)
+    if expected_aggregate:
+        _assert_aggregate_active(page, expected_aggregate)
+    elif nested_provided:
+        _assert_aggregate_block_visible(page)
+
+    if nested_provided:
+        modal = page.locator(MODAL_BODY)
+        if "account" in provided:
+            _fill_edit_aggregate_field(modal, ("Аккаунт",), row.account)
+        if "merchant_id_sbp" in provided:
+            _fill_edit_aggregate_field(modal, ("MerchantId СБП",), row.merchant_id_sbp)
+        if "account_number" in provided:
+            _fill_edit_aggregate_field(modal, ACCOUNT_NUMBER_LABELS, row.account_number)
 
     for attr, label in PHASE2_OPTIONAL_TEXT_FIELDS:
         if attr in provided:
@@ -154,6 +231,14 @@ def _process_row(
         try:
             fill_edit_wallet_form(page, row)
             _log("form_filled", card=row.card)
+        except AggregateNotActiveError as exc:
+            return make_row_result(
+                row,
+                row_number=row.row_number,
+                result=RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
+                comment=str(exc),
+                operator_profile=operator_profile,
+            )
         except Exception as exc:
             return make_row_result(
                 row,

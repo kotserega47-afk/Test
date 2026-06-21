@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from automation.edit_wallet_contract import (
     EditWalletRow,
+    RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
     RESULT_FAIL_NOT_FOUND,
     RESULT_FAIL_OPEN_CARD,
     RESULT_FAIL_SAVE_TIMEOUT,
@@ -13,6 +16,7 @@ from automation.edit_wallet_contract import (
 )
 from automation.add_wallet_engine import SaveWaitOutcome
 from automation.edit_wallet_engine import (
+    AggregateNotActiveError,
     _process_row,
     fill_edit_wallet_form,
 )
@@ -177,3 +181,98 @@ def test_success_ok(
     page = MagicMock()
     result = _process_row(page, _row(), operator_profile="DENIS")
     assert result.result == RESULT_OK
+
+
+@patch("automation.edit_wallet_engine._assert_aggregate_active")
+def test_aggregate_provided_does_not_click_checkbox(mock_assert_active):
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(
+            provided_columns=frozenset({"aggregate"}),
+            aggregate="ЧБР",
+        ),
+    )
+    mock_assert_active.assert_called_once_with(page, "ЧБР")
+
+
+@patch("automation.edit_wallet_engine._fill_edit_aggregate_field")
+@patch("automation.edit_wallet_engine._assert_aggregate_active")
+def test_aggregate_active_fills_nested_fields(mock_assert_active, mock_fill_field):
+    page = MagicMock()
+    fill_edit_wallet_form(
+        page,
+        _row(
+            provided_columns=frozenset({"aggregate", "account_number"}),
+            aggregate="ЧБР",
+            account_number="40820810000000007380",
+        ),
+    )
+    mock_assert_active.assert_called_once_with(page, "ЧБР")
+    mock_fill_field.assert_called_once()
+
+
+@patch("automation.edit_wallet_engine._assert_aggregate_active")
+def test_aggregate_provided_but_not_active_fails(mock_assert_active):
+    mock_assert_active.side_effect = AggregateNotActiveError("aggregate not active: ЧБР")
+    page = MagicMock()
+    with pytest.raises(AggregateNotActiveError, match="aggregate not active"):
+        fill_edit_wallet_form(
+            page,
+            _row(
+                provided_columns=frozenset({"aggregate"}),
+                aggregate="ЧБР",
+            ),
+        )
+
+
+@patch("automation.edit_wallet_engine.open_card")
+@patch("automation.edit_wallet_engine._assert_edit_modal")
+@patch("automation.edit_wallet_engine.card_exists_strict", return_value=True)
+def test_aggregate_not_active_returns_fail_code(mock_exists, mock_assert, mock_open):
+    page = MagicMock()
+    with patch(
+        "automation.edit_wallet_engine.fill_edit_wallet_form",
+        side_effect=AggregateNotActiveError("aggregate not active: ЧБР"),
+    ):
+        result = _process_row(
+            page,
+            _row(provided_columns=frozenset({"aggregate"}), aggregate="ЧБР"),
+            operator_profile="DENIS",
+        )
+    assert result.result == RESULT_FAIL_AGGREGATE_NOT_ACTIVE
+    assert "aggregate not active" in result.comment
+
+
+@patch("automation.edit_wallet_engine._fill_edit_aggregate_field")
+@patch("automation.edit_wallet_engine._assert_aggregate_block_visible")
+def test_account_number_without_visible_block_fails(mock_assert_block, mock_fill_field):
+    mock_assert_block.side_effect = AggregateNotActiveError("aggregate block not visible")
+    page = MagicMock()
+    with pytest.raises(AggregateNotActiveError, match="aggregate block not visible"):
+        fill_edit_wallet_form(
+            page,
+            _row(
+                provided_columns=frozenset({"account_number"}),
+                account_number="40820810000000007380",
+            ),
+        )
+    mock_fill_field.assert_not_called()
+
+
+@patch("automation.edit_wallet_engine._select_by_label")
+@patch("automation.edit_wallet_engine._fill_edit_aggregate_field")
+@patch("automation.edit_wallet_engine._assert_aggregate_block_visible")
+@patch("automation.edit_wallet_engine._assert_aggregate_active")
+def test_omitted_aggregate_has_no_aggregate_interaction(
+    mock_assert_active,
+    mock_assert_block,
+    mock_fill_field,
+    mock_select,
+):
+    page = MagicMock()
+    fill_edit_wallet_form(page, _row(provided_columns=frozenset({"status"}), status="Тест"))
+    mock_select.assert_called_once()
+    mock_assert_active.assert_not_called()
+    mock_assert_block.assert_not_called()
+    mock_fill_field.assert_not_called()

@@ -1,4 +1,8 @@
-"""Excel contract and routing for WalletEditor Edit Wallet (v1)."""
+"""Excel contract and routing for WalletEditor Edit Wallet (v1).
+
+Aggregate column semantics (v1): optional guard only — must match the already-active
+aggregate; Edit Wallet never selects or switches aggregate checkboxes.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ RESULT_SKIP_NOT_FOUND = "SKIP_NOT_FOUND"
 RESULT_FAIL_INVALID = "FAIL_INVALID_ROW"
 RESULT_FAIL_OPEN_CARD = "FAIL_OPEN_CARD"
 RESULT_FAIL_FILL = "FAIL_FILL_FORM"
+RESULT_FAIL_AGGREGATE_NOT_ACTIVE = "FAIL_AGGREGATE_NOT_ACTIVE"
 RESULT_FAIL_VALIDATION = "FAIL_SAVE_VALIDATION"
 RESULT_FAIL_SAVE_TIMEOUT = "FAIL_SAVE_TIMEOUT"
 RESULT_FAIL_NOT_FOUND = "FAIL_NOT_FOUND_AFTER_SAVE"
@@ -40,6 +45,7 @@ FAIL_RESULTS = frozenset(
         RESULT_FAIL_INVALID,
         RESULT_FAIL_OPEN_CARD,
         RESULT_FAIL_FILL,
+        RESULT_FAIL_AGGREGATE_NOT_ACTIVE,
         RESULT_FAIL_VALIDATION,
         RESULT_FAIL_SAVE_TIMEOUT,
         RESULT_FAIL_NOT_FOUND,
