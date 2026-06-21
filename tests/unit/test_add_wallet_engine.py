@@ -17,6 +17,12 @@ from automation.add_wallet_contract import (
 from automation.add_wallet_engine import (
     SaveWaitOutcome,
     _detect_aggregate_expansion,
+    _fill_gender_radio,
+    _fill_kyc_checkbox,
+    _fill_optional_select_by_label,
+    _fill_optional_text_by_label,
+    _fill_optional_textarea_by_label,
+    _fill_phase2_top_level_fields,
     _process_row,
     card_exists_strict,
     checkbox_label_matches,
@@ -24,6 +30,8 @@ from automation.add_wallet_engine import (
     fill_add_wallet_form,
     fill_aggregate_field_if_present,
     fill_aggregate_modal_fields,
+    is_kyc_true,
+    normalize_gender_option,
     select_single_aggregate_checkbox,
     wait_for_aggregate_fields_visible,
     wait_modal_closed_or_error,
@@ -460,3 +468,133 @@ def test_missing_aggregate_fields_fail_fill(
     result = _process_row(page, _row(aggregate="ЧБР"), cfg=cfg, operator_profile="DENIS")
     assert result.result == RESULT_FAIL_FILL
     assert "aggregate fields not visible" in result.comment
+
+
+def test_normalize_gender_option_values():
+    assert normalize_gender_option("M") == "М"
+    assert normalize_gender_option("female") == "Ж"
+    assert normalize_gender_option("unknown") is None
+
+
+def test_is_kyc_true_values():
+    assert is_kyc_true("1") is True
+    assert is_kyc_true("да") is True
+    assert is_kyc_true("false") is False
+    assert is_kyc_true("") is False
+
+
+@patch("automation.add_wallet_engine._fill_optional_text_by_label")
+@patch("automation.add_wallet_engine._fill_single_aggregate")
+@patch("automation.add_wallet_engine._fill_multiselect_list")
+@patch("automation.add_wallet_engine._select_by_label")
+@patch("automation.add_wallet_engine._fill_text_by_label")
+def test_fill_add_wallet_form_calls_phase2(
+    mock_text,
+    mock_select,
+    mock_multi,
+    mock_aggregate,
+    mock_phase2_text,
+):
+    page = MagicMock()
+    row = _row(surname="Petrov", comment="note")
+    with patch("automation.add_wallet_engine._fill_phase2_top_level_fields") as mock_phase2:
+        fill_add_wallet_form(page, row)
+    mock_phase2.assert_called_once_with(page, row)
+
+
+def test_fill_optional_text_skips_empty_and_missing():
+    page = MagicMock()
+    with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=None):
+        _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
+    field = MagicMock()
+    with patch("automation.add_wallet_engine._find_text_input_by_label", return_value=field):
+        _fill_optional_text_by_label(page, "Фамилия", "")
+        field.fill.assert_not_called()
+        _fill_optional_text_by_label(page, "Фамилия", "Ivanov")
+        field.fill.assert_called()
+
+
+def test_fill_optional_textarea_fills():
+    page = MagicMock()
+    field = MagicMock()
+    with patch("automation.add_wallet_engine._find_textarea_by_label", return_value=field):
+        _fill_optional_textarea_by_label(page, "Комментарий", "hello")
+    field.fill.assert_called()
+
+
+def test_fill_optional_select_fills():
+    page = MagicMock()
+    select = MagicMock()
+    with patch("automation.add_wallet_engine._find_select_by_label", return_value=select):
+        _fill_optional_select_by_label(page, "Шлюз", "GW1")
+    select.select_option.assert_called()
+
+
+def test_fill_gender_radio_clicks_option():
+    page = MagicMock()
+    modal = MagicMock()
+    page.locator.return_value = modal
+    row_el = MagicMock()
+    row_el.is_visible.return_value = True
+    pol_label = MagicMock()
+    pol_label.inner_text.return_value = "Пол"
+    m_label = MagicMock()
+    m_label.inner_text.return_value = "М"
+    labels = MagicMock()
+    labels.count.side_effect = [1, 2]
+    labels.first = pol_label
+    labels.nth.side_effect = lambda i: m_label if i == 1 else pol_label
+    row_el.locator.return_value = labels
+    rows = MagicMock()
+    rows.count.return_value = 1
+    rows.nth.return_value = row_el
+    modal.locator.return_value = rows
+
+    _fill_gender_radio(page, "male")
+    m_label.click.assert_called_once()
+
+
+def test_fill_kyc_checkbox_checks_when_true():
+    page = MagicMock()
+    modal = MagicMock()
+    page.locator.return_value = modal
+    checkbox = MagicMock()
+    checkbox.is_checked.return_value = False
+    with patch("automation.add_wallet_engine._find_checkbox_by_exact_label", return_value=checkbox):
+        _fill_kyc_checkbox(page, "yes")
+    checkbox.check.assert_called_once_with(force=True)
+
+
+def test_fill_kyc_checkbox_skips_false():
+    page = MagicMock()
+    with patch("automation.add_wallet_engine._find_checkbox_by_exact_label") as mock_find:
+        _fill_kyc_checkbox(page, "no")
+    mock_find.assert_not_called()
+
+
+@patch("automation.add_wallet_engine._fill_kyc_checkbox")
+@patch("automation.add_wallet_engine._fill_gender_radio")
+@patch("automation.add_wallet_engine._fill_optional_select_by_label")
+@patch("automation.add_wallet_engine._fill_optional_textarea_by_label")
+@patch("automation.add_wallet_engine._fill_optional_text_by_label")
+def test_fill_phase2_top_level_fields(
+    mock_text,
+    mock_textarea,
+    mock_select,
+    mock_gender,
+    mock_kyc,
+):
+    page = MagicMock()
+    row = _row(
+        surname="Ivanov",
+        comment="c1",
+        gateway="GW",
+        gender="M",
+        kyc="1",
+    )
+    _fill_phase2_top_level_fields(page, row)
+    mock_text.assert_any_call(page, "Фамилия", "Ivanov")
+    mock_textarea.assert_any_call(page, "Комментарий", "c1")
+    mock_select.assert_any_call(page, "Шлюз", "GW")
+    mock_gender.assert_called_once_with(page, "M")
+    mock_kyc.assert_called_once_with(page, "1")

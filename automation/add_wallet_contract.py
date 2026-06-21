@@ -21,6 +21,39 @@ DEFAULT_DIRECTION = "in"
 DEFAULT_POOL = "ЧБР"
 
 V1_REQUIRED_COLUMNS = frozenset({"card", "phone"})
+PHASE2_OPTIONAL_COLUMNS = frozenset(
+    {
+        "surname",
+        "first_name",
+        "patronymic",
+        "gender",
+        "login",
+        "password",
+        "password_extra",
+        "security_question",
+        "bank_card_sim",
+        "gateway",
+        "balance",
+        "topup_method",
+        "merch",
+        "comment_service",
+        "comment_deleted_account",
+        "comment",
+        "role",
+        "marker",
+        "cluster_sim",
+        "cluster_phone",
+        "cluster_sim_slot",
+        "server_id",
+        "ours",
+        "cluster",
+        "payout_priority",
+        "kyc",
+        "queue_length",
+        "queue_depth",
+        "bakai_customer_id",
+    }
+)
 V1_OPTIONAL_COLUMNS = frozenset(
     {
         "aggregate",
@@ -35,7 +68,7 @@ V1_OPTIONAL_COLUMNS = frozenset(
         "direction",
         "pool",
     }
-)
+) | PHASE2_OPTIONAL_COLUMNS
 DISABLE_MARKERS = frozenset({"action", "value"})
 
 RESULT_OK = "OK"
@@ -94,6 +127,51 @@ _COLUMN_ALIASES = {
     "номер счета": "account_number",
     "номер расчёта": "account_number",
     "номер расчета": "account_number",
+    "surname": "surname",
+    "фамилия": "surname",
+    "first_name": "first_name",
+    "имя": "first_name",
+    "patronymic": "patronymic",
+    "отчество": "patronymic",
+    "gender": "gender",
+    "пол": "gender",
+    "login": "login",
+    "логин": "login",
+    "password": "password",
+    "пароль": "password",
+    "password_extra": "password_extra",
+    "дополнительный пароль": "password_extra",
+    "security_question": "security_question",
+    "контрольный вопрос": "security_question",
+    "bank_card_sim": "bank_card_sim",
+    "gateway": "gateway",
+    "шлюз": "gateway",
+    "balance": "balance",
+    "баланс": "balance",
+    "topup_method": "topup_method",
+    "метод пополнения": "topup_method",
+    "merch": "merch",
+    "comment_service": "comment_service",
+    "comment_deleted_account": "comment_deleted_account",
+    "comment": "comment",
+    "комментарий": "comment",
+    "role": "role",
+    "роль": "role",
+    "marker": "marker",
+    "маркер": "marker",
+    "cluster_sim": "cluster_sim",
+    "cluster_phone": "cluster_phone",
+    "cluster_sim_slot": "cluster_sim_slot",
+    "server_id": "server_id",
+    "ours": "ours",
+    "cluster": "cluster",
+    "кластер": "cluster",
+    "payout_priority": "payout_priority",
+    "kyc": "kyc",
+    "кус": "kyc",
+    "queue_length": "queue_length",
+    "queue_depth": "queue_depth",
+    "bakai_customer_id": "bakai_customer_id",
     "action": "action",
     "value": "value",
 }
@@ -121,6 +199,35 @@ class AddWalletRow:
     merchant_id_sbp: str = ""
     account_number: str = ""
     aggregates: str = ""
+    surname: str = ""
+    first_name: str = ""
+    patronymic: str = ""
+    gender: str = ""
+    login: str = ""
+    password: str = ""
+    password_extra: str = ""
+    security_question: str = ""
+    bank_card_sim: str = ""
+    gateway: str = ""
+    balance: str = ""
+    topup_method: str = ""
+    merch: str = ""
+    comment_service: str = ""
+    comment_deleted_account: str = ""
+    comment: str = ""
+    role: str = ""
+    marker: str = ""
+    cluster_sim: str = ""
+    cluster_phone: str = ""
+    cluster_sim_slot: str = ""
+    server_id: str = ""
+    ours: str = ""
+    cluster: str = ""
+    payout_priority: str = ""
+    kyc: str = ""
+    queue_length: str = ""
+    queue_depth: str = ""
+    bakai_customer_id: str = ""
     input_columns: dict[str, str] = field(default_factory=dict)
 
 
@@ -270,6 +377,10 @@ def _validate_status(value: str) -> str | None:
     return None
 
 
+def _phase2_fields_from_row(row: pd.Series) -> dict[str, str]:
+    return {name: _cell_str(row.get(name)) for name in PHASE2_OPTIONAL_COLUMNS}
+
+
 def prepare_add_wallet_batch(
     file_path: str,
     *,
@@ -410,6 +521,7 @@ def prepare_add_wallet_batch(
                 merchant_id_sbp=merchant_id_sbp,
                 account_number=account_number,
                 aggregates=aggregates_raw,
+                **_phase2_fields_from_row(row),
                 input_columns=input_columns,
             )
         )

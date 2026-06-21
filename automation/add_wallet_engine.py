@@ -201,7 +201,10 @@ def _find_text_input_by_label_in(scope, label_text: str):
             continue
         if not _labels_match(label, label_text):
             continue
-        inputs = row.locator("input[type='text'], input:not([type='checkbox']):not([type='radio'])")
+        inputs = row.locator(
+            "input[type='text'], input[type='password'], "
+            "input:not([type='checkbox']):not([type='radio'])"
+        )
         if inputs.count() == 0:
             continue
         return inputs.first
@@ -227,7 +230,10 @@ def _find_all_text_inputs_by_label_in(scope, label_text: str) -> list:
             continue
         if not _labels_match(label, label_text):
             continue
-        inputs = row.locator("input[type='text'], input:not([type='checkbox']):not([type='radio'])")
+        inputs = row.locator(
+            "input[type='text'], input[type='password'], "
+            "input:not([type='checkbox']):not([type='radio'])"
+        )
         if inputs.count() == 0:
             continue
         matches.append(inputs.first)
@@ -294,6 +300,194 @@ def _find_multiselect_by_label(page: Page, label_text: str):
             return None
         return multiselect.first
     return None
+
+
+def _find_textarea_by_label_in(scope, label_text: str):
+    rows = scope.locator("div.row")
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        if not row.is_visible():
+            continue
+        labels = row.locator("label")
+        if labels.count() == 0:
+            continue
+        try:
+            label = labels.first.inner_text(timeout=1_000).strip()
+        except Exception:
+            continue
+        if not _labels_match(label, label_text):
+            continue
+        textareas = row.locator("textarea")
+        if textareas.count() == 0:
+            continue
+        return textareas.first
+    return None
+
+
+def _find_textarea_by_label(page: Page, label_text: str):
+    modal = page.locator(MODAL_BODY)
+    return _find_textarea_by_label_in(modal, label_text)
+
+
+def _fill_optional_text_by_label(page: Page, label: str, value: str) -> None:
+    if not value:
+        return
+    field = _find_text_input_by_label(page, label)
+    if field is None:
+        return
+    field.fill("")
+    field.fill(value)
+
+
+def _fill_optional_textarea_by_label(page: Page, label: str, value: str) -> None:
+    if not value:
+        return
+    field = _find_textarea_by_label(page, label)
+    if field is None:
+        return
+    field.fill("")
+    field.fill(value)
+
+
+def _fill_optional_select_by_label(page: Page, label: str, value: str) -> None:
+    if not value:
+        return
+    select = _find_select_by_label(page, label)
+    if select is None:
+        return
+    try:
+        select.select_option(label=value)
+    except Exception:
+        try:
+            select.select_option(value=value)
+        except Exception:
+            return
+
+
+_GENDER_VALUE_TO_OPTION = {
+    "м": "М",
+    "m": "М",
+    "male": "М",
+    "ж": "Ж",
+    "f": "Ж",
+    "female": "Ж",
+}
+_KYC_TRUE_VALUES = frozenset({"1", "true", "yes", "да", "y", "checked"})
+
+PHASE2_OPTIONAL_TEXT_FIELDS = (
+    ("surname", "Фамилия"),
+    ("first_name", "Имя"),
+    ("patronymic", "Отчество"),
+    ("login", "Логин"),
+    ("password", "Пароль"),
+    ("password_extra", "Дополнительный пароль"),
+    ("security_question", "Контрольный вопрос"),
+    ("bank_card_sim", "Sim банкпозиция карты"),
+    ("balance", "Баланс"),
+    ("merch", "Мерч"),
+    ("marker", "Маркер"),
+    ("cluster_sim", "Кластер sim"),
+    ("cluster_phone", "Номер телефона внутри кластера"),
+    ("cluster_sim_slot", "Номер слота симкарты внутри телефона"),
+    ("server_id", "Сервер ID"),
+    ("cluster", "Кластер"),
+    ("queue_length", "Длина очереди"),
+    ("queue_depth", "Глубина очереди"),
+    ("bakai_customer_id", "Bakai customer_id"),
+)
+PHASE2_OPTIONAL_TEXTAREA_FIELDS = (
+    ("comment_service", "Комментарий к сервисные работы"),
+    ("comment_deleted_account", "Комментарий к удаленный аккаунт"),
+    ("comment", "Комментарий"),
+)
+PHASE2_OPTIONAL_SELECT_FIELDS = (
+    ("gateway", "Шлюз"),
+    ("topup_method", "Метод пополнения"),
+    ("role", "Роль"),
+    ("ours", "Наш"),
+    ("payout_priority", "Приоритет для выплат"),
+)
+
+
+def normalize_gender_option(value: str) -> str | None:
+    return _GENDER_VALUE_TO_OPTION.get((value or "").strip().casefold())
+
+
+def is_kyc_true(value: str) -> bool:
+    return (value or "").strip().casefold() in _KYC_TRUE_VALUES
+
+
+def _fill_gender_radio(page: Page, value: str) -> None:
+    if not value:
+        return
+    option = normalize_gender_option(value)
+    if option is None:
+        raise RuntimeError(f"неизвестное значение gender: {value}")
+    modal = page.locator(MODAL_BODY)
+    rows = modal.locator("div.row")
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        if not row.is_visible():
+            continue
+        labels = row.locator("label")
+        if labels.count() == 0:
+            continue
+        try:
+            row_label = labels.first.inner_text(timeout=1_000).strip()
+        except Exception:
+            continue
+        if not _labels_match(row_label, "Пол"):
+            continue
+        for j in range(labels.count()):
+            option_label_el = labels.nth(j)
+            try:
+                option_text = option_label_el.inner_text(timeout=500).strip()
+            except Exception:
+                continue
+            if not _labels_match(option_text, option):
+                continue
+            option_label_el.click()
+            return
+        raise RuntimeError(f"radio gender не найден: {option}")
+    raise RuntimeError("поле gender (Пол) не найдено")
+
+
+def _find_checkbox_by_exact_label(modal, label_text: str):
+    labels = modal.locator("label")
+    for i in range(labels.count()):
+        label_el = labels.nth(i)
+        try:
+            text = label_el.inner_text(timeout=500).strip()
+        except Exception:
+            continue
+        if not _labels_match(text, label_text):
+            continue
+        checkbox = _checkbox_for_label(label_el)
+        if checkbox.count() > 0:
+            return checkbox.first
+    return None
+
+
+def _fill_kyc_checkbox(page: Page, value: str) -> None:
+    if not value or not is_kyc_true(value):
+        return
+    modal = page.locator(MODAL_BODY)
+    checkbox = _find_checkbox_by_exact_label(modal, "KYC")
+    if checkbox is None:
+        return
+    if not checkbox.is_checked():
+        checkbox.check(force=True)
+
+
+def _fill_phase2_top_level_fields(page: Page, row: AddWalletRow) -> None:
+    for attr, label in PHASE2_OPTIONAL_TEXT_FIELDS:
+        _fill_optional_text_by_label(page, label, getattr(row, attr, ""))
+    for attr, label in PHASE2_OPTIONAL_TEXTAREA_FIELDS:
+        _fill_optional_textarea_by_label(page, label, getattr(row, attr, ""))
+    for attr, label in PHASE2_OPTIONAL_SELECT_FIELDS:
+        _fill_optional_select_by_label(page, label, getattr(row, attr, ""))
+    _fill_gender_radio(page, row.gender)
+    _fill_kyc_checkbox(page, row.kyc)
 
 
 def _fill_text_by_label(page: Page, label: str, value: str) -> None:
@@ -518,6 +712,7 @@ def fill_add_wallet_form(page: Page, row: AddWalletRow) -> None:
                 raise
     _fill_multiselect_list(page, "Привязан к партнеру", row.partners)
     _fill_single_aggregate(page, row)
+    _fill_phase2_top_level_fields(page, row)
 
 
 def detect_add_wallet_validation_error(page: Page) -> str | None:

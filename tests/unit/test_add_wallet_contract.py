@@ -11,12 +11,14 @@ from automation.add_wallet_contract import (
     DEFAULT_STATE,
     DEFAULT_STATUS,
     ExcelRouting,
+    PHASE2_OPTIONAL_COLUMNS,
     RESULT_DRY_RUN,
     RESULT_FAIL_INVALID,
     RESULT_OK,
     RESULT_SKIP_DUP_FILE,
     AddWalletBatchSummary,
     detect_excel_routing,
+    normalize_column_name,
     parse_single_aggregate,
     prepare_add_wallet_batch,
 )
@@ -210,3 +212,54 @@ def test_parse_single_aggregate_rejects_multiple():
     name, err = parse_single_aggregate(aggregates="ЧБР;Тинькофф АПК")
     assert name is None
     assert err is not None
+
+
+def test_phase2_aliases_normalize():
+    assert normalize_column_name("Фамилия") == "surname"
+    assert normalize_column_name("пол") == "gender"
+    assert normalize_column_name("KYC") == "kyc"
+    assert normalize_column_name("КУС") == "kyc"
+    assert normalize_column_name("Комментарий") == "comment"
+    assert normalize_column_name("Шлюз") == "gateway"
+
+
+def test_accepts_all_phase2_optional_columns(tmp_path):
+    path = tmp_path / "phase2.xlsx"
+    row_data = {"card": "9990110810347534", "phone": "79491103311"}
+    for col in PHASE2_OPTIONAL_COLUMNS:
+        row_data[col] = f"val-{col}"
+    _write_xlsx(path, [row_data])
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    for col in PHASE2_OPTIONAL_COLUMNS:
+        assert getattr(row, col) == f"val-{col}"
+
+
+def test_phase2_empty_optional_fields_do_not_fail_row(tmp_path):
+    path = tmp_path / "minimal_phase2.xlsx"
+    _write_xlsx(
+        path,
+        [
+            {
+                "card": "9990110810347534",
+                "phone": "79491103311",
+                "surname": "",
+                "comment": "",
+                "kyc": "",
+            }
+        ],
+    )
+    batch = prepare_add_wallet_batch(str(path))
+    assert len(batch.rows) == 1
+    assert batch.rows[0].surname == ""
+    assert batch.rows[0].comment == ""
+
+
+def test_phase2_row_echoes_input_columns(tmp_path):
+    path = tmp_path / "echo.xlsx"
+    _write_xlsx(
+        path,
+        [{"card": "9990110810347534", "phone": "79491103311", "surname": "Ivanov", "login": "u1"}],
+    )
+    row = prepare_add_wallet_batch(str(path)).rows[0]
+    assert row.input_columns["surname"] == "Ivanov"
+    assert row.input_columns["login"] == "u1"
