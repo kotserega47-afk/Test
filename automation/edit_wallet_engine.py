@@ -61,8 +61,7 @@ from automation.edit_wallet_contract import (
 from automation.engine import (
     OpenCardStageError,
     _close_stale_modal,
-    _wait_for_strict_matching_row,
-    open_card_with_row_matcher,
+    open_card,
 )
 from automation.add_wallet_engine import _ensure_logged_in
 from automation.runtime import (
@@ -75,8 +74,8 @@ from core.playwright_cleanup import close_playwright_stack
 EDIT_TITLE = "Изменение кошелька"
 AGGREGATE_NESTED_COLUMNS = frozenset({"account", "merchant_id_sbp", "account_number"})
 
-_OPEN_CARD_STRICT_ATTEMPTS = 3
-_OPEN_CARD_STRICT_RETRY_STAGES = frozenset({"modal_container", "modal_data", "card_verify"})
+_OPEN_CARD_ATTEMPTS = 3
+_OPEN_CARD_RETRY_STAGES = frozenset({"modal_container", "modal_data", "card_verify"})
 
 
 class AggregateNotActiveError(Exception):
@@ -202,45 +201,87 @@ def _finish_row(
     return result_item
 
 
+def _modal_seen(page) -> bool:
+    try:
+        return page.locator(MODAL_BODY).is_visible()
+    except Exception:
+        return False
+
+
+def _row_clicked_before_open_stage(stage: str) -> bool:
+    return stage in {"modal_container", "modal_data", "card_verify"}
+
+
 def open_card_strict(page, card: str) -> None:
-    """Edit Wallet: shared stable open_card flow + strict row match + strict modal verify."""
+    """Edit Wallet: Disable-compatible open_card + strict modal card verify inside open_card."""
     last_exc: OpenCardStageError | None = None
 
-    for open_attempt in range(1, _OPEN_CARD_STRICT_ATTEMPTS + 1):
+    for open_attempt in range(1, _OPEN_CARD_ATTEMPTS + 1):
         if open_attempt > 1:
-            _log("retry_after_no_modal", card=card, extra=f"attempt={open_attempt}")
+            _log("retry_after_modal_failure", card=card, extra=f"attempt={open_attempt}")
             _close_stale_modal(page)
 
-        _log("open_card_search", card=card, extra=f"attempt={open_attempt}")
+        _log("open_card_start", card=card, extra=f"attempt={open_attempt}")
         try:
-            open_card_with_row_matcher(page, card, _wait_for_strict_matching_row)
-            _log("open_card_strict_found", card=card)
+            open_card(page, card)
+            _log("open_card_success", card=card, extra=f"attempt={open_attempt}")
             return
         except OpenCardStageError as exc:
             last_exc = exc
+            row_clicked = _row_clicked_before_open_stage(exc.stage)
+            modal_visible = _modal_seen(page)
             if exc.stage == "card_verify":
                 _log(
-                    "open_card_modal_mismatch",
+                    "modal_card_mismatch",
                     card=card,
-                    extra=f"attempt={open_attempt}",
+                    extra=(
+                        f"attempt={open_attempt} "
+                        f"row_clicked={str(row_clicked).lower()} "
+                        f"modal_seen={str(modal_visible).lower()}"
+                    ),
                 )
             elif exc.stage == "modal_container":
                 _log(
-                    "open_card_modal_container_timeout",
+                    "modal_container_wait",
                     card=card,
-                    extra=f"attempt={open_attempt}",
+                    extra=(
+                        f"attempt={open_attempt} "
+                        f"row_clicked={str(row_clicked).lower()} "
+                        f"modal_seen={str(modal_visible).lower()}"
+                    ),
                 )
             if (
-                exc.stage not in _OPEN_CARD_STRICT_RETRY_STAGES
-                or open_attempt >= _OPEN_CARD_STRICT_ATTEMPTS
+                exc.stage not in _OPEN_CARD_RETRY_STAGES
+                or open_attempt >= _OPEN_CARD_ATTEMPTS
             ):
+                _log(
+                    "open_card_failure",
+                    card=card,
+                    extra=(
+                        f"stage={exc.stage} attempt={open_attempt} "
+                        f"row_clicked={str(row_clicked).lower()} "
+                        f"modal_seen={str(modal_visible).lower()}"
+                    ),
+                )
                 raise
+        except Exception as exc:
+            modal_visible = _modal_seen(page)
+            _log(
+                "open_card_failure",
+                card=card,
+                extra=(
+                    f"reason={exc} attempt={open_attempt} "
+                    f"row_clicked=false modal_seen={str(modal_visible).lower()}"
+                ),
+            )
+            raise
 
     if last_exc is not None:
         raise last_exc
 
 
-def _assert_edit_modal(page) -> None:
+def _assert_edit_modal(page, *, card: str | None = None) -> None:
+    _log("assert_edit_modal", card=card)
     header = page.locator(MODAL_HEADER)
     text = header.inner_text(timeout=3_000)
     if EDIT_TITLE not in text:
@@ -675,7 +716,7 @@ def _process_row(
         try:
             with _row_timing_step(row, "open_card_strict"):
                 open_card_strict(page, row.card)
-                _assert_edit_modal(page)
+                _assert_edit_modal(page, card=row.card)
                 _log("modal_opened", card=row.card)
         except (OpenCardStageError, RuntimeError) as exc:
             return _finish_row(
