@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Sequence
@@ -16,6 +16,7 @@ import pandas as pd
 
 from automation.audit import Stats
 from automation.runtime import WalletEditorTask
+from core.event_log import append_event
 from integrations.dropbox_watcher import (
     download_file_with_rev,
     upload_file_if_rev,
@@ -23,9 +24,22 @@ from integrations.dropbox_watcher import (
 from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
+    OUTBOX_STATUS_FAILED,
+    OUTBOX_STATUS_PENDING,
+    OUTBOX_STATUS_SYNCED,
+    OUTBOX_STATUS_SYNCING,
+    OUTBOX_ACTIVE_STATUSES,
+    STATUS_K_VKLUCHENIYU,
+    STATUS_PROSROCHENO,
     build_runs_row,
+    filter_rows_not_in_registry,
+    is_processed_run_ids_corrupted,
+    load_processed_run_ids,
+    load_processed_run_ids_result,
+    processed_run_ids_corruption_error,
     load_warned_partners,
     mark_run_processed,
+    missing_result_fingerprints,
     normalize_all_results,
     parse_disable_datetime,
     partners_to_warn,
@@ -193,11 +207,44 @@ def append_run_to_dropbox_registry(
     Best-effort: never raises; logs errors only.
     Retries transient/rev conflicts until registry_timeout_seconds.
     """
+    from integrations.wallet_editor_registry_async import update_outbox_status
+
     dropbox_path = wallet_editor_dropbox_path()
     if not dropbox_path:
         log.info(
             "[WalletEditorRegistry] skipped: %s not set",
             ENV_DROPBOX_WALLET_EDITOR_PATH,
+        )
+        return
+
+    if is_processed_run_ids_corrupted():
+        corruption_error = (
+            processed_run_ids_corruption_error()
+            or "registry_processed_run_ids.json is corrupted"
+        )
+        log.error(
+            "[WalletEditorRegistry] append blocked run_id=%s: %s",
+            task.run_id,
+            corruption_error,
+        )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error=f"processed_run_ids corrupted: {corruption_error}",
+            increment_attempt=True,
+        )
+        _emit_sync_event(
+            "wallet_editor_registry_sync_failed",
+            task.run_id,
+            {"reason": "processed_run_ids_corrupted", "error": corruption_error},
+        )
+        append_event(
+            type="wallet_editor_registry_health_degraded",
+            job_type="wallet_editor",
+            payload={
+                "processed_run_ids_corrupted": True,
+                "error": corruption_error,
+            },
         )
         return
 
@@ -207,12 +254,31 @@ def append_run_to_dropbox_registry(
             task.run_id,
             result_path,
         )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error="result file missing",
+            increment_attempt=True,
+        )
+        _emit_sync_event(
+            "wallet_editor_registry_sync_failed",
+            task.run_id,
+            {"reason": "result file missing", "path": result_path},
+        )
         return
 
     settings = settings or load_registry_settings()
     started = time.monotonic()
     deadline = started + settings.registry_timeout_seconds
     slow_warning_sent = False
+    last_error = "unknown error"
+
+    update_outbox_status(task.run_id, status=OUTBOX_STATUS_SYNCING, increment_attempt=True)
+    _emit_sync_event(
+        "wallet_editor_registry_sync_started",
+        task.run_id,
+        {"path": dropbox_path},
+    )
 
     try:
         while time.monotonic() < deadline:
@@ -223,7 +289,7 @@ def append_run_to_dropbox_registry(
 
             try:
                 with _lock:
-                    outcome = _append_attempt(
+                    outcome, upload_rev = _append_attempt(
                         task,
                         result_path,
                         stats,
@@ -232,19 +298,55 @@ def append_run_to_dropbox_registry(
                         run_finished_at=run_finished_at,
                         output_file=output_file,
                     )
-            except Exception:
+            except Exception as exc:
                 log.exception(
                     "[WalletEditorRegistry] append attempt failed run_id=%s",
                     task.run_id,
                 )
                 outcome = _AppendOutcome.TRANSIENT
+                upload_rev = None
+                last_error = str(exc)
 
-            if outcome in (_AppendOutcome.SUCCESS, _AppendOutcome.DUPLICATE):
+            if outcome == _AppendOutcome.SUCCESS:
+                update_outbox_status(
+                    task.run_id,
+                    status=OUTBOX_STATUS_SYNCED,
+                    registry_upload_rev=upload_rev,
+                )
+                _emit_sync_event(
+                    "wallet_editor_registry_sync_success",
+                    task.run_id,
+                    {"path": dropbox_path, "rev": upload_rev},
+                )
+                return
+
+            if outcome == _AppendOutcome.DUPLICATE:
+                update_outbox_status(
+                    task.run_id,
+                    status=OUTBOX_STATUS_SYNCED,
+                    registry_upload_rev=upload_rev,
+                )
+                _emit_sync_event(
+                    "wallet_editor_registry_sync_success",
+                    task.run_id,
+                    {"path": dropbox_path, "duplicate": True},
+                )
                 return
 
             if outcome == _AppendOutcome.PERMANENT:
+                update_outbox_status(
+                    task.run_id,
+                    status=OUTBOX_STATUS_FAILED,
+                    last_error=last_error,
+                )
+                _emit_sync_event(
+                    "wallet_editor_registry_sync_failed",
+                    task.run_id,
+                    {"reason": "permanent", "error": last_error},
+                )
                 return
 
+            last_error = outcome.value
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -259,13 +361,42 @@ def append_run_to_dropbox_registry(
             task.run_id,
             dropbox_path,
         )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error=f"timeout: {last_error}",
+        )
+        _emit_sync_event(
+            "wallet_editor_registry_sync_failed",
+            task.run_id,
+            {"reason": "timeout", "error": last_error},
+        )
         _send_timeout_warning(task.chat_id)
-    except Exception:
+    except Exception as exc:
         log.exception(
             "[WalletEditorRegistry] append failed run_id=%s profile=%s",
             task.run_id,
             task.operator_profile,
         )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error=str(exc),
+        )
+        _emit_sync_event(
+            "wallet_editor_registry_sync_failed",
+            task.run_id,
+            {"reason": "exception", "error": str(exc)},
+        )
+
+
+def _emit_sync_event(event_type: str, run_id: str, payload: dict) -> None:
+    append_event(
+        type=event_type,
+        job_type="wallet_editor",
+        job_id=run_id,
+        payload=payload,
+    )
 
 
 def _append_attempt(
@@ -277,7 +408,7 @@ def _append_attempt(
     run_started_at: datetime,
     run_finished_at: datetime,
     output_file: str | None = None,
-) -> _AppendOutcome:
+) -> tuple[_AppendOutcome, str | None]:
     runs_output_file = output_file or os.path.basename(result_path)
 
     with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
@@ -290,20 +421,35 @@ def _append_attempt(
                 dropbox_path,
                 status,
             )
-            return _AppendOutcome.TRANSIENT
+            return _AppendOutcome.TRANSIENT, None
 
         is_new_file = status == "not_found"
         all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
             load_registry_frames(local_path, status)
         )
 
-        if run_id_already_processed(task.run_id, runs_df):
+        if run_id_already_processed(
+            task.run_id,
+            runs_df,
+            result_path=result_path,
+            all_results_df=all_results_df,
+        ):
             log.info(
                 "[WalletEditorRegistry] skip duplicate run_id=%s path=%s",
                 task.run_id,
                 dropbox_path,
             )
-            return _AppendOutcome.DUPLICATE
+            return _AppendOutcome.DUPLICATE, download_rev
+
+        repair_mode = task.run_id in load_processed_run_ids() and bool(
+            missing_result_fingerprints(result_path, all_results_df)
+        )
+        if repair_mode:
+            log.warning(
+                "[WalletEditorRegistry] repair re-append run_id=%s path=%s",
+                task.run_id,
+                dropbox_path,
+            )
 
         result_df = pd.read_excel(
             result_path,
@@ -312,6 +458,14 @@ def _append_attempt(
         )
         input_rows = len(result_df)
         new_rows = rows_from_result_excel(result_df)
+        if repair_mode:
+            new_rows = filter_rows_not_in_registry(new_rows, all_results_df)
+            if new_rows.empty:
+                log.info(
+                    "[WalletEditorRegistry] repair complete (all rows present) run_id=%s",
+                    task.run_id,
+                )
+                return _AppendOutcome.DUPLICATE, download_rev
 
         merged_all = pd.concat([all_results_df, new_rows], ignore_index=True)
         recalculated, missing_partners = recalculate_all_results(
@@ -348,14 +502,14 @@ def _append_attempt(
                 task.run_id,
                 dropbox_path,
             )
-            return _AppendOutcome.REV_CONFLICT
+            return _AppendOutcome.REV_CONFLICT, None
         if upload_status != "uploaded":
             log.error(
                 "[WalletEditorRegistry] upload failed run_id=%s path=%s",
                 task.run_id,
                 dropbox_path,
             )
-            return _AppendOutcome.TRANSIENT
+            return _AppendOutcome.TRANSIENT, None
 
         mark_run_processed(task.run_id)
         _process_missing_otlezka_warnings(task, missing_partners, otlezka_df)
@@ -363,10 +517,10 @@ def _append_attempt(
         log.info(
             "[WalletEditorRegistry] appended run_id=%s rows=%s path=%s",
             task.run_id,
-            input_rows,
+            len(new_rows),
             dropbox_path,
         )
-        return _AppendOutcome.SUCCESS
+        return _AppendOutcome.SUCCESS, download_rev
 
 
 def _disable_dates_equal(left: object, right: object) -> bool:
@@ -573,3 +727,416 @@ def _patch_attempt(
             dropbox_path,
         )
         return _PatchOutcome.SUCCESS, patched_count, None
+
+
+# -----------------------------------------------------------------------------
+# Outbox replay and registry health (Phase 1 durability)
+# -----------------------------------------------------------------------------
+
+DEFAULT_STALE_OUTBOX_SECONDS = 3600
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryHealthReport:
+    outbox_pending_count: int
+    outbox_failed_count: int
+    outbox_synced_count: int
+    oldest_pending_age_sec: float | None
+    last_sync_error: str | None
+    processed_without_rows_count: int
+    processed_run_ids_corrupted: bool
+    processed_run_ids_corruption_error: str | None
+    overdue_ready_count: int
+    missing_otlezka_count: int
+    missing_durable_result_count: int
+    stale_outbox: bool
+    degraded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxReplayResult:
+    attempted: int
+    synced: int
+    failed: int
+    skipped: int
+    errors: tuple[str, ...]
+
+
+def _parse_iso_age_seconds(iso_ts: str | None) -> float | None:
+    if not iso_ts:
+        return None
+    try:
+        from core.datetime_utils import ensure_aware_msk
+
+        dt = datetime.fromisoformat(iso_ts)
+        if dt.tzinfo is None:
+            dt = ensure_aware_msk(dt)
+        return max(0.0, (datetime.now(dt.tzinfo) - dt).total_seconds())
+    except Exception:
+        return None
+
+
+def _task_from_outbox(record) -> WalletEditorTask:
+    return WalletEditorTask(
+        file_path=record.result_file_path,
+        chat_id=record.chat_id,
+        telegram_user_id=record.telegram_user_id,
+        operator_profile=record.operator_profile,
+        source_file_name=record.source_file_name,
+        login="",
+        password="",
+        auth_state_path="",
+        run_id=record.run_id,
+    )
+
+
+def _stats_from_outbox(record) -> Stats:
+    stats = Stats()
+    stats.ok = record.stats_success_rows
+    stats.fail = record.stats_failed_rows
+    stats.skip = record.stats_skipped_rows
+    return stats
+
+
+def _datetime_from_iso(iso_ts: str) -> datetime:
+    from core.datetime_utils import ensure_aware_msk
+
+    dt = datetime.fromisoformat(iso_ts)
+    return ensure_aware_msk(dt)
+
+
+def replay_pending_outbox_records(
+    *,
+    include_failed: bool = True,
+    limit: int | None = None,
+) -> OutboxReplayResult:
+    """Replay pending/failed outbox records using durable STATE_DIR result copies."""
+    from integrations.wallet_editor_registry_async import (
+        load_outbox_records,
+        update_outbox_status,
+    )
+
+    if is_processed_run_ids_corrupted():
+        corruption_error = (
+            processed_run_ids_corruption_error()
+            or "registry_processed_run_ids.json is corrupted"
+        )
+        log.error("[WalletEditorRegistry] replay blocked: %s", corruption_error)
+        append_event(
+            type="wallet_editor_registry_health_degraded",
+            job_type="wallet_editor",
+            payload={
+                "processed_run_ids_corrupted": True,
+                "error": corruption_error,
+                "replay_blocked": True,
+            },
+        )
+        return OutboxReplayResult(
+            attempted=0,
+            synced=0,
+            failed=0,
+            skipped=0,
+            errors=(f"replay blocked: processed_run_ids corrupted: {corruption_error}",),
+        )
+
+    statuses = {OUTBOX_STATUS_PENDING}
+    if include_failed:
+        statuses.add(OUTBOX_STATUS_FAILED)
+
+    records = [r for r in load_outbox_records() if r.status in statuses]
+    records.sort(key=lambda r: r.created_at)
+    if limit is not None:
+        records = records[:limit]
+
+    attempted = synced = failed = skipped = 0
+    errors: list[str] = []
+
+    for record in records:
+        if not os.path.isfile(record.result_file_path):
+            skipped += 1
+            msg = f"run_id={record.run_id}: durable result missing"
+            errors.append(msg)
+            update_outbox_status(
+                record.run_id,
+                status=OUTBOX_STATUS_FAILED,
+                last_error="durable result file missing",
+            )
+            continue
+
+        attempted += 1
+        update_outbox_status(record.run_id, status=OUTBOX_STATUS_PENDING)
+        task = _task_from_outbox(record)
+        stats = _stats_from_outbox(record)
+        append_run_to_dropbox_registry(
+            task,
+            record.result_file_path,
+            stats,
+            run_started_at=_datetime_from_iso(record.run_started_at),
+            run_finished_at=_datetime_from_iso(record.run_finished_at),
+            output_file=record.output_file,
+        )
+        refreshed = load_outbox_records()
+        current = next((r for r in refreshed if r.run_id == record.run_id), None)
+        if current and current.status == OUTBOX_STATUS_SYNCED:
+            synced += 1
+        else:
+            failed += 1
+            if current and current.last_error:
+                errors.append(f"run_id={record.run_id}: {current.last_error}")
+
+    return OutboxReplayResult(
+        attempted=attempted,
+        synced=synced,
+        failed=failed,
+        skipped=skipped,
+        errors=tuple(errors),
+    )
+
+
+def _count_registry_lifecycle_metrics(
+    all_results: pd.DataFrame,
+) -> tuple[int, int]:
+    from integrations.wallet_editor_registry_lifecycle import (
+        MISSING_OTLEZKA_STATUS,
+        STATUS_K_VKLUCHENIYU,
+        STATUS_PROSROCHENO,
+    )
+
+    df = normalize_all_results(all_results)
+    overdue = 0
+    missing_otlezka = 0
+    for idx in df.index:
+        status = _cell_str(df.at[idx, "Статус включения"])
+        if status == STATUS_PROSROCHENO:
+            overdue += 1
+        elif status == STATUS_K_VKLUCHENIYU:
+            overdue += 1
+        if status == MISSING_OTLEZKA_STATUS:
+            missing_otlezka += 1
+    return overdue, missing_otlezka
+
+
+def _count_processed_without_rows(dropbox_path: str | None) -> int:
+    from integrations.wallet_editor_registry_async import load_outbox_records
+
+    if not dropbox_path or is_processed_run_ids_corrupted():
+        return 0
+
+    processed_result = load_processed_run_ids_result()
+    processed = processed_result.run_ids
+    if not processed:
+        return 0
+
+    outbox_by_id = {r.run_id: r for r in load_outbox_records()}
+
+    with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
+        local_path = Path(tmp) / "wallet_editor.xlsx"
+        status, _rev = download_file_with_rev(dropbox_path, str(local_path))
+        if status != "ok":
+            return 0
+        all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
+            local_path,
+            status,
+        )
+
+        count = 0
+        for run_id in processed:
+            record = outbox_by_id.get(run_id)
+            result_path = record.result_file_path if record else None
+            if not result_path or not os.path.isfile(result_path):
+                continue
+            if missing_result_fingerprints(result_path, all_results_df):
+                count += 1
+        return count
+
+
+def build_registry_health_report(
+    *,
+    stale_threshold_seconds: int = DEFAULT_STALE_OUTBOX_SECONDS,
+) -> RegistryHealthReport:
+    from integrations.wallet_editor_registry_async import (
+        OUTBOX_STATUS_FAILED,
+        OUTBOX_STATUS_PENDING,
+        OUTBOX_STATUS_SYNCED,
+        load_outbox_records,
+    )
+
+    records = load_outbox_records()
+    pending = [r for r in records if r.status == OUTBOX_STATUS_PENDING]
+    failed = [r for r in records if r.status == OUTBOX_STATUS_FAILED]
+    synced = [r for r in records if r.status == OUTBOX_STATUS_SYNCED]
+
+    oldest_pending_age: float | None = None
+    for record in pending:
+        age = _parse_iso_age_seconds(record.created_at)
+        if age is not None:
+            oldest_pending_age = age if oldest_pending_age is None else max(oldest_pending_age, age)
+
+    last_sync_error: str | None = None
+    for record in sorted(records, key=lambda r: r.last_attempt_at or "", reverse=True):
+        if record.last_error:
+            last_sync_error = record.last_error
+            break
+
+    missing_durable = sum(
+        1
+        for r in records
+        if r.status in OUTBOX_ACTIVE_STATUSES and not os.path.isfile(r.result_file_path)
+    )
+
+    dropbox_path = wallet_editor_dropbox_path()
+    processed_without_rows = _count_processed_without_rows(dropbox_path)
+    processed_run_ids_corrupted = is_processed_run_ids_corrupted()
+    processed_run_ids_error = processed_run_ids_corruption_error()
+
+    overdue_ready = 0
+    missing_otlezka = 0
+    if dropbox_path:
+        try:
+            with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
+                local_path = Path(tmp) / "wallet_editor.xlsx"
+                status, _rev = download_file_with_rev(dropbox_path, str(local_path))
+                if status == "ok":
+                    all_df, _runs, hold_df, otlezka_df, _he, _oe = load_registry_frames(
+                        local_path,
+                        status,
+                    )
+                    recalculated, missing_partners = recalculate_all_results(
+                        all_df,
+                        hold_df,
+                        otlezka_df,
+                    )
+                    overdue_ready, missing_otlezka = _count_registry_lifecycle_metrics(
+                        recalculated,
+                    )
+                    if missing_partners:
+                        missing_otlezka = max(missing_otlezka, len(missing_partners))
+        except Exception:
+            log.exception("[WalletEditorRegistry] health registry read failed")
+
+    stale_outbox = bool(
+        oldest_pending_age is not None and oldest_pending_age > stale_threshold_seconds
+    )
+    degraded = bool(
+        pending
+        or failed
+        or processed_without_rows > 0
+        or processed_run_ids_corrupted
+        or missing_durable > 0
+        or stale_outbox
+    )
+
+    if degraded:
+        append_event(
+            type="wallet_editor_registry_health_degraded",
+            job_type="wallet_editor",
+            payload={
+                "pending": len(pending),
+                "failed": len(failed),
+                "processed_without_rows": processed_without_rows,
+                "processed_run_ids_corrupted": processed_run_ids_corrupted,
+                "processed_run_ids_error": processed_run_ids_error,
+                "stale_outbox": stale_outbox,
+            },
+        )
+
+    return RegistryHealthReport(
+        outbox_pending_count=len(pending),
+        outbox_failed_count=len(failed),
+        outbox_synced_count=len(synced),
+        oldest_pending_age_sec=oldest_pending_age,
+        last_sync_error=last_sync_error,
+        processed_without_rows_count=processed_without_rows,
+        processed_run_ids_corrupted=processed_run_ids_corrupted,
+        processed_run_ids_corruption_error=processed_run_ids_error,
+        overdue_ready_count=overdue_ready,
+        missing_otlezka_count=missing_otlezka,
+        missing_durable_result_count=missing_durable,
+        stale_outbox=stale_outbox,
+        degraded=degraded,
+    )
+
+
+def format_registry_health_report(report: RegistryHealthReport) -> str:
+    lines = [
+        "WalletEditor registry health",
+        "",
+        f"outbox pending: {report.outbox_pending_count}",
+        f"outbox failed: {report.outbox_failed_count}",
+        f"outbox synced: {report.outbox_synced_count}",
+    ]
+    if report.oldest_pending_age_sec is not None:
+        lines.append(f"oldest pending age: {report.oldest_pending_age_sec:.0f}s")
+    if report.last_sync_error:
+        lines.append(f"last sync error: {report.last_sync_error}")
+    lines.extend(
+        [
+            f"processed_run_ids without rows: {report.processed_without_rows_count}",
+            f"processed_run_ids corrupted: {report.processed_run_ids_corrupted}",
+        ]
+    )
+    if report.processed_run_ids_corruption_error:
+        lines.append(
+            f"processed_run_ids corruption error: {report.processed_run_ids_corruption_error}"
+        )
+    lines.extend(
+        [
+            f"overdue/ready wallets: {report.overdue_ready_count}",
+            f"missing Отлёжка partners: {report.missing_otlezka_count}",
+            f"missing durable result files: {report.missing_durable_result_count}",
+            f"stale outbox: {report.stale_outbox}",
+            f"status: {'DEGRADED' if report.degraded else 'OK'}",
+        ]
+    )
+    if report.processed_run_ids_corrupted:
+        lines.append("")
+        lines.append(
+            "⚠️ CRITICAL: registry_processed_run_ids.json is corrupted. "
+            "Replay is blocked until the file is repaired."
+        )
+    if report.processed_without_rows_count > 0:
+        lines.append("")
+        lines.append(
+            "⚠️ CRITICAL: processed run_ids exist but registry rows are missing. "
+            "Use /registry_replay to repair."
+        )
+    return "\n".join(lines)
+
+
+def run_registry_outbox_replay_job() -> str:
+    """JOB_REGISTRY entry for scheduled / manual outbox replay."""
+    result = replay_pending_outbox_records()
+    return (
+        f"replay attempted={result.attempted} synced={result.synced} "
+        f"failed={result.failed} skipped={result.skipped}"
+    )
+
+
+def registry_stale_outbox_warning(
+    *,
+    stale_threshold_seconds: int = DEFAULT_STALE_OUTBOX_SECONDS,
+) -> str | None:
+    """Return warning text when registry durability or completeness may be at risk."""
+    report = build_registry_health_report(stale_threshold_seconds=stale_threshold_seconds)
+    if (
+        not report.stale_outbox
+        and report.outbox_pending_count == 0
+        and report.outbox_failed_count == 0
+        and report.processed_without_rows_count == 0
+        and not report.processed_run_ids_corrupted
+    ):
+        return None
+    parts = []
+    if report.stale_outbox:
+        parts.append(
+            f"registry outbox stale (oldest pending {report.oldest_pending_age_sec:.0f}s)"
+        )
+    if report.outbox_pending_count:
+        parts.append(f"pending={report.outbox_pending_count}")
+    if report.outbox_failed_count:
+        parts.append(f"failed={report.outbox_failed_count}")
+    if report.processed_without_rows_count:
+        parts.append(f"processed_without_rows={report.processed_without_rows_count}")
+    if report.processed_run_ids_corrupted:
+        parts.append("processed_run_ids_corrupted")
+    return "⚠️ Registry may be incomplete: " + ", ".join(parts)

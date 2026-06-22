@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -12,6 +13,11 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
 from core.datetime_utils import EXCEL_DATETIME_FORMAT, EXCEL_DATE_FORMAT, now_msk
+from utils.loggers import get_logger
+from utils.log_profiles import LOG_PROFILES
+
+icon, _log_name = LOG_PROFILES["DROPBOX"]
+log = get_logger(_log_name, icon)
 
 ACTION_REMOVE_PARTNER = "remove_partner"
 ACTION_ADD_PARTNER = "add_partner"
@@ -154,12 +160,38 @@ def _state_dir() -> Path:
     return Path(os.getenv("STATE_DIR", "/data/state"))
 
 
+def wallet_editor_results_dir() -> Path:
+    return _state_dir() / "wallet_editor" / "results"
+
+
+def wallet_editor_outbox_dir() -> Path:
+    return _state_dir() / "wallet_editor" / "outbox"
+
+
+def durable_result_path(run_id: str) -> Path:
+    return wallet_editor_results_dir() / f"{run_id}.xlsx"
+
+
 def warned_partners_path() -> Path:
     return _state_dir() / "wallet_editor" / "missing_hold_days_warned.json"
 
 
 def processed_run_ids_path() -> Path:
     return _state_dir() / "wallet_editor" / "registry_processed_run_ids.json"
+
+
+def outbox_index_path() -> Path:
+    return wallet_editor_outbox_dir() / "index.json"
+
+
+OUTBOX_STATUS_PENDING = "pending"
+OUTBOX_STATUS_SYNCING = "syncing"
+OUTBOX_STATUS_SYNCED = "synced"
+OUTBOX_STATUS_FAILED = "failed"
+
+OUTBOX_ACTIVE_STATUSES = frozenset(
+    {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SYNCING, OUTBOX_STATUS_FAILED}
+)
 
 
 def _empty_sheet(columns: list[str]) -> pd.DataFrame:
@@ -491,15 +523,51 @@ def partners_to_warn(missing: set[str], warned: set[str]) -> list[str]:
     return result
 
 
-def load_processed_run_ids() -> set[str]:
+class ProcessedRunIdsCorruptedError(RuntimeError):
+    """registry_processed_run_ids.json exists but cannot be parsed safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessedRunIdsLoadResult:
+    run_ids: frozenset[str]
+    corrupted: bool
+    error: str | None = None
+
+
+def load_processed_run_ids_result() -> ProcessedRunIdsLoadResult:
+    """Load processed run ids; corrupted=True when file exists but is unreadable."""
     path = processed_run_ids_path()
     if not path.exists():
-        return set()
+        return ProcessedRunIdsLoadResult(frozenset(), False, None)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {str(x) for x in data.get("run_ids", [])}
-    except Exception:
-        return set()
+        if not isinstance(data, dict):
+            raise ValueError("processed_run_ids root must be a JSON object")
+        raw_ids = data.get("run_ids", [])
+        if not isinstance(raw_ids, list):
+            raise ValueError("processed_run_ids.run_ids must be a JSON array")
+        run_ids = frozenset(str(x) for x in raw_ids if str(x).strip())
+        return ProcessedRunIdsLoadResult(run_ids, False, None)
+    except Exception as exc:
+        log.exception("[WalletEditorRegistry] processed_run_ids corrupted path=%s", path)
+        return ProcessedRunIdsLoadResult(frozenset(), True, str(exc))
+
+
+def is_processed_run_ids_corrupted() -> bool:
+    return load_processed_run_ids_result().corrupted
+
+
+def processed_run_ids_corruption_error() -> str | None:
+    return load_processed_run_ids_result().error
+
+
+def load_processed_run_ids() -> set[str]:
+    result = load_processed_run_ids_result()
+    if result.corrupted:
+        raise ProcessedRunIdsCorruptedError(
+            result.error or "registry_processed_run_ids.json is corrupted"
+        )
+    return set(result.run_ids)
 
 
 def save_processed_run_ids(run_ids: set[str]) -> None:
@@ -511,18 +579,129 @@ def save_processed_run_ids(run_ids: set[str]) -> None:
     )
 
 
-def run_id_already_processed(run_id: str, runs_df: pd.DataFrame) -> bool:
-    if run_id in load_processed_run_ids():
-        return True
+def result_row_fingerprint(row: pd.Series | dict[str, object]) -> str:
+    """Stable fingerprint for dedup / repair detection."""
+    if isinstance(row, dict):
+        get = row.get
+    else:
+        get = row.get
+
+    action = _cell_str(get("action", "")).lower()
+    value = _cell_str(get("value", ""))
+    partner = _cell_str(get("partner", "")) or partner_from_row(action, value)
+    parts = [
+        _normalize_key(get("card", "")),
+        _normalize_key(partner),
+        action,
+        _cell_str(get(DISABLE_DATE_COLUMN, "")),
+        _cell_str(get("status", "")).upper(),
+        _cell_str(get("comment", "")),
+    ]
+    return "|".join(parts)
+
+
+def fingerprints_from_result_excel(result_path: str) -> list[str]:
+    from integrations.wallet_editor_registry_xlsx import card_as_text
+
+    df = pd.read_excel(
+        result_path,
+        engine="openpyxl",
+        converters={"card": card_as_text},
+    )
+    return [result_row_fingerprint(df.loc[idx]) for idx in df.index]
+
+
+def registry_row_fingerprints(all_results: pd.DataFrame) -> set[str]:
+    df = normalize_all_results(all_results)
+    if df.empty:
+        return set()
+    return {result_row_fingerprint(df.loc[idx]) for idx in df.index}
+
+
+def missing_result_fingerprints(
+    result_path: str,
+    all_results: pd.DataFrame,
+) -> list[str]:
+    """Fingerprints from result file that are absent in registry all_results."""
+    present = registry_row_fingerprints(all_results)
+    return [fp for fp in fingerprints_from_result_excel(result_path) if fp not in present]
+
+
+def filter_rows_not_in_registry(
+    new_rows: pd.DataFrame,
+    all_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return only rows whose fingerprint is not already in all_results."""
+    if new_rows is None or new_rows.empty:
+        return _empty_sheet(ALL_RESULTS_COLUMNS)
+    present = registry_row_fingerprints(all_results)
+    keep_idx: list[int] = []
+    for idx in new_rows.index:
+        if result_row_fingerprint(new_rows.loc[idx]) not in present:
+            keep_idx.append(int(idx))
+    if not keep_idx:
+        return _empty_sheet(ALL_RESULTS_COLUMNS)
+    return new_rows.loc[keep_idx].reset_index(drop=True)
+
+
+def run_id_already_processed(
+    run_id: str,
+    runs_df: pd.DataFrame,
+    *,
+    result_path: str | None = None,
+    all_results_df: pd.DataFrame | None = None,
+) -> bool:
+    """
+  Return True when append should be skipped as duplicate.
+
+  If run_id is in processed_run_ids but result rows are missing from registry
+  (restored workbook trap), returns False so repair re-append can proceed.
+    """
+    if is_processed_run_ids_corrupted():
+        raise ProcessedRunIdsCorruptedError(
+            processed_run_ids_corruption_error()
+            or "registry_processed_run_ids.json is corrupted"
+        )
+
+    in_processed = run_id in load_processed_run_ids()
+    in_legacy_runs = False
     if runs_df is not None and not runs_df.empty and "run_id" in runs_df.columns:
-        return run_id in runs_df["run_id"].astype(str).tolist()
-    return False
+        in_legacy_runs = run_id in runs_df["run_id"].astype(str).tolist()
+
+    if not in_processed and not in_legacy_runs:
+        return False
+
+    if result_path and all_results_df is not None:
+        missing = missing_result_fingerprints(result_path, all_results_df)
+        if missing:
+            return False
+
+    return True
 
 
 def mark_run_processed(run_id: str) -> None:
+    if is_processed_run_ids_corrupted():
+        log.error(
+            "[WalletEditorRegistry] skip mark_run_processed run_id=%s: processed_run_ids corrupted",
+            run_id,
+        )
+        return
     ids = load_processed_run_ids()
     ids.add(run_id)
     save_processed_run_ids(ids)
+
+
+def unmark_run_processed(run_id: str) -> None:
+    if is_processed_run_ids_corrupted():
+        log.error(
+            "[WalletEditorRegistry] skip unmark_run_processed run_id=%s: processed_run_ids corrupted",
+            run_id,
+        )
+        return
+    ids = load_processed_run_ids()
+    if run_id in ids:
+        ids.discard(run_id)
+        save_processed_run_ids(ids)
 
 
 def build_runs_row(

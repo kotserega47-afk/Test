@@ -331,7 +331,7 @@ def test_registry_result_sent_before_slow_registry(tmp_path):
         with patch("automation.worker.send_text", side_effect=track_send_text):
             with patch("automation.worker.send_document", side_effect=track_send_document):
                 with patch(
-                    "automation.worker.schedule_registry_append",
+                    "automation.worker.prepare_registry_outbox_and_schedule",
                     side_effect=track_schedule,
                 ):
                     with patch("automation.worker.delayed_cleanup"):
@@ -381,7 +381,7 @@ def test_schedule_registry_append_forwards_output_file(tmp_path):
 
     task = _make_task(run_id="async-output-file")
     with patch(
-        "integrations.wallet_editor_registry_async.append_run_to_dropbox_registry",
+        "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
         side_effect=fake_append,
     ):
         schedule_registry_append(

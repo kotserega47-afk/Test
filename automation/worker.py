@@ -29,8 +29,7 @@ from core.datetime_utils import now_msk
 from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
 from integrations.wallet_editor_registry_async import (
-    schedule_registry_append,
-    stage_registry_result_copy,
+    prepare_registry_outbox_and_schedule,
 )
 from transport.telegram_transport import send_text, send_document
 
@@ -224,14 +223,12 @@ def _run_disable_task(profile_key: str, task: WalletEditorTask) -> None:
     )
 
     user_output_file = os.path.basename(result_file)
-    registry_result_path, registry_is_copy = stage_registry_result_copy(result_file)
-    schedule_registry_append(
+    prepare_registry_outbox_and_schedule(
         task,
-        registry_result_path,
+        result_file,
         stats,
         run_started_at=run_started_at,
         run_finished_at=run_finished_at,
-        is_staged_copy=registry_is_copy,
         output_file=user_output_file,
     )
 

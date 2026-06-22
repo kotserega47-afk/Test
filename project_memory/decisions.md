@@ -104,6 +104,7 @@
 | E-WE-17 | 2026-06-21 | Add Wallet row success requires strict post-save card verification (`row_matches_card_strict`); **modal close ≠ OK**; `FAIL_NOT_FOUND_AFTER_SAVE` when card absent after save | CONFIRMED | `automation/add_wallet_engine.py`; `automation/audit.py` |
 | E-WE-18 | 2026-06-21 | Add Wallet v1 defaults: **only** `status=Тест` when column absent/empty; `direction` / `state` / `pool` / `aggregate` filled **only** when Excel provides explicit non-empty values — no implicit ЧБР or in/enabled defaults | CONFIRMED | `automation/add_wallet_contract.py`; real UI verified 2026-06-21 |
 | E-WE-19 | 2026-06-21 | Add Wallet v1 does **not** write Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); disable / auto-enable registry paths unchanged | CONFIRMED | `automation/worker.py` `_run_add_wallet_task` (no registry schedule) |
+| E-WE-20 | 2026-06-22 | Registry Phase 1 durability: STATE_DIR outbox + durable result copies before Dropbox sync; replay on failure; repair re-append when processed_run_ids diverges from workbook rows; `/registry_health` + `/registry_replay`; auto-enable warns on stale outbox | CONFIRMED | `wallet_editor_registry_async.py`; `wallet_editor_registry.py`; `wallet_editor_registry_lifecycle.py`; `automation/worker.py` |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -228,3 +229,4 @@
 | 2026-06-15 | Hourly incident whitelist fix — E-CONFIG-14 (`e4b31fb`); payin group spacing — E-HOURLY-01 |
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
 | 2026-06-21 | WalletEditor Add Wallet — E-WE-16…E-WE-19; invariants I16–I17 |
+| 2026-06-22 | Registry outbox Phase 1 — E-WE-20; durable STATE_DIR outbox + replay + health |

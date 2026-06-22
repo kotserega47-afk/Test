@@ -239,7 +239,8 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
 | **WE-UX-C** | **OPEN** | Readable WalletEditor result filenames (manual / conversion / auto-enable / registry staging) | Independent of UX-B |
 | **WE-AE-SCHEDULER-C** | **OPEN** | Scheduled daily auto-enable at 08:00 MSK via Rules `schedules` | Phase B2 complete; prod `rules.xlsx` row + ACL for commands |
-| **WE-REG-WATCHDOG** | **OPEN** | Registry append timeout/watchdog alerts; stale append detection | E-WE-10 partial coverage via job_params |
+| **WE-REGISTRY-OUTBOX-PHASE1** | **complete** | Durable STATE_DIR outbox + replay + registry health (E-WE-20) |
+| **WE-REG-WATCHDOG** | **OPEN** | Registry append timeout/watchdog alerts; stale append detection | E-WE-10 partial coverage via job_params; **partial:** outbox + `/registry_health` (E-WE-20) |
 | **WE-LIFECYCLE-REFRESH** | **OPEN** | Optional lifecycle refresh job / write-back for external workbook edits | Not implemented |
 | **WE-AE-SUMMARY** | **OPTIONAL** | Final aggregated auto-enable summary message across batches | Per-batch reports exist today |
 | **WE-POSTGRES-HISTORY** | **OPTIONAL** | Postgres/history model for registry beyond xlsx | Future; not scoped |
@@ -280,3 +281,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-02 | CONFIG-MIGRATION-PHASE-4C complete — Payout Rules V2 production cutover (E-CONFIG-13); Phase 4D observation open |
 | 2026-06-07 | WE-AE, WE-HOLD, WE-UX-A closed; WE-UX-B/C, WE-AE-SCHEDULER-C added to open tasks |
 | 2026-06-21 | WE-ADD-1 / WE-ADD-1.1 / WE-ADD-2 closed; R-WE-08…R-WE-10 Add Wallet operational risks |
+| 2026-06-22 | WE-REGISTRY-OUTBOX-PHASE1 complete — durable outbox, replay, registry health (E-WE-20) |

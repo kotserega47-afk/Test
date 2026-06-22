@@ -68,7 +68,7 @@
 - **Legacy job_params whitelist** — `wallet_editor`, `wallet_editor_auto_enable`, and `conversion.valid_status` allowed in `config_manager` validator; prevents `get_job_params(hourly)` → `{}` when extra job rows exist (E-CONFIG-14 `e4b31fb`, E-CONFIG-15 `194d99e`).
 - **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
 - **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
-- **WalletEditor Add Wallet** — Telegram Excel ingest routes Add Wallet files (`card`+`phone`) separately from disable (`card`+`action`+`value`); Playwright create flow via `automation/add_wallet_engine.py`; Phase 1 / 1.1 / 2 **complete**; real UI verified (2026-06-21); no Dropbox registry write (E-WE-16…E-WE-19).
+- **WalletEditor registry outbox (Phase 1)** — durable `{STATE_DIR}/wallet_editor/outbox` + `results/{run_id}.xlsx`; replay `/registry_replay`; health `/registry_health`; repair re-append for restored-workbook trap (E-WE-20).
 
 ---
 

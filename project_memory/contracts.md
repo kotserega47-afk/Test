@@ -264,7 +264,13 @@ Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py
 
 **Runtime order (worker):** `engine.run()` → Telegram summary + result file → async registry append (daemon thread). Registry does **not** delay Telegram.
 
-**Registry staging:** per-run result xlsx copied to temp (`we_registry_result_*`) before async append; `delayed_cleanup` (30s) may delete original result path without losing registry data.
+**Registry staging:** durable copy to `{STATE_DIR}/wallet_editor/results/{run_id}.xlsx` before async append; outbox index `{STATE_DIR}/wallet_editor/outbox/index.json` tracks `pending|syncing|synced|failed`; `/tmp` result cleanup (30s) does not affect replay. Legacy `/tmp` staging (`we_registry_result_*`) retained for non-outbox callers.
+
+**Outbox replay:** `replay_pending_outbox_records()` + TG `/registry_replay` + job `wallet_editor_registry_replay`. Repair re-append when `registry_processed_run_ids` contains `run_id` but row fingerprints absent from workbook (restored-workbook trap).
+
+**Registry health:** `/registry_health` reports outbox pending/failed, processed-without-rows, stale threshold (default 3600s). Auto-enable warns (does not block) on stale outbox.
+
+**Events:** `wallet_editor_outbox_recorded`, `wallet_editor_registry_sync_*`, `wallet_editor_registry_health_degraded` in `{STATE_DIR}/events/`.
 
 **`job_params` (`job=wallet_editor`, global scope):**
 

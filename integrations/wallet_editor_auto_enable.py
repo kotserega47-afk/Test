@@ -50,6 +50,7 @@ from integrations.wallet_editor_registry import (
     EnablePatchResult,
     EnableRegistryUpdate,
     patch_enable_results_in_dropbox_registry,
+    registry_stale_outbox_warning,
     wallet_editor_dropbox_path,
 )
 from integrations.wallet_editor_registry_lifecycle import recalculate_all_results
@@ -542,6 +543,11 @@ def run_auto_enable_plan(
         sent = _send_to_route(settings.telegram_route_report, report)
         return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
 
+    stale_warning = registry_stale_outbox_warning()
+    if stale_warning:
+        log.warning("[AutoEnable] %s", stale_warning)
+        _send_to_route(settings.telegram_route_report, stale_warning)
+
     try:
         if registry_frames is None:
             recalculated, _hold_df, _otlezka_df, _raw = load_registry_frames_for_planning(today=today)
@@ -603,6 +609,11 @@ def run_auto_enable(
         log.info("[AutoEnable] skipped: enabled=0")
         sent = _send_to_route(settings.telegram_route_report, report)
         return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
+
+    stale_warning = registry_stale_outbox_warning()
+    if stale_warning:
+        log.warning("[AutoEnable] %s", stale_warning)
+        _send_to_route(settings.telegram_route_report, stale_warning)
 
     try:
         if registry_frames is None:
