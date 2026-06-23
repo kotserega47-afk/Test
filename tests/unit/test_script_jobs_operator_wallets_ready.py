@@ -103,8 +103,8 @@ def test_long_result_truncates_text_and_attaches_file(mock_download, mock_xlsx):
 
 
 @patch("integrations.script_jobs.scripts.operator_wallets_ready.download_antares_wallets_export")
-def test_run_failure_returns_failed_result(mock_download):
-    mock_download.side_effect = RuntimeError("export failed")
+def test_run_failure_includes_exception_class_and_message(mock_download):
+    mock_download.side_effect = RuntimeError("Antares login failed")
     ctx = ScriptExecutionContext(
         actor=Actor(kind="tg", chat_id=9),
         script_key="operator_wallets_ready",
@@ -118,7 +118,9 @@ def test_run_failure_returns_failed_result(mock_download):
     ):
         result = run_operator_wallets_ready(ctx)
     assert result.status == "failed"
-    assert "Не удалось" in result.text
+    assert result.text == "❌ Не удалось сформировать отчёт: RuntimeError: Antares login failed"
+    assert "RuntimeError" in result.text
+    assert "Antares login failed" in result.text
 
 
 def test_registry_contains_operator_wallets_ready():

@@ -179,7 +179,7 @@ def run_operator_wallets_ready(context: ScriptExecutionContext) -> ScriptResult:
         log.exception("[operator_wallets_ready] failed script_key=%s", context.script_key)
         return ScriptResult(
             status="failed",
-            text=f"❌ Не удалось сформировать отчёт: {type(exc).__name__}",
+            text=f"❌ Не удалось сформировать отчёт: {type(exc).__name__}: {exc}",
             metadata={"error_class": type(exc).__name__},
         )
 
