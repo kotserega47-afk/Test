@@ -265,6 +265,7 @@ def _help_text() -> str:
         "/registry_health\n"
         "/registry_replay\n"
         "/run_script_hello\n"
+        "/operator_wallets_ready\n"
         "/help"
     )
 
@@ -429,6 +430,12 @@ async def cmd_run_script_hello(update: Update, context: ContextTypes.DEFAULT_TYP
     await _run_job_async(update, "script_job:hello_world")
 
 
+async def cmd_operator_wallets_ready(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "operator_wallets_ready"):
+        return
+    await _run_job_async(update, "script_job:operator_wallets_ready")
+
+
 async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "auto_enable_plan"):
         return
@@ -547,6 +554,7 @@ def get_handlers():
         CommandHandler("run_raccoon", cmd_run_raccoon),
         CommandHandler("run_hourly_raccoon", cmd_run_hourly_raccoon),
         CommandHandler("run_script_hello", cmd_run_script_hello),
+        CommandHandler("operator_wallets_ready", cmd_operator_wallets_ready),
         CommandHandler("rules_validate", cmd_rules_validate),
         CommandHandler("auto_enable_plan", cmd_auto_enable_plan),
         CommandHandler("auto_enable_run", cmd_auto_enable_run),

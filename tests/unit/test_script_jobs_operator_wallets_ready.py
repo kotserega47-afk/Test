@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+import pandas as pd
+import pytest
+
+import integrations.script_jobs  # noqa: F401 — bootstrap JOB_REGISTRY
+from core.config_manager import ALLOWED_JOB_PARAMS
+from core.job_runner import Actor, JOB_REGISTRY
+from core.rules_v2.constants import ALLOWED_JOB_PARAMS as RULES_V2_JOB_PARAMS
+from integrations.script_jobs import SCRIPT_REGISTRY
+from integrations.script_jobs.scripts.operator_wallets_ready import (
+    READY_STATUSES_NORM,
+    count_ready_wallets_by_partner,
+    format_report_text,
+    normalize_status,
+    run_operator_wallets_ready,
+)
+from integrations.script_jobs.types import ScriptExecutionContext
+from integrations.tg_commands import cmd_operator_wallets_ready
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Готов к работе", "готов к работе"),
+        ("готов к работе", "готов к работе"),
+        ("  Активный   вход ", "активный вход"),
+        ("Активный выход", "активный выход"),
+        ("Не готов. Sim", "не готов. sim"),
+    ],
+)
+def test_normalize_status(raw: str, expected: str):
+    assert normalize_status(raw) == expected
+
+
+def test_unknown_status_not_in_ready_set():
+    assert normalize_status("Тест") not in READY_STATUSES_NORM
+
+
+def _sample_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Карта": ["111", "111", "222", "333", "444"],
+            "Партнёр": ["Beta", "Beta", "Alpha", "Alpha", "Gamma"],
+            "Статус": [
+                "Готов к работе",
+                "Активный вход",
+                "активный выход",
+                "Не готов. Sim",
+                "Готов к работе",
+            ],
+        }
+    )
+
+
+def test_partner_grouping_and_sort():
+    rows = count_ready_wallets_by_partner(_sample_df())
+    assert rows == [("Alpha", 1), ("Beta", 1), ("Gamma", 1)]
+
+
+def test_empty_result_text():
+    text = format_report_text([], total=0, truncated=False, shown_count=0)
+    assert "Нет кошельков" in text
+    assert "Итого: 0" in text
+
+
+@patch("integrations.script_jobs.scripts.operator_wallets_ready.build_report_xlsx")
+@patch("integrations.script_jobs.scripts.operator_wallets_ready.download_antares_wallets_export")
+def test_long_result_truncates_text_and_attaches_file(mock_download, mock_xlsx):
+    mock_download.return_value = "ignored.xlsx"
+    mock_xlsx.return_value = "/tmp/full.xlsx"
+
+    many_rows = [(f"Partner-{i:03d}", i + 1) for i in range(40)]
+    with patch(
+        "integrations.script_jobs.scripts.operator_wallets_ready.pd.read_excel",
+        return_value=pd.DataFrame({"Карта": ["1"], "Партнёр": ["A"], "Статус": ["Готов к работе"]}),
+    ):
+        with patch(
+            "integrations.script_jobs.scripts.operator_wallets_ready.count_ready_wallets_by_partner",
+            return_value=many_rows,
+        ):
+            with patch(
+                "integrations.script_jobs.scripts.operator_wallets_ready.get_job_params",
+                return_value={"text_limit_chars": 200, "top_n": 3},
+            ):
+                ctx = ScriptExecutionContext(
+                    actor=Actor(kind="tg", chat_id=1, user_id=2),
+                    script_key="operator_wallets_ready",
+                    job_type="script_job:operator_wallets_ready",
+                    source="manual",
+                    chat_id=1,
+                )
+                result = run_operator_wallets_ready(ctx)
+
+    assert result.status == "ok"
+    assert "топ-3" in result.text
+    assert len(result.files) == 1
+    assert result.files[0].endswith(".xlsx")
+    mock_xlsx.assert_called_once()
+
+
+@patch("integrations.script_jobs.scripts.operator_wallets_ready.download_antares_wallets_export")
+def test_run_failure_returns_failed_result(mock_download):
+    mock_download.side_effect = RuntimeError("export failed")
+    ctx = ScriptExecutionContext(
+        actor=Actor(kind="tg", chat_id=9),
+        script_key="operator_wallets_ready",
+        job_type="script_job:operator_wallets_ready",
+        source="manual",
+        chat_id=9,
+    )
+    with patch(
+        "integrations.script_jobs.scripts.operator_wallets_ready.get_job_params",
+        return_value={},
+    ):
+        result = run_operator_wallets_ready(ctx)
+    assert result.status == "failed"
+    assert "Не удалось" in result.text
+
+
+def test_registry_contains_operator_wallets_ready():
+    assert "operator_wallets_ready" in SCRIPT_REGISTRY
+    assert SCRIPT_REGISTRY["operator_wallets_ready"].command_name == "operator_wallets_ready"
+    assert "script_job:operator_wallets_ready" in JOB_REGISTRY
+
+
+def test_job_params_whitelist_synced():
+    keys = {
+        "enabled",
+        "telegram_route_report",
+        "telegram_route_alert",
+        "text_limit_chars",
+        "top_n",
+    }
+    assert "script_job:operator_wallets_ready" in ALLOWED_JOB_PARAMS
+    assert set(ALLOWED_JOB_PARAMS["script_job:operator_wallets_ready"]) == keys
+    assert "script_job:operator_wallets_ready" in RULES_V2_JOB_PARAMS
+    assert set(RULES_V2_JOB_PARAMS["script_job:operator_wallets_ready"]) == keys
+
+
+def test_operator_wallets_ready_command_is_guarded():
+    update = AsyncMock()
+    update.effective_chat.id = 1
+    update.effective_user.id = 2
+    context = AsyncMock()
+
+    async def run() -> None:
+        with patch("integrations.tg_commands._guard_or_deny", new_callable=AsyncMock) as guard:
+            guard.return_value = False
+            await cmd_operator_wallets_ready(update, context)
+            guard.assert_awaited_once_with(update, "operator_wallets_ready")
+
+    asyncio.run(run())
+
+
+def test_operator_wallets_ready_dispatches_script_job():
+    update = AsyncMock()
+    update.effective_chat.id = 1
+    update.effective_user.id = 2
+    context = AsyncMock()
+
+    async def run() -> None:
+        with patch("integrations.tg_commands._guard_or_deny", new_callable=AsyncMock) as guard:
+            with patch("integrations.tg_commands._run_job_async", new_callable=AsyncMock) as run_job:
+                guard.return_value = True
+                await cmd_operator_wallets_ready(update, context)
+                run_job.assert_awaited_once_with(update, "script_job:operator_wallets_ready")
+
+    asyncio.run(run())

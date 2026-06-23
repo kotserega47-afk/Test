@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from integrations.script_jobs.scripts.operator_wallets_ready import run_operator_wallets_ready
 from integrations.script_jobs.types import ScriptExecutionContext, ScriptResult, ScriptSpec
 
 SCRIPT_JOB_PREFIX: Final[str] = "script_job:"
@@ -34,5 +35,10 @@ SCRIPT_REGISTRY: dict[str, ScriptSpec] = {
     script_key="hello_world",
     command_name="run_script_hello",
     run=_hello_world_run,
+  ),
+  "operator_wallets_ready": ScriptSpec(
+    script_key="operator_wallets_ready",
+    command_name="operator_wallets_ready",
+    run=run_operator_wallets_ready,
   ),
 }

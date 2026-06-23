@@ -78,6 +78,13 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
         "enabled": "bool",
         "telegram_route_report": "str",
     },
+    "script_job:operator_wallets_ready": {
+        "enabled": "bool",
+        "telegram_route_report": "str",
+        "telegram_route_alert": "str",
+        "text_limit_chars": "int",
+        "top_n": "int",
+    },
 }
 
 # =============================================================================
