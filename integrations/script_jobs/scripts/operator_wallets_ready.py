@@ -92,6 +92,50 @@ def count_ready_wallets_by_partner(df: pd.DataFrame) -> list[tuple[str, int]]:
     return items
 
 
+def parse_priority_partners(raw: object) -> list[str]:
+    """Parse priority_partners job_param: splitlines, trim, skip empty, dedupe."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        lines = [str(item) for item in raw]
+    else:
+        lines = str(raw).splitlines()
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        partner = line.strip()
+        if not partner or partner in seen:
+            continue
+        seen.add(partner)
+        result.append(partner)
+    return result
+
+
+def apply_priority_partner_order(
+    rows: list[tuple[str, int]],
+    priority_partners: list[str],
+) -> list[tuple[str, int]]:
+    """Put configured partners first (Rules order), then remaining by count DESC / name ASC."""
+    if not priority_partners:
+        return rows
+
+    by_partner = dict(rows)
+    ordered: list[tuple[str, int]] = []
+    used: set[str] = set()
+
+    for partner in priority_partners:
+        count = by_partner.get(partner)
+        if count is None:
+            continue
+        ordered.append((partner, count))
+        used.add(partner)
+
+    remaining = [item for item in rows if item[0] not in used]
+    ordered.extend(remaining)
+    return ordered
+
+
 def _status_header_line() -> str:
     return " / ".join(READY_STATUS_LABELS)
 
@@ -138,7 +182,7 @@ def build_report_xlsx(rows: list[tuple[str, int]], *, path: str) -> str:
     return path
 
 
-def _load_params(context: ScriptExecutionContext) -> tuple[int, int]:
+def _load_params(context: ScriptExecutionContext) -> tuple[int, int, list[str]]:
     params = get_job_params(job=context.job_type)
     text_limit = params.get("text_limit_chars", DEFAULT_TEXT_LIMIT_CHARS)
     top_n = params.get("top_n", DEFAULT_TOP_N)
@@ -150,7 +194,8 @@ def _load_params(context: ScriptExecutionContext) -> tuple[int, int]:
         top_n = max(1, int(top_n))
     except (TypeError, ValueError):
         top_n = DEFAULT_TOP_N
-    return text_limit, top_n
+    priority_partners = parse_priority_partners(params.get("priority_partners"))
+    return text_limit, top_n, priority_partners
 
 
 def _warn_if_antares_jobs_running() -> None:
@@ -169,12 +214,13 @@ def _warn_if_antares_jobs_running() -> None:
 
 def run_operator_wallets_ready(context: ScriptExecutionContext) -> ScriptResult:
     _warn_if_antares_jobs_running()
-    text_limit, top_n = _load_params(context)
+    text_limit, top_n, priority_partners = _load_params(context)
 
     try:
         export_path = download_antares_wallets_export()
         df = pd.read_excel(export_path, dtype=str)
         rows = count_ready_wallets_by_partner(df)
+        rows = apply_priority_partner_order(rows, priority_partners)
     except Exception as exc:
         log.exception("[operator_wallets_ready] failed script_key=%s", context.script_key)
         return ScriptResult(

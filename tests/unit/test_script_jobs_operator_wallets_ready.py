@@ -14,9 +14,11 @@ from integrations.script_jobs import SCRIPT_REGISTRY
 from integrations.script_jobs.antares_wallets_export import format_login_failure_message
 from integrations.script_jobs.scripts.operator_wallets_ready import (
     READY_STATUSES_NORM,
+    apply_priority_partner_order,
     count_ready_wallets_by_partner,
     format_report_text,
     normalize_status,
+    parse_priority_partners,
     run_operator_wallets_ready,
 )
 from integrations.script_jobs.types import ScriptExecutionContext
@@ -137,6 +139,7 @@ def test_job_params_whitelist_synced():
         "telegram_route_alert",
         "text_limit_chars",
         "top_n",
+        "priority_partners",
     }
     assert "script_job:operator_wallets_ready" in ALLOWED_JOB_PARAMS
     assert set(ALLOWED_JOB_PARAMS["script_job:operator_wallets_ready"]) == keys
@@ -208,3 +211,61 @@ def test_format_login_failure_message_never_includes_credential_values():
     assert secret_password not in message
     assert "login_env_set=True" in message
     assert "password_env_set=True" in message
+
+
+def test_parse_priority_partners_multiline_value():
+    raw = "Амобайл Юмани\nКибит Юмани\n\n  Аврора (Юмани карты)  \n"
+    assert parse_priority_partners(raw) == [
+        "Амобайл Юмани",
+        "Кибит Юмани",
+        "Аврора (Юмани карты)",
+    ]
+
+
+def test_parse_priority_partners_empty_and_missing():
+    assert parse_priority_partners(None) == []
+    assert parse_priority_partners("") == []
+    assert parse_priority_partners("\n  \n") == []
+
+
+def test_parse_priority_partners_deduplicates_safely():
+    raw = "Амобайл Юмани\nКибит Юмани\nАмобайл Юмани\n"
+    assert parse_priority_partners(raw) == ["Амобайл Юмани", "Кибит Юмани"]
+
+
+def test_apply_priority_partner_order_preserves_rules_order():
+    rows = [
+        ("ЧБР Тбанк c2c", 10),
+        ("Gamma", 5),
+        ("Амобайл Юмани", 3),
+        ("Кибит Юмани", 7),
+        ("Аврора (Юмани карты)", 2),
+    ]
+    priority = ["Амобайл Юмани", "Кибит Юмани", "Аврора (Юмани карты)"]
+    ordered = apply_priority_partner_order(rows, priority)
+    assert [partner for partner, _ in ordered] == [
+        "Амобайл Юмани",
+        "Кибит Юмани",
+        "Аврора (Юмани карты)",
+        "ЧБР Тбанк c2c",
+        "Gamma",
+    ]
+
+
+def test_apply_priority_partner_order_ignores_missing_partners():
+    rows = [("Alpha", 4), ("Beta", 2)]
+    priority = ["Missing Partner", "Alpha", "Also Missing"]
+    ordered = apply_priority_partner_order(rows, priority)
+    assert ordered == [("Alpha", 4), ("Beta", 2)]
+
+
+def test_apply_priority_partner_order_no_config_keeps_default_sort():
+    rows = [("Alpha", 1), ("Beta", 1), ("Gamma", 1)]
+    assert apply_priority_partner_order(rows, []) == rows
+
+
+def test_apply_priority_partner_order_fallback_sort_for_remaining():
+    rows = [("Alpha", 9), ("Bravo", 9), ("Zulu", 9), ("Mike", 3)]
+    priority = ["Mike"]
+    ordered = apply_priority_partner_order(rows, priority)
+    assert ordered == [("Mike", 3), ("Alpha", 9), ("Bravo", 9), ("Zulu", 9)]

@@ -84,6 +84,7 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
         "telegram_route_alert": "str",
         "text_limit_chars": "int",
         "top_n": "int",
+        "priority_partners": "str",
     },
 }
 
