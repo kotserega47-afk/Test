@@ -11,6 +11,7 @@ from core.config_manager import ALLOWED_JOB_PARAMS
 from core.job_runner import Actor, JOB_REGISTRY
 from core.rules_v2.constants import ALLOWED_JOB_PARAMS as RULES_V2_JOB_PARAMS
 from integrations.script_jobs import SCRIPT_REGISTRY
+from integrations.script_jobs.antares_wallets_export import format_login_failure_message
 from integrations.script_jobs.scripts.operator_wallets_ready import (
     READY_STATUSES_NORM,
     count_ready_wallets_by_partner,
@@ -172,3 +173,38 @@ def test_operator_wallets_ready_dispatches_script_job():
                 run_job.assert_awaited_once_with(update, "script_job:operator_wallets_ready")
 
     asyncio.run(run())
+
+
+def test_format_login_failure_message_includes_diagnostics_paths():
+    message = format_login_failure_message(
+        url="https://antares.plus/lkcard/#/login",
+        login_env_set=True,
+        password_env_set=True,
+        page_hint="title=Antares",
+        screenshot="/tmp/script_jobs/operator_wallets_ready/debug/login_failed_20260101_120000.png",
+        html="/tmp/script_jobs/operator_wallets_ready/debug/login_failed_20260101_120000.html",
+        reason="export button not visible after login",
+    )
+    assert "Antares login failed" in message
+    assert "url=https://antares.plus/lkcard/#/login" in message
+    assert "login_env_set=True" in message
+    assert "password_env_set=True" in message
+    assert "screenshot=/tmp/script_jobs/operator_wallets_ready/debug/login_failed" in message
+    assert "html=/tmp/script_jobs/operator_wallets_ready/debug/login_failed" in message
+    assert "reason=export button not visible after login" in message
+
+
+def test_format_login_failure_message_never_includes_credential_values():
+    secret_login = "operator@example.com"
+    secret_password = "super-secret-password"
+    message = format_login_failure_message(
+        url="https://antares.plus/lkcard/#/login",
+        login_env_set=bool(secret_login),
+        password_env_set=bool(secret_password),
+        page_hint="title=Login",
+        reason="export button not visible after login",
+    )
+    assert secret_login not in message
+    assert secret_password not in message
+    assert "login_env_set=True" in message
+    assert "password_env_set=True" in message
