@@ -27,6 +27,7 @@ from integrations.downloader_wallets import run_wallet_cycle
 from integrations.bakai_monitor_playwright import run_rate_monitor_safe
 from integrations.downloader import run_download
 from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job types
+from integrations import script_jobs  # noqa: F401 — registers script_job:* handlers
 
 from analyzers.hourly_report import run_hourly_report
 from integrations.telegram_routes import ROUTE_PLATFORM_HOURLY_REPORT, send_message_to_route
@@ -263,6 +264,7 @@ def _help_text() -> str:
         "/wallet_editor_refresh\n"
         "/registry_health\n"
         "/registry_replay\n"
+        "/run_script_hello\n"
         "/help"
     )
 
@@ -421,6 +423,12 @@ async def cmd_run_hourly_raccoon(update: Update, context: ContextTypes.DEFAULT_T
     await _run_job_async(update, "raccoon_hourly")
 
 
+async def cmd_run_script_hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "run_script_hello"):
+        return
+    await _run_job_async(update, "script_job:hello_world")
+
+
 async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "auto_enable_plan"):
         return
@@ -538,6 +546,7 @@ def get_handlers():
         CommandHandler("run_rate", cmd_run_rate),
         CommandHandler("run_raccoon", cmd_run_raccoon),
         CommandHandler("run_hourly_raccoon", cmd_run_hourly_raccoon),
+        CommandHandler("run_script_hello", cmd_run_script_hello),
         CommandHandler("rules_validate", cmd_rules_validate),
         CommandHandler("auto_enable_plan", cmd_auto_enable_plan),
         CommandHandler("auto_enable_run", cmd_auto_enable_run),

@@ -74,6 +74,10 @@ ALLOWED_JOB_PARAMS: Dict[str, Dict[str, str]] = {
     "conversion": {
         "valid_status": "str",
     },
+    "script_job:hello_world": {
+        "enabled": "bool",
+        "telegram_route_report": "str",
+    },
 }
 
 # =============================================================================

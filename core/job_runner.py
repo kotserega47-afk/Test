@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -34,7 +35,7 @@ class Actor:
 # Registry
 # =============================================================================
 
-JOB_REGISTRY: Dict[str, Callable[[], Any]] = {}
+JOB_REGISTRY: Dict[str, Callable[..., Any]] = {}
 _RUNNING: Dict[str, Tuple[str, float, Dict[str, Any]]] = {}
 
 
@@ -131,6 +132,32 @@ def _unlock(job_type: str) -> None:
         pass
 
 
+def _invoke_job(fn: Callable[..., Any], actor: Actor) -> None:
+    """Call registry handler; pass actor when the callable accepts it (script jobs)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        fn()
+        return
+
+    if not params:
+        fn()
+        return
+
+    if "actor" in params:
+        fn(actor)
+        return
+
+    if len(params) == 1:
+        first = next(iter(params.values()))
+        ann = first.annotation
+        if ann is Actor or ann == "Actor":
+            fn(actor)
+            return
+
+    fn()
+
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -214,7 +241,7 @@ def request_job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) 
 
     job_exc: Optional[Exception] = None
     try:
-        fn()
+        _invoke_job(fn, actor)
         append_event(
             type="job_finished",
             job_id=job_id,

@@ -105,4 +105,8 @@ ALLOWED_JOB_PARAMS: dict[str, dict[str, str]] = {
         "include_empty_sections": "bool",
         "hide_inactive_rows": "bool",
     },
+    "script_job:hello_world": {
+        "enabled": "bool",
+        "telegram_route_report": "str",
+    },
 }
