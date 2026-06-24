@@ -341,10 +341,11 @@ class ConversionAnalyzer:
             parts = [p.strip() for p in str(row["partner"]).split(",") if p.strip()]
             return [(p, row["card"]) for p in parts]
 
-        pairs = active_cards.apply(split_partners, axis=1).explode()
-        pairs = pairs.dropna()
-        pairs = pairs.apply(pd.Series)
-        pairs.columns = ["partner_display", "card"]
+        pairs = active_cards.apply(split_partners, axis=1).explode().dropna()
+        pairs = pd.DataFrame(
+            pairs.tolist(),
+            columns=["partner_display", "card"],
+        )
 
         cards_in_work_by_partner = (
             pairs.drop_duplicates(subset=["partner_display", "card"])

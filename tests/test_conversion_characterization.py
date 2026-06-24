@@ -710,3 +710,113 @@ class TestMainProcessFileConsumer:
         assert tracked["workbook"] == 0
         assert tracked["problem_cards"] == 0
         assert tracked["report_path"] == 1
+
+
+class TestConversionCardsInWorkPairs:
+    def test_analyze_completes_when_all_active_cards_are_problems(self, tmp_path):
+        conv_path = write_conversion_fixture(tmp_path / CONV_FILENAME)
+        card_df = pd.DataFrame(
+            [
+                {
+                    "Карта": "CARD001",
+                    "Партнёр": RAW_PARTNER_ALPHA,
+                    "Статус": "Готов к работе",
+                    "Пул": "PoolAlpha",
+                },
+            ]
+        )
+        card_path = tmp_path / "card_only_problem.xlsx"
+        card_df.to_excel(card_path, index=False)
+
+        analysis = ConversionAnalyzer().analyze(
+            conv_file=conv_path,
+            card_files=[str(card_path)],
+            col_mapping=COL_MAPPING,
+            snapshot=_build_snapshot(),
+            special_state=SpecialCardsState.empty(),
+        )
+
+        assert analysis.summary["Карт в работе по партнёрам"] == {}
+        assert analysis.cards_in_work_by_partner.empty
+        assert analysis.summary["Карты на отключение"] == 1
+
+        wb = render_excel(analysis)
+        assert "Карт в работе" not in wb.sheetnames
+
+    def test_cards_in_work_counts_comma_separated_partners(self, tmp_path):
+        conv_path = tmp_path / "conv_multi_partner.xlsx"
+        pd.DataFrame(
+            [
+                {
+                    "Дата/Время создания": "10.01.2026 12:00:00",
+                    "Карта": "CARD005",
+                    "Партнёр": RAW_PARTNER_ALPHA,
+                    "Статус": "Оплачен",
+                },
+            ]
+        ).to_excel(conv_path, index=False)
+
+        card_path = tmp_path / "card_multi_partner.xlsx"
+        pd.DataFrame(
+            [
+                {
+                    "Карта": "CARD005",
+                    "Партнёр": f"{RAW_PARTNER_ALPHA}, {RAW_PARTNER_BETA}",
+                    "Статус": "Готов к работе",
+                    "Пул": "PoolMulti",
+                },
+            ]
+        ).to_excel(card_path, index=False)
+
+        analysis = ConversionAnalyzer().analyze(
+            conv_file=str(conv_path),
+            card_files=[str(card_path)],
+            col_mapping=COL_MAPPING,
+            snapshot=_build_snapshot(),
+            special_state=SpecialCardsState.empty(),
+        )
+
+        work = analysis.summary["Карт в работе по партнёрам"]
+        assert work["test partner (101)"] == 1
+        assert work["test beta (202)"] == 1
+
+    def test_cards_in_work_dedupes_duplicate_partner_card_rows(self, tmp_path):
+        conv_path = tmp_path / "conv_dedup.xlsx"
+        pd.DataFrame(
+            [
+                {
+                    "Дата/Время создания": "10.01.2026 12:00:00",
+                    "Карта": "CARD006",
+                    "Партнёр": RAW_PARTNER_BETA,
+                    "Статус": "Оплачен",
+                },
+            ]
+        ).to_excel(conv_path, index=False)
+
+        card_path = tmp_path / "card_dedup.xlsx"
+        pd.DataFrame(
+            [
+                {
+                    "Карта": "CARD006",
+                    "Партнёр": RAW_PARTNER_BETA,
+                    "Статус": "Готов к работе",
+                    "Пул": "PoolBeta",
+                },
+                {
+                    "Карта": "CARD006",
+                    "Партнёр": RAW_PARTNER_BETA,
+                    "Статус": "Готов к работе",
+                    "Пул": "PoolBeta",
+                },
+            ]
+        ).to_excel(card_path, index=False)
+
+        analysis = ConversionAnalyzer().analyze(
+            conv_file=str(conv_path),
+            card_files=[str(card_path)],
+            col_mapping=COL_MAPPING,
+            snapshot=_build_snapshot(),
+            special_state=SpecialCardsState.empty(),
+        )
+
+        assert analysis.summary["Карт в работе по партнёрам"] == {"test beta (202)": 1}
