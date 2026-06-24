@@ -27,6 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum processed run_ids to inspect (default: 20)",
     )
     parser.add_argument(
+        "--only-health-failures",
+        action="store_true",
+        help=(
+            "Scan all processed run_ids and show only entries where "
+            "health_would_count is true (matches /registry_health counter)"
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON report",
@@ -43,7 +51,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        report = diagnose_processed_runs(limit=args.limit)
+        report = diagnose_processed_runs(
+            limit=args.limit,
+            only_health_failures=args.only_health_failures,
+        )
     except DatabaseNotConfiguredError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

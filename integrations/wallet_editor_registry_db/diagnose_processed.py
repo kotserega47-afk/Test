@@ -50,6 +50,8 @@ class DiagnoseProcessedReport:
     processed_run_ids_corrupted: bool
     processed_run_ids_error: str | None
     limit: int
+    only_health_failures: bool
+    health_failures_count: int
     entries: tuple[DiagnoseRunEntry, ...]
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -59,6 +61,8 @@ class DiagnoseProcessedReport:
             "processed_run_ids_corrupted": self.processed_run_ids_corrupted,
             "processed_run_ids_error": self.processed_run_ids_error,
             "limit": self.limit,
+            "only_health_failures": self.only_health_failures,
+            "health_failures_count": self.health_failures_count,
             "entries": [asdict(entry) for entry in self.entries],
         }
 
@@ -132,11 +136,15 @@ def _classify_reason(
     return REASON_B2_FINGERPRINT_MISMATCH
 
 
-def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
+def diagnose_processed_runs(
+    *,
+    limit: int = 20,
+    only_health_failures: bool = False,
+) -> DiagnoseProcessedReport:
     """Diagnose processed run_ids against durable results and PostgreSQL."""
     processed_result = load_processed_run_ids_result()
     run_ids = sorted(processed_result.run_ids)
-    limited_run_ids = run_ids[: max(limit, 0)]
+    scan_run_ids = run_ids if only_health_failures else run_ids[: max(limit, 0)]
 
     if processed_result.corrupted:
         return DiagnoseProcessedReport(
@@ -145,13 +153,15 @@ def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
             processed_run_ids_corrupted=True,
             processed_run_ids_error=processed_result.error,
             limit=limit,
+            only_health_failures=only_health_failures,
+            health_failures_count=0,
             entries=(),
         )
 
     from integrations.wallet_editor_registry_async import load_outbox_records
 
     outbox_by_id = {record.run_id: record for record in load_outbox_records()}
-    run_row_counts = _postgres_run_row_counts(limited_run_ids)
+    run_row_counts = _postgres_run_row_counts(scan_run_ids)
 
     postgres_fingerprints: frozenset[str] | None = None
     if registry_source() == "postgres":
@@ -161,7 +171,7 @@ def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
             postgres_fingerprints = None
 
     entries: list[DiagnoseRunEntry] = []
-    for run_id in limited_run_ids:
+    for run_id in scan_run_ids:
         record = outbox_by_id.get(run_id)
         result_path = record.result_file_path if record else None
         result_exists = bool(result_path and os.path.isfile(result_path))
@@ -212,13 +222,25 @@ def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
             )
         )
 
+    health_failures = tuple(entry for entry in entries if entry.health_would_count)
+    health_failures_count = len(health_failures)
+
+    if only_health_failures:
+        output_entries = health_failures
+        if limit > 0:
+            output_entries = output_entries[:limit]
+    else:
+        output_entries = tuple(entries)
+
     return DiagnoseProcessedReport(
         registry_source=registry_source(),
         processed_run_ids_total=len(run_ids),
         processed_run_ids_corrupted=False,
         processed_run_ids_error=None,
         limit=limit,
-        entries=tuple(entries),
+        only_health_failures=only_health_failures,
+        health_failures_count=health_failures_count,
+        entries=output_entries,
     )
 
 
@@ -228,8 +250,13 @@ def format_diagnose_processed_report(report: DiagnoseProcessedReport) -> str:
         "",
         f"registry_source: {report.registry_source}",
         f"processed_run_ids total: {report.processed_run_ids_total}",
-        f"showing: {len(report.entries)} (limit {report.limit})",
+        f"health_failures_count: {report.health_failures_count}",
     ]
+    if report.only_health_failures:
+        lines.append("filter: only_health_failures")
+        lines.append(f"showing: {len(report.entries)} health failure(s)")
+    else:
+        lines.append(f"showing: {len(report.entries)} (limit {report.limit})")
     if report.processed_run_ids_corrupted:
         lines.append(f"processed_run_ids corrupted: True")
         if report.processed_run_ids_error:
@@ -238,7 +265,10 @@ def format_diagnose_processed_report(report: DiagnoseProcessedReport) -> str:
 
     lines.append("")
     if not report.entries:
-        lines.append("no processed run_ids to diagnose")
+        if report.only_health_failures:
+            lines.append("no health failures (processed_without_rows would be 0)")
+        else:
+            lines.append("no processed run_ids to diagnose")
         return "\n".join(lines)
 
     for entry in report.entries:
@@ -263,11 +293,17 @@ def format_diagnose_processed_report(report: DiagnoseProcessedReport) -> str:
         lines.append(f"  probable_reason: {entry.probable_reason}")
         lines.append("")
 
-    flagged = [e for e in report.entries if e.probable_reason != REASON_OK]
-    lines.append(
-        f"summary: {len(flagged)} flagged / {len(report.entries)} shown "
-        f"(OK={len(report.entries) - len(flagged)})"
-    )
+    if report.only_health_failures:
+        lines.append(
+            f"summary: {report.health_failures_count} health failure(s) "
+            f"of {report.processed_run_ids_total} processed run_id(s)"
+        )
+    else:
+        flagged = [e for e in report.entries if e.probable_reason != REASON_OK]
+        lines.append(
+            f"summary: {len(flagged)} flagged / {len(report.entries)} shown "
+            f"(OK={len(report.entries) - len(flagged)})"
+        )
     return "\n".join(lines)
 
 
