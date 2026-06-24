@@ -17,6 +17,12 @@ from integrations.dropbox_watcher import download_file_with_rev, upload_file_if_
 from integrations.telegram_routes import resolve_route_chat_id, routes_from_rules_v2_enabled
 from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry import _lock, wallet_editor_dropbox_path
+from integrations.wallet_editor_registry_db.config import mirror_enabled
+from integrations.wallet_editor_registry_db.mirror import (
+    MirrorResultBatch,
+    mirror_rows_for_refresh,
+    schedule_mirror_batch,
+)
 from integrations.wallet_editor_registry_lifecycle import (
     MISSING_OTLEZKA_STATUS,
     STATUS_HOLD,
@@ -243,15 +249,29 @@ def _refresh_attempt(
     *,
     dropbox_path: str,
     today: date,
-) -> tuple[_RefreshOutcome, int, RefreshBreakdown, str | None]:
+) -> tuple[_RefreshOutcome, int, RefreshBreakdown, str | None, MirrorResultBatch | None]:
+    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
+
+    if registry_source_is_postgres():
+        from integrations.wallet_editor_registry_db.postgres_source import refresh_attempt_postgres
+
+        return refresh_attempt_postgres(
+            dropbox_path=dropbox_path,
+            today=today,
+            normalize_all_results=normalize_all_results,
+            recalculate_all_results=recalculate_all_results,
+            compute_lifecycle_diff=compute_lifecycle_diff,
+            lifecycle_row_changed=_lifecycle_row_changed,
+        )
+
     with tempfile.TemporaryDirectory(prefix="we_registry_refresh_") as tmp:
         local_path = Path(tmp) / "wallet_editor.xlsx"
         status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
 
         if status == "error":
-            return _RefreshOutcome.TRANSIENT, 0, RefreshBreakdown(), "registry download failed"
+            return _RefreshOutcome.TRANSIENT, 0, RefreshBreakdown(), "registry download failed", None
         if status == "not_found":
-            return _RefreshOutcome.PERMANENT, 0, RefreshBreakdown(), "registry file not found"
+            return _RefreshOutcome.PERMANENT, 0, RefreshBreakdown(), "registry file not found", None
 
         all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
             load_registry_frames(local_path, status)
@@ -265,7 +285,7 @@ def _refresh_attempt(
         )
         changed_rows, breakdown = compute_lifecycle_diff(before_df, recalculated)
         if changed_rows == 0:
-            return _RefreshOutcome.SKIPPED, 0, breakdown, None
+            return _RefreshOutcome.SKIPPED, 0, breakdown, None, None
 
         save_registry_workbook(
             local_path,
@@ -278,11 +298,22 @@ def _refresh_attempt(
 
         upload_status = upload_file_if_rev(str(local_path), dropbox_path, download_rev)
         if upload_status == "rev_conflict":
-            return _RefreshOutcome.REV_CONFLICT, changed_rows, breakdown, "rev conflict"
+            return _RefreshOutcome.REV_CONFLICT, changed_rows, breakdown, "rev conflict", None
         if upload_status != "uploaded":
-            return _RefreshOutcome.TRANSIENT, changed_rows, breakdown, f"upload failed: {upload_status}"
+            return (
+                _RefreshOutcome.TRANSIENT,
+                changed_rows,
+                breakdown,
+                f"upload failed: {upload_status}",
+                None,
+            )
 
-        return _RefreshOutcome.SUCCESS, changed_rows, breakdown, None
+        mirror_batch = mirror_rows_for_refresh(
+            before_df,
+            recalculated,
+            row_changed=_lifecycle_row_changed,
+        )
+        return _RefreshOutcome.SUCCESS, changed_rows, breakdown, None, mirror_batch
 
 
 def refresh_wallet_editor_registry_lifecycle(
@@ -337,8 +368,9 @@ def refresh_wallet_editor_registry_lifecycle(
 
     while time.monotonic() < deadline:
         try:
+            mirror_batch: MirrorResultBatch | None = None
             with _lock:
-                outcome, changed_rows, breakdown, error_reason = _refresh_attempt(
+                outcome, changed_rows, breakdown, error_reason, mirror_batch = _refresh_attempt(
                     dropbox_path=dropbox_path,
                     today=today,
                 )
@@ -346,6 +378,7 @@ def refresh_wallet_editor_registry_lifecycle(
             log.exception("[WalletEditorRefresh] attempt failed")
             outcome = _RefreshOutcome.TRANSIENT
             error_reason = str(exc)
+            mirror_batch = None
 
         if outcome == _RefreshOutcome.SUCCESS:
             duration = time.monotonic() - started
@@ -367,6 +400,14 @@ def refresh_wallet_editor_registry_lifecycle(
                 duration_sec=duration,
                 report_text=report,
             )
+            from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
+
+            if registry_source_is_postgres():
+                from integrations.wallet_editor_registry_db.excel_export import schedule_excel_export
+
+                schedule_excel_export(operation="refresh", dropbox_path=dropbox_path)
+            else:
+                schedule_mirror_batch(mirror_batch, operation="refresh")
             return replace(result, report_sent=_send_refresh_report(result))
 
         if outcome == _RefreshOutcome.SKIPPED:
