@@ -21,6 +21,7 @@ from integrations.wallet_editor_registry import (
     build_registry_health_report,
     format_registry_health_report,
     patch_enable_results_in_dropbox_registry,
+    registry_stale_outbox_warning,
     EnableRegistryUpdate,
 )
 from integrations.wallet_editor_registry_async import (
@@ -29,6 +30,7 @@ from integrations.wallet_editor_registry_async import (
     create_outbox_record,
     get_outbox_record,
     persist_durable_result_copy,
+    update_outbox_status,
 )
 from integrations.wallet_editor_registry_db.config import (
     ENV_REGISTRY_SOURCE,
@@ -42,9 +44,12 @@ from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
     DISABLE_DATE_COLUMN,
     OPERATION_DATE_COLUMN,
+    mark_run_processed,
+    missing_result_fingerprints,
     result_row_dates,
+    rows_from_result_excel,
 )
-from integrations.wallet_editor_registry_xlsx import save_registry_workbook
+from integrations.wallet_editor_registry_xlsx import card_as_text, save_registry_workbook
 
 MSK = ZoneInfo("Europe/Moscow")
 DROPBOX_PATH = "/Ostin/platform/Tests/wallet_editor.xlsx"
@@ -403,3 +408,248 @@ class TestExcelExportFailureDoesNotRevertOutbox:
         append_mock.assert_called_once()
         pg_mock.assert_not_called()
         export_mock.assert_not_called()
+
+
+def _setup_synced_processed_run(
+    tmp_path: Path,
+    *,
+    run_id: str = "pg-health-run",
+) -> Path:
+    result_path = tmp_path / "result.xlsx"
+    _write_result(result_path)
+    task = _make_task(run_id=run_id)
+    stats = Stats()
+    stats.ok = 1
+    durable = persist_durable_result_copy(task.run_id, str(result_path))
+    create_outbox_record(
+        task,
+        durable_path=durable,
+        stats=stats,
+        run_started_at=RUN_STARTED,
+        run_finished_at=RUN_FINISHED,
+        output_file="result.xlsx",
+    )
+    update_outbox_status(task.run_id, status=OUTBOX_STATUS_SYNCED)
+    mark_run_processed(task.run_id)
+    return result_path
+
+
+def _all_results_matching_result(result_path: Path) -> pd.DataFrame:
+    result_df = pd.read_excel(
+        result_path,
+        engine="openpyxl",
+        converters={"card": card_as_text},
+    )
+    return rows_from_result_excel(result_df)
+
+
+class TestProcessedWithoutRowsPostgresSource:
+    def test_postgres_source_stale_excel_no_false_positive(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        result_path = _setup_synced_processed_run(tmp_path)
+        matching_all_results = _all_results_matching_result(result_path)
+        empty_runs = pd.DataFrame(
+            columns=[
+                "started_at",
+                "finished_at",
+                "input_rows",
+                "success_rows",
+                "failed_rows",
+                "skipped_rows",
+                "output_file",
+                "run_id",
+            ]
+        )
+
+        with (
+            patch(
+                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+                return_value=(matching_all_results, empty_runs),
+            ),
+            patch(
+                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
+                return_value=(
+                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+                    False,
+                    False,
+                ),
+            ),
+            patch(
+                "integrations.wallet_editor_registry.download_file_with_rev",
+                side_effect=AssertionError(
+                    "processed_without_rows must not read Dropbox Excel when source=postgres"
+                ),
+            ),
+        ):
+            report = build_registry_health_report()
+
+        assert report.processed_without_rows_count == 0
+
+    def test_postgres_source_missing_rows_detected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        _setup_synced_processed_run(tmp_path, run_id="pg-missing-rows")
+        empty_all_results, empty_runs = _empty_registry_frames()
+
+        with (
+            patch(
+                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+                return_value=(empty_all_results, empty_runs),
+            ),
+            patch(
+                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
+                return_value=(
+                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+                    False,
+                    False,
+                ),
+            ),
+        ):
+            report = build_registry_health_report()
+
+        assert report.processed_without_rows_count >= 1
+
+    def test_postgres_source_excel_export_failure_does_not_affect_processed_without_rows(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        result_path = _setup_synced_processed_run(tmp_path, run_id="pg-export-fail-health")
+        matching_all_results = _all_results_matching_result(result_path)
+        empty_runs = pd.DataFrame(
+            columns=[
+                "started_at",
+                "finished_at",
+                "input_rows",
+                "success_rows",
+                "failed_rows",
+                "skipped_rows",
+                "output_file",
+                "run_id",
+            ]
+        )
+
+        from integrations.wallet_editor_registry_db.excel_export_state import (
+            record_excel_export_failure,
+        )
+
+        record_excel_export_failure(operation="append", error="upload failed")
+
+        with (
+            patch(
+                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+                return_value=(matching_all_results, empty_runs),
+            ),
+            patch(
+                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
+                return_value=(
+                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+                    False,
+                    False,
+                ),
+            ),
+        ):
+            report = build_registry_health_report()
+
+        assert report.processed_without_rows_count == 0
+        assert report.excel_export_recent_failures >= 1
+
+    def test_postgres_health_not_degraded_when_excel_stale_only(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        result_path = _setup_synced_processed_run(tmp_path, run_id="pg-not-degraded")
+        matching_all_results = _all_results_matching_result(result_path)
+        empty_runs = pd.DataFrame(
+            columns=[
+                "started_at",
+                "finished_at",
+                "input_rows",
+                "success_rows",
+                "failed_rows",
+                "skipped_rows",
+                "output_file",
+                "run_id",
+            ]
+        )
+
+        with (
+            patch(
+                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+                return_value=(matching_all_results, empty_runs),
+            ),
+            patch(
+                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
+                return_value=(
+                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+                    False,
+                    False,
+                ),
+            ),
+        ):
+            report = build_registry_health_report()
+            warning = registry_stale_outbox_warning()
+
+        assert report.processed_without_rows_count == 0
+        assert report.outbox_pending_count == 0
+        assert report.outbox_failed_count == 0
+        assert report.excel_export_recent_failures == 0
+        assert report.degraded is False
+        assert warning is None
+
+    def test_excel_source_still_checks_dropbox_for_processed_without_rows(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "excel")
+
+        result_path = _setup_synced_processed_run(tmp_path, run_id="excel-health-run")
+
+        store: dict[str, bytes] = {}
+        revs: dict[str, str] = {}
+
+        def fake_download(path, local_path):
+            if path not in store:
+                return "not_found", None
+            Path(local_path).write_bytes(store[path])
+            return "ok", revs.get(path, "rev1")
+
+        from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
+
+        empty_wb = tmp_path / "empty.xlsx"
+        create_styled_registry_workbook(empty_wb)
+        store[DROPBOX_PATH] = empty_wb.read_bytes()
+        revs[DROPBOX_PATH] = "rev-empty"
+
+        with patch(
+            "integrations.wallet_editor_registry.download_file_with_rev",
+            side_effect=fake_download,
+        ):
+            report = build_registry_health_report()
+
+        assert report.processed_without_rows_count >= 1
+        assert missing_result_fingerprints(
+            str(result_path),
+            pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+        )

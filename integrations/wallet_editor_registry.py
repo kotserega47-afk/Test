@@ -1022,8 +1022,9 @@ def _count_registry_lifecycle_metrics(
 
 def _count_processed_without_rows(dropbox_path: str | None) -> int:
     from integrations.wallet_editor_registry_async import load_outbox_records
+    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
 
-    if not dropbox_path or is_processed_run_ids_corrupted():
+    if is_processed_run_ids_corrupted():
         return 0
 
     processed_result = load_processed_run_ids_result()
@@ -1033,25 +1034,40 @@ def _count_processed_without_rows(dropbox_path: str | None) -> int:
 
     outbox_by_id = {r.run_id: r for r in load_outbox_records()}
 
-    with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, _rev = download_file_with_rev(dropbox_path, str(local_path))
-        if status != "ok":
-            return 0
-        all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
-            local_path,
-            status,
-        )
+    if registry_source_is_postgres():
+        try:
+            from integrations.wallet_editor_registry_db.frames import (
+                load_registry_frames_from_postgres,
+            )
 
-        count = 0
-        for run_id in processed:
-            record = outbox_by_id.get(run_id)
-            result_path = record.result_file_path if record else None
-            if not result_path or not os.path.isfile(result_path):
-                continue
-            if missing_result_fingerprints(result_path, all_results_df):
-                count += 1
-        return count
+            all_results_df, _runs_df = load_registry_frames_from_postgres()
+        except Exception:
+            log.exception(
+                "[WalletEditorRegistry] health postgres processed_without_rows read failed"
+            )
+            return 0
+    else:
+        if not dropbox_path:
+            return 0
+        with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
+            local_path = Path(tmp) / "wallet_editor.xlsx"
+            status, _rev = download_file_with_rev(dropbox_path, str(local_path))
+            if status != "ok":
+                return 0
+            all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
+                local_path,
+                status,
+            )
+
+    count = 0
+    for run_id in processed:
+        record = outbox_by_id.get(run_id)
+        result_path = record.result_file_path if record else None
+        if not result_path or not os.path.isfile(result_path):
+            continue
+        if missing_result_fingerprints(result_path, all_results_df):
+            count += 1
+    return count
 
 
 def build_registry_health_report(
