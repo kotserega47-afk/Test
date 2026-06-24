@@ -52,6 +52,11 @@ FROM we_registry_runs
 ORDER BY started_at, run_id
 """
 
+FETCH_ROW_FINGERPRINTS_SQL = """
+SELECT row_fingerprint
+FROM we_registry_results
+"""
+
 
 def _result_from_record(record: tuple[Any, ...]) -> RegistryResultRow:
     (
@@ -175,6 +180,25 @@ def load_registry_frames_from_postgres(
         else:
             runs = pd.DataFrame(columns=RUNS_COLUMNS)
         return all_results, runs
+
+    if connection is not None:
+        with connection.cursor() as cur:
+            return _load(cur)
+
+    with connect(for_mirror=False) as conn:
+        with conn.cursor() as cur:
+            return _load(cur)
+
+
+def load_registry_row_fingerprints_from_postgres(
+    *,
+    connection: Any | None = None,
+) -> frozenset[str]:
+    """Load authoritative row_fingerprint values from PostgreSQL."""
+
+    def _load(cur: Any) -> frozenset[str]:
+        cur.execute(FETCH_ROW_FINGERPRINTS_SQL)
+        return frozenset(str(row[0]) for row in cur.fetchall() if row[0])
 
     if connection is not None:
         with connection.cursor() as cur:

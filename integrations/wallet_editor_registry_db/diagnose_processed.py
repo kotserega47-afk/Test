@@ -14,7 +14,7 @@ from integrations.wallet_editor_registry_db.connection import connect
 from integrations.wallet_editor_registry_lifecycle import (
     fingerprints_from_result_excel,
     load_processed_run_ids_result,
-    missing_result_fingerprints,
+    missing_result_fingerprints_in_set,
 )
 
 REASON_OK = "OK"
@@ -96,11 +96,12 @@ def _postgres_fingerprints_present(fingerprints: Sequence[str]) -> set[str]:
             return {str(row[0]) for row in cur.fetchall()}
 
 
-def _load_health_all_results_df() -> pd.DataFrame:
-    from integrations.wallet_editor_registry_db.frames import load_registry_frames_from_postgres
+def _load_postgres_fingerprint_set() -> frozenset[str]:
+    from integrations.wallet_editor_registry_db.frames import (
+        load_registry_row_fingerprints_from_postgres,
+    )
 
-    all_results_df, _runs_df = load_registry_frames_from_postgres()
-    return all_results_df
+    return load_registry_row_fingerprints_from_postgres()
 
 
 def _classify_reason(
@@ -152,12 +153,12 @@ def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
     outbox_by_id = {record.run_id: record for record in load_outbox_records()}
     run_row_counts = _postgres_run_row_counts(limited_run_ids)
 
-    all_results_df: pd.DataFrame | None = None
+    postgres_fingerprints: frozenset[str] | None = None
     if registry_source() == "postgres":
         try:
-            all_results_df = _load_health_all_results_df()
+            postgres_fingerprints = _load_postgres_fingerprint_set()
         except Exception:
-            all_results_df = None
+            postgres_fingerprints = None
 
     entries: list[DiagnoseRunEntry] = []
     for run_id in limited_run_ids:
@@ -175,8 +176,15 @@ def diagnose_processed_runs(*, limit: int = 20) -> DiagnoseProcessedReport:
         missing_count = len(missing_fps)
 
         health_would_count = False
-        if result_exists and result_path is not None and all_results_df is not None:
-            health_would_count = bool(missing_result_fingerprints(result_path, all_results_df))
+        if (
+            result_exists
+            and result_path is not None
+            and postgres_fingerprints is not None
+            and registry_source() == "postgres"
+        ):
+            health_would_count = bool(
+                missing_result_fingerprints_in_set(result_path, postgres_fingerprints)
+            )
 
         reason = _classify_reason(
             result_file_exists=result_exists,

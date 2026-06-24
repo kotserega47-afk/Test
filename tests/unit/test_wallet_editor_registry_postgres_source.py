@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -44,6 +45,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
     DISABLE_DATE_COLUMN,
     OPERATION_DATE_COLUMN,
+    fingerprints_from_result_excel,
     mark_run_processed,
     missing_result_fingerprints,
     result_row_dates,
@@ -443,6 +445,39 @@ def _all_results_matching_result(result_path: Path) -> pd.DataFrame:
     return rows_from_result_excel(result_df)
 
 
+def _fingerprints_from_result(result_path: Path) -> frozenset[str]:
+    return frozenset(fingerprints_from_result_excel(str(result_path)))
+
+
+@contextmanager
+def _patch_postgres_health_reads(
+    *,
+    all_results: pd.DataFrame,
+    runs: pd.DataFrame,
+    present_fingerprints: frozenset[str],
+):
+    with (
+        patch(
+            "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+            return_value=(all_results, runs),
+        ),
+        patch(
+            "integrations.wallet_editor_registry_db.frames.load_registry_row_fingerprints_from_postgres",
+            return_value=present_fingerprints,
+        ),
+        patch(
+            "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
+            return_value=(
+                pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+                pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+                False,
+                False,
+            ),
+        ),
+    ):
+        yield
+
+
 class TestProcessedWithoutRowsPostgresSource:
     def test_postgres_source_stale_excel_no_false_positive(
         self, tmp_path, monkeypatch
@@ -454,6 +489,7 @@ class TestProcessedWithoutRowsPostgresSource:
 
         result_path = _setup_synced_processed_run(tmp_path)
         matching_all_results = _all_results_matching_result(result_path)
+        present_fps = _fingerprints_from_result(result_path)
         empty_runs = pd.DataFrame(
             columns=[
                 "started_at",
@@ -468,18 +504,10 @@ class TestProcessedWithoutRowsPostgresSource:
         )
 
         with (
-            patch(
-                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
-                return_value=(matching_all_results, empty_runs),
-            ),
-            patch(
-                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
-                return_value=(
-                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
-                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
-                    False,
-                    False,
-                ),
+            _patch_postgres_health_reads(
+                all_results=matching_all_results,
+                runs=empty_runs,
+                present_fingerprints=present_fps,
             ),
             patch(
                 "integrations.wallet_editor_registry.download_file_with_rev",
@@ -501,20 +529,10 @@ class TestProcessedWithoutRowsPostgresSource:
         _setup_synced_processed_run(tmp_path, run_id="pg-missing-rows")
         empty_all_results, empty_runs = _empty_registry_frames()
 
-        with (
-            patch(
-                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
-                return_value=(empty_all_results, empty_runs),
-            ),
-            patch(
-                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
-                return_value=(
-                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
-                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
-                    False,
-                    False,
-                ),
-            ),
+        with _patch_postgres_health_reads(
+            all_results=empty_all_results,
+            runs=empty_runs,
+            present_fingerprints=frozenset(),
         ):
             report = build_registry_health_report()
 
@@ -530,6 +548,7 @@ class TestProcessedWithoutRowsPostgresSource:
 
         result_path = _setup_synced_processed_run(tmp_path, run_id="pg-export-fail-health")
         matching_all_results = _all_results_matching_result(result_path)
+        present_fps = _fingerprints_from_result(result_path)
         empty_runs = pd.DataFrame(
             columns=[
                 "started_at",
@@ -549,25 +568,36 @@ class TestProcessedWithoutRowsPostgresSource:
 
         record_excel_export_failure(operation="append", error="upload failed")
 
-        with (
-            patch(
-                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
-                return_value=(matching_all_results, empty_runs),
-            ),
-            patch(
-                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
-                return_value=(
-                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
-                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
-                    False,
-                    False,
-                ),
-            ),
+        with _patch_postgres_health_reads(
+            all_results=matching_all_results,
+            runs=empty_runs,
+            present_fingerprints=present_fps,
         ):
             report = build_registry_health_report()
 
         assert report.processed_without_rows_count == 0
         assert report.excel_export_recent_failures >= 1
+
+    def test_postgres_fingerprints_in_db_without_run_id_rows_health_ok(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        result_path = _setup_synced_processed_run(tmp_path, run_id="pg-fp-no-runid")
+        present_fps = _fingerprints_from_result(result_path)
+        empty_all_results, empty_runs = _empty_registry_frames()
+
+        with _patch_postgres_health_reads(
+            all_results=empty_all_results,
+            runs=empty_runs,
+            present_fingerprints=present_fps,
+        ):
+            report = build_registry_health_report()
+
+        assert report.processed_without_rows_count == 0
 
     def test_postgres_health_not_degraded_when_excel_stale_only(
         self, tmp_path, monkeypatch
@@ -579,6 +609,7 @@ class TestProcessedWithoutRowsPostgresSource:
 
         result_path = _setup_synced_processed_run(tmp_path, run_id="pg-not-degraded")
         matching_all_results = _all_results_matching_result(result_path)
+        present_fps = _fingerprints_from_result(result_path)
         empty_runs = pd.DataFrame(
             columns=[
                 "started_at",
@@ -592,20 +623,10 @@ class TestProcessedWithoutRowsPostgresSource:
             ]
         )
 
-        with (
-            patch(
-                "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
-                return_value=(matching_all_results, empty_runs),
-            ),
-            patch(
-                "integrations.wallet_editor_registry_db.hold_loader.load_hold_otlezka_from_dropbox",
-                return_value=(
-                    pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
-                    pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
-                    False,
-                    False,
-                ),
-            ),
+        with _patch_postgres_health_reads(
+            all_results=matching_all_results,
+            runs=empty_runs,
+            present_fingerprints=present_fps,
         ):
             report = build_registry_health_report()
             warning = registry_stale_outbox_warning()

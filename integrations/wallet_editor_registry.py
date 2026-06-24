@@ -1037,27 +1037,40 @@ def _count_processed_without_rows(dropbox_path: str | None) -> int:
     if registry_source_is_postgres():
         try:
             from integrations.wallet_editor_registry_db.frames import (
-                load_registry_frames_from_postgres,
+                load_registry_row_fingerprints_from_postgres,
+            )
+            from integrations.wallet_editor_registry_lifecycle import (
+                missing_result_fingerprints_in_set,
             )
 
-            all_results_df, _runs_df = load_registry_frames_from_postgres()
+            present_fingerprints = load_registry_row_fingerprints_from_postgres()
         except Exception:
             log.exception(
                 "[WalletEditorRegistry] health postgres processed_without_rows read failed"
             )
             return 0
-    else:
-        if not dropbox_path:
+
+        count = 0
+        for run_id in processed:
+            record = outbox_by_id.get(run_id)
+            result_path = record.result_file_path if record else None
+            if not result_path or not os.path.isfile(result_path):
+                continue
+            if missing_result_fingerprints_in_set(result_path, present_fingerprints):
+                count += 1
+        return count
+
+    if not dropbox_path:
+        return 0
+    with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
+        local_path = Path(tmp) / "wallet_editor.xlsx"
+        status, _rev = download_file_with_rev(dropbox_path, str(local_path))
+        if status != "ok":
             return 0
-        with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
-            local_path = Path(tmp) / "wallet_editor.xlsx"
-            status, _rev = download_file_with_rev(dropbox_path, str(local_path))
-            if status != "ok":
-                return 0
-            all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
-                local_path,
-                status,
-            )
+        all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
+            local_path,
+            status,
+        )
 
     count = 0
     for run_id in processed:

@@ -131,8 +131,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(fps),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=all_results,
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(fps),
             ),
         ):
             report = diagnose_processed_runs(limit=20)
@@ -156,8 +156,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(),
             ),
         ):
             report = diagnose_processed_runs(limit=20)
@@ -201,8 +201,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=wrong_df,
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(),
             ),
         ):
             report = diagnose_processed_runs(limit=20)
@@ -230,8 +230,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(),
             ),
         ):
             report = diagnose_processed_runs(limit=20)
@@ -256,8 +256,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(fps),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=all_results,
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(fps),
             ),
         ):
             report = diagnose_processed_runs(limit=5)
@@ -285,8 +285,8 @@ class TestDiagnoseProcessedRuns:
                 return_value=set(),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(),
             ),
         ):
             text = format_diagnose_processed_report(diagnose_processed_runs(limit=10))
@@ -311,8 +311,8 @@ class TestDiagnoseProcessedCli:
                 return_value=set(fps),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.diagnose_processed._load_health_all_results_df",
-                return_value=_matching_all_results(durable),
+                "integrations.wallet_editor_registry_db.diagnose_processed._load_postgres_fingerprint_set",
+                return_value=frozenset(fps),
             ),
         ):
             from tools.diagnose_processed_without_rows import main

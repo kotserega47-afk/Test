@@ -624,6 +624,14 @@ def missing_result_fingerprints(
 ) -> list[str]:
     """Fingerprints from result file that are absent in registry all_results."""
     present = registry_row_fingerprints(all_results)
+    return missing_result_fingerprints_in_set(result_path, present)
+
+
+def missing_result_fingerprints_in_set(
+    result_path: str,
+    present: set[str] | frozenset[str],
+) -> list[str]:
+    """Fingerprints from result file that are absent in the provided fingerprint set."""
     return [fp for fp in fingerprints_from_result_excel(result_path) if fp not in present]
 
 
