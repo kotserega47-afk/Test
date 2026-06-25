@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 
 from analyzers import conversion
 from analyzers.conversion_analyzer import ConversionAnalyzer, normalize_name
-from analyzers.conversion_dto import SpecialCardsState
+from analyzers.conversion_dto import ConversionAnalysisResult, SpecialCardsState
 from core.rules_v2.accessors import ConversionRulesAccessor
 from core.rules_v2.models import MetaInfo, RulesSnapshotV2
 from reporters.conversion_reporter import render_excel, render_telegram
@@ -268,6 +268,32 @@ class TestConversionReporter:
 
         for frag in fragments["summary_message_fragments"]:
             assert frag in telegram.summary_message, f"missing summary fragment: {frag!r}"
+
+    def test_render_excel_empty_sections_saves_with_placeholder_sheet(self, tmp_path):
+        analysis = ConversionAnalysisResult(
+            summary={
+                "Карт в работе по партнёрам": {},
+                "Карт в работе по пулам": {},
+                "Max ошибки": 0,
+                "Карты на отключение": 0,
+            },
+            problem_cards=pd.DataFrame(),
+            cards_in_work_by_partner=pd.Series(dtype=int),
+            cards_in_work_by_pool=pd.Series(dtype=int),
+            special_cards_state=SpecialCardsState.empty(),
+        )
+
+        wb = render_excel(analysis)
+        report_path = tmp_path / "empty_conversion_report.xlsx"
+        wb.save(report_path)
+
+        loaded = load_workbook(report_path, read_only=True)
+        try:
+            assert loaded.sheetnames == ["Нет данных"]
+            assert loaded["Нет данных"]["A1"].value == "Нет данных для отчёта"
+            assert loaded["Нет данных"]["A2"].value == "Все секции отчёта пустые"
+        finally:
+            loaded.close()
 
 
 class TestOriginalPartner:

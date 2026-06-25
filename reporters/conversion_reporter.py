@@ -13,6 +13,7 @@ from analyzers.conversion_dto import ConversionAnalysisResult, SpecialCardsState
 from utils.excel_utils import flatten_lists_in_df, write_df_to_sheet
 
 PROBLEM_BATCH_SIZE = 500
+EMPTY_REPORT_SHEET = "Нет данных"
 OFF_SHEET_COLUMNS = [
     "card",
     "partner",
@@ -29,6 +30,15 @@ def _prepare_off_sheet_df(problem: pd.DataFrame) -> pd.DataFrame:
     ordered = [c for c in OFF_SHEET_COLUMNS if c in df.columns]
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
+
+
+def _ensure_workbook_has_visible_sheet(wb: Workbook) -> None:
+    """openpyxl requires at least one visible sheet before save."""
+    if wb.sheetnames:
+        return
+    ws = wb.create_sheet(EMPTY_REPORT_SHEET)
+    ws["A1"] = "Нет данных для отчёта"
+    ws["A2"] = "Все секции отчёта пустые"
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,7 @@ def render_excel(analysis: ConversionAnalysisResult) -> Workbook:
             ),
         )
 
+    _ensure_workbook_has_visible_sheet(wb)
     return wb
 
 
