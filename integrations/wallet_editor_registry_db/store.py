@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Iterable, Protocol, Sequence
 
 from integrations.wallet_editor_registry_db.models import RegistryResultRow, RegistryRunRow
@@ -166,6 +167,15 @@ INSERT INTO we_registry_runs (
 ON CONFLICT (run_id) DO NOTHING
 """
 
+PATCH_LIFECYCLE_SQL = """
+UPDATE we_registry_results SET
+    reenable_date = %(reenable_date)s,
+    enable_status = %(enable_status)s,
+    hold_mark = %(hold_mark)s,
+    updated_at = now()
+WHERE row_fingerprint = %(row_fingerprint)s
+"""
+
 
 class RegistryStore(Protocol):
     def upsert_run(self, row: RegistryRunRow) -> bool:
@@ -173,6 +183,16 @@ class RegistryStore(Protocol):
 
     def upsert_result(self, row: RegistryResultRow) -> bool:
         """Return True when a new result row was inserted (False if updated existing)."""
+
+    def patch_lifecycle_fields(
+        self,
+        *,
+        row_fingerprint: str,
+        reenable_date: str | None,
+        enable_status: str | None,
+        hold_mark: str | None,
+    ) -> bool:
+        """Update lifecycle columns only. Return True when a row was updated."""
 
 
 def _run_params(row: RegistryRunRow) -> dict[str, Any]:
@@ -243,6 +263,25 @@ class PostgresRegistryStore:
         )
         return len(rows)
 
+    def patch_lifecycle_fields(
+        self,
+        *,
+        row_fingerprint: str,
+        reenable_date: str | None,
+        enable_status: str | None,
+        hold_mark: str | None,
+    ) -> bool:
+        self._cursor.execute(
+            PATCH_LIFECYCLE_SQL,
+            {
+                "row_fingerprint": row_fingerprint,
+                "reenable_date": reenable_date,
+                "enable_status": enable_status,
+                "hold_mark": hold_mark,
+            },
+        )
+        return self._cursor.rowcount > 0
+
 
 class InMemoryRegistryStore:
     """Test double for import idempotency without a live database."""
@@ -261,3 +300,22 @@ class InMemoryRegistryStore:
         existed = row.row_fingerprint in self.results
         self.results[row.row_fingerprint] = row
         return not existed
+
+    def patch_lifecycle_fields(
+        self,
+        *,
+        row_fingerprint: str,
+        reenable_date: str | None,
+        enable_status: str | None,
+        hold_mark: str | None,
+    ) -> bool:
+        existing = self.results.get(row_fingerprint)
+        if existing is None:
+            return False
+        self.results[row_fingerprint] = replace(
+            existing,
+            reenable_date=reenable_date,
+            enable_status=enable_status,
+            hold_mark=hold_mark,
+        )
+        return True
