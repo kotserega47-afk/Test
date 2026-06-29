@@ -2,9 +2,9 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.5 |
+| **KB версия** | v1.6 |
 | **Статус документа** | draft |
-| **Последнее обновление** | 2026-06-21 |
+| **Последнее обновление** | 2026-06-23 |
 
 ---
 
@@ -210,7 +210,8 @@ flowchart LR
 | `automation/add_wallet_contract.py` | Add Wallet Excel contract, routing, batch prep, result dataframe | `wallet_editor_tg`, `add_wallet_engine` |
 | `automation/add_wallet_engine.py` | Add Wallet Playwright UI automation (create modal) | `automation/worker` `_run_add_wallet_task` |
 | `automation/runtime.py` | `WalletEditorTask`, operator map, credentials, result naming, `run_id` | worker, handler |
-| `integrations/wallet_editor_registry.py` | Dropbox registry append with retry/timeout/rev conflict | `wallet_editor_registry_async` (daemon) |
+| `integrations/wallet_editor_registry.py` | Registry append/patch/health/replay; Postgres-first when `WALLET_EDITOR_REGISTRY_SOURCE=postgres` | `wallet_editor_registry_async` (daemon) |
+| `integrations/wallet_editor_registry_db/` | Postgres frames, store, excel export, diagnose/backfill/refresh CLIs support | `wallet_editor_registry` |
 | `integrations/wallet_editor_registry_async.py` | Stage result copy + schedule async append | `automation/worker` after TG send |
 | `integrations/wallet_editor_registry_settings.py` | `wallet_editor` job_params (`registry_*_seconds`) | `wallet_editor_registry` |
 | `integrations/wallet_editor_registry_lifecycle.py` | Lifecycle recalc (`hold`, `Отлёжка`, re-enable dates/status) | `wallet_editor_registry` |
@@ -442,10 +443,35 @@ result xlsx (wallet_editor_result_* / add_wallet result naming)
         ↓
 Telegram summary + document reply
         ↓
-[disable only] Dropbox registry append async (DROPBOX_WALLET_EDITOR_PATH, best-effort)
+[disable only] Postgres registry append async (or Excel when `WALLET_EDITOR_REGISTRY_SOURCE=excel`)
+        ↓
+[optional] Excel export → Dropbox wallet_editor.xlsx (projection; preserves hold/Отлёжка)
         ↓
 [optional] Auto-Enable: eligibility → batches → Antares enable → patch Включено/Комментарий включения
 ```
+
+**Registry source of truth (Postgres mode — production default):**
+
+```
+Antares disable/add results
+        ↓
+PostgreSQL (SoT)
+  we_registry_results / we_registry_runs
+        ├── Auto-enable planning (load_registry_frames_from_postgres + Dropbox hold/Отлёжка)
+        ├── Registry health (/registry_health, processed_without_rows)
+        ├── Manual export (/registry_export, tools/export_wallet_editor_registry.py)
+        └── Lifecycle refresh (job /wallet_editor_refresh, tools/refresh_registry_lifecycle_fields.py)
+        ↓
+Excel export (best-effort projection)
+        ↓
+Dropbox wallet_editor.xlsx
+        ├── hold        (operator-maintained; not in Postgres)
+        └── Отлёжка     (operator-maintained; not in Postgres)
+```
+
+**Recovery workflow:** `/registry_health` → verify integrity → `/registry_export` rebuild Excel if damaged → `/registry_replay` only for legacy outbox gaps (historical `failed` outbox ≠ incomplete registry when `processed_without_rows=0`).
+
+**Repair CLIs (ops):** `diagnose_processed_without_rows`, `backfill_processed_without_rows`, `refresh_registry_lifecycle_fields`, `export_wallet_editor_registry`.
 
 **Add Wallet pipeline (Phase 1 / 1.1 / 2 — complete):**
 
@@ -474,7 +500,7 @@ no Dropbox registry write (Add Wallet v1)
 **Auto-Enable pipeline (Phase A → B2):**
 
 ```
-Dropbox registry download → recalculate_all_results
+Postgres all_results (+ Dropbox hold/Отлёжка for lifecycle) → recalculate_all_results
         ↓
 build_auto_enable_plan (eligibility, dedup, max_rows_per_run, batch split)
         ↓
@@ -626,3 +652,4 @@ Database: not present in active runtime chain.
 | 2026-06-04 | **Wallet hang mitigation** — Patch A (PW timeouts + stage logs); Patch B (`dispatch_job_background`); Job Health Guard C1 (observe-only `/status` `job_health:`) |
 | 2026-06-07 | **WalletEditor Auto-Enable** (Phase A/B1/B2); **HOLD enforcement**; **registry UX-A** formatting; token sanitization; wallet datepicker fix |
 | 2026-06-21 | **WalletEditor Add Wallet** — Excel routing fork; `add_wallet_contract` + `add_wallet_engine`; Phase 1/1.1/2 complete; KYC scoped checkbox; E-WE-16…E-WE-19 |
+| 2026-06-23 | **WalletEditor registry Postgres SoT** — Excel projection; ops export/repair CLIs; `/registry_export` (E-WE-21, E-WE-22) |

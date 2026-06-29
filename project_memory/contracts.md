@@ -241,7 +241,11 @@ Wallet Editor **Add Wallet input** xlsx (`automation/add_wallet_contract.py`):
 
 **Registry:** Add Wallet v1 does **not** append to Dropbox cumulative registry (E-WE-19). Disable flow registry contract unchanged.
 
-Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_lifecycle.py` + `wallet_editor_registry_xlsx.py`):
+Wallet Editor **registry** (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_db/` + lifecycle/xlsx):
+
+**Source of truth:** PostgreSQL `we_registry_results` / `we_registry_runs` when `WALLET_EDITOR_REGISTRY_SOURCE=postgres` (production default). Dropbox `wallet_editor.xlsx` is an **exported projection**; operator sheets `hold` and `Отлёжка` are read from Dropbox only (not in Postgres).
+
+**Excel projection:** `excel_export.py` rebuilds `all_results` + `runs` after Postgres commits; preserves `hold`/`Отлёжка`. Manual: `/registry_export` or `tools/export_wallet_editor_registry.py`.
 
 | Sheet | Ownership | Purpose |
 |-------|-----------|---------|
@@ -268,7 +272,7 @@ Wallet Editor **Dropbox registry** xlsx (`integrations/wallet_editor_registry.py
 
 **Outbox replay:** `replay_pending_outbox_records()` + TG `/registry_replay` + job `wallet_editor_registry_replay`. Repair re-append when `registry_processed_run_ids` contains `run_id` but row fingerprints absent from workbook (restored-workbook trap).
 
-**Registry health:** `/registry_health` reports outbox pending/failed, processed-without-rows, stale threshold (default 3600s). Auto-enable warns (does not block) on stale outbox.
+**Registry health:** `/registry_health` reports outbox pending/failed, `processed_without_rows` (Postgres fingerprints when source=postgres), stale threshold (default 3600s). Auto-enable: postgres mode warns on `processed_without_rows`/stale/pending; historical `outbox_failed` alone → informational only (E-WE-22).
 
 **Events:** `wallet_editor_outbox_recorded`, `wallet_editor_registry_sync_*`, `wallet_editor_registry_health_degraded` in `{STATE_DIR}/events/`.
 

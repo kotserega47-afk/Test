@@ -208,6 +208,17 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | WALLET-HANG-PATCH-A | complete | Playwright timeouts + wallet stage logs + progress hooks |
 | WALLET-HANG-PATCH-B | complete | Scheduler `dispatch_job_background` |
 | JOB-HEALTH-GUARD-C1 | complete | Observe-only job health in `/status` |
+| TASK-2026-06-23-01 | complete | WalletEditor registry Postgres Phase 1 — mirror, health, postgres-first append/patch/refresh |
+| TASK-2026-06-24-01 | complete | Registry mirror observation + reconcile; Stage D diagnostics |
+
+**TASK-2026-06-23-01 completed subtasks:**
+
+- ✓ `diagnose_processed_without_rows` CLI (B1/B2/B3/B4 classification)
+- ✓ Postgres backfill tool (`backfill_processed_without_rows`)
+- ✓ Lifecycle refresh tool (`refresh_registry_lifecycle_fields`)
+- ✓ Registry export CLI (`export_wallet_editor_registry`)
+- ✓ Telegram `/registry_export`
+- ✓ Postgres-aware registry warnings in auto-enable (`processed_without_rows` vs historical `outbox_failed`)
 
 ---
 
@@ -240,10 +251,12 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | **WE-UX-C** | **OPEN** | Readable WalletEditor result filenames (manual / conversion / auto-enable / registry staging) | Independent of UX-B |
 | **WE-AE-SCHEDULER-C** | **OPEN** | Scheduled daily auto-enable at 08:00 MSK via Rules `schedules` | Phase B2 complete; prod `rules.xlsx` row + ACL for commands |
 | **WE-REGISTRY-OUTBOX-PHASE1** | **complete** | Durable STATE_DIR outbox + replay + registry health (E-WE-20) |
+| **TASK-2026-06-23-01** | **complete** | WalletEditor registry Postgres Phase 1 — postgres-first ops (E-WE-21) |
+| **TASK-2026-06-24-01** | **complete** | Registry mirror observation / reconcile (Stage D) |
 | **WE-REG-WATCHDOG** | **OPEN** | Registry append timeout/watchdog alerts; stale append detection | E-WE-10 partial coverage via job_params; **partial:** outbox + `/registry_health` (E-WE-20) |
-| **WE-LIFECYCLE-REFRESH** | **OPEN** | Optional lifecycle refresh job / write-back for external workbook edits | Not implemented |
+| **WE-LIFECYCLE-REFRESH** | **complete** | Lifecycle refresh job + `tools/refresh_registry_lifecycle_fields.py` | `wallet_editor_registry_refresh` job; postgres lifecycle patch CLI |
 | **WE-AE-SUMMARY** | **OPTIONAL** | Final aggregated auto-enable summary message across batches | Per-batch reports exist today |
-| **WE-POSTGRES-HISTORY** | **OPTIONAL** | Postgres/history model for registry beyond xlsx | Future; not scoped |
+| **WE-POSTGRES-HISTORY** | **complete** | Postgres registry source of truth for `all_results`/`runs` | E-WE-21; rollback `WALLET_EDITOR_REGISTRY_SOURCE=excel` |
 
 **Phase 1B scope (planned, not started):**
 
@@ -282,3 +295,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-07 | WE-AE, WE-HOLD, WE-UX-A closed; WE-UX-B/C, WE-AE-SCHEDULER-C added to open tasks |
 | 2026-06-21 | WE-ADD-1 / WE-ADD-1.1 / WE-ADD-2 closed; R-WE-08…R-WE-10 Add Wallet operational risks |
 | 2026-06-22 | WE-REGISTRY-OUTBOX-PHASE1 complete — durable outbox, replay, registry health (E-WE-20) |
+| 2026-06-23 | TASK-2026-06-23-01 / TASK-2026-06-24-01 closed — WalletEditor registry Postgres SoT + ops tooling (E-WE-21, E-WE-22) |

@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.7 |
-| **Снимок на дату** | 2026-06-21 |
+| **KB версия** | v1.8 |
+| **Снимок на дату** | 2026-06-23 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -69,6 +69,8 @@
 - **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
 - **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
 - **WalletEditor registry outbox (Phase 1)** — durable `{STATE_DIR}/wallet_editor/outbox` + `results/{run_id}.xlsx`; replay `/registry_replay`; health `/registry_health`; repair re-append for restored-workbook trap (E-WE-20).
+- **WalletEditor registry Postgres source of truth** — `WALLET_EDITOR_REGISTRY_SOURCE=postgres` (default in prod): `all_results` + `runs` in PostgreSQL (`we_registry_results`, `we_registry_runs`); Excel `wallet_editor.xlsx` is an **exported projection** after commits; operator sheets `hold` + `Отлёжка` remain in Dropbox only (E-WE-21).
+- **WalletEditor registry ops tooling** — CLI + TG recovery: `tools/diagnose_processed_without_rows.py`, `tools/backfill_processed_without_rows.py`, `tools/refresh_registry_lifecycle_fields.py`, `tools/export_wallet_editor_registry.py`; Telegram `/registry_export` (E-WE-22).
 
 ---
 
@@ -245,7 +247,9 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
-| **Cumulative registry** | Dropbox `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe openpyxl write (UX-A row style copy); async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10, UX-A) |
+| **Cumulative registry** | **PostgreSQL** (`we_registry_results`, `we_registry_runs`) when `WALLET_EDITOR_REGISTRY_SOURCE=postgres`; Excel export to `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe openpyxl write (UX-A); async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10, UX-A, E-WE-21) |
+| **Operator config sheets** | Dropbox `wallet_editor.xlsx` sheets `hold`, `Отлёжка` only (not in Postgres) |
+| **Registry recovery (ops)** | `/registry_health` → integrity; `/registry_export` → rebuild Excel from Postgres; `/registry_replay` → legacy outbox repair only; CLI: `diagnose_processed_without_rows`, `backfill_processed_without_rows`, `refresh_registry_lifecycle_fields`, `export_wallet_editor_registry` |
 | **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from recalculated registry; plan `/auto_enable_plan`; execute `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения`; HOLD check before `open_card` |
 | **Add Wallet** | Excel `card`+`phone` → `detect_excel_routing()` → `add_add_wallet_task()` → `add_wallet_engine.run()`; required cols: `card`, `phone`; default: `status=Тест` only; success = strict post-save card search (`row_matches_card_strict`); **no** registry append; disable/auto-enable/conversion paths unchanged |
 | **HOLD enforcement** | `integrations/wallet_editor_hold.py`; manual engine pre-pass; auto-enable executor batch check; fail-closed |
@@ -335,3 +339,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-15 | Hourly auto-report incident resolved — legacy job_params whitelist fix E-CONFIG-14 (`e4b31fb`); payin group spacing with `hide_inactive_rows` E-HOURLY-01; Raccoon hourly log prefixes |
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
 | 2026-06-21 | WalletEditor Add Wallet Phase 1 / 1.1 / 2 complete — routing, contract, engine, KYC fix; real UI verified; E-WE-16…E-WE-19 |
+| 2026-06-23 | WalletEditor registry Postgres source of truth — Excel becomes projection; ops CLIs + `/registry_export`; postgres-aware auto-enable warnings (E-WE-21, E-WE-22) |
