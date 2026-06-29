@@ -1315,12 +1315,21 @@ def run_registry_outbox_replay_job() -> str:
     )
 
 
-def registry_stale_outbox_warning(
-    *,
-    stale_threshold_seconds: int = DEFAULT_STALE_OUTBOX_SECONDS,
-) -> str | None:
-    """Return warning text when registry durability or completeness may be at risk."""
-    report = build_registry_health_report(stale_threshold_seconds=stale_threshold_seconds)
+def _registry_completeness_warning_parts(report: RegistryHealthReport) -> list[str]:
+    parts: list[str] = []
+    if report.stale_outbox:
+        age = report.oldest_pending_age_sec or 0.0
+        parts.append(f"registry outbox stale (oldest pending {age:.0f}s)")
+    if report.outbox_pending_count:
+        parts.append(f"pending={report.outbox_pending_count}")
+    if report.processed_without_rows_count:
+        parts.append(f"processed_without_rows={report.processed_without_rows_count}")
+    if report.processed_run_ids_corrupted:
+        parts.append("processed_run_ids_corrupted")
+    return parts
+
+
+def _excel_registry_stale_outbox_warning(report: RegistryHealthReport) -> str | None:
     if (
         not report.stale_outbox
         and report.outbox_pending_count == 0
@@ -1329,17 +1338,34 @@ def registry_stale_outbox_warning(
         and not report.processed_run_ids_corrupted
     ):
         return None
-    parts = []
-    if report.stale_outbox:
-        parts.append(
-            f"registry outbox stale (oldest pending {report.oldest_pending_age_sec:.0f}s)"
-        )
-    if report.outbox_pending_count:
-        parts.append(f"pending={report.outbox_pending_count}")
+
+    parts = _registry_completeness_warning_parts(report)
     if report.outbox_failed_count:
         parts.append(f"failed={report.outbox_failed_count}")
-    if report.processed_without_rows_count:
-        parts.append(f"processed_without_rows={report.processed_without_rows_count}")
-    if report.processed_run_ids_corrupted:
-        parts.append("processed_run_ids_corrupted")
+    if not parts:
+        return None
     return "⚠️ Registry may be incomplete: " + ", ".join(parts)
+
+
+def _postgres_registry_stale_outbox_warning(report: RegistryHealthReport) -> str | None:
+    risk_parts = _registry_completeness_warning_parts(report)
+    if risk_parts:
+        return "⚠️ Registry may be incomplete: " + ", ".join(risk_parts)
+
+    if report.outbox_failed_count > 0 and report.processed_without_rows_count == 0:
+        return (
+            f"ℹ️ Historical failed outbox records: {report.outbox_failed_count}\n"
+            "Registry integrity verified."
+        )
+    return None
+
+
+def registry_stale_outbox_warning(
+    *,
+    stale_threshold_seconds: int = DEFAULT_STALE_OUTBOX_SECONDS,
+) -> str | None:
+    """Return warning text when registry durability or completeness may be at risk."""
+    report = build_registry_health_report(stale_threshold_seconds=stale_threshold_seconds)
+    if report.registry_source == "postgres":
+        return _postgres_registry_stale_outbox_warning(report)
+    return _excel_registry_stale_outbox_warning(report)
