@@ -38,6 +38,11 @@ from integrations.wallet_editor_registry import (
     format_registry_health_report,
     replay_pending_outbox_records,
     run_registry_outbox_replay_job,
+    wallet_editor_dropbox_path,
+)
+from integrations.wallet_editor_registry_db.excel_export import (
+    export_registry_workbook_to_dropbox,
+    format_export_registry_summary,
 )
 from core.state_store import state_get, state_update
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
@@ -264,6 +269,7 @@ def _help_text() -> str:
         "/wallet_editor_refresh\n"
         "/registry_health\n"
         "/registry_replay\n"
+        "/registry_export\n"
         "/run_script_hello\n"
         "/operator_wallets_ready\n"
         "/help"
@@ -540,6 +546,30 @@ async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ /registry_replay failed: {type(e).__name__}: {e}")
 
 
+async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard_or_deny(update, "registry_export"):
+        return
+
+    dropbox_path = wallet_editor_dropbox_path()
+    if not dropbox_path:
+        await update.message.reply_text(
+            "❌ Registry export failed: DROPBOX_WALLET_EDITOR_PATH is not set"
+        )
+        return
+
+    await update.message.reply_text("📤 Exporting registry from Postgres to Dropbox...")
+    try:
+        loop = asyncio.get_running_loop()
+        summary = await loop.run_in_executor(
+            None,
+            lambda: export_registry_workbook_to_dropbox(dropbox_path),
+        )
+        await update.message.reply_text(format_export_registry_summary(summary))
+    except Exception as e:
+        log.exception("cmd_registry_export failed")
+        await update.message.reply_text(f"❌ Registry export failed: {e}")
+
+
 def get_handlers():
     return [
         CommandHandler("start", cmd_start),
@@ -561,5 +591,6 @@ def get_handlers():
         CommandHandler("wallet_editor_refresh", cmd_wallet_editor_refresh),
         CommandHandler("registry_health", cmd_registry_health),
         CommandHandler("registry_replay", cmd_registry_replay),
+        CommandHandler("registry_export", cmd_registry_export),
         MessageHandler(filters.Document.ALL, handle_wallet_editor_document),
     ]

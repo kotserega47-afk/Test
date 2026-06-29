@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from core.event_log import append_event
@@ -23,10 +24,38 @@ icon, name = LOG_PROFILES["DROPBOX"]
 log = get_logger(name, icon)
 
 
-def export_registry_workbook_to_dropbox(dropbox_path: str) -> None:
+@dataclass(frozen=True, slots=True)
+class ExportRegistrySummary:
+    dropbox_path: str
+    all_results_rows: int
+    runs_rows: int
+    hold_exists: bool
+    otlezka_exists: bool
+    download_status: str
+    upload_status: str
+
+
+def format_export_registry_summary(summary: ExportRegistrySummary) -> str:
+    lines = [
+        "WalletEditor registry export",
+        "",
+        f"path: {summary.dropbox_path}",
+        f"all_results rows: {summary.all_results_rows}",
+        f"runs rows: {summary.runs_rows}",
+        f"hold_exists: {summary.hold_exists}",
+        f"otlezka_exists: {summary.otlezka_exists}",
+        f"download status: {summary.download_status}",
+        f"upload status: {summary.upload_status}",
+    ]
+    return "\n".join(lines)
+
+
+def export_registry_workbook_to_dropbox(dropbox_path: str) -> ExportRegistrySummary:
     """Build xlsx from Postgres history + preserved hold/otlezka and upload."""
     all_results, runs = load_registry_frames_from_postgres()
     all_results = normalize_all_results(all_results)
+    all_results_rows = len(all_results)
+    runs_rows = len(runs)
 
     with tempfile.TemporaryDirectory(prefix="we_export_") as tmp:
         local_path = Path(tmp) / "wallet_editor.xlsx"
@@ -55,6 +84,16 @@ def export_registry_workbook_to_dropbox(dropbox_path: str) -> None:
         upload_status = upload_file_if_rev(str(local_path), dropbox_path, expected_rev)
         if upload_status != "uploaded":
             raise RuntimeError(f"registry export upload failed status={upload_status}")
+
+    return ExportRegistrySummary(
+        dropbox_path=dropbox_path,
+        all_results_rows=all_results_rows,
+        runs_rows=runs_rows,
+        hold_exists=hold_exists,
+        otlezka_exists=otlezka_exists,
+        download_status=status,
+        upload_status=upload_status,
+    )
 
 
 def schedule_excel_export(*, operation: str, dropbox_path: str) -> None:
