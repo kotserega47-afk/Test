@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -37,13 +37,44 @@ from integrations.wallet_editor_registry_lifecycle import (
     run_id_already_processed,
     save_processed_run_ids,
 )
+from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
 from integrations.wallet_editor_registry_lifecycle import (
-    OPERATION_DATE_COLUMN,
+    ALL_RESULTS_COLUMNS,
     DISABLE_DATE_COLUMN,
+    OPERATION_DATE_COLUMN,
     result_row_dates,
 )
 
 MSK = ZoneInfo("Europe/Moscow")
+RUN_STARTED = datetime(2026, 6, 22, 9, 0, 0, tzinfo=MSK)
+RUN_FINISHED = datetime(2026, 6, 22, 9, 5, 0, tzinfo=MSK)
+DROPBOX_PATH = "/Ostin/platform/Tests/wallet_editor.xlsx"
+
+
+def _empty_registry_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    return (
+        pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+        pd.DataFrame(
+            columns=[
+                "started_at",
+                "finished_at",
+                "input_rows",
+                "success_rows",
+                "failed_rows",
+                "skipped_rows",
+                "output_file",
+            ]
+        ),
+    )
+
+
+def _empty_hold_otlezka():
+    return (
+        pd.DataFrame(columns=["Дата добавления", "card", "partner", "comment"]),
+        pd.DataFrame(columns=["partner", "Полные дни", "comment"]),
+        False,
+        False,
+    )
 RUN_STARTED = datetime(2026, 6, 22, 9, 0, 0, tzinfo=MSK)
 RUN_FINISHED = datetime(2026, 6, 22, 9, 5, 0, tzinfo=MSK)
 DROPBOX_PATH = "/Ostin/platform/Tests/wallet_editor.xlsx"
@@ -84,30 +115,49 @@ def outbox_env(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(state_dir))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
-
-    store: dict[str, bytes] = {}
-    revs: dict[str, str] = {"": "rev0"}
-
-    def fake_download(path, local_path):
-        if path not in store:
-            return "not_found", None
-        Path(local_path).write_bytes(store[path])
-        return "ok", revs.get(path, "rev1")
-
-    def fake_upload(local_path, path, expected_rev=None):
-        if expected_rev is not None and revs.get(path) != expected_rev:
-            return "rev_conflict"
-        store[path] = Path(local_path).read_bytes()
-        revs[path] = f"rev{len(revs)}"
-        return "uploaded"
+    monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("WALLET_EDITOR_MANUAL_READERS_SOURCE", "postgres")
 
     monkeypatch.setattr(
-        "integrations.wallet_editor_registry.download_file_with_rev",
-        fake_download,
+        "integrations.wallet_editor_registry_db.postgres_source.load_registry_frames_from_postgres",
+        lambda: _empty_registry_frames(),
     )
     monkeypatch.setattr(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        fake_upload,
+        "integrations.wallet_editor_registry_db.postgres_source.load_hold_otlezka_for_runtime",
+        lambda _path: _empty_hold_otlezka(),
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.postgres_run_exists",
+        lambda _run_id: False,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source._persist_full_registry",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.frames.load_registry_frames_from_postgres",
+        lambda: _empty_registry_frames(),
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.frames.load_registry_row_fingerprints_from_postgres",
+        lambda: frozenset(),
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_sync.run_manual_sync_prerun_gate",
+        lambda **kwargs: MagicMock(ok=True),
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_readers.load_hold_otlezka_for_runtime",
+        lambda _path: _empty_hold_otlezka(),
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_readers.pg_manual_readers_missing_successful_sync",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_lifecycle.now_msk",
+        lambda: datetime(2026, 6, 22, 12, 0, 0, tzinfo=MSK),
     )
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.load_registry_settings",
@@ -116,11 +166,11 @@ def outbox_env(monkeypatch, tmp_path):
         ).RegistrySettings(60, 180, 10),
     )
 
-    return state_dir, store, revs
+    return state_dir
 
 
 def test_outbox_record_created_after_durable_copy(outbox_env, tmp_path):
-    state_dir, _, _ = outbox_env
+    state_dir = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task()
@@ -143,7 +193,7 @@ def test_outbox_record_created_after_durable_copy(outbox_env, tmp_path):
 
 
 def test_durable_copy_survives_tmp_cleanup(outbox_env, tmp_path):
-    _, _, _ = outbox_env
+    state_dir = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task()
@@ -156,8 +206,7 @@ def test_durable_copy_survives_tmp_cleanup(outbox_env, tmp_path):
     assert len(df) == 1
 
 
-def test_failed_upload_keeps_outbox_pending(outbox_env, tmp_path):
-    _, store, revs = outbox_env
+def test_failed_persist_keeps_outbox_failed(outbox_env, tmp_path, monkeypatch):
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="fail-upload")
@@ -172,42 +221,34 @@ def test_failed_upload_keeps_outbox_pending(outbox_env, tmp_path):
         output_file="out.xlsx",
     )
 
-    revs[DROPBOX_PATH] = "stale-rev"
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source._persist_full_registry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
 
-    def always_conflict(local_path, path, expected_rev=None):
-        return "rev_conflict"
-
-    with patch(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        side_effect=always_conflict,
+    with (
+        patch("integrations.wallet_editor_registry._send_timeout_warning"),
+        patch("integrations.wallet_editor_registry._send_slow_append_warning"),
     ):
-        with patch(
-            "integrations.wallet_editor_registry._send_timeout_warning",
-        ):
-            with patch(
-                "integrations.wallet_editor_registry._send_slow_append_warning",
-            ):
-                append_run_to_dropbox_registry(
-                    task,
-                    durable,
-                    Stats(ok=1, fail=0, skip=0),
-                    run_started_at=RUN_STARTED,
-                    run_finished_at=RUN_FINISHED,
-                    settings=__import__(
-                        "integrations.wallet_editor_registry_settings",
-                        fromlist=["RegistrySettings"],
-                    ).RegistrySettings(1, 2, 1),
-                    output_file="out.xlsx",
-                )
+        append_run_to_dropbox_registry(
+            task,
+            durable,
+            Stats(ok=1, fail=0, skip=0),
+            run_started_at=RUN_STARTED,
+            run_finished_at=RUN_FINISHED,
+            settings=__import__(
+                "integrations.wallet_editor_registry_settings",
+                fromlist=["RegistrySettings"],
+            ).RegistrySettings(1, 2, 1),
+            output_file="out.xlsx",
+        )
 
     record = get_outbox_record(task.run_id)
     assert record is not None
     assert record.status == OUTBOX_STATUS_FAILED
-    assert DROPBOX_PATH not in store or record.status != OUTBOX_STATUS_SYNCED
 
 
 def test_replay_after_simulated_failure(outbox_env, tmp_path):
-    _, store, _ = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="replay-run")
@@ -229,14 +270,12 @@ def test_replay_after_simulated_failure(outbox_env, tmp_path):
     result_replay = replay_pending_outbox_records()
     assert result_replay.attempted == 1
     assert result_replay.synced == 1
-    assert DROPBOX_PATH in store
     record = get_outbox_record(task.run_id)
     assert record is not None
     assert record.status == OUTBOX_STATUS_SYNCED
 
 
 def test_processed_run_ids_trap_allows_repair_reappend(outbox_env, tmp_path):
-    _, store, _ = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="trap-run")
@@ -260,14 +299,12 @@ def test_processed_run_ids_trap_allows_repair_reappend(outbox_env, tmp_path):
         run_finished_at=RUN_FINISHED,
         output_file="out.xlsx",
     )
-    assert DROPBOX_PATH in store
     record = get_outbox_record(task.run_id)
     if record:
         assert record.status == OUTBOX_STATUS_SYNCED
 
 
-def test_replay_no_duplicate_rows(outbox_env, tmp_path):
-    _, store, _ = outbox_env
+def test_replay_no_duplicate_sync(outbox_env, tmp_path):
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="nodup-run")
@@ -282,19 +319,14 @@ def test_replay_no_duplicate_rows(outbox_env, tmp_path):
         output_file="out.xlsx",
     )
 
-    replay_pending_outbox_records()
-    first_size = len(store[DROPBOX_PATH])
-    replay_pending_outbox_records()
-    second_size = len(store[DROPBOX_PATH])
-    assert first_size == second_size
-
-    with pd.ExcelFile(__import__("io").BytesIO(store[DROPBOX_PATH])) as book:
-        df = pd.read_excel(book, "all_results")
-    assert len(df) == 1
+    first = replay_pending_outbox_records()
+    second = replay_pending_outbox_records()
+    assert first.synced == 1
+    assert second.synced == 0
 
 
 def test_add_wallet_does_not_create_outbox(outbox_env, tmp_path):
-    state_dir, _, _ = outbox_env
+    state_dir = outbox_env
     import automation.worker as worker_mod
 
     with patch("automation.worker.send_text"):
@@ -373,7 +405,6 @@ def test_prepare_registry_outbox_and_schedule_creates_record(outbox_env, tmp_pat
 
 
 def test_health_detects_processed_without_rows(outbox_env, tmp_path):
-    _, store, revs = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="orphan-processed")
@@ -392,20 +423,11 @@ def test_health_detects_processed_without_rows(outbox_env, tmp_path):
     update_outbox_status(task.run_id, status=OUTBOX_STATUS_SYNCED)
     mark_run_processed(task.run_id)
 
-    # Seed empty registry workbook so health can compare rows
-    from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
-
-    empty_wb = tmp_path / "empty.xlsx"
-    create_styled_registry_workbook(empty_wb)
-    store[DROPBOX_PATH] = empty_wb.read_bytes()
-    revs[DROPBOX_PATH] = "rev-empty"
-
     report = build_registry_health_report()
     assert report.processed_without_rows_count >= 1
 
 
 def test_processed_without_rows_triggers_stale_warning(outbox_env, tmp_path):
-    _, store, revs = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="warn-trap")
@@ -424,20 +446,13 @@ def test_processed_without_rows_triggers_stale_warning(outbox_env, tmp_path):
     update_outbox_status(task.run_id, status=OUTBOX_STATUS_SYNCED)
     mark_run_processed(task.run_id)
 
-    from integrations.wallet_editor_registry_xlsx import create_styled_registry_workbook
-
-    empty_wb = tmp_path / "empty.xlsx"
-    create_styled_registry_workbook(empty_wb)
-    store[DROPBOX_PATH] = empty_wb.read_bytes()
-    revs[DROPBOX_PATH] = "rev-empty"
-
     warning = registry_stale_outbox_warning()
     assert warning is not None
     assert "processed_without_rows=" in warning
 
 
 def test_corrupt_processed_run_ids_blocks_replay(outbox_env, tmp_path):
-    state_dir, store, revs = outbox_env
+    state_dir = outbox_env
     result = tmp_path / "result.xlsx"
     _write_result(result)
     task = _make_task(run_id="corrupt-replay")
@@ -463,11 +478,10 @@ def test_corrupt_processed_run_ids_blocks_replay(outbox_env, tmp_path):
     assert result_replay.attempted == 0
     assert result_replay.synced == 0
     assert any("replay blocked" in err for err in result_replay.errors)
-    assert DROPBOX_PATH not in store
 
 
 def test_registry_health_reports_processed_run_ids_corruption(outbox_env, tmp_path):
-    state_dir, _, _ = outbox_env
+    state_dir = outbox_env
     corrupt_path = state_dir / "wallet_editor" / "registry_processed_run_ids.json"
     corrupt_path.parent.mkdir(parents=True, exist_ok=True)
     corrupt_path.write_text("[]", encoding="utf-8")

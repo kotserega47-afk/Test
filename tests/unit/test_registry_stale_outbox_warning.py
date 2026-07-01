@@ -35,31 +35,28 @@ def _health_report(**overrides) -> RegistryHealthReport:
 
 class TestRegistryStaleOutboxWarning:
     @pytest.mark.parametrize(
-        ("source", "failed", "processed_without_rows", "expected_kind"),
+        ("failed", "processed_without_rows", "expected_kind"),
         [
-            ("excel", 33, 0, "incomplete"),
-            ("postgres", 33, 0, "historical"),
-            ("postgres", 33, 2, "incomplete"),
-            ("excel", 0, 2, "incomplete"),
-            ("postgres", 0, 0, "none"),
+            (33, 0, "historical"),
+            (33, 2, "incomplete"),
+            (0, 2, "incomplete"),
+            (0, 0, "none"),
         ],
         ids=[
-            "excel_failed_only",
-            "postgres_failed_only",
-            "postgres_failed_and_missing_rows",
-            "excel_missing_rows",
-            "postgres_all_clear",
+            "failed_only",
+            "failed_and_missing_rows",
+            "missing_rows",
+            "all_clear",
         ],
     )
     def test_decision_table_failed_vs_missing_rows(
         self,
-        source: str,
         failed: int,
         processed_without_rows: int,
         expected_kind: str,
     ):
         report = _health_report(
-            registry_source=source,
+            registry_source="postgres",
             outbox_failed_count=failed,
             processed_without_rows_count=processed_without_rows,
         )
@@ -84,15 +81,17 @@ class TestRegistryStaleOutboxWarning:
             assert "Registry integrity verified." in message
             assert "Registry may be incomplete" not in message
 
-    def test_excel_failed_only_uses_incomplete_warning(self):
-        report = _health_report(registry_source="excel", outbox_failed_count=5)
+    def test_failed_only_uses_historical_warning(self):
+        report = _health_report(registry_source="postgres", outbox_failed_count=5)
         with patch(
             "integrations.wallet_editor_registry.build_registry_health_report",
             return_value=report,
         ):
             message = registry_stale_outbox_warning()
 
-        assert message == "⚠️ Registry may be incomplete: failed=5"
+        assert message == (
+            "ℹ️ Historical failed outbox records: 5\nRegistry integrity verified."
+        )
 
     def test_postgres_pending_still_warns_without_failed_signal(self):
         report = _health_report(

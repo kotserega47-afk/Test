@@ -7,7 +7,7 @@ import traceback
 import threading
 import time
 from concurrent.futures import Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from queue import Queue
 from typing import Sequence, Union
 
@@ -30,6 +30,12 @@ from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
 from integrations.wallet_editor_registry_async import (
     prepare_registry_outbox_and_schedule,
+)
+from integrations.wallet_editor_registry_db.config import manual_sync_enabled
+from integrations.wallet_editor_registry_db.manual_sync import (
+    RunSnapshotBinding,
+    log_run_snapshot_binding,
+    run_manual_sync_prerun_gate,
 )
 from transport.telegram_transport import send_text, send_document
 
@@ -58,6 +64,7 @@ class WalletEditorAutoEnableBatchTask:
     settings: AutoEnableSettings
     result_future: Future = field(default_factory=Future)
     queued_at: float = field(default_factory=time.perf_counter)
+    manual_snapshot_binding: RunSnapshotBinding | None = None
 
 
 @dataclass
@@ -188,7 +195,37 @@ def delayed_cleanup(result_path: str, input_path: str, delay: int = 30):
         log.warning(f"⚠️ [Cleanup] Не удалось удалить входной файл: {e}")
 
 
+def _worker_manual_sync_gate(
+    *,
+    chat_id: int,
+    triggered_by: str,
+    actor: str | None,
+) -> RunSnapshotBinding | None:
+    """
+    Authoritative manual sync gate at worker execution start (I-MAN-10).
+
+    Returns binding when gate passes (or sync disabled). Returns None when blocked.
+    """
+    gate = run_manual_sync_prerun_gate(triggered_by=triggered_by, actor=actor)
+    if gate.ok:
+        log_run_snapshot_binding(gate.binding, context=triggered_by)
+        return gate.binding
+    if gate.operator_message:
+        send_text(chat_id=str(chat_id), text=gate.operator_message)
+    return None
+
+
 def _run_disable_task(profile_key: str, task: WalletEditorTask) -> None:
+    if manual_sync_enabled():
+        binding = _worker_manual_sync_gate(
+            chat_id=task.chat_id,
+            triggered_by="wallet_editor_disable",
+            actor=f"profile:{profile_key}",
+        )
+        if binding is None:
+            return
+        task = replace(task, manual_snapshot_binding=binding)
+
     log.info(f"🚀 [Worker] profile={profile_key} file={task.file_path}")
 
     run_started_at = now_msk()
@@ -241,6 +278,16 @@ def _run_disable_task(profile_key: str, task: WalletEditorTask) -> None:
 
 def _run_add_wallet_task(profile_key: str, task: WalletEditorAddWalletTask) -> None:
     from automation.add_wallet_engine import run as run_add_wallet
+
+    if task.requires_manual_snapshot_gate and manual_sync_enabled():
+        binding = _worker_manual_sync_gate(
+            chat_id=task.chat_id,
+            triggered_by="wallet_editor_add_wallet",
+            actor=f"profile:{profile_key}",
+        )
+        if binding is None:
+            return
+        log_run_snapshot_binding(binding, context="wallet_editor_add_wallet")
 
     log.info(
         f"🚀 [Worker] add_wallet profile={profile_key} file={task.file_path} dry_run={task.dry_run}"

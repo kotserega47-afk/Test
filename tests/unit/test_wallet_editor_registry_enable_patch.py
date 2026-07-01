@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -152,77 +153,105 @@ def test_unrelated_rows_unchanged():
 
 @pytest.fixture
 def registry_env(monkeypatch, tmp_path):
-    store: dict[str, bytes] = {}
-    revs: dict[str, str] = {}
-
-    def fake_download_with_rev(dropbox_path: str, local_path: str) -> tuple[str, str | None]:
-        content = store.get(dropbox_path)
-        if content is None:
-            return "not_found", None
-        Path(local_path).write_bytes(content)
-        return "ok", revs.get(dropbox_path, "rev-initial")
-
-    def fake_get_rev(dropbox_path: str) -> str | None:
-        if dropbox_path not in store:
-            return None
-        return revs.get(dropbox_path, "rev-initial")
-
-    def fake_upload_if_rev(
-        local_path: str, dropbox_path: str, expected_rev: str | None
-    ) -> str:
-        from integrations import dropbox_watcher
-
-        if expected_rev is not None:
-            current = dropbox_watcher.get_dropbox_file_rev(dropbox_path)
-            if current != expected_rev:
-                return "rev_conflict"
-        store[dropbox_path] = Path(local_path).read_bytes()
-        revs[dropbox_path] = f"rev-after-{len(store)}"
-        return "uploaded"
+    """Postgres patch path with in-memory registry store."""
+    from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
+    from integrations.wallet_editor_registry_db.store import InMemoryRegistryStore
+    from integrations.wallet_editor_registry_db.mapping import map_all_results_row
 
     state_root = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(state_root))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
+    monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("WALLET_EDITOR_MANUAL_READERS_SOURCE", "postgres")
 
-    workbook = tmp_path / "seed.xlsx"
+    pg_store = InMemoryRegistryStore()
     seed_df = _recalc(_df(_row()))
-    save_registry_workbook(
-        workbook,
-        all_results=seed_df,
-        runs=pd.DataFrame(),
-        hold_exists=False,
-        otlezka_exists=True,
-        is_new_file=True,
+    for index in seed_df.index:
+        pg_store.upsert_result(
+            map_all_results_row(seed_df.loc[index], source_row_index=int(index))
+        )
+
+    def _load_frames_from_store():
+        from integrations.wallet_editor_registry_db.frames import result_row_to_dict
+
+        if not pg_store.results:
+            return pd.DataFrame(columns=ALL_RESULTS_COLUMNS), pd.DataFrame(
+                columns=[
+                    "started_at",
+                    "finished_at",
+                    "input_rows",
+                    "success_rows",
+                    "failed_rows",
+                    "skipped_rows",
+                    "output_file",
+                ]
+            )
+        rows = [result_row_to_dict(row) for row in pg_store.results.values()]
+        return pd.DataFrame(rows, columns=ALL_RESULTS_COLUMNS), pd.DataFrame(
+            columns=[
+                "started_at",
+                "finished_at",
+                "input_rows",
+                "success_rows",
+                "failed_rows",
+                "skipped_rows",
+                "output_file",
+            ]
+        )
+
+    def _upsert_results_batch(rows):
+        for row in rows:
+            pg_store.upsert_result(row)
+        return len(rows)
+
+    pg_store.upsert_results_batch = _upsert_results_batch  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.load_registry_frames_from_postgres",
+        _load_frames_from_store,
     )
-    store[DROPBOX_PATH] = workbook.read_bytes()
-    revs[DROPBOX_PATH] = "rev-initial"
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.load_hold_otlezka_for_runtime",
+        lambda _path: (_otlezka_df().iloc[0:0], _otlezka_df(), False, True),
+    )
 
-    with patch(
-        "integrations.wallet_editor_registry.download_file_with_rev",
-        side_effect=fake_download_with_rev,
-    ):
-        with patch(
-            "integrations.wallet_editor_registry.upload_file_if_rev",
-            side_effect=fake_upload_if_rev,
-        ):
-            with patch(
-                "integrations.dropbox_watcher.get_dropbox_file_rev",
-                side_effect=fake_get_rev,
-            ):
-                with patch(
-                    "integrations.wallet_editor_registry_lifecycle.now_msk",
-                    return_value=datetime(2026, 6, 6, 12, 0, 0, tzinfo=MSK),
-                ):
-                    yield store, revs
+    class _FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCursor()
+
+        def commit(self):
+            return None
+
+    @contextmanager
+    def fake_connect(**kwargs):
+        yield _FakeConn()
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.connect",
+        fake_connect,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.PostgresRegistryStore",
+        lambda cur: pg_store,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_lifecycle.now_msk",
+        lambda: datetime(2026, 6, 6, 12, 0, 0, tzinfo=MSK),
+    )
+
+    yield pg_store
 
 
-def _read_all_results(store: dict[str, bytes]) -> pd.DataFrame:
-    with pd.ExcelFile(io.BytesIO(store[DROPBOX_PATH]), engine="openpyxl") as book:
-        return pd.read_excel(book, "all_results")
-
-
-def test_patch_enable_results_in_dropbox_registry_success(registry_env):
-    store, _revs = registry_env
+def test_patch_enable_results_postgres_success(registry_env):
+    pg_store = registry_env
     result = patch_enable_results_in_dropbox_registry(
         [_update(vklyucheno="SKIP", comment="UNKNOWN_STATUS: test")],
         settings=RegistrySettings(60, 180, 1),
@@ -230,93 +259,6 @@ def test_patch_enable_results_in_dropbox_registry_success(registry_env):
     assert result.success is True
     assert result.patched_count == 1
 
-    all_results = _read_all_results(store)
-    assert all_results.at[0, "Включено"] == "SKIP"
-    assert all_results.at[0, "Комментарий включения"] == "UNKNOWN_STATUS: test"
-    assert all_results.at[0, "Статус включения"] == STATUS_PROPUSHENO
-
-
-def test_patch_enable_results_rev_conflict_then_success(registry_env):
-    store, _revs = registry_env
-    attempts = {"count": 0}
-
-    def flaky_upload(local_path, dropbox_path, expected_rev):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            return "rev_conflict"
-        store[dropbox_path] = Path(local_path).read_bytes()
-        return "uploaded"
-
-    with patch(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        side_effect=flaky_upload,
-    ):
-        result = patch_enable_results_in_dropbox_registry(
-            [_update()],
-            settings=RegistrySettings(60, 180, 0),
-        )
-
-    assert result.success is True
-    assert result.patched_count == 1
-    assert attempts["count"] == 2
-
-
-def test_patch_enable_results_upload_failure(registry_env):
-    store, _revs = registry_env
-
-    with patch(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        return_value="error",
-    ):
-        result = patch_enable_results_in_dropbox_registry(
-            [_update()],
-            settings=RegistrySettings(60, 5, 1),
-        )
-
-    assert result.success is False
-    assert result.patched_count == 0
-    assert result.error_reason is not None
-
-
-def test_patch_preserves_existing_row_styles(registry_env):
-    store, _revs = registry_env
-    from openpyxl import load_workbook
-    from openpyxl.styles import Alignment, Border, Side
-
-    wb = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
-    ws = wb[SHEET_ALL_RESULTS]
-    card_col = ALL_RESULTS_COLUMNS.index("card") + 1
-    vklyucheno_col = ALL_RESULTS_COLUMNS.index("Включено") + 1
-    comment_col = ALL_RESULTS_COLUMNS.index("comment") + 1
-    thin = Side(style="thin")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center = Alignment(horizontal="center", vertical="center")
-
-    for col_idx in range(1, len(ALL_RESULTS_COLUMNS) + 1):
-        cell = ws.cell(row=2, column=col_idx)
-        cell.border = border
-        if col_idx in {card_col, comment_col}:
-            cell.alignment = center
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    wb.close()
-    store[DROPBOX_PATH] = buf.getvalue()
-
-    result = patch_enable_results_in_dropbox_registry(
-        [_update(vklyucheno="OK", comment="styled patch")],
-        settings=RegistrySettings(60, 180, 1),
-    )
-    assert result.success is True
-    assert result.patched_count == 1
-
-    wb2 = load_workbook(io.BytesIO(store[DROPBOX_PATH]))
-    ws2 = wb2[SHEET_ALL_RESULTS]
-    assert ws2.cell(row=2, column=card_col).border.left.style == "thin"
-    assert ws2.cell(row=2, column=comment_col).alignment.horizontal == "center"
-    assert ws2.cell(row=2, column=vklyucheno_col).border.left.style == "thin"
-    assert ws2.cell(row=2, column=vklyucheno_col).value == "OK"
-    assert ws2.cell(row=2, column=ALL_RESULTS_COLUMNS.index("Комментарий включения") + 1).value == (
-        "styled patch"
-    )
-    wb2.close()
+    patched_row = next(iter(pg_store.results.values()))
+    assert patched_row.vklyucheno == "SKIP"
+    assert patched_row.enable_comment == "UNKNOWN_STATUS: test"

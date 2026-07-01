@@ -66,94 +66,88 @@ def _default_otlezka() -> pd.DataFrame:
     return pd.DataFrame([{"partner": "Ostin", "Полные дни": 5, "comment": ""}])
 
 
-def _seed_registry(
-    store: dict[str, bytes],
-    tmp_path: Path,
+def _seed_registry_state(
+    registry_state: dict,
     *,
     rows: list[dict],
     hold: pd.DataFrame | None = None,
     otlezka: pd.DataFrame | None = None,
 ) -> None:
-    all_results = pd.DataFrame(rows, columns=ALL_RESULTS_COLUMNS)
-    hold_df = hold if hold is not None else pd.DataFrame(columns=HOLD_COLUMNS)
-    otlezka_df = otlezka if otlezka is not None else _default_otlezka()
-    local = tmp_path / "we_refresh_seed.xlsx"
-    with pd.ExcelWriter(local, engine="openpyxl") as writer:
-        all_results.to_excel(writer, sheet_name=SHEET_ALL_RESULTS, index=False)
-        pd.DataFrame(columns=RUNS_COLUMNS).to_excel(writer, sheet_name=SHEET_RUNS, index=False)
-        hold_df.to_excel(writer, sheet_name=SHEET_HOLD, index=False)
-        otlezka_df.to_excel(writer, sheet_name=SHEET_OTLEZKA, index=False)
-    store[DROPBOX_PATH] = local.read_bytes()
-
-
-def _read_all_results(store: dict[str, bytes]) -> pd.DataFrame:
-    with pd.ExcelFile(io.BytesIO(store[DROPBOX_PATH]), engine="openpyxl") as book:
-        return pd.read_excel(book, SHEET_ALL_RESULTS)
+    registry_state["all_results"] = pd.DataFrame(rows, columns=ALL_RESULTS_COLUMNS)
+    if hold is not None:
+        registry_state["hold"] = hold
+    if otlezka is not None:
+        registry_state["otlezka"] = otlezka
 
 
 @pytest.fixture
 def refresh_env(monkeypatch, tmp_path):
-    store: dict[str, bytes] = {}
-    revs: dict[str, str] = {}
-    uploads: list[str] = []
+    from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
+    from integrations.wallet_editor_registry_refresh import RefreshBreakdown, _RefreshOutcome
 
-    def fake_download_with_rev(dropbox_path: str, local_path: str) -> tuple[str, str | None]:
-        content = store.get(dropbox_path)
-        if content is None:
-            return "not_found", None
-        Path(local_path).write_bytes(content)
-        return "ok", revs.get(dropbox_path, "rev-initial")
+    registry_state = {
+        "all_results": pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
+        "runs": pd.DataFrame(columns=RUNS_COLUMNS),
+        "hold": pd.DataFrame(columns=HOLD_COLUMNS),
+        "otlezka": _default_otlezka(),
+        "commits": 0,
+    }
 
-    def fake_get_rev(dropbox_path: str) -> str | None:
-        if dropbox_path not in store:
-            return None
-        return revs.get(dropbox_path, "rev-initial")
-
-    def fake_upload_if_rev(
-        local_path: str, dropbox_path: str, expected_rev: str | None
-    ) -> str:
-        from integrations import dropbox_watcher
-
-        if expected_rev is not None:
-            current = dropbox_watcher.get_dropbox_file_rev(dropbox_path)
-            if current != expected_rev:
-                return "rev_conflict"
-        store[dropbox_path] = Path(local_path).read_bytes()
-        revs[dropbox_path] = f"rev-after-{len(uploads)}"
-        uploads.append(dropbox_path)
-        return "uploaded"
+    def fake_refresh_attempt_postgres(
+        *,
+        dropbox_path: str,
+        today,
+        normalize_all_results,
+        recalculate_all_results,
+        compute_lifecycle_diff,
+        lifecycle_row_changed,
+    ):
+        before_df = normalize_all_results(registry_state["all_results"])
+        recalculated, _missing = recalculate_all_results(
+            before_df,
+            registry_state["hold"],
+            registry_state["otlezka"],
+            today=today,
+        )
+        changed_rows, breakdown = compute_lifecycle_diff(before_df, recalculated)
+        if changed_rows == 0:
+            return _RefreshOutcome.SKIPPED, 0, breakdown, None, None
+        registry_state["all_results"] = recalculated
+        registry_state["commits"] += 1
+        return _RefreshOutcome.SUCCESS, changed_rows, breakdown, None, None
 
     state_root = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(state_root))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
-    revs[DROPBOX_PATH] = "rev-initial"
+    monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("WALLET_EDITOR_MANUAL_READERS_SOURCE", "postgres")
 
-    with patch(
-        "integrations.wallet_editor_registry_refresh.download_file_with_rev",
-        side_effect=fake_download_with_rev,
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.refresh_attempt_postgres",
+        fake_refresh_attempt_postgres,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_sync.run_manual_sync_prerun_gate",
+        lambda **kwargs: MagicMock(ok=True),
+    )
+
+    with (
+        patch(
+            "integrations.wallet_editor_registry_refresh.resolve_route_chat_id",
+            return_value=MagicMock(chat_id=-9001, source="test"),
+        ),
+        patch(
+            "integrations.wallet_editor_registry_refresh.send_message_sync",
+            return_value=None,
+        ),
     ):
-        with patch(
-            "integrations.wallet_editor_registry_refresh.upload_file_if_rev",
-            side_effect=fake_upload_if_rev,
-        ):
-            with patch(
-                "integrations.dropbox_watcher.get_dropbox_file_rev",
-                side_effect=fake_get_rev,
-            ):
-                with patch(
-                    "integrations.wallet_editor_registry_refresh.resolve_route_chat_id",
-                    return_value=MagicMock(chat_id=-9001, source="test"),
-                ):
-                    with patch(
-                        "integrations.wallet_editor_registry_refresh.send_message_sync",
-                        return_value=None,
-                    ):
-                        yield store, revs, uploads, tmp_path
+        yield registry_state, tmp_path
 
 
 def test_waiting_to_ready_transition(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(store, tmp_path, rows=[_row()])
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(registry_state, rows=[_row()])
     result = refresh_wallet_editor_registry_lifecycle(
         today=date(2026, 6, 7),
         settings=FAST_SETTINGS,
@@ -162,16 +156,14 @@ def test_waiting_to_ready_transition(refresh_env):
     assert result.changed_rows == 1
     assert result.uploaded is True
     assert result.breakdown.waiting_to_ready == 1
-    assert len(uploads) == 1
-    df = _read_all_results(store)
-    assert df.iloc[0]["Статус включения"] == STATUS_K_VKLUCHENIYU
+    assert registry_state["commits"] == 1
+    assert registry_state["all_results"].iloc[0]["Статус включения"] == STATUS_K_VKLUCHENIYU
 
 
 def test_ready_to_overdue_transition(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(
-        store,
-        tmp_path,
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(
+        registry_state,
         rows=[
             _row(
                 **{
@@ -189,19 +181,17 @@ def test_ready_to_overdue_transition(refresh_env):
     assert result.success is True
     assert result.changed_rows == 1
     assert result.breakdown.ready_to_overdue == 1
-    assert len(uploads) == 1
-    df = _read_all_results(store)
-    assert df.iloc[0]["Статус включения"] == STATUS_PROSROCHENO
+    assert registry_state["commits"] == 1
+    assert registry_state["all_results"].iloc[0]["Статус включения"] == STATUS_PROSROCHENO
 
 
 def test_hold_row_unchanged(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
+    registry_state, _tmp_path = refresh_env
     hold = pd.DataFrame(
         [{"Дата добавления": "01.06.2026", "card": "4111111111111111", "partner": "Ostin", "comment": "hold"}]
     )
-    _seed_registry(
-        store,
-        tmp_path,
+    _seed_registry_state(
+        registry_state,
         rows=[
             _row(
                 **{
@@ -220,14 +210,13 @@ def test_hold_row_unchanged(refresh_env):
     )
     assert result.skipped_no_changes is True
     assert result.uploaded is False
-    assert len(uploads) == 0
+    assert registry_state["commits"] == 0
 
 
 def test_ok_skip_fail_rows_unchanged(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(
-        store,
-        tmp_path,
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(
+        registry_state,
         rows=[
             _row(
                 card="4111111111111112",
@@ -266,14 +255,13 @@ def test_ok_skip_fail_rows_unchanged(refresh_env):
         settings=FAST_SETTINGS,
     )
     assert result.skipped_no_changes is True
-    assert len(uploads) == 0
+    assert registry_state["commits"] == 0
 
 
 def test_no_changes_skips_upload(refresh_env):
-    store, revs, uploads, tmp_path = refresh_env
-    _seed_registry(
-        store,
-        tmp_path,
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(
+        registry_state,
         rows=[
             _row(
                 **{
@@ -283,79 +271,58 @@ def test_no_changes_skips_upload(refresh_env):
             )
         ],
     )
-    rev_before = revs[DROPBOX_PATH]
     result = refresh_wallet_editor_registry_lifecycle(
         today=date(2026, 6, 7),
         settings=FAST_SETTINGS,
     )
     assert result.skipped_no_changes is True
     assert result.uploaded is False
-    assert len(uploads) == 0
-    assert revs[DROPBOX_PATH] == rev_before
+    assert registry_state["commits"] == 0
 
 
 def test_changes_trigger_upload(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(store, tmp_path, rows=[_row()])
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(registry_state, rows=[_row()])
     result = refresh_wallet_editor_registry_lifecycle(
         today=date(2026, 6, 7),
         settings=FAST_SETTINGS,
     )
     assert result.uploaded is True
-    assert len(uploads) == 1
+    assert registry_state["commits"] == 1
 
 
-def test_rev_conflict_retry(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(store, tmp_path, rows=[_row()])
-    attempts = {"count": 0}
-
-    def flaky_upload(local_path, dropbox_path, expected_rev):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            return "rev_conflict"
-        store[dropbox_path] = Path(local_path).read_bytes()
-        uploads.append(dropbox_path)
-        return "uploaded"
-
-    with patch(
-        "integrations.wallet_editor_registry_refresh.upload_file_if_rev",
-        side_effect=flaky_upload,
-    ):
-        result = refresh_wallet_editor_registry_lifecycle(
-            today=date(2026, 6, 7),
-            settings=FAST_SETTINGS,
-        )
-
-    assert result.success is True
-    assert result.uploaded is True
-    assert attempts["count"] == 2
-    assert len(uploads) == 1
-
-
-def test_refresh_failure_on_missing_registry(refresh_env):
-    store, _, _, _ = refresh_env
-    store.pop(DROPBOX_PATH, None)
+def test_refresh_failure_on_manual_sync_gate(refresh_env, monkeypatch):
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(registry_state, rows=[_row()])
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_sync.run_manual_sync_prerun_gate",
+        lambda **kwargs: MagicMock(ok=False, operator_message="manual sync required"),
+    )
     result = refresh_wallet_editor_registry_lifecycle(
         today=date(2026, 6, 7),
         settings=FAST_SETTINGS,
     )
     assert result.success is False
-    assert "not found" in (result.error or "").lower()
+    assert "manual sync" in (result.error or "").lower()
 
 
-def test_refresh_failure_on_upload_error(refresh_env):
-    store, _, _, tmp_path = refresh_env
-    _seed_registry(store, tmp_path, rows=[_row()])
+def test_refresh_failure_on_postgres_load_error(refresh_env, monkeypatch):
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(registry_state, rows=[_row()])
 
-    with patch(
-        "integrations.wallet_editor_registry_refresh.upload_file_if_rev",
-        return_value="error",
-    ):
-        result = refresh_wallet_editor_registry_lifecycle(
-            today=date(2026, 6, 7),
-            settings=RegistrySettings(30, 60, 0),
-        )
+    def _fail_refresh(**kwargs):
+        from integrations.wallet_editor_registry_refresh import RefreshBreakdown, _RefreshOutcome
+
+        return _RefreshOutcome.TRANSIENT, 0, RefreshBreakdown(), "postgres load failed", None
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.refresh_attempt_postgres",
+        _fail_refresh,
+    )
+    result = refresh_wallet_editor_registry_lifecycle(
+        today=date(2026, 6, 7),
+        settings=RegistrySettings(30, 60, 0),
+    )
 
     assert result.success is False
     assert result.uploaded is False
@@ -461,8 +428,8 @@ def test_job_registry_registration():
 
 
 def test_scheduler_invokes_refresh_job(refresh_env):
-    store, _, uploads, tmp_path = refresh_env
-    _seed_registry(store, tmp_path, rows=[_row()])
+    registry_state, _tmp_path = refresh_env
+    _seed_registry_state(registry_state, rows=[_row()])
 
     with patch(
         "integrations.wallet_editor_registry_refresh.refresh_wallet_editor_registry_lifecycle",
@@ -473,11 +440,13 @@ def test_scheduler_invokes_refresh_job(refresh_env):
         actor = refresh_fn.call_args.kwargs["actor"]
         assert actor.kind == "scheduler"
 
-    assert len(uploads) == 1
+    assert registry_state["commits"] == 1
 
 
-def test_run_job_raises_on_failure(refresh_env):
-    store, _, _, _ = refresh_env
-    store.pop(DROPBOX_PATH, None)
-    with pytest.raises(RuntimeError, match="not found"):
+def test_run_job_raises_on_failure(refresh_env, monkeypatch):
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.manual_sync.run_manual_sync_prerun_gate",
+        lambda **kwargs: MagicMock(ok=False, operator_message="manual sync required"),
+    )
+    with pytest.raises(RuntimeError, match="manual sync"):
         run_wallet_editor_registry_refresh_job()

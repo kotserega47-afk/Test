@@ -164,11 +164,10 @@ def diagnose_processed_runs(
     run_row_counts = _postgres_run_row_counts(scan_run_ids)
 
     postgres_fingerprints: frozenset[str] | None = None
-    if registry_source() == "postgres":
-        try:
-            postgres_fingerprints = _load_postgres_fingerprint_set()
-        except Exception:
-            postgres_fingerprints = None
+    try:
+        postgres_fingerprints = _load_postgres_fingerprint_set()
+    except Exception:
+        postgres_fingerprints = None
 
     entries: list[DiagnoseRunEntry] = []
     for run_id in scan_run_ids:
@@ -190,7 +189,6 @@ def diagnose_processed_runs(
             result_exists
             and result_path is not None
             and postgres_fingerprints is not None
-            and registry_source() == "postgres"
         ):
             health_would_count = bool(
                 missing_result_fingerprints_in_set(result_path, postgres_fingerprints)

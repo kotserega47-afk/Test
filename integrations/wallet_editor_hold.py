@@ -96,3 +96,30 @@ def load_hold_pairs_from_dropbox() -> HoldPairsSnapshot:
     except Exception as exc:
         log.exception("[Hold] failed to load hold pairs from registry")
         return HoldPairsSnapshot.unavailable(str(exc))
+
+
+def load_hold_pairs_from_postgres() -> HoldPairsSnapshot:
+    from integrations.wallet_editor_registry_db.manual_readers import (
+        ManualReadersNotReadyError,
+        load_active_hold_pair_norms_from_postgres,
+    )
+
+    try:
+        pairs = load_active_hold_pair_norms_from_postgres()
+        log.info("[Hold] loaded hold_pairs from postgres count=%s", len(pairs))
+        return HoldPairsSnapshot(pairs, True)
+    except ManualReadersNotReadyError as exc:
+        log.error("[Hold] postgres readers not ready: %s", exc)
+        return HoldPairsSnapshot.unavailable(str(exc))
+    except Exception as exc:
+        log.exception("[Hold] failed to load hold pairs from postgres")
+        return HoldPairsSnapshot.unavailable(str(exc))
+
+
+def load_hold_pairs_snapshot() -> HoldPairsSnapshot:
+    """Runtime hold loader — PG or Dropbox per WALLET_EDITOR_MANUAL_READERS_SOURCE."""
+    from integrations.wallet_editor_registry_db.config import manual_readers_source_is_postgres
+
+    if manual_readers_source_is_postgres():
+        return load_hold_pairs_from_postgres()
+    return load_hold_pairs_from_dropbox()

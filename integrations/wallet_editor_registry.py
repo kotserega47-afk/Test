@@ -60,7 +60,7 @@ from integrations.wallet_editor_registry_xlsx import (
     load_registry_frames,
     save_registry_workbook,
 )
-from integrations.wallet_editor_registry_db.mirror import MirrorResultBatch, schedule_mirror_batch
+from integrations.wallet_editor_registry_db.mirror import MirrorResultBatch
 from integrations.wallet_editor_registry_db.mapping import map_all_results_row, map_runs_row
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -211,20 +211,46 @@ def append_run_to_dropbox_registry(
     """
     from integrations.wallet_editor_registry_async import update_outbox_status
 
-    dropbox_path = wallet_editor_dropbox_path()
-    if not dropbox_path:
-        log.info(
-            "[WalletEditorRegistry] skipped: %s not set",
-            ENV_DROPBOX_WALLET_EDITOR_PATH,
+    from integrations.wallet_editor_registry_db.config import (
+        LegacyRegistrySourceError,
+        get_database_url,
+        manual_readers_source_is_postgres,
+        registry_source,
+    )
+
+    try:
+        registry_source()
+    except LegacyRegistrySourceError as exc:
+        log.error(
+            "[WalletEditorRegistry] append blocked run_id=%s: %s",
+            task.run_id,
+            exc,
+        )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error=str(exc),
+            increment_attempt=True,
         )
         return
 
-    from integrations.wallet_editor_registry_db.config import (
-        get_database_url,
-        registry_source_is_postgres,
-    )
+    dropbox_path = wallet_editor_dropbox_path() or ""
 
-    if registry_source_is_postgres() and not get_database_url():
+    if not manual_readers_source_is_postgres() and not dropbox_path:
+        log.error(
+            "[WalletEditorRegistry] postgres append blocked run_id=%s: %s not set "
+            "(required for dropbox manual readers)",
+            task.run_id,
+            ENV_DROPBOX_WALLET_EDITOR_PATH,
+        )
+        update_outbox_status(
+            task.run_id,
+            status=OUTBOX_STATUS_FAILED,
+            last_error=f"{ENV_DROPBOX_WALLET_EDITOR_PATH} is not set",
+            increment_attempt=True,
+        )
+        return
+    elif not get_database_url():
         log.error(
             "[WalletEditorRegistry] postgres append blocked run_id=%s: DATABASE_URL missing",
             task.run_id,
@@ -340,14 +366,6 @@ def append_run_to_dropbox_registry(
                     task.run_id,
                     {"path": dropbox_path, "rev": upload_rev},
                 )
-                from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
-
-                if registry_source_is_postgres():
-                    from integrations.wallet_editor_registry_db.excel_export import schedule_excel_export
-
-                    schedule_excel_export(operation="append", dropbox_path=dropbox_path)
-                else:
-                    schedule_mirror_batch(mirror_batch, operation="append")
                 return
 
             if outcome == _AppendOutcome.DUPLICATE:
@@ -439,152 +457,19 @@ def _append_attempt(
     run_finished_at: datetime,
     output_file: str | None = None,
 ) -> tuple[_AppendOutcome, str | None, MirrorResultBatch | None]:
-    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
+    from integrations.wallet_editor_registry_db.postgres_source import append_attempt_postgres
 
-    if registry_source_is_postgres():
-        from integrations.wallet_editor_registry_db.postgres_source import append_attempt_postgres
-
-        return append_attempt_postgres(
-            task,
-            result_path,
-            stats,
-            dropbox_path=dropbox_path,
-            run_started_at=run_started_at,
-            run_finished_at=run_finished_at,
-            output_file=output_file,
-            resolve_source=resolve_source,
-            process_missing_otlezka_warnings=_process_missing_otlezka_warnings,
-        )
-
-    runs_output_file = output_file or os.path.basename(result_path)
-
-    with tempfile.TemporaryDirectory(prefix="we_registry_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
-
-        if status == "error":
-            log.error(
-                "[WalletEditorRegistry] download failed path=%s status=%s",
-                dropbox_path,
-                status,
-            )
-            return _AppendOutcome.TRANSIENT, None, None
-
-        is_new_file = status == "not_found"
-        all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
-            load_registry_frames(local_path, status)
-        )
-
-        if run_id_already_processed(
-            task.run_id,
-            runs_df,
-            result_path=result_path,
-            all_results_df=all_results_df,
-        ):
-            log.info(
-                "[WalletEditorRegistry] skip duplicate run_id=%s path=%s",
-                task.run_id,
-                dropbox_path,
-            )
-            return _AppendOutcome.DUPLICATE, download_rev, None
-
-        repair_mode = task.run_id in load_processed_run_ids() and bool(
-            missing_result_fingerprints(result_path, all_results_df)
-        )
-        if repair_mode:
-            log.warning(
-                "[WalletEditorRegistry] repair re-append run_id=%s path=%s",
-                task.run_id,
-                dropbox_path,
-            )
-
-        result_df = pd.read_excel(
-            result_path,
-            engine="openpyxl",
-            converters={"card": card_as_text},
-        )
-        input_rows = len(result_df)
-        new_rows = rows_from_result_excel(result_df)
-        if repair_mode:
-            new_rows = filter_rows_not_in_registry(new_rows, all_results_df)
-            if new_rows.empty:
-                log.info(
-                    "[WalletEditorRegistry] repair complete (all rows present) run_id=%s",
-                    task.run_id,
-                )
-                return _AppendOutcome.DUPLICATE, download_rev, None
-
-        merged_all = pd.concat([all_results_df, new_rows], ignore_index=True)
-        recalculated, missing_partners = recalculate_all_results(
-            merged_all,
-            hold_df,
-            otlezka_df,
-        )
-
-        new_run = build_runs_row(
-            started_at=run_started_at,
-            finished_at=run_finished_at,
-            input_rows=input_rows,
-            stats_ok=stats.ok,
-            stats_fail=stats.fail,
-            stats_skip=stats.skip,
-            output_file=runs_output_file,
-        )
-        merged_runs = pd.concat([runs_df, new_run], ignore_index=True)
-
-        save_registry_workbook(
-            local_path,
-            all_results=recalculated,
-            runs=merged_runs,
-            hold_exists=hold_exists,
-            otlezka_exists=otlezka_exists,
-            is_new_file=is_new_file,
-        )
-
-        expected_rev = None if is_new_file else download_rev
-        upload_status = upload_file_if_rev(str(local_path), dropbox_path, expected_rev)
-        if upload_status == "rev_conflict":
-            log.warning(
-                "[WalletEditorRegistry] upload skipped: rev conflict run_id=%s path=%s",
-                task.run_id,
-                dropbox_path,
-            )
-            return _AppendOutcome.REV_CONFLICT, None, None
-        if upload_status != "uploaded":
-            log.error(
-                "[WalletEditorRegistry] upload failed run_id=%s path=%s",
-                task.run_id,
-                dropbox_path,
-            )
-            return _AppendOutcome.TRANSIENT, None, None
-
-        mark_run_processed(task.run_id)
-        _process_missing_otlezka_warnings(task, missing_partners, otlezka_df)
-
-        start_idx = len(all_results_df)
-        result_rows = tuple(
-            map_all_results_row(
-                recalculated.iloc[i],
-                run_id=task.run_id,
-                source_row_index=i,
-            )
-            for i in range(start_idx, len(recalculated))
-        )
-        run_row = map_runs_row(
-            new_run.iloc[0],
-            run_id=task.run_id,
-            operator_profile=task.operator_profile,
-            source=resolve_source(task.operator_profile),
-        )
-        mirror_batch = MirrorResultBatch(results=result_rows, runs=(run_row,))
-
-        log.info(
-            "[WalletEditorRegistry] appended run_id=%s rows=%s path=%s",
-            task.run_id,
-            len(new_rows),
-            dropbox_path,
-        )
-        return _AppendOutcome.SUCCESS, download_rev, mirror_batch
+    return append_attempt_postgres(
+        task,
+        result_path,
+        stats,
+        dropbox_path=dropbox_path,
+        run_started_at=run_started_at,
+        run_finished_at=run_finished_at,
+        output_file=output_file,
+        resolve_source=resolve_source,
+        process_missing_otlezka_warnings=_process_missing_otlezka_warnings,
+    )
 
 
 def _disable_dates_equal(left: object, right: object) -> bool:
@@ -658,8 +543,24 @@ def patch_enable_results_in_dropbox_registry(
     if not updates:
         return EnablePatchResult(success=True, patched_count=0, requested_count=0)
 
-    dropbox_path = wallet_editor_dropbox_path()
-    if not dropbox_path:
+    from integrations.wallet_editor_registry_db.config import (
+        LegacyRegistrySourceError,
+        manual_readers_source_is_postgres,
+        registry_source,
+    )
+
+    try:
+        registry_source()
+    except LegacyRegistrySourceError as exc:
+        return EnablePatchResult(
+            success=False,
+            patched_count=0,
+            requested_count=requested_count,
+            error_reason=str(exc),
+        )
+
+    dropbox_path = wallet_editor_dropbox_path() or ""
+    if not manual_readers_source_is_postgres() and not dropbox_path:
         return EnablePatchResult(
             success=False,
             patched_count=0,
@@ -691,14 +592,6 @@ def patch_enable_results_in_dropbox_registry(
             mirror_batch = None
 
         if outcome == _PatchOutcome.SUCCESS:
-            from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
-
-            if registry_source_is_postgres():
-                from integrations.wallet_editor_registry_db.excel_export import schedule_excel_export
-
-                schedule_excel_export(operation="patch", dropbox_path=dropbox_path)
-            else:
-                schedule_mirror_batch(mirror_batch, operation="patch")
             return EnablePatchResult(
                 success=True,
                 patched_count=patched_count,
@@ -740,87 +633,14 @@ def _patch_attempt(
     *,
     dropbox_path: str,
 ) -> tuple[_PatchOutcome, int, str | None, MirrorResultBatch | None]:
-    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
+    from integrations.wallet_editor_registry_db.postgres_source import patch_attempt_postgres
 
-    if registry_source_is_postgres():
-        from integrations.wallet_editor_registry_db.postgres_source import patch_attempt_postgres
-
-        return patch_attempt_postgres(
-            updates,
-            dropbox_path=dropbox_path,
-            apply_enable_updates_to_all_results=apply_enable_updates_to_all_results,
-            find_enable_patch_row_index=_find_enable_patch_row_index,
-        )
-
-    with tempfile.TemporaryDirectory(prefix="we_registry_patch_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
-
-        if status == "error":
-            log.error(
-                "[WalletEditorRegistry] enable patch download failed path=%s status=%s",
-                dropbox_path,
-                status,
-            )
-            return _PatchOutcome.TRANSIENT, 0, "registry download failed", None
-
-        is_new_file = status == "not_found"
-        if is_new_file:
-            return _PatchOutcome.PERMANENT, 0, "registry file not found", None
-
-        all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
-            load_registry_frames(local_path, status)
-        )
-
-        patched_df, patched_count = apply_enable_updates_to_all_results(
-            all_results_df,
-            updates,
-        )
-        recalculated, _missing_partners = recalculate_all_results(
-            patched_df,
-            hold_df,
-            otlezka_df,
-        )
-
-        save_registry_workbook(
-            local_path,
-            all_results=recalculated,
-            runs=runs_df,
-            hold_exists=hold_exists,
-            otlezka_exists=otlezka_exists,
-            is_new_file=False,
-        )
-
-        upload_status = upload_file_if_rev(str(local_path), dropbox_path, download_rev)
-        if upload_status == "rev_conflict":
-            log.warning(
-                "[WalletEditorRegistry] enable patch upload skipped: rev conflict path=%s",
-                dropbox_path,
-            )
-            return _PatchOutcome.REV_CONFLICT, 0, "rev conflict", None
-        if upload_status != "uploaded":
-            log.error(
-                "[WalletEditorRegistry] enable patch upload failed path=%s status=%s",
-                dropbox_path,
-                upload_status,
-            )
-            return _PatchOutcome.TRANSIENT, 0, f"upload failed: {upload_status}", None
-
-        from integrations.wallet_editor_registry_db.mirror import mirror_rows_for_patch
-
-        mirror_batch = mirror_rows_for_patch(
-            recalculated,
-            updates,
-            find_row_index=_find_enable_patch_row_index,
-        )
-
-        log.info(
-            "[WalletEditorRegistry] enable patch applied patched=%s requested=%s path=%s",
-            patched_count,
-            len(updates),
-            dropbox_path,
-        )
-        return _PatchOutcome.SUCCESS, patched_count, None, mirror_batch
+    return patch_attempt_postgres(
+        updates,
+        dropbox_path=dropbox_path,
+        apply_enable_updates_to_all_results=apply_enable_updates_to_all_results,
+        find_enable_patch_row_index=_find_enable_patch_row_index,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -853,8 +673,9 @@ class RegistryHealthReport:
     mirror_recent_failures: int = 0
     mirror_failure_count: int = 0
     mirror_last_operation: str | None = None
-    excel_export_recent_failures: int = 0
-    excel_export_last_error: str | None = None
+    manual_snapshot_block: str | None = None
+    manual_readers_source: str = "dropbox"
+    manual_readers_no_successful_sync: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -919,6 +740,19 @@ def replay_pending_outbox_records(
         load_outbox_records,
         update_outbox_status,
     )
+    from integrations.wallet_editor_registry_db.manual_sync import run_manual_sync_prerun_gate
+
+    gate = run_manual_sync_prerun_gate(triggered_by="registry_replay")
+    if not gate.ok:
+        message = gate.operator_message or "manual sync gate failed"
+        log.error("[WalletEditorRegistry] replay blocked: %s", message)
+        return OutboxReplayResult(
+            attempted=0,
+            synced=0,
+            failed=0,
+            skipped=0,
+            errors=(message,),
+        )
 
     if is_processed_run_ids_corrupted():
         corruption_error = (
@@ -1022,7 +856,6 @@ def _count_registry_lifecycle_metrics(
 
 def _count_processed_without_rows(dropbox_path: str | None) -> int:
     from integrations.wallet_editor_registry_async import load_outbox_records
-    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
 
     if is_processed_run_ids_corrupted():
         return 0
@@ -1034,43 +867,20 @@ def _count_processed_without_rows(dropbox_path: str | None) -> int:
 
     outbox_by_id = {r.run_id: r for r in load_outbox_records()}
 
-    if registry_source_is_postgres():
-        try:
-            from integrations.wallet_editor_registry_db.frames import (
-                load_registry_row_fingerprints_from_postgres,
-            )
-            from integrations.wallet_editor_registry_lifecycle import (
-                missing_result_fingerprints_in_set,
-            )
-
-            present_fingerprints = load_registry_row_fingerprints_from_postgres()
-        except Exception:
-            log.exception(
-                "[WalletEditorRegistry] health postgres processed_without_rows read failed"
-            )
-            return 0
-
-        count = 0
-        for run_id in processed:
-            record = outbox_by_id.get(run_id)
-            result_path = record.result_file_path if record else None
-            if not result_path or not os.path.isfile(result_path):
-                continue
-            if missing_result_fingerprints_in_set(result_path, present_fingerprints):
-                count += 1
-        return count
-
-    if not dropbox_path:
-        return 0
-    with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, _rev = download_file_with_rev(dropbox_path, str(local_path))
-        if status != "ok":
-            return 0
-        all_results_df, _runs_df, _hold, _otlezka, _he, _oe = load_registry_frames(
-            local_path,
-            status,
+    try:
+        from integrations.wallet_editor_registry_db.frames import (
+            load_registry_row_fingerprints_from_postgres,
         )
+        from integrations.wallet_editor_registry_lifecycle import (
+            missing_result_fingerprints_in_set,
+        )
+
+        present_fingerprints = load_registry_row_fingerprints_from_postgres()
+    except Exception:
+        log.exception(
+            "[WalletEditorRegistry] health postgres processed_without_rows read failed"
+        )
+        return 0
 
     count = 0
     for run_id in processed:
@@ -1078,7 +888,7 @@ def _count_processed_without_rows(dropbox_path: str | None) -> int:
         result_path = record.result_file_path if record else None
         if not result_path or not os.path.isfile(result_path):
             continue
-        if missing_result_fingerprints(result_path, all_results_df):
+        if missing_result_fingerprints_in_set(result_path, present_fingerprints):
             count += 1
     return count
 
@@ -1125,55 +935,35 @@ def build_registry_health_report(
     overdue_ready = 0
     missing_otlezka = 0
     from integrations.wallet_editor_registry_db.config import (
+        manual_readers_source,
         mirror_enabled as db_mirror_enabled,
         registry_source,
         registry_source_is_postgres,
     )
+    from integrations.wallet_editor_registry_db.manual_readers import (
+        load_hold_otlezka_for_runtime,
+        pg_manual_readers_missing_successful_sync,
+    )
     from integrations.wallet_editor_registry_db.mirror_state import get_mirror_health
 
-    if registry_source_is_postgres():
-        try:
-            from integrations.wallet_editor_registry_db.frames import load_registry_frames_from_postgres
-            from integrations.wallet_editor_registry_db.hold_loader import load_hold_otlezka_from_dropbox
+    manual_readers_no_sync = pg_manual_readers_missing_successful_sync()
 
-            all_df, _runs = load_registry_frames_from_postgres()
-            if dropbox_path:
-                hold_df, otlezka_df, _he, _oe = load_hold_otlezka_from_dropbox(dropbox_path)
-            else:
-                hold_df = pd.DataFrame()
-                otlezka_df = pd.DataFrame()
-            recalculated, missing_partners = recalculate_all_results(
-                all_df,
-                hold_df,
-                otlezka_df,
-            )
-            overdue_ready, missing_otlezka = _count_registry_lifecycle_metrics(recalculated)
-            if missing_partners:
-                missing_otlezka = max(missing_otlezka, len(missing_partners))
-        except Exception:
-            log.exception("[WalletEditorRegistry] health postgres registry read failed")
-    elif dropbox_path:
-        try:
-            with tempfile.TemporaryDirectory(prefix="we_health_") as tmp:
-                local_path = Path(tmp) / "wallet_editor.xlsx"
-                status, _rev = download_file_with_rev(dropbox_path, str(local_path))
-                if status == "ok":
-                    all_df, _runs, hold_df, otlezka_df, _he, _oe = load_registry_frames(
-                        local_path,
-                        status,
-                    )
-                    recalculated, missing_partners = recalculate_all_results(
-                        all_df,
-                        hold_df,
-                        otlezka_df,
-                    )
-                    overdue_ready, missing_otlezka = _count_registry_lifecycle_metrics(
-                        recalculated,
-                    )
-                    if missing_partners:
-                        missing_otlezka = max(missing_otlezka, len(missing_partners))
-        except Exception:
-            log.exception("[WalletEditorRegistry] health registry read failed")
+    try:
+        from integrations.wallet_editor_registry_db.frames import load_registry_frames_from_postgres
+
+        all_df, _runs = load_registry_frames_from_postgres()
+        dropbox_path_for_hold = dropbox_path or ""
+        hold_df, otlezka_df, _he, _oe = load_hold_otlezka_for_runtime(dropbox_path_for_hold)
+        recalculated, missing_partners = recalculate_all_results(
+            all_df,
+            hold_df,
+            otlezka_df,
+        )
+        overdue_ready, missing_otlezka = _count_registry_lifecycle_metrics(recalculated)
+        if missing_partners:
+            missing_otlezka = max(missing_otlezka, len(missing_partners))
+    except Exception:
+        log.exception("[WalletEditorRegistry] health registry read failed")
 
     stale_outbox = bool(
         oldest_pending_age is not None and oldest_pending_age > stale_threshold_seconds
@@ -1181,16 +971,6 @@ def build_registry_health_report(
 
     mirror_health = get_mirror_health()
     mirror_failures = mirror_health.recent_failures
-    excel_export_failures = 0
-    excel_export_last_error: str | None = None
-    if registry_source_is_postgres():
-        from integrations.wallet_editor_registry_db.excel_export_state import (
-            get_excel_export_health,
-        )
-
-        export_health = get_excel_export_health()
-        excel_export_failures = export_health.recent_failures
-        excel_export_last_error = export_health.last_error
 
     degraded = bool(
         pending
@@ -1200,7 +980,7 @@ def build_registry_health_report(
         or missing_durable > 0
         or stale_outbox
         or mirror_failures > 0
-        or excel_export_failures > 0
+        or manual_readers_no_sync
     )
 
     if degraded:
@@ -1216,6 +996,14 @@ def build_registry_health_report(
                 "stale_outbox": stale_outbox,
             },
         )
+
+    manual_snapshot_block: str | None = None
+    try:
+        from integrations.wallet_editor_registry_db.manual_sync import build_manual_snapshot_health_block
+
+        manual_snapshot_block = build_manual_snapshot_health_block()
+    except Exception:
+        log.exception("[WalletEditorRegistry] manual snapshot health block failed")
 
     return RegistryHealthReport(
         outbox_pending_count=len(pending),
@@ -1239,8 +1027,9 @@ def build_registry_health_report(
         mirror_recent_failures=mirror_failures,
         mirror_failure_count=mirror_health.failure_count,
         mirror_last_operation=mirror_health.last_operation,
-        excel_export_recent_failures=excel_export_failures,
-        excel_export_last_error=excel_export_last_error,
+        manual_snapshot_block=manual_snapshot_block,
+        manual_readers_source=manual_readers_source(),
+        manual_readers_no_successful_sync=manual_readers_no_sync,
     )
 
 
@@ -1286,10 +1075,11 @@ def format_registry_health_report(report: RegistryHealthReport) -> str:
         lines.append(f"mirror last failure: {report.mirror_last_failure_at}")
     if report.mirror_last_error:
         lines.append(f"mirror last error: {report.mirror_last_error}")
-    if report.registry_source == "postgres":
-        lines.append(f"excel export recent failures: {report.excel_export_recent_failures}")
-        if report.excel_export_last_error:
-            lines.append(f"excel export last error: {report.excel_export_last_error}")
+    lines.append("Registry projection: DISABLED (architecture)")
+    lines.append("Registry export: Telegram only")
+    lines.append(f"manual readers source: {report.manual_readers_source}")
+    if report.manual_readers_no_successful_sync:
+        lines.append("DEGRADED: no successful manual sync")
     lines.append(f"status: {'DEGRADED' if report.degraded else 'OK'}")
     if report.processed_run_ids_corrupted:
         lines.append("")
@@ -1303,6 +1093,9 @@ def format_registry_health_report(report: RegistryHealthReport) -> str:
             "⚠️ CRITICAL: processed run_ids exist but registry rows are missing. "
             "Use /registry_replay to repair."
         )
+    if report.manual_snapshot_block:
+        lines.append("")
+        lines.append(report.manual_snapshot_block)
     return "\n".join(lines)
 
 
@@ -1329,24 +1122,6 @@ def _registry_completeness_warning_parts(report: RegistryHealthReport) -> list[s
     return parts
 
 
-def _excel_registry_stale_outbox_warning(report: RegistryHealthReport) -> str | None:
-    if (
-        not report.stale_outbox
-        and report.outbox_pending_count == 0
-        and report.outbox_failed_count == 0
-        and report.processed_without_rows_count == 0
-        and not report.processed_run_ids_corrupted
-    ):
-        return None
-
-    parts = _registry_completeness_warning_parts(report)
-    if report.outbox_failed_count:
-        parts.append(f"failed={report.outbox_failed_count}")
-    if not parts:
-        return None
-    return "⚠️ Registry may be incomplete: " + ", ".join(parts)
-
-
 def _postgres_registry_stale_outbox_warning(report: RegistryHealthReport) -> str | None:
     risk_parts = _registry_completeness_warning_parts(report)
     if risk_parts:
@@ -1366,6 +1141,4 @@ def registry_stale_outbox_warning(
 ) -> str | None:
     """Return warning text when registry durability or completeness may be at risk."""
     report = build_registry_health_report(stale_threshold_seconds=stale_threshold_seconds)
-    if report.registry_source == "postgres":
-        return _postgres_registry_stale_outbox_warning(report)
-    return _excel_registry_stale_outbox_warning(report)
+    return _postgres_registry_stale_outbox_warning(report)

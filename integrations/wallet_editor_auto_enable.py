@@ -66,6 +66,37 @@ PHASE_B2_LABEL = "Phase B2 execution + registry patch"
 PLAN_ONLY_LABEL = "plan-only"
 
 
+def _actor_label(actor: Actor | None) -> str | None:
+    if actor is None:
+        return None
+    parts = [actor.kind]
+    if actor.user_id is not None:
+        parts.append(f"user={actor.user_id}")
+    elif actor.chat_id is not None:
+        parts.append(f"chat={actor.chat_id}")
+    return ":".join(parts)
+
+
+def _require_manual_sync_gate_for_auto_enable(
+    *,
+    triggered_by: str,
+    actor: Actor | None,
+) -> tuple[bool, str | None]:
+    from integrations.wallet_editor_registry_db.manual_sync import (
+        log_run_snapshot_binding,
+        run_manual_sync_prerun_gate,
+    )
+
+    gate = run_manual_sync_prerun_gate(
+        triggered_by=triggered_by,
+        actor=_actor_label(actor),
+    )
+    if gate.ok:
+        log_run_snapshot_binding(gate.binding, context=triggered_by)
+        return True, None
+    return False, gate.operator_message
+
+
 @dataclass(frozen=True, slots=True)
 class AutoEnablePlan:
     eligibility: EligibilityResult
@@ -140,22 +171,23 @@ def load_registry_frames_for_planning(
     *,
     today: date | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Download registry from Dropbox and return recalculated all_results frames."""
-    dropbox_path = wallet_editor_dropbox_path()
-    if not dropbox_path:
-        raise RuntimeError("DROPBOX_WALLET_EDITOR_PATH is not set")
+    """Load registry frames for auto-enable planning (recalculated all_results)."""
+    from integrations.wallet_editor_registry_db.frames import load_registry_frames_from_postgres
+    from integrations.wallet_editor_registry_db.manual_readers import (
+        ManualReadersNotReadyError,
+        load_hold_otlezka_for_runtime,
+    )
 
     today = today or now_msk().date()
 
-    with tempfile.TemporaryDirectory(prefix="we_auto_enable_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, _rev = download_file_with_rev(dropbox_path, str(local_path))
-        if status == "error":
-            raise RuntimeError(f"registry download failed path={dropbox_path}")
-
-        all_df, _runs_df, hold_df, otlezka_df, _hold_exists, _otlezka_exists = (
-            load_registry_frames(local_path, status)
+    try:
+        all_df, _runs_df = load_registry_frames_from_postgres()
+        dropbox_path = wallet_editor_dropbox_path() or ""
+        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_for_runtime(
+            dropbox_path,
         )
+    except ManualReadersNotReadyError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     recalculated, _missing = recalculate_all_results(
         all_df,
@@ -548,6 +580,16 @@ def run_auto_enable_plan(
         log.warning("[AutoEnable] %s", stale_warning)
         _send_to_route(settings.telegram_route_report, stale_warning)
 
+    gate_ok, gate_message = _require_manual_sync_gate_for_auto_enable(
+        triggered_by="auto_enable_plan",
+        actor=actor,
+    )
+    if not gate_ok:
+        report = gate_message or "manual sync gate failed"
+        log.error("[AutoEnable] plan blocked by manual sync gate")
+        sent = _send_to_route(settings.telegram_route_report, report)
+        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="manual_sync_gate")
+
     try:
         if registry_frames is None:
             recalculated, _hold_df, _otlezka_df, _raw = load_registry_frames_for_planning(today=today)
@@ -614,6 +656,16 @@ def run_auto_enable(
     if stale_warning:
         log.warning("[AutoEnable] %s", stale_warning)
         _send_to_route(settings.telegram_route_report, stale_warning)
+
+    gate_ok, gate_message = _require_manual_sync_gate_for_auto_enable(
+        triggered_by="auto_enable_run",
+        actor=actor,
+    )
+    if not gate_ok:
+        report = gate_message or "manual sync gate failed"
+        log.error("[AutoEnable] run blocked by manual sync gate")
+        sent = _send_to_route(settings.telegram_route_report, report)
+        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="manual_sync_gate")
 
     try:
         if registry_frames is None:

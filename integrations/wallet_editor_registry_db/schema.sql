@@ -71,8 +71,82 @@ CREATE TABLE IF NOT EXISTS we_registry_reconcile (
 CREATE INDEX IF NOT EXISTS we_registry_reconcile_status_idx
     ON we_registry_reconcile (status, detected_at DESC);
 
+-- Manual operator sheets (hold / Отлёжка) — Phase 1 manual sync
+
+CREATE TABLE IF NOT EXISTS we_registry_manual_sync_runs (
+    id                      BIGSERIAL PRIMARY KEY,
+    sync_id                 TEXT NOT NULL UNIQUE,
+    status                  TEXT NOT NULL,
+    triggered_by            TEXT NOT NULL,
+    triggered_by_actor      TEXT,
+    source_path             TEXT NOT NULL,
+    source_rev              TEXT,
+    content_hash            TEXT,
+    hold_rows_seen          INTEGER NOT NULL DEFAULT 0,
+    hold_rows_activated     INTEGER NOT NULL DEFAULT 0,
+    hold_rows_deactivated   INTEGER NOT NULL DEFAULT 0,
+    otlezka_rows_seen       INTEGER NOT NULL DEFAULT 0,
+    otlezka_rows_activated  INTEGER NOT NULL DEFAULT 0,
+    otlezka_rows_deactivated INTEGER NOT NULL DEFAULT 0,
+    validation_warnings     JSONB,
+    error_code              TEXT,
+    error_message           TEXT,
+    started_at              TIMESTAMPTZ NOT NULL,
+    finished_at             TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS we_registry_manual_sync_runs_started_at_idx
+    ON we_registry_manual_sync_runs (started_at DESC);
+
+CREATE TABLE IF NOT EXISTS we_registry_hold (
+    id                  BIGSERIAL PRIMARY KEY,
+    card                TEXT NOT NULL,
+    partner             TEXT NOT NULL,
+    card_norm           TEXT NOT NULL,
+    partner_norm        TEXT NOT NULL,
+    added_at            TEXT,
+    comment             TEXT,
+    active              BOOLEAN NOT NULL DEFAULT true,
+    source_sync_run_id  BIGINT REFERENCES we_registry_manual_sync_runs (id) ON DELETE SET NULL,
+    source_row_index    INTEGER,
+    synced_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deactivated_at      TIMESTAMPTZ,
+    raw_payload         JSONB
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS we_registry_hold_active_card_partner_idx
+    ON we_registry_hold (card_norm, partner_norm)
+    WHERE active = true;
+
+CREATE INDEX IF NOT EXISTS we_registry_hold_active_idx
+    ON we_registry_hold (active)
+    WHERE active = true;
+
+CREATE TABLE IF NOT EXISTS we_registry_otlezka (
+    id                  BIGSERIAL PRIMARY KEY,
+    partner             TEXT NOT NULL,
+    partner_norm        TEXT NOT NULL,
+    full_days           INTEGER NOT NULL,
+    comment             TEXT,
+    active              BOOLEAN NOT NULL DEFAULT true,
+    source_sync_run_id  BIGINT REFERENCES we_registry_manual_sync_runs (id) ON DELETE SET NULL,
+    source_row_index    INTEGER,
+    synced_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deactivated_at      TIMESTAMPTZ,
+    raw_payload         JSONB
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS we_registry_otlezka_active_partner_idx
+    ON we_registry_otlezka (partner_norm)
+    WHERE active = true;
+
+CREATE INDEX IF NOT EXISTS we_registry_otlezka_active_idx
+    ON we_registry_otlezka (active)
+    WHERE active = true;
+
 INSERT INTO we_registry_meta (key, value, updated_at)
-VALUES ('schema_version', '1', now())
+VALUES ('schema_version', '2', now())
 ON CONFLICT (key) DO UPDATE
 SET value = EXCLUDED.value,
     updated_at = EXCLUDED.updated_at;

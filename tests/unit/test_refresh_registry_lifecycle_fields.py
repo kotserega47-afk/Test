@@ -128,7 +128,7 @@ class TestRefreshLifecycleApply:
                 return_value=(df, pd.DataFrame()),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_from_dropbox",
+                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_for_runtime",
                 return_value=(_empty_hold(), _otlezka_df(), True, True),
             ),
             patch(
@@ -219,7 +219,7 @@ class TestRefreshLifecycleApply:
         assert stale_second == 0
         assert patches_second == []
 
-    def test_apply_exports_excel_when_rows_changed(self):
+    def test_apply_updates_postgres_when_rows_changed(self):
         df = _all_results_df(_row())
         store = InMemoryRegistryStore()
         _seed_store(df, store)
@@ -230,21 +230,18 @@ class TestRefreshLifecycleApply:
                 return_value=(df, pd.DataFrame()),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_from_dropbox",
+                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_for_runtime",
                 return_value=(_empty_hold(), _otlezka_df(), True, True),
             ),
             patch(
                 "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.wallet_editor_dropbox_path",
                 return_value="/dropbox/wallet_editor.xlsx",
             ),
-            patch(
-                "integrations.wallet_editor_registry_db.excel_export.export_registry_workbook_to_dropbox",
-            ) as export_mock,
         ):
             summary = refresh_lifecycle_fields_from_postgres(apply=True, store=store)
 
-        assert summary.excel_exported is True
-        export_mock.assert_called_once_with("/dropbox/wallet_editor.xlsx")
+        assert summary.rows_changed >= 1
+        assert summary.error_count == 0
 
 
 class TestRefreshLifecycleCli:
@@ -257,7 +254,7 @@ class TestRefreshLifecycleCli:
                 return_value=(df, pd.DataFrame()),
             ),
             patch(
-                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_from_dropbox",
+                "integrations.wallet_editor_registry_db.refresh_lifecycle_fields.load_hold_otlezka_for_runtime",
                 return_value=(_empty_hold(), _otlezka_df(), True, True),
             ),
             patch(

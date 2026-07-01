@@ -14,7 +14,10 @@ from integrations.wallet_editor_registry_db.frames import (
     load_registry_frames_from_postgres,
     postgres_run_exists,
 )
-from integrations.wallet_editor_registry_db.hold_loader import load_hold_otlezka_from_dropbox
+from integrations.wallet_editor_registry_db.manual_readers import (
+    ManualReadersNotReadyError,
+    load_hold_otlezka_for_runtime,
+)
 from integrations.wallet_editor_registry_db.mapping import map_all_results_row, map_runs_row
 from integrations.wallet_editor_registry_db.mirror import MirrorResultBatch
 from integrations.wallet_editor_registry_db.store import PostgresRegistryStore
@@ -111,9 +114,12 @@ def append_attempt_postgres(
 
     try:
         all_results_df, runs_df = load_registry_frames_from_postgres()
-        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_from_dropbox(
+        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_for_runtime(
             dropbox_path,
         )
+    except ManualReadersNotReadyError as exc:
+        log.error("[WalletEditorRegistry] postgres append blocked: %s", exc)
+        return _AppendOutcome.PERMANENT, str(exc), None
     except Exception:
         log.exception("[WalletEditorRegistry] postgres append load failed run_id=%s", task.run_id)
         return _AppendOutcome.TRANSIENT, None, None
@@ -230,9 +236,11 @@ def patch_attempt_postgres(
 
     try:
         all_results_df, runs_df = load_registry_frames_from_postgres()
-        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_from_dropbox(
+        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_for_runtime(
             dropbox_path,
         )
+    except ManualReadersNotReadyError as exc:
+        return _PatchOutcome.PERMANENT, 0, str(exc), None
     except Exception:
         log.exception("[WalletEditorRegistry] postgres patch load failed")
         return _PatchOutcome.TRANSIENT, 0, "postgres load failed", None
@@ -303,9 +311,11 @@ def refresh_attempt_postgres(
 
     try:
         all_results_df, _runs_df = load_registry_frames_from_postgres()
-        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_from_dropbox(
+        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_for_runtime(
             dropbox_path,
         )
+    except ManualReadersNotReadyError as exc:
+        return _RefreshOutcome.PERMANENT, 0, RefreshBreakdown(), str(exc), None
     except Exception:
         log.exception("[WalletEditorRegistry] postgres refresh load failed")
         return _RefreshOutcome.TRANSIENT, 0, RefreshBreakdown(), "postgres load failed", None

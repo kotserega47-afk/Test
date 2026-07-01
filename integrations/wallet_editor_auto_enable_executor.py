@@ -60,7 +60,7 @@ from integrations.wallet_editor_hold import (
     HOLD_SKIP_COMMENT,
     HoldPairsSnapshot,
     is_card_partner_on_hold,
-    load_hold_pairs_from_dropbox,
+    load_hold_pairs_snapshot,
 )
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -626,7 +626,7 @@ def execute_enable_batch(
     )
 
     with log_step_duration(profile=profile, scope="auto_enable", step="batch"):
-        hold_snapshot = load_hold_pairs_from_dropbox()
+        hold_snapshot = load_hold_pairs_snapshot()
         with sync_playwright() as playwright:
             browser = None
             context = None

@@ -17,4 +17,9 @@ reports/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .env
+
+# Discovery frame dumps (local analysis artifacts)
+.discovery_frames/
+.discovery_frames_dense/

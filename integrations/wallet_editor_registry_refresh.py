@@ -21,7 +21,6 @@ from integrations.wallet_editor_registry_db.config import mirror_enabled
 from integrations.wallet_editor_registry_db.mirror import (
     MirrorResultBatch,
     mirror_rows_for_refresh,
-    schedule_mirror_batch,
 )
 from integrations.wallet_editor_registry_lifecycle import (
     MISSING_OTLEZKA_STATUS,
@@ -250,70 +249,16 @@ def _refresh_attempt(
     dropbox_path: str,
     today: date,
 ) -> tuple[_RefreshOutcome, int, RefreshBreakdown, str | None, MirrorResultBatch | None]:
-    from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
+    from integrations.wallet_editor_registry_db.postgres_source import refresh_attempt_postgres
 
-    if registry_source_is_postgres():
-        from integrations.wallet_editor_registry_db.postgres_source import refresh_attempt_postgres
-
-        return refresh_attempt_postgres(
-            dropbox_path=dropbox_path,
-            today=today,
-            normalize_all_results=normalize_all_results,
-            recalculate_all_results=recalculate_all_results,
-            compute_lifecycle_diff=compute_lifecycle_diff,
-            lifecycle_row_changed=_lifecycle_row_changed,
-        )
-
-    with tempfile.TemporaryDirectory(prefix="we_registry_refresh_") as tmp:
-        local_path = Path(tmp) / "wallet_editor.xlsx"
-        status, download_rev = download_file_with_rev(dropbox_path, str(local_path))
-
-        if status == "error":
-            return _RefreshOutcome.TRANSIENT, 0, RefreshBreakdown(), "registry download failed", None
-        if status == "not_found":
-            return _RefreshOutcome.PERMANENT, 0, RefreshBreakdown(), "registry file not found", None
-
-        all_results_df, runs_df, hold_df, otlezka_df, hold_exists, otlezka_exists = (
-            load_registry_frames(local_path, status)
-        )
-        before_df = normalize_all_results(all_results_df)
-        recalculated, _missing = recalculate_all_results(
-            before_df,
-            hold_df,
-            otlezka_df,
-            today=today,
-        )
-        changed_rows, breakdown = compute_lifecycle_diff(before_df, recalculated)
-        if changed_rows == 0:
-            return _RefreshOutcome.SKIPPED, 0, breakdown, None, None
-
-        save_registry_workbook(
-            local_path,
-            all_results=recalculated,
-            runs=runs_df,
-            hold_exists=hold_exists,
-            otlezka_exists=otlezka_exists,
-            is_new_file=False,
-        )
-
-        upload_status = upload_file_if_rev(str(local_path), dropbox_path, download_rev)
-        if upload_status == "rev_conflict":
-            return _RefreshOutcome.REV_CONFLICT, changed_rows, breakdown, "rev conflict", None
-        if upload_status != "uploaded":
-            return (
-                _RefreshOutcome.TRANSIENT,
-                changed_rows,
-                breakdown,
-                f"upload failed: {upload_status}",
-                None,
-            )
-
-        mirror_batch = mirror_rows_for_refresh(
-            before_df,
-            recalculated,
-            row_changed=_lifecycle_row_changed,
-        )
-        return _RefreshOutcome.SUCCESS, changed_rows, breakdown, None, mirror_batch
+    return refresh_attempt_postgres(
+        dropbox_path=dropbox_path,
+        today=today,
+        normalize_all_results=normalize_all_results,
+        recalculate_all_results=recalculate_all_results,
+        compute_lifecycle_diff=compute_lifecycle_diff,
+        lifecycle_row_changed=_lifecycle_row_changed,
+    )
 
 
 def refresh_wallet_editor_registry_lifecycle(
@@ -327,8 +272,10 @@ def refresh_wallet_editor_registry_lifecycle(
     today = today or now_msk().date()
     settings = settings or load_registry_settings()
     dropbox_path = wallet_editor_dropbox_path()
+    from integrations.wallet_editor_registry_db.config import manual_readers_source_is_postgres
 
-    if not dropbox_path:
+    needs_dropbox_workbook = not manual_readers_source_is_postgres()
+    if needs_dropbox_workbook and not dropbox_path:
         duration = time.monotonic() - started
         breakdown = RefreshBreakdown()
         report = build_refresh_report(
@@ -349,6 +296,38 @@ def refresh_wallet_editor_registry_lifecycle(
             breakdown=breakdown,
             duration_sec=duration,
             error="DROPBOX_WALLET_EDITOR_PATH is not set",
+            report_text=report,
+        )
+        return replace(result, report_sent=_send_refresh_report(result))
+
+    from integrations.wallet_editor_registry_db.manual_sync import run_manual_sync_prerun_gate
+
+    gate = run_manual_sync_prerun_gate(
+        triggered_by="registry_refresh",
+        actor=actor.kind if actor is not None else None,
+    )
+    if not gate.ok:
+        duration = time.monotonic() - started
+        breakdown = RefreshBreakdown()
+        error = gate.operator_message or "manual sync gate failed"
+        report = build_refresh_report(
+            today=today,
+            changed_rows=0,
+            breakdown=breakdown,
+            uploaded=False,
+            skipped_no_changes=False,
+            duration_sec=duration,
+            success=False,
+            error=error,
+        )
+        result = RefreshResult(
+            success=False,
+            changed_rows=0,
+            uploaded=False,
+            skipped_no_changes=False,
+            breakdown=breakdown,
+            duration_sec=duration,
+            error=error,
             report_text=report,
         )
         return replace(result, report_sent=_send_refresh_report(result))
@@ -400,14 +379,6 @@ def refresh_wallet_editor_registry_lifecycle(
                 duration_sec=duration,
                 report_text=report,
             )
-            from integrations.wallet_editor_registry_db.config import registry_source_is_postgres
-
-            if registry_source_is_postgres():
-                from integrations.wallet_editor_registry_db.excel_export import schedule_excel_export
-
-                schedule_excel_export(operation="refresh", dropbox_path=dropbox_path)
-            else:
-                schedule_mirror_batch(mirror_batch, operation="refresh")
             return replace(result, report_sent=_send_refresh_report(result))
 
         if outcome == _RefreshOutcome.SKIPPED:

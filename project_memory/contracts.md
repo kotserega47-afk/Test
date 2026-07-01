@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.6 |
-| **Последнее обновление** | 2026-06-21 |
+| **KB версия** | v1.9 |
+| **Последнее обновление** | 2026-07-01 |
 
 ---
 
@@ -241,38 +241,51 @@ Wallet Editor **Add Wallet input** xlsx (`automation/add_wallet_contract.py`):
 
 **Registry:** Add Wallet v1 does **not** append to Dropbox cumulative registry (E-WE-19). Disable flow registry contract unchanged.
 
-Wallet Editor **registry** (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_db/` + lifecycle/xlsx):
+Wallet Editor **registry** (`integrations/wallet_editor_registry.py` + `wallet_editor_registry_db/` + lifecycle):
 
-**Source of truth:** PostgreSQL `we_registry_results` / `we_registry_runs` when `WALLET_EDITOR_REGISTRY_SOURCE=postgres` (production default). Dropbox `wallet_editor.xlsx` is an **exported projection**; operator sheets `hold` and `Отлёжка` are read from Dropbox only (not in Postgres).
+**Source of truth:** PostgreSQL `we_registry_results` / `we_registry_runs` + lifecycle fields. Runtime (Disable, Auto Enable, Lifecycle, Registry) reads/writes **PostgreSQL only**.
 
-**Excel projection:** `excel_export.py` rebuilds `all_results` + `runs` after Postgres commits; preserves `hold`/`Отлёжка`. Manual: `/registry_export` or `tools/export_wallet_editor_registry.py`.
+**Operator manual workbook** (Dropbox `DROPBOX_WALLET_EDITOR_PATH`):
 
-| Sheet | Ownership | Purpose |
-|-------|-----------|---------|
-| `all_results` | program (format-preserving cell updates) | lifecycle table per result row (recalculated on every append) |
-| `runs` | program (format-preserving cell updates) | one row per WE run |
-| `hold` | user if exists; program creates headers only if missing | card+partner pairs excluded from re-enable |
-| `Отлёжка` | user if exists; program creates headers only if missing | partner → full days before re-enable |
+| Contract | Rule |
+|----------|------|
+| Allowed sheets | **`hold`**, **`Отлёжка` only** |
+| Purpose | Operator input; runtime **never** writes registry history to Dropbox |
+| Reader | **ManualSync only** — sole component that reads Dropbox workbook |
+| Ingest target | `manual_hold` / `manual_otlezka` tables in PostgreSQL |
 
-**`all_results` columns (order):** `Дата отключения`, `Дата включения`, `Статус включения`, `Включено`, `Комментарий включения`, `card`, `partner`, `action`, `status`, `comment`, `hold` — column `value` **not** written (legacy column migrated to `partner` on read, then removed on save).
+**Generated export workbook** (not stored in Dropbox):
+
+| Contract | Rule |
+|----------|------|
+| Builder | **`RegistryExportBuilder`** only |
+| Delivery | `/registry_export` → Excel → **Telegram**; CLI `tools/export_wallet_editor_registry.py` → local `--output` |
+| Mode | **Read-only** report; editing prohibited |
+| Sheets | `all_results`, `runs`, `hold`, `Отлёжка`, `README`, `sync_status` (from PostgreSQL) |
+
+**Environment:**
+
+| Variable | Production value | Purpose |
+|----------|------------------|---------|
+| `WALLET_EDITOR_REGISTRY_SOURCE` | `postgres` (default) | Registry history SoT; `excel` **removed** |
+| `WALLET_EDITOR_MANUAL_SYNC_ENABLED` | `1` | Enable ManualSync + pre-run gate |
+| `WALLET_EDITOR_MANUAL_READERS_SOURCE` | `postgres` | hold/Отлёжка readers from PG (after sync) |
+| `DATABASE_URL` | required | PostgreSQL connection |
+| `DROPBOX_WALLET_EDITOR_PATH` | required for manual sync | Operator workbook path |
+
+**`all_results` columns (PostgreSQL / export):** `Дата отключения`, `Дата включения`, `Статус включения`, `Включено`, `Комментарий включения`, `card`, `partner`, `action`, `status`, `comment`, `hold` — column `value` **not** written (legacy column migrated to `partner` on read).
 
 **`runs` columns:** `started_at`, `finished_at`, `input_rows`, `success_rows`, `failed_rows`, `skipped_rows`, `output_file`
 
-**Write model:** openpyxl in-place (`load_workbook` → update cells by header → `save`); no `pandas.to_excel` overwrite. Preserves column widths, freeze panes, header fonts/fills. **UX-A (2026-06-07):** new data rows in `all_results` / `runs` copy cell styles (font, border, fill, alignment, protection, number_format) from template row (last existing data row, else row 2); existing rows updated via value-only writes; new header cells appended on the right copy neighbor header style. `card` written as Excel text (`number_format` `@`).
+**Rules:** `partner` from row via `partner_from_row()` when `action` ∈ `{remove_partner, add_partner}`; `Дата включения` = disable date + `Полные дни` from `Отлёжка`; missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner. **`Включено` lifecycle override:** OK → ВКЛЮЧЕНО; SKIP → ПРОПУЩЕНО; FAIL → ОШИБКА. Auto-enable Phase B2 patches `Включено` + `Комментарий включения` in **PostgreSQL**. Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`.
 
-**Rules:** `partner` from row via `partner_from_row()` when `action` ∈ `{remove_partner, add_partner}` (value → partner); migrated from legacy `value` on read for `remove_partner`; `Дата включения` = disable date + `Полные дни` from `Отлёжка` (date only `dd.mm.yyyy`); missing partner on `Отлёжка` → `Нет даты отлёжки` + red fill + one-time TG warning per partner (`{STATE_DIR}/wallet_editor/missing_hold_days_warned.json`). **`Включено` lifecycle override:** OK → `Статус включения`=ВКЛЮЧЕНО; SKIP → ПРОПУЩЕНО; FAIL → ОШИБКА. Auto-enable Phase B2 patches only `Включено` + `Комментарий включения` (matching row by card+partner+`Дата отключения` on `remove_partner` rows). Idempotency: `{STATE_DIR}/wallet_editor/registry_processed_run_ids.json`. Legacy `all_results` with `run_id` column auto-migrated.
+**HOLD enforcement:** sheet `hold` = business block for `add_partner`. Loader `integrations/wallet_editor_hold.py` reads from PostgreSQL (after manual sync) or Dropbox when `MANUAL_READERS_SOURCE=dropbox`. Manual `engine.run`: held `add_partner` → SKIP. Auto-enable: held candidate → SKIP; read failure → fail-closed.
 
-**HOLD enforcement (2026-06-07):** sheet `hold` = business block for `add_partner` (not just lifecycle recalc). Shared loader `integrations/wallet_editor_hold.py` reads hold pairs from Dropbox registry. Manual `engine.run`: held/failed-check `add_partner` → `status=SKIP` before Playwright. Auto-enable executor: held candidate → `registry_value=SKIP` before `open_card`; hold-list read failure → manual SKIP / auto-enable FAIL (fail-closed). `remove_partner` / `set_status` **not** blocked.
+**Runtime order (worker):** `engine.run()` → Telegram summary + result file → async registry append to PostgreSQL (daemon thread). Registry does **not** delay Telegram.
 
-**Dropbox rev protection:** download stores `rev`; upload via `upload_file_if_rev` only if remote `rev` unchanged; on conflict — retry until timeout; per-run WE TG result never blocked.
+**Registry staging:** durable copy to `{STATE_DIR}/wallet_editor/results/{run_id}.xlsx` before async append; outbox index tracks `pending|syncing|synced|failed`; `/registry_replay` for repair.
 
-**Runtime order (worker):** `engine.run()` → Telegram summary + result file → async registry append (daemon thread). Registry does **not** delay Telegram.
-
-**Registry staging:** durable copy to `{STATE_DIR}/wallet_editor/results/{run_id}.xlsx` before async append; outbox index `{STATE_DIR}/wallet_editor/outbox/index.json` tracks `pending|syncing|synced|failed`; `/tmp` result cleanup (30s) does not affect replay. Legacy `/tmp` staging (`we_registry_result_*`) retained for non-outbox callers.
-
-**Outbox replay:** `replay_pending_outbox_records()` + TG `/registry_replay` + job `wallet_editor_registry_replay`. Repair re-append when `registry_processed_run_ids` contains `run_id` but row fingerprints absent from workbook (restored-workbook trap).
-
-**Registry health:** `/registry_health` reports outbox pending/failed, `processed_without_rows` (Postgres fingerprints when source=postgres), stale threshold (default 3600s). Auto-enable: postgres mode warns on `processed_without_rows`/stale/pending; historical `outbox_failed` alone → informational only (E-WE-22).
+**Registry health:** `/registry_health` — `Registry projection: DISABLED (architecture)`; `Registry export: Telegram only`; outbox pending/failed; `processed_without_rows`.
 
 **Events:** `wallet_editor_outbox_recorded`, `wallet_editor_registry_sync_*`, `wallet_editor_registry_health_degraded` in `{STATE_DIR}/events/`.
 
@@ -306,7 +319,7 @@ Invariant: `registry_warning_seconds < registry_timeout_seconds` (auto-adjusted 
 
 **TG commands (Rules `commands` sheet ACL):** `/auto_enable_plan` — fresh plan + report only; `/auto_enable_run` — fresh plan + Antares execution when `dry_run=0`. Reader: `integrations/wallet_editor_auto_enable_settings.py`.
 
-**Phases:** A = plan/dry-run/report; B1 = Antares execution (no registry patch); B1.1 = `max_rows_per_run`; B2 = patch `Включено` / `Комментарий включения` via `patch_enable_results_in_dropbox_registry`.
+**Phases:** A = plan/dry-run/report; B1 = Antares execution (no registry patch); B1.1 = `max_rows_per_run`; B2 = patch `Включено` / `Комментарий включения` in **PostgreSQL**.
 
 ### Telegram token sanitization (security)
 

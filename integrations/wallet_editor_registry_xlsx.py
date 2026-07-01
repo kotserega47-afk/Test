@@ -37,6 +37,9 @@ from integrations.wallet_editor_registry_lifecycle import (
 CARD_TEXT_FORMAT = "@"
 TEXT_COLUMNS = frozenset({"card"})
 
+SHEET_README = "README"
+SHEET_SYNC_STATUS = "sync_status"
+
 
 def copy_cell_style(src_cell: Cell, dst_cell: Cell) -> None:
     """Copy visual cell style without changing value."""
@@ -399,6 +402,72 @@ def save_registry_workbook(
         _create_user_sheet_headers(wb.create_sheet(SHEET_HOLD), HOLD_COLUMNS)
     if not otlezka_exists and SHEET_OTLEZKA not in wb.sheetnames:
         _create_user_sheet_headers(wb.create_sheet(SHEET_OTLEZKA), OTLEZKA_COLUMNS)
+
+    wb.save(local_path)
+    wb.close()
+
+
+def _sync_user_sheet(ws: Worksheet, df: pd.DataFrame, columns: list[str]) -> None:
+    df = normalize_sheet(df, columns)
+    header_map = _write_headers(ws, columns)
+    for row_offset in range(len(df)):
+        row_idx = row_offset + 2
+        for col_name in columns:
+            col_idx = header_map.get(col_name)
+            if not col_idx:
+                continue
+            _set_cell_value(ws, row_idx, col_idx, col_name, df.iloc[row_offset].get(col_name, ""))
+
+
+def _write_text_lines_sheet(ws: Worksheet, lines: list[str]) -> None:
+    for row_idx, line in enumerate(lines, 1):
+        ws.cell(row=row_idx, column=1, value=line)
+
+
+def _write_key_value_sheet(ws: Worksheet, rows: list[tuple[str, str]]) -> None:
+    ws.cell(row=1, column=1, value="key")
+    ws.cell(row=1, column=2, value="value")
+    for row_idx, (key, value) in enumerate(rows, 2):
+        ws.cell(row=row_idx, column=1, value=key)
+        ws.cell(row=row_idx, column=2, value=value)
+
+
+def save_registry_export_workbook(
+    local_path: Path,
+    *,
+    all_results: pd.DataFrame,
+    runs: pd.DataFrame,
+    hold: pd.DataFrame,
+    otlezka: pd.DataFrame,
+    readme_lines: list[str],
+    sync_status_rows: list[tuple[str, str]],
+) -> None:
+    """Write a full PG-backed registry export workbook (delivery-agnostic)."""
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    default = wb.active
+    if default is not None:
+        wb.remove(default)
+
+    ws_all = wb.create_sheet(SHEET_ALL_RESULTS)
+    _write_headers(ws_all, ALL_RESULTS_COLUMNS)
+    _sync_all_results_sheet(ws_all, all_results)
+
+    ws_runs = wb.create_sheet(SHEET_RUNS)
+    _write_headers(ws_runs, RUNS_COLUMNS)
+    _sync_runs_sheet(ws_runs, runs)
+
+    ws_hold = wb.create_sheet(SHEET_HOLD)
+    _sync_user_sheet(ws_hold, hold, HOLD_COLUMNS)
+
+    ws_otlezka = wb.create_sheet(SHEET_OTLEZKA)
+    _sync_user_sheet(ws_otlezka, otlezka, OTLEZKA_COLUMNS)
+
+    ws_readme = wb.create_sheet(SHEET_README)
+    _write_text_lines_sheet(ws_readme, readme_lines)
+
+    ws_sync = wb.create_sheet(SHEET_SYNC_STATUS)
+    _write_key_value_sheet(ws_sync, sync_status_rows)
 
     wb.save(local_path)
     wb.close()

@@ -1,34 +1,50 @@
-"""CLI: export Wallet Editor registry from Postgres to Dropbox Excel."""
+"""CLI: export Wallet Editor registry from PostgreSQL to a local Excel file."""
 
 from __future__ import annotations
 
+import argparse
 import sys
+from pathlib import Path
 
-from integrations.wallet_editor_registry import wallet_editor_dropbox_path
 from integrations.wallet_editor_registry_db.connection import DatabaseNotConfiguredError
-from integrations.wallet_editor_registry_db.excel_export import (
-    export_registry_workbook_to_dropbox,
-    format_export_registry_summary,
+from integrations.wallet_editor_registry_db.registry_export_builder import (
+    RegistryExportBuilder,
+    format_registry_export_summary,
 )
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Build a registry export workbook from PostgreSQL (read-only).",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output .xlsx path or directory (default: temp file path in summary)",
+    )
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
-    dropbox_path = wallet_editor_dropbox_path()
-    if not dropbox_path:
-        print("ERROR: DROPBOX_WALLET_EDITOR_PATH is not set", file=sys.stderr)
-        return 2
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     try:
-        summary = export_registry_workbook_to_dropbox(dropbox_path)
+        artifact = RegistryExportBuilder().build(output_path=args.output)
     except DatabaseNotConfiguredError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:
         print(f"ERROR: export failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
-    print(format_export_registry_summary(summary))
-    return 0 if summary.upload_status == "uploaded" else 1
+    print(format_registry_export_summary(artifact.summary))
+    print(f"path: {artifact.path}")
+    return 0
 
 
 if __name__ == "__main__":

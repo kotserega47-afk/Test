@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.6 |
-| **Последнее обновление** | 2026-06-21 |
+| **KB версия** | v1.9 |
+| **Последнее обновление** | 2026-07-01 |
 
 ---
 
@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-19**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-27**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I17 — см. таблицы |
 
 ---
@@ -105,8 +105,13 @@
 | E-WE-18 | 2026-06-21 | Add Wallet v1 defaults: **only** `status=Тест` when column absent/empty; `direction` / `state` / `pool` / `aggregate` filled **only** when Excel provides explicit non-empty values — no implicit ЧБР or in/enabled defaults | CONFIRMED | `automation/add_wallet_contract.py`; real UI verified 2026-06-21 |
 | E-WE-19 | 2026-06-21 | Add Wallet v1 does **not** write Dropbox cumulative registry (`DROPBOX_WALLET_EDITOR_PATH`); disable / auto-enable registry paths unchanged | CONFIRMED | `automation/worker.py` `_run_add_wallet_task` (no registry schedule) |
 | E-WE-20 | 2026-06-22 | Registry Phase 1 durability: STATE_DIR outbox + durable result copies before Dropbox sync; replay on failure; repair re-append when processed_run_ids diverges from workbook rows; `/registry_health` + `/registry_replay`; auto-enable warns on stale outbox | CONFIRMED | `wallet_editor_registry_async.py`; `wallet_editor_registry.py`; `wallet_editor_registry_lifecycle.py`; `automation/worker.py` |
-| E-WE-21 | 2026-06-23 | **Postgres becomes source of truth for WalletEditor registry** (`WALLET_EDITOR_REGISTRY_SOURCE=postgres`): `all_results`/`runs` in `we_registry_results`/`we_registry_runs`; commits are Postgres-first; Excel `wallet_editor.xlsx` is a best-effort exported projection; operator sheets `hold`/`Отлёжка` stay in Dropbox only; migration phases: mirror observation → health/diagnose → backfill repair → lifecycle refresh → manual export; rollback via `WALLET_EDITOR_REGISTRY_SOURCE=excel` | CONFIRMED | `integrations/wallet_editor_registry_db/`; `WALLET_EDITOR_REGISTRY_SOURCE` env |
-| E-WE-22 | 2026-06-23 | **Operational recovery via Telegram `/registry_export`**: rebuild Dropbox Excel from Postgres without Railway shell; complements CLI `tools/export_wallet_editor_registry.py`; preserves hold/Отлёжка; does not recalculate lifecycle or write Postgres; postgres-aware auto-enable warnings use `processed_without_rows` not historical `outbox_failed` alone | CONFIRMED | `integrations/tg_commands.py`; `integrations/wallet_editor_registry_db/excel_export.py` |
+| E-WE-21 | 2026-06-23 | **Postgres registry migration (Phase 1)** — introduced `WALLET_EDITOR_REGISTRY_SOURCE=postgres`, Postgres-first commits, Excel as exported projection. **Superseded by E-WE-23…E-WE-27** (2026-07-01): projection and `excel` rollback removed | SUPERSEDED | `integrations/wallet_editor_registry_db/` |
+| E-WE-22 | 2026-06-23 | **Operational recovery via `/registry_export`** — introduced Telegram export from Postgres. **Amended by E-WE-25** (2026-07-01): export is Telegram-only via `RegistryExportBuilder`; no Dropbox write | SUPERSEDED | `integrations/tg_commands.py`; `registry_export_builder.py` |
+| E-WE-23 | 2026-07-01 | **PostgreSQL is the only runtime Source of Truth** for WalletEditor registry history (`we_registry_results`, `we_registry_runs`, lifecycle). Disable, Auto Enable, Lifecycle, and Registry append/patch/refresh operate on PostgreSQL only | CONFIRMED | `wallet_editor_registry.py`; `WALLET_EDITOR_REGISTRY_SOURCE=postgres` (default) |
+| E-WE-24 | 2026-07-01 | **Dropbox workbook permanently repurposed as operator manual workbook** — sheets `hold` and `Отлёжка` only; operator input; runtime never writes history there | CONFIRMED | `wallet_editor_manual_sync/`; `DROPBOX_WALLET_EDITOR_PATH` |
+| E-WE-25 | 2026-07-01 | **Registry export is Telegram-only** — `/registry_export` → `RegistryExportBuilder` → Excel → Telegram; read-only; CLI writes local file only | CONFIRMED | `registry_export_builder.py`; `tg_commands.py` |
+| E-WE-26 | 2026-07-01 | **Excel runtime projection removed** — no `schedule_excel_export`, no `excel_export.py`; runtime does not write `all_results`/`runs` to Dropbox | CONFIRMED | Phase 5 TASK-2026-07-01-05 |
+| E-WE-27 | 2026-07-01 | **Rollback is Git/deploy rollback only** — `WALLET_EDITOR_REGISTRY_SOURCE=excel` no longer supported (`LegacyRegistrySourceError`) | CONFIRMED | `wallet_editor_registry_db/config.py` |
 
 ### Conversion decisions (E-CONV-*)
 
@@ -232,3 +237,4 @@
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
 | 2026-06-21 | WalletEditor Add Wallet — E-WE-16…E-WE-19; invariants I16–I17 |
 | 2026-06-22 | Registry outbox Phase 1 — E-WE-20; durable STATE_DIR outbox + replay + health |
+| 2026-07-01 | WalletEditor Registry v2 finalized — E-WE-23…E-WE-27; ManualSync, PG-only runtime, TG-only export, projection removed |

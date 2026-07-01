@@ -12,7 +12,7 @@ from core.datetime_utils import now_msk
 from integrations.wallet_editor_registry import wallet_editor_dropbox_path
 from integrations.wallet_editor_registry_db.connection import connect
 from integrations.wallet_editor_registry_db.frames import load_registry_frames_from_postgres
-from integrations.wallet_editor_registry_db.hold_loader import load_hold_otlezka_from_dropbox
+from integrations.wallet_editor_registry_db.manual_readers import load_hold_otlezka_for_runtime
 from integrations.wallet_editor_registry_db.mapping import _optional_str
 from integrations.wallet_editor_registry_db.store import PostgresRegistryStore, RegistryStore
 from integrations.wallet_editor_registry_lifecycle import (
@@ -63,7 +63,6 @@ class RefreshLifecycleSummary:
     remaining_missing_partners: tuple[str, ...] = ()
     sample_changes: tuple[LifecycleFieldChange, ...] = ()
     dry_run: bool = True
-    excel_exported: bool = False
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -153,7 +152,6 @@ def refresh_lifecycle_fields_from_postgres(
     apply: bool = False,
     today: date | None = None,
     dropbox_path: str | None = None,
-    export_excel: bool = True,
     store: RegistryStore | None = None,
 ) -> RefreshLifecycleSummary:
     """Recalculate lifecycle fields from Postgres history + Dropbox Отлёжка."""
@@ -166,7 +164,7 @@ def refresh_lifecycle_fields_from_postgres(
 
     try:
         all_results_df, _runs_df = load_registry_frames_from_postgres()
-        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_from_dropbox(
+        hold_df, otlezka_df, _hold_exists, _otlezka_exists = load_hold_otlezka_for_runtime(
             dropbox_path,
         )
     except Exception as exc:
@@ -202,17 +200,6 @@ def refresh_lifecycle_fields_from_postgres(
     except Exception as exc:
         summary.errors.append(f"postgres update failed: {exc}")
         return summary
-
-    if export_excel and summary.rows_changed > 0:
-        try:
-            from integrations.wallet_editor_registry_db.excel_export import (
-                export_registry_workbook_to_dropbox,
-            )
-
-            export_registry_workbook_to_dropbox(dropbox_path)
-            summary.excel_exported = True
-        except Exception as exc:
-            summary.errors.append(f"excel export failed: {exc}")
 
     log.info(
         "[WalletEditorRegistry] lifecycle refresh apply rows_changed=%s stale=%s missing_partners=%s",
@@ -261,7 +248,7 @@ def format_refresh_lifecycle_summary(summary: RefreshLifecycleSummary) -> str:
                 lines.append(f"      hold: {change.before_hold!r} -> {change.after_hold!r}")
     if not summary.dry_run:
         lines.append("")
-        lines.append(f"excel exported: {'yes' if summary.excel_exported else 'no'}")
+        lines.append("postgres updated: yes")
     if summary.errors:
         lines.append("")
         lines.append("error details:")

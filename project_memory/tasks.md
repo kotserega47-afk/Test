@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.6 |
-| **Последнее обновление** | 2026-06-21 |
+| **KB версия** | v1.9 |
+| **Последнее обновление** | 2026-07-01 |
 
 ---
 
@@ -78,7 +78,7 @@
 | R-WE-04 | Legacy `automation/main.py` / `tg_receiver.py` | double polling / broken `add_task` API if запущены | **Не** использовать в production; path = `scheduler.py` only |
 | R-WE-05 | Missing / incomplete `WALLET_EDITOR_OPERATOR_MAP` | все ingest отклоняются (fail-closed) | Railway env checklist per operator |
 | R-WE-06 | Result file name collision in `/tmp/wallet_editor` | suffix `_2` / `_<uuid8>` appended | `build_wallet_editor_result_path()` |
-| R-WE-07 | Concurrent Dropbox registry writes (multi-profile) | corrupt/missing rows in `wallet_editor.xlsx` | in-process `threading.Lock` in `wallet_editor_registry.py`; full download/upload per append; rev check before upload (lost-update skip) |
+| R-WE-07 | ~~Concurrent Dropbox registry writes (multi-profile)~~ | ~~corrupt/missing rows in `wallet_editor.xlsx`~~ | **closed** — runtime no longer writes registry history to Dropbox (E-WE-26) |
 | ~~R-TG-01~~ | ~~Silent Telegram sender failure (enqueue ≠ delivery)~~ | **mitigated** | Option B: health-state + periodic log in `telegram_bot.py` |
 | R-WE-08 | Add Wallet optional fields skip silently when Antares label/control not found | operator believes field set when UI control missing | Monitor `[WalletEditorAdd]` logs; extend label map after Antares UI changes |
 | R-WE-09 | Add Wallet UI labels/select options drift after Antares updates | fill skipped or wrong option | Contract tests + real UI smoke; tune `ADD_WALLET_LOWER_FORM_CONTROL_TYPES` |
@@ -138,6 +138,20 @@
 | WE-ADD-2 | **complete** | Phase 2 optional columns (29 fields); status default `Тест`; no direction/state/pool/aggregate defaults; KYC scoped checkbox fix (`b68ded7`) |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
+
+---
+
+## Закрыто — WalletEditor Registry v2 (2026-07-01)
+
+| ID | Status | Summary |
+|----|--------|---------|
+| TASK-2026-07-01-01 | **complete** | Manual sync foundation — PG schema v2, snapshot hash, sync library |
+| TASK-2026-07-01-02 | **complete** | Pre-run manual sync gate before dangerous ops |
+| TASK-2026-07-01-03 | **complete** | Runtime readers `hold`/`Отлёжка` from PostgreSQL |
+| TASK-2026-07-01-04 | **complete** | `/registry_export` via `RegistryExportBuilder` → Telegram |
+| TASK-2026-07-01-05 | **complete** | Remove Dropbox projection; `excel` source removed; CLI on builder |
+
+Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 
 ---
 
@@ -210,6 +224,12 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | JOB-HEALTH-GUARD-C1 | complete | Observe-only job health in `/status` |
 | TASK-2026-06-23-01 | complete | WalletEditor registry Postgres Phase 1 — mirror, health, postgres-first append/patch/refresh |
 | TASK-2026-06-24-01 | complete | Registry mirror observation + reconcile; Stage D diagnostics |
+| TASK-2026-07-01-01 | complete | Manual sync foundation — schema v2, snapshot hash, sync library |
+| TASK-2026-07-01-02 | complete | Pre-run manual sync gate |
+| TASK-2026-07-01-03 | complete | Runtime readers hold/Отлёжка from PostgreSQL |
+| TASK-2026-07-01-04 | complete | `/registry_export` + RegistryExportBuilder (Telegram delivery) |
+| TASK-2026-07-01-05 | complete | Remove Dropbox registry projection; excel source removed |
+| TASK-2026-07-01-06 | ready | KB finalization + ops cutover checklist |
 
 **TASK-2026-06-23-01 completed subtasks:**
 
@@ -256,7 +276,8 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | **WE-REG-WATCHDOG** | **OPEN** | Registry append timeout/watchdog alerts; stale append detection | E-WE-10 partial coverage via job_params; **partial:** outbox + `/registry_health` (E-WE-20) |
 | **WE-LIFECYCLE-REFRESH** | **complete** | Lifecycle refresh job + `tools/refresh_registry_lifecycle_fields.py` | `wallet_editor_registry_refresh` job; postgres lifecycle patch CLI |
 | **WE-AE-SUMMARY** | **OPTIONAL** | Final aggregated auto-enable summary message across batches | Per-batch reports exist today |
-| **WE-POSTGRES-HISTORY** | **complete** | Postgres registry source of truth for `all_results`/`runs` | E-WE-21; rollback `WALLET_EDITOR_REGISTRY_SOURCE=excel` |
+| **WE-POSTGRES-HISTORY** | **complete** | Postgres registry source of truth for `all_results`/`runs` | E-WE-23; rollback Git/deploy only (E-WE-27) |
+| **TASK-2026-07-01-06** | **ready** | Ops cleanup — backup Dropbox workbook, delete `all_results`/`runs` sheets, keep `hold`+`Отлёжка`; see `ops/WALLET_EDITOR_POSTGRES_CUTOVER.md` | TASK-2026-07-01-05 complete |
 
 **Phase 1B scope (planned, not started):**
 
@@ -296,3 +317,4 @@ Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
 | 2026-06-21 | WE-ADD-1 / WE-ADD-1.1 / WE-ADD-2 closed; R-WE-08…R-WE-10 Add Wallet operational risks |
 | 2026-06-22 | WE-REGISTRY-OUTBOX-PHASE1 complete — durable outbox, replay, registry health (E-WE-20) |
 | 2026-06-23 | TASK-2026-06-23-01 / TASK-2026-06-24-01 closed — WalletEditor registry Postgres SoT + ops tooling (E-WE-21, E-WE-22) |
+| 2026-07-01 | TASK-2026-07-01-01…05 closed — WalletEditor Registry v2 (ManualSync, PG readers, TG export, projection removed); TASK-2026-07-01-06 KB + ops checklist (E-WE-23…E-WE-27) |

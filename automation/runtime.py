@@ -286,6 +286,7 @@ class WalletEditorTask:
     password: str
     auth_state_path: str
     run_id: str = field(default_factory=lambda: uuid4().hex)
+    manual_snapshot_binding: "RunSnapshotBinding | None" = None
     queued_at: float = field(default_factory=time.perf_counter)
 
 
@@ -300,6 +301,7 @@ class WalletEditorAddWalletTask:
     password: str
     auth_state_path: str
     dry_run: bool = False
+    requires_manual_snapshot_gate: bool = False
     created_at: float = field(default_factory=time.perf_counter)
     queued_at: float = field(default_factory=time.perf_counter)
 

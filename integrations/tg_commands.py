@@ -7,7 +7,7 @@ import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 from utils.loggers import get_logger
@@ -38,11 +38,12 @@ from integrations.wallet_editor_registry import (
     format_registry_health_report,
     replay_pending_outbox_records,
     run_registry_outbox_replay_job,
-    wallet_editor_dropbox_path,
 )
-from integrations.wallet_editor_registry_db.excel_export import (
-    export_registry_workbook_to_dropbox,
-    format_export_registry_summary,
+from integrations.wallet_editor_registry_db.registry_export_builder import (
+    RegistryExportArtifact,
+    RegistryExportBuilder,
+    build_registry_export_from_postgres,
+    format_registry_export_summary,
 )
 from core.state_store import state_get, state_update
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
@@ -550,21 +551,26 @@ async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await _guard_or_deny(update, "registry_export"):
         return
 
-    dropbox_path = wallet_editor_dropbox_path()
-    if not dropbox_path:
-        await update.message.reply_text(
-            "❌ Registry export failed: DROPBOX_WALLET_EDITOR_PATH is not set"
-        )
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        await update.message.reply_text("❌ Registry export failed: chat_id unavailable")
         return
 
-    await update.message.reply_text("📤 Exporting registry from Postgres to Dropbox...")
+    await update.message.reply_text("📤 Building registry export from PostgreSQL...")
     try:
         loop = asyncio.get_running_loop()
-        summary = await loop.run_in_executor(
+        artifact: RegistryExportArtifact = await loop.run_in_executor(
             None,
-            lambda: export_registry_workbook_to_dropbox(dropbox_path),
+            build_registry_export_from_postgres,
         )
-        await update.message.reply_text(format_export_registry_summary(summary))
+        summary_text = format_registry_export_summary(artifact.summary)
+        with artifact.path.open("rb") as export_file:
+            await update.message.reply_document(
+                document=InputFile(export_file, filename=artifact.filename),
+                caption=summary_text[:1024],
+            )
+        if len(summary_text) > 1024:
+            await update.message.reply_text(summary_text)
     except Exception as e:
         log.exception("cmd_registry_export failed")
         await update.message.reply_text(f"❌ Registry export failed: {e}")

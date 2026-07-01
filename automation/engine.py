@@ -36,7 +36,7 @@ from integrations.wallet_editor_hold import (
     HOLD_SKIP_COMMENT,
     HoldPairsSnapshot,
     is_card_partner_on_hold,
-    load_hold_pairs_from_dropbox,
+    load_hold_pairs_snapshot,
 )
 from integrations.wallet_editor_registry_lifecycle import (
     DISABLE_DATE_COLUMN,
@@ -1473,7 +1473,7 @@ def run(file_path: str, cfg: RunConfig):
         _ensure_result_date_columns(df)
 
         _validate_set_direction_pre_playwright(df)
-        hold_snapshot = load_hold_pairs_from_dropbox()
+        hold_snapshot = load_hold_pairs_snapshot()
         _apply_add_partner_hold_precheck(df, hold_snapshot, stats)
         stats.fail += int((df["status"] == "FAIL").sum())
 

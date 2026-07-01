@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.8 |
-| **Снимок на дату** | 2026-06-23 |
+| **KB версия** | v1.9 |
+| **Снимок на дату** | 2026-07-01 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -69,8 +69,8 @@
 - **Hourly payins group spacing** — `group_break_after` segment boundaries applied **before** `hide_inactive_rows` filtering in `hourly_render_model`; presentation-only (E-HOURLY-01).
 - **Raccoon hourly log profile** — `RACCOON_HOURLY` in `log_profiles.py`; `[raccoon_hourly_dl]` / `[raccoon_hourly_report]` prefixes for observability.
 - **WalletEditor registry outbox (Phase 1)** — durable `{STATE_DIR}/wallet_editor/outbox` + `results/{run_id}.xlsx`; replay `/registry_replay`; health `/registry_health`; repair re-append for restored-workbook trap (E-WE-20).
-- **WalletEditor registry Postgres source of truth** — `WALLET_EDITOR_REGISTRY_SOURCE=postgres` (default in prod): `all_results` + `runs` in PostgreSQL (`we_registry_results`, `we_registry_runs`); Excel `wallet_editor.xlsx` is an **exported projection** after commits; operator sheets `hold` + `Отлёжка` remain in Dropbox only (E-WE-21).
-- **WalletEditor registry ops tooling** — CLI + TG recovery: `tools/diagnose_processed_without_rows.py`, `tools/backfill_processed_without_rows.py`, `tools/refresh_registry_lifecycle_fields.py`, `tools/export_wallet_editor_registry.py`; Telegram `/registry_export` (E-WE-22).
+- **WalletEditor registry (final architecture)** — PostgreSQL sole SoT for `all_results`/`runs`/lifecycle; Dropbox workbook = operator manual input only (`hold`, `Отлёжка`); ManualSync ingest; export via `/registry_export` → `RegistryExportBuilder` → Telegram; CLI export → local file; no runtime Dropbox projection (E-WE-23…E-WE-27).
+- **WalletEditor registry ops tooling** — CLI: `diagnose_processed_without_rows`, `backfill_processed_without_rows`, `refresh_registry_lifecycle_fields`, `export_wallet_editor_registry` (local PG export); Telegram `/registry_export`, `/registry_health`, `/registry_replay`; ops cutover checklist `ops/WALLET_EDITOR_POSTGRES_CUTOVER.md`.
 
 ---
 
@@ -247,15 +247,25 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
-| **Cumulative registry** | **PostgreSQL** (`we_registry_results`, `we_registry_runs`) when `WALLET_EDITOR_REGISTRY_SOURCE=postgres`; Excel export to `DROPBOX_WALLET_EDITOR_PATH`; lifecycle + format-safe openpyxl write (UX-A); async append **after** TG result; `job_params` timeout/warning/retry (`registry_*_seconds`); staged result copy (E-WE-08…E-WE-10, UX-A, E-WE-21) |
-| **Operator config sheets** | Dropbox `wallet_editor.xlsx` sheets `hold`, `Отлёжка` only (not in Postgres) |
-| **Registry recovery (ops)** | `/registry_health` → integrity; `/registry_export` → rebuild Excel from Postgres; `/registry_replay` → legacy outbox repair only; CLI: `diagnose_processed_without_rows`, `backfill_processed_without_rows`, `refresh_registry_lifecycle_fields`, `export_wallet_editor_registry` |
-| **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from recalculated registry; plan `/auto_enable_plan`; execute `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения`; HOLD check before `open_card` |
-| **Add Wallet** | Excel `card`+`phone` → `detect_excel_routing()` → `add_add_wallet_task()` → `add_wallet_engine.run()`; required cols: `card`, `phone`; default: `status=Тест` only; success = strict post-save card search (`row_matches_card_strict`); **no** registry append; disable/auto-enable/conversion paths unchanged |
-| **HOLD enforcement** | `integrations/wallet_editor_hold.py`; manual engine pre-pass; auto-enable executor batch check; fail-closed |
+
+#### WalletEditor Registry (current architecture)
+
+| Layer | State |
+|-------|-------|
+| **Source of truth** | **PostgreSQL** — `we_registry_results`, `we_registry_runs`, lifecycle fields; `manual_hold` / `manual_otlezka` after ManualSync |
+| **Operator manual workbook** | Dropbox `DROPBOX_WALLET_EDITOR_PATH` — sheets **`hold`**, **`Отлёжка` only**; operator input; runtime **never** writes history there |
+| **ManualSync** | Only component that reads Dropbox workbook; writes hold/Отлёжка to PostgreSQL |
+| **Runtime (Disable, Auto Enable, Lifecycle, Registry)** | PostgreSQL only for history; pre-run manual sync gate before dangerous ops |
+| **Registry export** | `/registry_export` → `RegistryExportBuilder` → Excel → **Telegram** (read-only report) |
+| **CLI export** | `tools/export_wallet_editor_registry.py` → local file via `RegistryExportBuilder` (no Dropbox) |
+| **Outbox** | Durable `{STATE_DIR}/wallet_editor/outbox` + `/registry_replay` for repair |
+| **Health** | `/registry_health` — projection DISABLED; export Telegram-only |
+
+| **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from PG registry + PG hold/Отлёжка; `/auto_enable_plan`, `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения` in PostgreSQL |
+| **Add Wallet** | Excel `card`+`phone` → `detect_excel_routing()` → `add_wallet_engine.run()`; **no** registry append |
+| **HOLD enforcement** | `integrations/wallet_editor_hold.py`; reads from PG (after manual sync) or Dropbox fallback when `MANUAL_READERS_SOURCE=dropbox` |
 | **Auth state** | Per-profile `/tmp/auth_state_wallet_editor_<PROFILE>.json` |
-| **Telegram outbound health** | `integrations/telegram_bot.py` — enqueue vs delivery counters, periodic health log via `scheduler.schedule_loop` |
-| **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production |
+| **Legacy** | `automation/main.py`, `automation/tg_receiver.py` — not production; `WALLET_EDITOR_REGISTRY_SOURCE=excel` — **removed** |
 
 ---
 
@@ -339,4 +349,5 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-15 | Hourly auto-report incident resolved — legacy job_params whitelist fix E-CONFIG-14 (`e4b31fb`); payin group spacing with `hide_inactive_rows` E-HOURLY-01; Raccoon hourly log prefixes |
 | 2026-06-16 | Conversion `valid_status` legacy whitelist — E-CONFIG-15 (`194d99e`) |
 | 2026-06-21 | WalletEditor Add Wallet Phase 1 / 1.1 / 2 complete — routing, contract, engine, KYC fix; real UI verified; E-WE-16…E-WE-19 |
-| 2026-06-23 | WalletEditor registry Postgres source of truth — Excel becomes projection; ops CLIs + `/registry_export`; postgres-aware auto-enable warnings (E-WE-21, E-WE-22) |
+| 2026-06-23 | WalletEditor registry Postgres source of truth — Excel becomes projection; ops CLIs + `/registry_export` (E-WE-21, E-WE-22) |
+| 2026-07-01 | WalletEditor Registry v2 complete — ManualSync, PG readers, TG-only export, projection removed (E-WE-23…E-WE-27); KB finalized TASK-2026-07-01-06 |

@@ -16,18 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Recalculate lifecycle fields (Дата включения / Статус включения / hold) "
-            "for Postgres registry rows using current Dropbox Отлёжка config."
+            "for Postgres registry rows using current hold/Отлёжка config."
         ),
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Update PostgreSQL and export Excel (default: dry-run only)",
-    )
-    parser.add_argument(
-        "--no-export",
-        action="store_true",
-        help="Skip Dropbox Excel export after --apply (Postgres update only)",
+        help="Update PostgreSQL (default: dry-run only)",
     )
     return parser
 
@@ -37,10 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        summary = refresh_lifecycle_fields_from_postgres(
-            apply=args.apply,
-            export_excel=not args.no_export,
-        )
+        summary = refresh_lifecycle_fields_from_postgres(apply=args.apply)
     except DatabaseNotConfiguredError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

@@ -125,7 +125,7 @@ def test_add_partner_ok_writes_operation_date_only(tmp_path, monkeypatch, mock_w
     monkeypatch.setattr("automation.engine.now_msk", lambda: FIXED_NOW)
     monkeypatch.setattr("automation.engine.ensure_partner_added", MagicMock(return_value="added Ostin"))
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: HoldPairsSnapshot.empty_available(),
     )
 

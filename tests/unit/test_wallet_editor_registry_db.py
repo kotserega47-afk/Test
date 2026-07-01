@@ -42,15 +42,26 @@ from integrations.wallet_editor_registry_lifecycle import (
 
 
 class TestRegistrySourceConfig:
-    def test_registry_source_defaults_excel(self, monkeypatch):
+    def test_registry_source_defaults_postgres(self, monkeypatch):
         from integrations.wallet_editor_registry_db.config import (
             ENV_REGISTRY_SOURCE,
-            REGISTRY_SOURCE_EXCEL,
+            REGISTRY_SOURCE_POSTGRES,
             registry_source,
         )
 
         monkeypatch.delenv(ENV_REGISTRY_SOURCE, raising=False)
-        assert registry_source() == REGISTRY_SOURCE_EXCEL
+        assert registry_source() == REGISTRY_SOURCE_POSTGRES
+
+    def test_legacy_excel_source_rejected(self, monkeypatch):
+        from integrations.wallet_editor_registry_db.config import (
+            ENV_REGISTRY_SOURCE,
+            LegacyRegistrySourceError,
+            registry_source,
+        )
+
+        monkeypatch.setenv(ENV_REGISTRY_SOURCE, "excel")
+        with pytest.raises(LegacyRegistrySourceError, match="no longer supported"):
+            registry_source()
 
     def test_registry_source_postgres(self, monkeypatch):
         from integrations.wallet_editor_registry_db.config import (
@@ -115,7 +126,7 @@ class TestSchemaSql:
         assert schema_sql_path().is_file()
 
     def test_schema_version_constant(self):
-        assert SCHEMA_VERSION == 1
+        assert SCHEMA_VERSION == 2
 
     def test_expected_tables_present_in_sql(self):
         sql = load_schema_sql()
@@ -131,16 +142,16 @@ class TestSchemaSql:
         assert "row_fingerprint" in sql
         assert "UNIQUE" in sql
 
-    def test_schema_excludes_hold_and_otlezka(self):
+    def test_schema_includes_manual_sync_tables(self):
         sql = load_schema_sql().lower()
-        assert "hold" not in sql or "hold_mark" in sql
-        assert "отлёжка" not in sql
-        assert "otlezka" not in sql
+        assert "we_registry_hold" in sql
+        assert "we_registry_otlezka" in sql
+        assert "we_registry_manual_sync_runs" in sql
 
     def test_schema_meta_version_insert(self):
         sql = load_schema_sql()
         assert "schema_version" in sql
-        assert "'1'" in sql
+        assert "'2'" in sql
 
 
 class TestMappingAllResults:

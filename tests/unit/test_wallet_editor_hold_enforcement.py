@@ -257,7 +257,7 @@ def test_apply_add_partner_hold_precheck_fail_closed():
 def test_add_partner_held_skip_no_open_card(tmp_path, monkeypatch, mock_wallet_editor_playwright):
     open_card = mock_wallet_editor_playwright
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("4111111111111111", "Ostin")),
     )
 
@@ -288,7 +288,7 @@ def test_add_partner_held_skip_no_open_card(tmp_path, monkeypatch, mock_wallet_e
 def test_add_partner_not_held_runs_normally(tmp_path, monkeypatch, mock_wallet_editor_playwright):
     open_card = mock_wallet_editor_playwright
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("9999", "Other")),
     )
 
@@ -318,7 +318,7 @@ def test_held_add_partner_plus_remove_partner_same_card(
 ):
     open_card = mock_wallet_editor_playwright
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("4111111111111111", "Ostin")),
     )
 
@@ -353,7 +353,7 @@ def test_held_add_partner_plus_remove_partner_same_card(
 def test_all_rows_held_skip_no_open_card(tmp_path, monkeypatch, mock_wallet_editor_playwright):
     open_card = mock_wallet_editor_playwright
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("4111111111111111", "Ostin")),
     )
 
@@ -378,7 +378,7 @@ def test_all_rows_held_skip_no_open_card(tmp_path, monkeypatch, mock_wallet_edit
 def test_remove_partner_unaffected_by_hold(tmp_path, monkeypatch, mock_wallet_editor_playwright):
     open_card = mock_wallet_editor_playwright
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("4111111111111111", "Ostin")),
     )
 
@@ -407,7 +407,7 @@ def test_set_status_unaffected_by_hold(tmp_path, monkeypatch, mock_wallet_editor
     ensure_status = MagicMock(return_value="set status ok")
     monkeypatch.setattr("automation.engine.ensure_status_set", ensure_status)
     monkeypatch.setattr(
-        "automation.engine.load_hold_pairs_from_dropbox",
+        "automation.engine.load_hold_pairs_snapshot",
         lambda: _hold_snapshot(("4111111111111111", "Ostin")),
     )
 
