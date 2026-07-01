@@ -440,37 +440,22 @@ def save_registry_export_workbook(
     hold: pd.DataFrame,
     otlezka: pd.DataFrame,
     readme_lines: list[str],
-    sync_status_rows: list[tuple[str, str]],
+    sync_status_rows: list[tuple[str, str]] | None = None,
 ) -> None:
     """Write a full PG-backed registry export workbook (delivery-agnostic)."""
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    wb = Workbook()
-    default = wb.active
-    if default is not None:
-        wb.remove(default)
+    del sync_status_rows  # legacy parameter; export workbook no longer includes sync_status
+    from integrations.wallet_editor_registry_db.registry_export_format import (
+        write_registry_export_workbook,
+    )
 
-    ws_all = wb.create_sheet(SHEET_ALL_RESULTS)
-    _write_headers(ws_all, ALL_RESULTS_COLUMNS)
-    _sync_all_results_sheet(ws_all, all_results)
-
-    ws_runs = wb.create_sheet(SHEET_RUNS)
-    _write_headers(ws_runs, RUNS_COLUMNS)
-    _sync_runs_sheet(ws_runs, runs)
-
-    ws_hold = wb.create_sheet(SHEET_HOLD)
-    _sync_user_sheet(ws_hold, hold, HOLD_COLUMNS)
-
-    ws_otlezka = wb.create_sheet(SHEET_OTLEZKA)
-    _sync_user_sheet(ws_otlezka, otlezka, OTLEZKA_COLUMNS)
-
-    ws_readme = wb.create_sheet(SHEET_README)
-    _write_text_lines_sheet(ws_readme, readme_lines)
-
-    ws_sync = wb.create_sheet(SHEET_SYNC_STATUS)
-    _write_key_value_sheet(ws_sync, sync_status_rows)
-
-    wb.save(local_path)
-    wb.close()
+    write_registry_export_workbook(
+        local_path,
+        all_results=all_results,
+        runs=runs,
+        hold=hold,
+        otlezka=otlezka,
+        readme_lines=readme_lines,
+    )
 
 
 def create_styled_registry_workbook(path: Path) -> None:

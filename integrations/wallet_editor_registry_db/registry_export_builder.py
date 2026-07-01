@@ -20,7 +20,10 @@ from integrations.wallet_editor_registry_db.manual_store import (
 )
 from integrations.wallet_editor_registry_db.manual_sync_state import load_manual_sync_meta
 from integrations.wallet_editor_registry_lifecycle import normalize_all_results
-from integrations.wallet_editor_registry_xlsx import save_registry_export_workbook
+from integrations.wallet_editor_registry_db.registry_export_format import (
+    format_export_datetime_value,
+    write_registry_export_workbook,
+)
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -91,36 +94,30 @@ def _readme_lines(
     snapshot_hash_short: str | None,
     last_manual_sync_at: str | None,
 ) -> list[str]:
+    generated_display = format_export_datetime_value(generated_at) if generated_at else ""
+    sync_display = (
+        format_export_datetime_value(last_manual_sync_at) if last_manual_sync_at else "нет"
+    )
     return [
-        "WalletEditor Registry Export",
+        "Реестр WalletEditor",
         "",
-        "This workbook is a generated, read-only report.",
-        "Do not edit this workbook.",
+        "Источник данных:",
+        "PostgreSQL",
         "",
-        "Source of truth:",
-        "- Registry history (all_results, runs): PostgreSQL",
-        "- Hold and Отлёжка runtime: PostgreSQL (after manual sync)",
+        "Эта книга предназначена только для просмотра.",
         "",
-        "The Dropbox operator workbook is used only for manual input",
-        "(hold and Отлёжка sheets). Changes there require /manual_sync.",
+        "Все изменения необходимо выполнять",
+        "в операторской Dropbox-книге",
+        "(hold и Отлёжка).",
         "",
-        "To obtain the registry, use /registry_export in Telegram.",
+        "Для получения актуальной версии",
+        "используйте команду",
         "",
-        f"Generated at: {generated_at}",
-        f"Manual snapshot hash: {snapshot_hash_short or 'n/a'}",
-        f"Last manual sync: {last_manual_sync_at or 'none'}",
-    ]
-
-
-def _sync_status_rows(meta) -> list[tuple[str, str]]:
-    return [
-        ("last_manual_sync_at", meta.last_sync_at or ""),
-        ("last_manual_snapshot_hash", meta.last_snapshot_hash or ""),
-        ("last_manual_sync_status", meta.last_sync_status or ""),
-        ("last_manual_source_rev", meta.last_source_rev or ""),
-        ("active_hold_rows", str(meta.active_hold_rows)),
-        ("active_otlezka_rows", str(meta.active_otlezka_rows)),
-        ("last_manual_sync_run_id", meta.last_sync_run_id or ""),
+        "/registry_export",
+        "",
+        f"Сформировано: {generated_display}",
+        f"Хэш снимка manual sync: {snapshot_hash_short or 'н/д'}",
+        f"Последний manual sync: {sync_display}",
     ]
 
 
@@ -181,14 +178,13 @@ class RegistryExportBuilder:
             last_manual_sync_at=meta.last_sync_at,
         )
 
-        save_registry_export_workbook(
+        write_registry_export_workbook(
             output_path,
             all_results=all_results,
             runs=runs,
             hold=hold_df,
             otlezka=otlezka_df,
             readme_lines=readme_lines,
-            sync_status_rows=_sync_status_rows(meta),
         )
 
         summary = RegistryExportSummary(

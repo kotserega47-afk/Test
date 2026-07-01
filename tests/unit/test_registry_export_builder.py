@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
+from integrations.wallet_editor_registry_db.config import LegacyRegistrySourceError
 from integrations.wallet_editor_registry_db.manual_snapshot import HoldSnapshotRow, OtlezkaSnapshotRow
 from integrations.wallet_editor_registry_db.manual_store import InMemoryManualSyncStore
 from integrations.wallet_editor_registry_db.manual_sync_state import (
@@ -18,22 +19,24 @@ from integrations.wallet_editor_registry_db.manual_sync_state import (
     META_LAST_SYNC_AT,
     META_LAST_SYNC_STATUS,
 )
-from integrations.wallet_editor_registry_db.config import LegacyRegistrySourceError
 from integrations.wallet_editor_registry_db.registry_export_builder import (
     RegistryExportBuilder,
     format_registry_export_summary,
+)
+from integrations.wallet_editor_registry_db.registry_export_format import (
+    EXPORT_SHEET_HOLD,
+    EXPORT_SHEET_OTLEZKA,
+    EXPORT_SHEET_README,
+    EXPORT_SHEET_RESULTS,
+    EXPORT_SHEET_RUNS,
+    EXPORT_SHEET_STATS,
 )
 from integrations.wallet_editor_registry_lifecycle import (
     ALL_RESULTS_COLUMNS,
     HOLD_COLUMNS,
     OTLEZKA_COLUMNS,
     RUNS_COLUMNS,
-    SHEET_ALL_RESULTS,
-    SHEET_HOLD,
-    SHEET_OTLEZKA,
-    SHEET_RUNS,
 )
-from integrations.wallet_editor_registry_xlsx import SHEET_README, SHEET_SYNC_STATUS
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -104,22 +107,21 @@ class TestRegistryExportBuilder:
 
         wb = load_workbook(artifact.path, read_only=True)
         assert wb.sheetnames == [
-            SHEET_ALL_RESULTS,
-            SHEET_RUNS,
-            SHEET_HOLD,
-            SHEET_OTLEZKA,
-            SHEET_README,
-            SHEET_SYNC_STATUS,
+            EXPORT_SHEET_RESULTS,
+            EXPORT_SHEET_RUNS,
+            EXPORT_SHEET_HOLD,
+            EXPORT_SHEET_OTLEZKA,
+            EXPORT_SHEET_STATS,
+            EXPORT_SHEET_README,
         ]
-        readme = [wb[SHEET_README].cell(row=i, column=1).value for i in range(1, 20)]
+        readme = [wb[EXPORT_SHEET_README].cell(row=i, column=1).value for i in range(1, 20)]
         readme_text = "\n".join(line for line in readme if line)
-        assert "WalletEditor Registry Export" in readme_text
-        assert "Source of truth:" in readme_text
+        assert "Реестр WalletEditor" in readme_text
         assert "PostgreSQL" in readme_text
-        assert "Do not edit this workbook." in readme_text
-        assert "operator workbook" in readme_text
+        assert "только для просмотра" in readme_text
+        assert "Dropbox-книге" in readme_text
         assert "/registry_export" in readme_text
-        assert "Manual snapshot hash: abc123def456" in readme_text
+        assert "Хэш снимка manual sync: abc123def456" in readme_text
         wb.close()
 
     def test_hold_sheet_uses_hold_columns(self, tmp_path, monkeypatch):
@@ -133,7 +135,7 @@ class TestRegistryExportBuilder:
             artifact = RegistryExportBuilder(store=store).build(output_path=tmp_path)
 
         wb = load_workbook(artifact.path, read_only=True)
-        hold_ws = wb[SHEET_HOLD]
+        hold_ws = wb[EXPORT_SHEET_HOLD]
         assert hold_ws.cell(row=1, column=1).value == HOLD_COLUMNS[0]
         assert hold_ws.cell(row=2, column=2).value == "4111"
         wb.close()
