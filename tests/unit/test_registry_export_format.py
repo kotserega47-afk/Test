@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
-import pytest
 from openpyxl import load_workbook
-from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
+from integrations.wallet_editor_registry_db.registry_export_builder import (
+    RegistryExportSummary,
+    format_registry_export_summary,
+)
 from integrations.wallet_editor_registry_db.registry_export_format import (
-    EXPORT_DATETIME_DISPLAY,
     EXPORT_SHEET_README,
     EXPORT_SHEET_RESULTS,
     EXPORT_SHEET_RUNS,
@@ -23,10 +24,13 @@ from integrations.wallet_editor_registry_db.registry_export_format import (
     STATS_TOTAL_HEADER,
     STATS_TOTAL_ROW_LABEL,
     build_statistics_sheet_rows,
+    calendar_operation_dates_desc,
     format_export_datetime_value,
+    partners_from_otlezka,
     prepare_export_frames,
     sort_all_results_for_export,
     sort_runs_for_export,
+    workbook_has_external_links,
     write_registry_export_workbook,
 )
 from integrations.wallet_editor_registry_lifecycle import (
@@ -109,7 +113,14 @@ def _sample_frames():
             },
         ]
     )
-    otlezka = pd.DataFrame(columns=OTLEZKA_COLUMNS)
+    otlezka = pd.DataFrame(
+        [
+            {"partner": "Gamma", "Полные дни": 30, "comment": ""},
+            {"partner": "Beta", "Полные дни": 30, "comment": ""},
+            {"partner": "Alpha", "Полные дни": 30, "comment": ""},
+            {"partner": "Delta", "Полные дни": 30, "comment": ""},
+        ]
+    )
     return all_results, runs, hold, otlezka
 
 
@@ -149,27 +160,40 @@ class TestExportSortingAndFormatting:
 
 
 class TestStatisticsSheet:
-    def test_build_remove_and_add_partner_blocks(self):
-        all_results, _, _, _ = _sample_frames()
-        rows = build_statistics_sheet_rows(all_results)
-        text = "\n".join(" | ".join(str(cell) for cell in row) for row in rows if row)
-        assert STATS_REMOVE_TITLE in text
-        assert STATS_ADD_TITLE in text
-        assert "Alpha" in text
-        assert STATS_TOTAL_ROW_LABEL in text
-        assert STATS_TOTAL_HEADER in text
+    def test_partners_from_otlezka_alphabetical(self):
+        _, _, _, otlezka = _sample_frames()
+        assert partners_from_otlezka(otlezka) == ["Alpha", "Beta", "Delta", "Gamma"]
 
-    def test_statistics_totals_and_vsego_column(self):
+    def test_calendar_dates_have_no_gaps(self):
         all_results, _, _, _ = _sample_frames()
-        rows = build_statistics_sheet_rows(all_results)
+        dates = calendar_operation_dates_desc(all_results)
+        assert dates == [date(2026, 6, 3), date(2026, 6, 2), date(2026, 6, 1)]
+
+    def test_build_statistics_uses_otlezka_partners_and_zeros(self):
+        all_results, _, _, otlezka = _sample_frames()
+        rows = build_statistics_sheet_rows(all_results, otlezka)
         add_idx = next(i for i, row in enumerate(rows) if row and row[0] == STATS_ADD_TITLE)
         remove_header = next(row for row in rows if row and row[0] == "Партнёр")
+        add_header = rows[add_idx + 1]
+        assert remove_header[2:5] == add_header[2:5] == [
+            "03.06.2026",
+            "02.06.2026",
+            "01.06.2026",
+        ]
+        delta_row = next(row for row in rows[:add_idx] if row and row[0] == "Delta")
+        assert delta_row[2:] == [0, 0, 0, 0]
+        assert STATS_REMOVE_TITLE in {row[0] for row in rows if row}
+        assert STATS_ADD_TITLE in {row[0] for row in rows if row}
+
+    def test_statistics_totals_and_vsego_column(self):
+        all_results, _, _, otlezka = _sample_frames()
+        rows = build_statistics_sheet_rows(all_results, otlezka)
+        add_idx = next(i for i, row in enumerate(rows) if row and row[0] == STATS_ADD_TITLE)
         remove_total = next(
             row
             for row in rows[:add_idx]
             if row and row[0] == STATS_TOTAL_ROW_LABEL
         )
-        assert remove_header[-1] == STATS_TOTAL_HEADER
         assert remove_total[-1] == 2
 
 
@@ -186,6 +210,8 @@ class TestExportWorkbookPresentation:
             readme_lines=["Реестр WalletEditor", "PostgreSQL", "/registry_export"],
         )
 
+        assert workbook_has_external_links(output) is False
+
         wb = load_workbook(output)
         assert wb.sheetnames == [
             EXPORT_SHEET_RESULTS,
@@ -201,21 +227,16 @@ class TestExportWorkbookPresentation:
         assert results_ws.auto_filter.ref is not None
         assert results_ws.cell(row=1, column=1).font.bold is True
         assert results_ws.cell(row=2, column=1).value.startswith("01.06.2026")
-        assert results_ws.cell(row=3, column=1).value.startswith("01.06.2026")
-        assert results_ws.cell(row=5, column=1).value.startswith("03.06.2026")
         assert results_ws.cell(row=2, column=1).border.left.style == "thin"
-
-        runs_ws = wb[EXPORT_SHEET_RUNS]
-        assert runs_ws.cell(row=2, column=1).value == "01.06.2026 07:00:00"
-        assert runs_ws.auto_filter.ref is not None
+        assert results_ws.cell(row=2, column=5).border.left.style == "thin"
 
         stats_ws = wb[EXPORT_SHEET_STATS]
         assert stats_ws.cell(row=1, column=1).value == STATS_REMOVE_TITLE
-        assert EXPORT_SHEET_STATS in wb.sheetnames
+        assert stats_ws.cell(row=5, column=1).value == "Delta"
+        assert stats_ws.cell(row=5, column=3).value == 0
 
         readme_ws = wb[EXPORT_SHEET_README]
-        readme_text = readme_ws.cell(row=1, column=1).value
-        assert "Реестр WalletEditor" in readme_text
+        assert "Реестр WalletEditor" in readme_ws.cell(row=1, column=1).value
         assert readme_ws.auto_filter.ref is None
 
         for ws in wb.worksheets:
@@ -247,3 +268,22 @@ class TestExportWorkbookPresentation:
         ].width
         assert width <= MAX_COLUMN_WIDTH
         wb.close()
+
+
+class TestTelegramSummaryFormatting:
+    def test_summary_uses_display_datetime_format(self):
+        summary = RegistryExportSummary(
+            all_results_rows=1,
+            runs_rows=1,
+            hold_rows=1,
+            otlezka_rows=1,
+            last_manual_sync_at="2026-07-01T18:40:27.388258+00:00",
+            snapshot_hash_short="abc",
+            manual_sync_degraded=False,
+            generated_at="2026-07-01T22:28:42+03:00",
+            filename="wallet_editor_export.xlsx",
+        )
+        text = format_registry_export_summary(summary)
+        assert "generated at: 01.07.2026 22:28:42" in text
+        assert "last manual sync: 01.07.2026 18:40:27" in text
+        assert "T" not in text.split("generated at:")[1].splitlines()[0]

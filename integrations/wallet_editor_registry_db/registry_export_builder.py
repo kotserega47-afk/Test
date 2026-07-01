@@ -55,16 +55,22 @@ class RegistryExportArtifact:
 
 
 def format_registry_export_summary(summary: RegistryExportSummary) -> str:
+    generated_at = format_export_datetime_value(summary.generated_at)
+    last_manual_sync = (
+        format_export_datetime_value(summary.last_manual_sync_at)
+        if summary.last_manual_sync_at
+        else "none"
+    )
     lines = [
         "WalletEditor registry export",
         "",
         f"filename: {summary.filename}",
-        f"generated at: {summary.generated_at}",
+        f"generated at: {generated_at}",
         f"all_results rows: {summary.all_results_rows}",
         f"runs rows: {summary.runs_rows}",
         f"active hold rows: {summary.hold_rows}",
         f"active Отлёжка rows: {summary.otlezka_rows}",
-        f"last manual sync: {summary.last_manual_sync_at or 'none'}",
+        f"last manual sync: {last_manual_sync}",
         f"snapshot hash: {summary.snapshot_hash_short or 'n/a'}",
     ]
     if summary.manual_sync_degraded:
