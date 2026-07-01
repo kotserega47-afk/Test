@@ -14,13 +14,18 @@ from integrations.wallet_editor_registry_db.manual_snapshot import (
     compute_snapshot_hash,
     parse_manual_workbook,
 )
-from integrations.wallet_editor_registry_db.manual_store import InMemoryManualSyncStore
+from integrations.wallet_editor_registry_db.manual_store import (
+    InMemoryManualSyncStore,
+    PostgresManualSyncStore,
+)
 from integrations.wallet_editor_registry_db.manual_sync import (
     ManualSyncDecision,
     RunSnapshotBinding,
     ensure_manual_snapshot_current,
 )
 from integrations.wallet_editor_registry_db.manual_sync_state import (
+    META_HOLD_ACTIVE_COUNT,
+    META_OTLEZKA_ACTIVE_COUNT,
     build_manual_snapshot_health_report,
     save_manual_sync_meta,
 )
@@ -241,3 +246,78 @@ class TestManualSnapshotHealth:
             current_dropbox_rev="rev-a",
         )
         assert report.failed is True
+
+
+class TestPostgresManualSyncStoreCounts:
+    def test_count_active_hold_queries_active_rows(self):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.__enter__ = MagicMock(return_value=cur)
+        cur.__exit__ = MagicMock(return_value=False)
+        cur.fetchone.return_value = (4,)
+        conn.cursor.return_value = cur
+
+        store = PostgresManualSyncStore(conn)
+        assert store.count_active_hold() == 4
+        sql = cur.execute.call_args[0][0]
+        assert "we_registry_hold" in sql
+        assert "active = true" in sql
+
+    def test_count_active_otlezka_queries_active_rows(self):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.__enter__ = MagicMock(return_value=cur)
+        cur.__exit__ = MagicMock(return_value=False)
+        cur.fetchone.return_value = (2,)
+        conn.cursor.return_value = cur
+
+        store = PostgresManualSyncStore(conn)
+        assert store.count_active_otlezka() == 2
+        sql = cur.execute.call_args[0][0]
+        assert "we_registry_otlezka" in sql
+        assert "active = true" in sql
+
+    def test_synced_path_persists_active_counts_via_postgres_store(self, enabled, tmp_path):
+        wb = _make_workbook(tmp_path)
+        mem = InMemoryManualSyncStore()
+
+        pg_store = PostgresManualSyncStore(MagicMock())
+        pg_store.get_meta = mem.get_meta
+        pg_store.set_meta = mem.set_meta
+        pg_store.persist_sync_run = mem.persist_sync_run
+        pg_store.finish_sync_run = mem.finish_sync_run
+        pg_store.apply_snapshot = mem.apply_snapshot
+
+        def _cursor():
+            cur = MagicMock()
+            cur.__enter__ = MagicMock(return_value=cur)
+            cur.__exit__ = MagicMock(return_value=False)
+
+            def _execute(sql, params=None):
+                if "COUNT(*) FROM we_registry_hold" in sql:
+                    cur.fetchone.return_value = (mem.count_active_hold(),)
+                elif "COUNT(*) FROM we_registry_otlezka" in sql:
+                    cur.fetchone.return_value = (mem.count_active_otlezka(),)
+
+            cur.execute = _execute
+            return cur
+
+        pg_store._conn.cursor = _cursor
+
+        def _download(_path: str, local_path: str) -> tuple[str, str | None]:
+            Path(local_path).write_bytes(wb.read_bytes())
+            return "ok", "rev-sync"
+
+        result = ensure_manual_snapshot_current(
+            pg_store,
+            dropbox_path=DROPBOX_PATH,
+            download_fn=_download,
+            rev_fn=lambda _p: "rev-sync",
+        )
+
+        assert result.decision == ManualSyncDecision.SYNCED
+        assert pg_store.get_meta(META_HOLD_ACTIVE_COUNT) == "1"
+        assert pg_store.get_meta(META_OTLEZKA_ACTIVE_COUNT) == "1"
+        report = build_manual_snapshot_health_report(pg_store, current_dropbox_rev="rev-sync")
+        assert report.active_hold_rows == 1
+        assert report.active_otlezka_rows == 1

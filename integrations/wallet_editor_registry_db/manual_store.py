@@ -294,6 +294,18 @@ class PostgresManualSyncStore:
             otlezka_deactivated=otlezka_deactivated,
         )
 
+    def count_active_hold(self) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(COUNT_ACTIVE_HOLD_SQL)
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+    def count_active_otlezka(self) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(COUNT_ACTIVE_OTLEZKA_SQL)
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
 
 class InMemoryManualSyncStore:
     """Test double for manual sync persistence."""
