@@ -7,7 +7,6 @@ import re
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -37,6 +36,7 @@ EXPORT_SHEET_README = "README"
 
 EXPORT_DATETIME_DISPLAY = "%d.%m.%Y %H:%M:%S"
 EXPORT_DATE_DISPLAY = "%d.%m.%Y"
+EXPORT_EXCEL_DATETIME_NUMBER_FORMAT = "dd.mm.yyyy hh:mm:ss"
 HOLD_ADDED_DATE_COLUMN = "Дата добавления"
 STATS_PARTNER_HEADER = "Партнёр"
 STATS_TOTAL_HEADER = "Всего"
@@ -94,6 +94,30 @@ def sort_hold_for_export(df: pd.DataFrame) -> pd.DataFrame:
     return work.drop(columns=["_sort_added", "_sort_idx"]).reset_index(drop=True)
 
 
+def parse_export_excel_datetime(value: object) -> datetime | None:
+    """Parse a registry value into a naive datetime for Excel cells."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none"}:
+        return None
+
+    parsed_dt = _try_parse_datetime(text)
+    if parsed_dt is not None:
+        return parsed_dt
+
+    parsed_date = parse_operation_date(text)
+    if parsed_date is not None:
+        return datetime.combine(parsed_date, datetime.min.time())
+
+    return None
+
+
 def format_export_datetime_value(value: object) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
@@ -125,29 +149,33 @@ def format_export_datetime_value(value: object) -> str:
     return text
 
 
-def format_dataframe_datetimes(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
-    if df.empty:
-        return df
-    work = df.copy()
-    for col in columns:
-        if col in work.columns:
-            work[col] = work[col].map(format_export_datetime_value)
-    return work
-
-
 def prepare_export_frames(
     all_results: pd.DataFrame,
     runs: pd.DataFrame,
     hold: pd.DataFrame,
     otlezka: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    all_results = format_dataframe_datetimes(
-        sort_all_results_for_export(all_results),
-        ALL_RESULTS_DATETIME_COLUMNS,
-    )
-    runs = format_dataframe_datetimes(sort_runs_for_export(runs), RUNS_DATETIME_COLUMNS)
-    hold = format_dataframe_datetimes(sort_hold_for_export(hold), HOLD_DATETIME_COLUMNS)
+    all_results = sort_all_results_for_export(all_results)
+    runs = sort_runs_for_export(runs)
+    hold = sort_hold_for_export(hold)
     return all_results, runs, hold, otlezka.reset_index(drop=True)
+
+
+def _coerce_export_cell_value(
+    col_name: str,
+    value: object,
+    datetime_columns: frozenset[str],
+) -> tuple[object, bool]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "", False
+    if col_name not in datetime_columns:
+        return value, False
+
+    parsed = parse_export_excel_datetime(value)
+    if parsed is not None:
+        return parsed, True
+    text = str(value).strip()
+    return (text if text else ""), False
 
 
 def partners_from_otlezka(otlezka: pd.DataFrame) -> list[str]:
@@ -228,9 +256,24 @@ def write_registry_export_workbook(
     if default is not None:
         wb.remove(default)
 
-    _write_data_sheet(wb.create_sheet(EXPORT_SHEET_RESULTS), ALL_RESULTS_COLUMNS, all_results)
-    _write_data_sheet(wb.create_sheet(EXPORT_SHEET_RUNS), RUNS_COLUMNS, runs)
-    _write_data_sheet(wb.create_sheet(EXPORT_SHEET_HOLD), HOLD_COLUMNS, hold)
+    _write_data_sheet(
+        wb.create_sheet(EXPORT_SHEET_RESULTS),
+        ALL_RESULTS_COLUMNS,
+        all_results,
+        frozenset(ALL_RESULTS_DATETIME_COLUMNS),
+    )
+    _write_data_sheet(
+        wb.create_sheet(EXPORT_SHEET_RUNS),
+        RUNS_COLUMNS,
+        runs,
+        frozenset(RUNS_DATETIME_COLUMNS),
+    )
+    _write_data_sheet(
+        wb.create_sheet(EXPORT_SHEET_HOLD),
+        HOLD_COLUMNS,
+        hold,
+        frozenset(HOLD_DATETIME_COLUMNS),
+    )
     _write_data_sheet(wb.create_sheet(EXPORT_SHEET_OTLEZKA), OTLEZKA_COLUMNS, otlezka)
     _write_statistics_sheet(
         wb.create_sheet(EXPORT_SHEET_STATS),
@@ -336,9 +379,15 @@ def _build_statistics_block(
     return rows
 
 
-def _write_data_sheet(ws: Worksheet, columns: list[str], df: pd.DataFrame) -> None:
+def _write_data_sheet(
+    ws: Worksheet,
+    columns: list[str],
+    df: pd.DataFrame,
+    datetime_columns: frozenset[str] | None = None,
+) -> None:
     max_row = max(len(df) + 1, 1)
     max_col = len(columns)
+    datetime_columns = datetime_columns or frozenset()
 
     for col_idx, name in enumerate(columns, 1):
         ws.cell(row=1, column=col_idx, value=name)
@@ -346,10 +395,15 @@ def _write_data_sheet(ws: Worksheet, columns: list[str], df: pd.DataFrame) -> No
     for row_offset in range(len(df)):
         row_idx = row_offset + 2
         for col_idx, col_name in enumerate(columns, 1):
-            value = df.iloc[row_offset].get(col_name, "")
-            if value is None or (isinstance(value, float) and pd.isna(value)):
-                value = ""
-            ws.cell(row=row_idx, column=col_idx, value=value)
+            raw_value = df.iloc[row_offset].get(col_name, "")
+            cell_value, is_datetime = _coerce_export_cell_value(
+                col_name,
+                raw_value,
+                datetime_columns,
+            )
+            cell = ws.cell(row=row_idx, column=col_idx, value=cell_value)
+            if is_datetime:
+                cell.number_format = EXPORT_EXCEL_DATETIME_NUMBER_FORMAT
 
     _apply_sheet_formatting(
         ws,

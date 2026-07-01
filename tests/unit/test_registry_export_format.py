@@ -14,6 +14,8 @@ from integrations.wallet_editor_registry_db.registry_export_builder import (
     format_registry_export_summary,
 )
 from integrations.wallet_editor_registry_db.registry_export_format import (
+    EXPORT_EXCEL_DATETIME_NUMBER_FORMAT,
+    EXPORT_SHEET_HOLD,
     EXPORT_SHEET_README,
     EXPORT_SHEET_RESULTS,
     EXPORT_SHEET_RUNS,
@@ -146,7 +148,7 @@ class TestExportSortingAndFormatting:
             == "03.06.2026 14:30:45"
         )
 
-    def test_prepare_export_frames_formats_datetime_columns(self):
+    def test_prepare_export_frames_preserves_raw_datetime_values(self):
         all_results, runs, hold, _ = _sample_frames()
         prepared_all, prepared_runs, prepared_hold, _ = prepare_export_frames(
             all_results,
@@ -156,7 +158,7 @@ class TestExportSortingAndFormatting:
         )
         assert prepared_all.iloc[0][OPERATION_DATE_COLUMN] == "01.06.2026 09:00:00"
         assert prepared_runs.iloc[0]["started_at"] == "01.06.2026 07:00:00"
-        assert prepared_hold.iloc[0]["Дата добавления"] == "01.06.2026 00:00:00"
+        assert prepared_hold.iloc[0]["Дата добавления"] == "01.06.2026"
 
 
 class TestStatisticsSheet:
@@ -226,7 +228,7 @@ class TestExportWorkbookPresentation:
         assert results_ws.freeze_panes == "A2"
         assert results_ws.auto_filter.ref is not None
         assert results_ws.cell(row=1, column=1).font.bold is True
-        assert results_ws.cell(row=2, column=1).value.startswith("01.06.2026")
+        assert isinstance(results_ws.cell(row=2, column=1).value, datetime)
         assert results_ws.cell(row=2, column=1).border.left.style == "thin"
         assert results_ws.cell(row=2, column=5).border.left.style == "thin"
 
@@ -267,6 +269,101 @@ class TestExportWorkbookPresentation:
             get_column_letter(comment_col)
         ].width
         assert width <= MAX_COLUMN_WIDTH
+        wb.close()
+
+
+class TestExcelDateTimeCells:
+    @staticmethod
+    def _column_index(columns: list[str], name: str) -> int:
+        return columns.index(name) + 1
+
+    def test_results_datetime_columns_are_excel_datetime(self, tmp_path):
+        all_results, runs, hold, otlezka = _sample_frames()
+        all_results.at[0, "Дата отключения"] = "01.06.2026 08:00:00"
+        all_results.at[0, "Дата включения"] = "02.06.2026 09:00:00"
+        output = tmp_path / "export.xlsx"
+        write_registry_export_workbook(
+            output,
+            all_results=all_results,
+            runs=runs,
+            hold=hold,
+            otlezka=otlezka,
+            readme_lines=["README"],
+        )
+        wb = load_workbook(output)
+        ws = wb[EXPORT_SHEET_RESULTS]
+        data_row = 4  # 02.06.2026 row after ascending sort
+        for col_name in (
+            OPERATION_DATE_COLUMN,
+            "Дата отключения",
+            "Дата включения",
+        ):
+            col_idx = self._column_index(ALL_RESULTS_COLUMNS, col_name)
+            cell = ws.cell(row=data_row, column=col_idx)
+            assert isinstance(cell.value, datetime), col_name
+            assert cell.data_type == "d", col_name
+            assert cell.number_format == EXPORT_EXCEL_DATETIME_NUMBER_FORMAT, col_name
+        wb.close()
+
+    def test_runs_datetime_columns_are_excel_datetime(self, tmp_path):
+        all_results, runs, hold, otlezka = _sample_frames()
+        output = tmp_path / "export.xlsx"
+        write_registry_export_workbook(
+            output,
+            all_results=all_results,
+            runs=runs,
+            hold=hold,
+            otlezka=otlezka,
+            readme_lines=["README"],
+        )
+        wb = load_workbook(output)
+        ws = wb[EXPORT_SHEET_RUNS]
+        for col_name in ("started_at", "finished_at"):
+            col_idx = self._column_index(RUNS_COLUMNS, col_name)
+            cell = ws.cell(row=2, column=col_idx)
+            assert isinstance(cell.value, datetime)
+            assert cell.data_type == "d"
+            assert cell.number_format == EXPORT_EXCEL_DATETIME_NUMBER_FORMAT
+        wb.close()
+
+    def test_hold_added_date_is_excel_datetime(self, tmp_path):
+        all_results, runs, hold, otlezka = _sample_frames()
+        output = tmp_path / "export.xlsx"
+        write_registry_export_workbook(
+            output,
+            all_results=all_results,
+            runs=runs,
+            hold=hold,
+            otlezka=otlezka,
+            readme_lines=["README"],
+        )
+        wb = load_workbook(output)
+        ws = wb[EXPORT_SHEET_HOLD]
+        col_idx = self._column_index(HOLD_COLUMNS, "Дата добавления")
+        cell = ws.cell(row=2, column=col_idx)
+        assert isinstance(cell.value, datetime)
+        assert cell.data_type == "d"
+        assert cell.number_format == EXPORT_EXCEL_DATETIME_NUMBER_FORMAT
+        wb.close()
+
+    def test_invalid_date_stays_text_and_export_succeeds(self, tmp_path):
+        all_results, runs, hold, otlezka = _sample_frames()
+        all_results.at[1, "Дата включения"] = "Нет даты отлёжки"
+        output = tmp_path / "export.xlsx"
+        write_registry_export_workbook(
+            output,
+            all_results=all_results,
+            runs=runs,
+            hold=hold,
+            otlezka=otlezka,
+            readme_lines=["README"],
+        )
+        wb = load_workbook(output)
+        ws = wb[EXPORT_SHEET_RESULTS]
+        col_idx = self._column_index(ALL_RESULTS_COLUMNS, "Дата включения")
+        cell = ws.cell(row=2, column=col_idx)
+        assert cell.value == "Нет даты отлёжки"
+        assert cell.data_type == "s"
         wb.close()
 
 
