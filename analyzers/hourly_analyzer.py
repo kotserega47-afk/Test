@@ -16,6 +16,7 @@ from utils.normalization import normalize_partner_name, parse_dt_series_msk
 from core.rules_provider import get_snapshot_v2, get_indexes_v2
 from core.rules_v2.accessors import HourlyRulesAccessor
 from core.rules_v2.models import RulesSnapshotV2
+from core.rules_v2.normalizers import normalize_key
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -48,6 +49,7 @@ class HourlyMethodRow:
     title: str
     amount: float
     comment: str = ""
+    partner_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,10 @@ def _to_msk(dt: datetime) -> datetime:
 def _clean_method(value: object) -> str:
     s = str(value or "").strip().upper()
     return s
+
+
+def _method_lookup_key(value: object) -> str:
+    return normalize_key(_clean_method(value)) or "uni"
 
 
 # =============================================================================
@@ -551,6 +557,8 @@ def build_hourly_dto_from_files(
 
         methods: List[HourlyMethodRow] = []
 
+        partner_key_for_row = entity if entity in partner_meta else ""
+
         for _, row in sub.iterrows():
             method = _clean_method(row["_method"])
             amt = float(row["_amount"] or 0.0)
@@ -571,6 +579,7 @@ def build_hourly_dto_from_files(
                     title=method or "—",
                     amount=amt,
                     comment=comment,
+                    partner_key=partner_key_for_row,
                 )
             )
 
@@ -582,18 +591,46 @@ def build_hourly_dto_from_files(
             )
         )
 
-    # merge by entity/group code
+    # merge by group code; keep partner + method as separate dimensions
     merged_payout: Dict[str, HourlyPayoutBlock] = {}
+    merged_method_index: Dict[str, Dict[tuple[str, str], HourlyMethodRow]] = {}
 
     for block in payout_blocks_raw:
-        if block.group_code not in merged_payout:
-            merged_payout[block.group_code] = HourlyPayoutBlock(
-                group_code=block.group_code,
+        group_code = block.group_code
+        if group_code not in merged_payout:
+            merged_payout[group_code] = HourlyPayoutBlock(
+                group_code=group_code,
                 title=block.title,
-                methods=list(block.methods),
+                methods=[],
             )
-        else:
-            merged_payout[block.group_code].methods.extend(block.methods)
+            merged_method_index[group_code] = {}
+
+        bucket = merged_method_index[group_code]
+        for method_row in block.methods:
+            method_key = _method_lookup_key(method_row.method_code)
+            merge_key = (str(method_row.partner_key or "").strip(), method_key)
+            if merge_key not in bucket:
+                bucket[merge_key] = method_row
+                merged_payout[group_code].methods.append(method_row)
+            else:
+                prev = bucket[merge_key]
+                merged_comment = (prev.comment or "").strip() or (method_row.comment or "").strip()
+                merged = HourlyMethodRow(
+                    method_code=prev.method_code,
+                    title=prev.title or method_row.title,
+                    amount=float(prev.amount or 0.0) + float(method_row.amount or 0.0),
+                    comment=merged_comment,
+                    partner_key=prev.partner_key,
+                )
+                bucket[merge_key] = merged
+                methods_list = merged_payout[group_code].methods
+                for idx, existing in enumerate(methods_list):
+                    if (
+                        str(existing.partner_key or "").strip() == merge_key[0]
+                        and _method_lookup_key(existing.method_code) == method_key
+                    ):
+                        methods_list[idx] = merged
+                        break
 
     payout_blocks = list(merged_payout.values())
 

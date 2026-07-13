@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from analyzers.hourly_analyzer import HourlyDTO, HourlyMethodRow, HourlyRow
 from core.config_manager import get_job_params
 from core.rules_provider import get_snapshot_v2
+from core.rules_v2.normalizers import normalize_key
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,98 @@ def _members_for_item(snapshot, item_key: str, member_type: str | None = None):
     return members
 
 
+def _source_partner_keys(snapshot, item_key: str) -> list[str]:
+    return [
+        str(m.member_key or "").strip()
+        for m in _members_for_item(snapshot, item_key, member_type="source_partner")
+        if str(m.member_key or "").strip()
+    ]
+
+
+def _method_lookup_key(value: object) -> str:
+    return normalize_key(str(value or "").strip().upper()) or "uni"
+
+
+def _build_payout_fact(
+    dto: HourlyDTO,
+) -> tuple[dict[tuple[str, str], HourlyMethodRow], dict[tuple[str, str, str], HourlyMethodRow]]:
+    legacy: dict[tuple[str, str], HourlyMethodRow] = {}
+    by_partner: dict[tuple[str, str, str], HourlyMethodRow] = {}
+
+    for block in dto.payout:
+        group_code = str(block.group_code or "").strip()
+        if not group_code:
+            continue
+
+        for method in block.methods:
+            method_key = _method_lookup_key(method.method_code)
+            partner_key = str(method.partner_key or "").strip()
+            legacy_key = (group_code, method_key)
+            partner_key_tuple = (group_code, partner_key, method_key)
+
+            if legacy_key not in legacy:
+                legacy[legacy_key] = HourlyMethodRow(
+                    method_code=method_key.upper(),
+                    title=method.title,
+                    amount=float(method.amount or 0.0),
+                    comment=_clean_comment(method.comment),
+                    partner_key=partner_key,
+                )
+            else:
+                prev = legacy[legacy_key]
+                merged_comment = _clean_comment(prev.comment) or _clean_comment(method.comment)
+                legacy[legacy_key] = HourlyMethodRow(
+                    method_code=prev.method_code,
+                    title=prev.title or method.title,
+                    amount=float(prev.amount or 0.0) + float(method.amount or 0.0),
+                    comment=merged_comment,
+                    partner_key=prev.partner_key,
+                )
+
+            if partner_key_tuple not in by_partner:
+                by_partner[partner_key_tuple] = HourlyMethodRow(
+                    method_code=method_key.upper(),
+                    title=method.title,
+                    amount=float(method.amount or 0.0),
+                    comment=_clean_comment(method.comment),
+                    partner_key=partner_key,
+                )
+            else:
+                prev = by_partner[partner_key_tuple]
+                merged_comment = _clean_comment(prev.comment) or _clean_comment(method.comment)
+                by_partner[partner_key_tuple] = HourlyMethodRow(
+                    method_code=prev.method_code,
+                    title=prev.title or method.title,
+                    amount=float(prev.amount or 0.0) + float(method.amount or 0.0),
+                    comment=merged_comment,
+                    partner_key=partner_key,
+                )
+
+    return legacy, by_partner
+
+
+def _lookup_payout_fact(
+    *,
+    group_code: str,
+    method_key: str,
+    partner_keys: list[str],
+    use_partner_lookup: bool,
+    legacy_fact: dict[tuple[str, str], HourlyMethodRow],
+    partner_fact: dict[tuple[str, str, str], HourlyMethodRow],
+) -> HourlyMethodRow | None:
+    if use_partner_lookup:
+        for partner_key in partner_keys:
+            fact = partner_fact.get((group_code, partner_key, method_key))
+            if fact is not None:
+                return fact
+        return None
+    return legacy_fact.get((group_code, method_key))
+
+
+def _payout_line_label(method_item) -> str:
+    return str(method_item.display_name or "").strip()
+
+
 def _build_payin_fact(dto: HourlyDTO) -> dict[str, HourlyRow]:
     out: dict[str, HourlyRow] = {}
     for row in dto.payin:
@@ -111,43 +204,11 @@ def _build_payin_fact(dto: HourlyDTO) -> dict[str, HourlyRow]:
     return out
 
 
-def _build_payout_fact(dto: HourlyDTO) -> dict[tuple[str, str], HourlyMethodRow]:
-    out: dict[tuple[str, str], HourlyMethodRow] = {}
-
-    for block in dto.payout:
-        group_code = str(block.group_code or "").strip()
-        if not group_code:
-            continue
-
-        for method in block.methods:
-            method_key = str(method.method_code or "").strip().lower() or "uni"
-            key = (group_code, method_key)
-
-            if key not in out:
-                out[key] = HourlyMethodRow(
-                    method_code=method_key.upper(),
-                    title=method.title,
-                    amount=float(method.amount or 0.0),
-                    comment=_clean_comment(method.comment),
-                )
-            else:
-                prev = out[key]
-                merged_comment = _clean_comment(prev.comment) or _clean_comment(method.comment)
-                out[key] = HourlyMethodRow(
-                    method_code=prev.method_code,
-                    title=prev.title or method.title,
-                    amount=float(prev.amount or 0.0) + float(method.amount or 0.0),
-                    comment=merged_comment,
-                )
-
-    return out
-
-
 def _render_payout_items(dto: HourlyDTO, snapshot, *, hide_inactive_rows: bool) -> List[str]:
     group_section = "hourly.config_payouts"
     method_section = "hourly.config_payout_methods"
 
-    payout_fact = _build_payout_fact(dto)
+    legacy_fact, partner_fact = _build_payout_fact(dto)
 
     method_items = _hourly_items(snapshot, method_section, item_type="payout_method")
     group_items = _hourly_items(snapshot, group_section, item_type="payout_group")
@@ -182,8 +243,17 @@ def _render_payout_items(dto: HourlyDTO, snapshot, *, hide_inactive_rows: bool) 
         method_lines: List[str] = []
 
         for method_item in group_methods:
-            method_key = str(method_item.method_key or "").strip().lower() or "uni"
-            fact = payout_fact.get((group_code, method_key))
+            method_key = _method_lookup_key(method_item.method_key)
+            partner_keys = _source_partner_keys(snapshot, method_item.item_key)
+            use_partner_lookup = bool(partner_keys)
+            fact = _lookup_payout_fact(
+                group_code=group_code,
+                method_key=method_key,
+                partner_keys=partner_keys,
+                use_partner_lookup=use_partner_lookup,
+                legacy_fact=legacy_fact,
+                partner_fact=partner_fact,
+            )
             amount = float(fact.amount) if fact else 0.0
 
             comment = _clean_comment(method_item.comment)
@@ -191,8 +261,8 @@ def _render_payout_items(dto: HourlyDTO, snapshot, *, hide_inactive_rows: bool) 
                 comment = _clean_comment(fact.comment)
 
             suffix = f" ({comment})" if comment else ""
-            method_name = str(method_item.display_name or method_key.upper()).strip()
-            line = f" - {method_name} – {_fmt_amount(amount)}{suffix}"
+            line_label = _payout_line_label(method_item)
+            line = f" - {line_label} – {_fmt_amount(amount)}{suffix}"
 
             if hide_inactive_rows:
                 if _is_active_row(amount=amount, count=None):
