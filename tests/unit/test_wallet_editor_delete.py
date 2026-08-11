@@ -30,6 +30,7 @@ from automation.engine import (
     _prepare_df,
     _validate_delete_conflicts,
     ensure_wallet_deleted,
+    open_matched_card_row,
     timing_outcome_from_result,
 )
 from automation.runtime import RunConfig
@@ -171,44 +172,149 @@ def test_routing_card_action_delete_is_disable(tmp_path):
 
 def test_ensure_wallet_deleted_skip_not_found():
     page = MagicMock()
-    with patch("automation.engine.card_exists_strict", return_value=False):
+    with (
+        patch("automation.engine.find_strict_matching_row_index", return_value=None) as find,
+        patch("automation.engine.open_matched_card_row") as open_row,
+        patch("automation.engine._submit_card_filter") as submit,
+    ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
     assert result == RESULT_SKIP_NOT_FOUND
+    find.assert_called_once()
+    open_row.assert_not_called()
+    submit.assert_not_called()  # search is inside find_*, which is mocked
 
 
-def test_ensure_wallet_deleted_dry_run_does_not_open_or_click():
+def test_ensure_wallet_deleted_dry_run_one_search_no_open():
     page = MagicMock()
     with (
-        patch("automation.engine.card_exists_strict", return_value=True) as exists,
-        patch("automation.engine.open_card_strict") as open_card,
+        patch("automation.engine.find_strict_matching_row_index", return_value=0) as find,
+        patch("automation.engine.open_matched_card_row") as open_row,
         patch("automation.engine._find_wallet_delete_button") as find_btn,
+        patch("automation.engine._submit_card_filter") as submit,
     ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg(dry_run=True))
     assert result == RESULT_DRY_RUN_WOULD_DELETE
-    exists.assert_called_once()
-    open_card.assert_not_called()
+    find.assert_called_once()
+    open_row.assert_not_called()
     find_btn.assert_not_called()
+    submit.assert_not_called()
+
+
+def test_pre_open_search_filled_exactly_once():
+    """Before opening the form, card filter must be submitted exactly once."""
+    page = MagicMock()
+    delete_btn = MagicMock()
+    dialog = MagicMock()
+    submit_calls = []
+
+    def fake_find(page_arg, card):
+        from automation.engine import _submit_card_filter
+
+        _submit_card_filter(page_arg, card)
+        return 0
+
+    def counting_submit(page_arg, card):
+        submit_calls.append(card)
+
+    with (
+        patch("automation.engine.find_strict_matching_row_index", side_effect=fake_find),
+        patch("automation.engine._submit_card_filter", side_effect=counting_submit),
+        patch("automation.engine.open_matched_card_row") as open_row,
+        patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
+        patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
+        patch("automation.engine._click_delete_confirm_ok"),
+        patch("automation.engine.classify_after_delete_confirm", return_value=RESULT_OK_DELETED),
+    ):
+        result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
+
+    assert result == RESULT_OK_DELETED
+    assert len(submit_calls) == 1
+    open_row.assert_called_once_with(page, "9860246700001620", 0)
+
+
+def test_successful_delete_fills_search_exactly_twice():
+    """Success path: one pre-open search + one post-delete verification search."""
+    page = MagicMock()
+    delete_btn = MagicMock()
+    dialog = MagicMock()
+    submit_calls: list[str] = []
+
+    def counting_submit(page_arg, card):
+        submit_calls.append(card)
+
+    def find_with_submit(page_arg, card):
+        counting_submit(page_arg, card)
+        return 0
+
+    def verify_gone(page_arg, card):
+        counting_submit(page_arg, card)
+        return False
+
+    with (
+        patch("automation.engine.find_strict_matching_row_index", side_effect=find_with_submit),
+        patch("automation.engine.open_matched_card_row") as open_row,
+        patch("automation.engine.open_card_strict") as legacy_open,
+        patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
+        patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
+        patch("automation.engine._click_delete_confirm_ok"),
+        patch("automation.engine._wait_form_hidden_after_delete", return_value=True),
+        patch("automation.engine._wait_confirm_dialog_gone"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch("automation.engine.card_exists_strict", side_effect=verify_gone),
+        patch("automation.engine._submit_card_filter", side_effect=counting_submit),
+    ):
+        result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
+
+    assert result == RESULT_OK_DELETED
+    assert len(submit_calls) == 2
+    assert submit_calls == ["9860246700001620", "9860246700001620"]
+    open_row.assert_called_once_with(page, "9860246700001620", 0)
+    legacy_open.assert_not_called()
+    delete_btn.click.assert_called_once()
+
+
+def test_found_card_opens_from_current_search_results():
+    page = MagicMock()
+    with (
+        patch("automation.engine.find_strict_matching_row_index", return_value=2) as find,
+        patch("automation.engine.open_matched_card_row") as open_row,
+        patch("automation.engine._find_wallet_delete_button", return_value=MagicMock()),
+        patch("automation.engine._wait_delete_confirm_dialog", return_value=MagicMock()),
+        patch("automation.engine._click_delete_confirm_ok"),
+        patch("automation.engine.classify_after_delete_confirm", return_value=RESULT_OK_DELETED),
+        patch("automation.engine.open_card_strict") as legacy_open,
+        patch("automation.engine._submit_card_filter") as submit,
+    ):
+        result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
+
+    assert result == RESULT_OK_DELETED
+    find.assert_called_once()
+    open_row.assert_called_once_with(page, "9860246700001620", 2)
+    legacy_open.assert_not_called()
+    submit.assert_not_called()
 
 
 def test_ensure_wallet_deleted_fail_open_card():
     page = MagicMock()
     with (
-        patch("automation.engine.card_exists_strict", return_value=True),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
         patch(
-            "automation.engine.open_card_strict",
+            "automation.engine.open_matched_card_row",
             side_effect=OpenCardStageError("modal_container", "9860246700001620"),
         ),
         patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter") as submit,
     ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
     assert result == RESULT_FAIL_OPEN_CARD
+    submit.assert_not_called()
 
 
 def test_ensure_wallet_deleted_button_not_found():
     page = MagicMock()
     with (
-        patch("automation.engine.card_exists_strict", return_value=True),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=None),
         patch("automation.engine._close_stale_modal"),
     ):
@@ -220,8 +326,8 @@ def test_ensure_wallet_deleted_confirm_dialog_not_found():
     page = MagicMock()
     delete_btn = MagicMock()
     with (
-        patch("automation.engine.card_exists_strict", return_value=True),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
         patch("automation.engine._wait_delete_confirm_dialog", return_value=None),
         patch("automation.engine._close_stale_modal"),
@@ -231,20 +337,44 @@ def test_ensure_wallet_deleted_confirm_dialog_not_found():
     delete_btn.click.assert_called_once()
 
 
+def test_post_delete_runs_separate_verification_search():
+    page = MagicMock()
+    delete_btn = MagicMock()
+    dialog = MagicMock()
+    verify = MagicMock(return_value=False)
+
+    with (
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
+        patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
+        patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
+        patch("automation.engine._click_delete_confirm_ok"),
+        patch("automation.engine._wait_form_hidden_after_delete", return_value=True),
+        patch("automation.engine._wait_confirm_dialog_gone"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch("automation.engine.card_exists_strict", verify),
+    ):
+        result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
+
+    assert result == RESULT_OK_DELETED
+    verify.assert_called_once_with(page, "9860246700001620")
+
+
 def test_ensure_wallet_deleted_ok_when_form_closes_and_card_gone():
     page = MagicMock()
     delete_btn = MagicMock()
     dialog = MagicMock()
 
     with (
-        patch("automation.engine.card_exists_strict", side_effect=[True, False]),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
         patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
         patch("automation.engine._click_delete_confirm_ok") as click_ok,
         patch("automation.engine._wait_form_hidden_after_delete", return_value=True),
         patch("automation.engine._wait_confirm_dialog_gone"),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch("automation.engine.card_exists_strict", return_value=False),
     ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
 
@@ -260,8 +390,8 @@ def test_form_timeout_recovery_card_gone_returns_ok_deleted():
     recover = MagicMock()
 
     with (
-        patch("automation.engine.card_exists_strict", side_effect=[True, False]),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
         patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
         patch("automation.engine._click_delete_confirm_ok") as click_ok,
@@ -270,6 +400,7 @@ def test_form_timeout_recovery_card_gone_returns_ok_deleted():
         patch("automation.engine._wallet_form_visible", side_effect=[True, False, False]),
         patch("automation.engine._close_stale_modal", recover),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch("automation.engine.card_exists_strict", return_value=False),
     ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
 
@@ -284,8 +415,8 @@ def test_form_timeout_recovery_card_still_exists():
     dialog = MagicMock()
 
     with (
-        patch("automation.engine.card_exists_strict", side_effect=[True, True]),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
         patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
         patch("automation.engine._click_delete_confirm_ok") as click_ok,
@@ -293,6 +424,7 @@ def test_form_timeout_recovery_card_still_exists():
         patch("automation.engine._find_delete_confirm_dialog", return_value=None),
         patch("automation.engine._wallet_form_visible", return_value=False),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch("automation.engine.card_exists_strict", return_value=True),
     ):
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
 
@@ -306,8 +438,8 @@ def test_form_timeout_search_impossible_returns_delete_timeout():
     dialog = MagicMock()
 
     with (
-        patch("automation.engine.card_exists_strict", return_value=True),
-        patch("automation.engine.open_card_strict"),
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
         patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
         patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
         patch("automation.engine._click_delete_confirm_ok") as click_ok,
@@ -416,12 +548,64 @@ def test_timeout_on_first_card_does_not_block_second_delete():
 def test_ensure_wallet_deleted_technical_on_unexpected_error():
     page = MagicMock()
     with (
-        patch("automation.engine.card_exists_strict", side_effect=RuntimeError("boom")),
+        patch(
+            "automation.engine.find_strict_matching_row_index",
+            side_effect=RuntimeError("boom"),
+        ),
     ):
         from automation.engine import RESULT_FAIL_TECHNICAL
 
         result = ensure_wallet_deleted(page, "9860246700001620", _cfg())
     assert result == RESULT_FAIL_TECHNICAL
+
+
+def test_stop_before_delete_opens_once_without_clicking_delete():
+    page = MagicMock()
+    delete_btn = MagicMock()
+    with (
+        patch("automation.engine.find_strict_matching_row_index", return_value=0) as find,
+        patch("automation.engine.open_matched_card_row") as open_row,
+        patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
+        patch("automation.engine._pause_stop_before_delete"),
+        patch("automation.engine._submit_card_filter") as submit,
+    ):
+        result = ensure_wallet_deleted(
+            page, "9860246700001620", _cfg(stop_before_delete=True)
+        )
+    assert result == RESULT_STOP_BEFORE_DELETE
+    find.assert_called_once()
+    open_row.assert_called_once_with(page, "9860246700001620", 0)
+    delete_btn.click.assert_not_called()
+    submit.assert_not_called()
+
+
+def test_open_matched_card_row_does_not_resubmit_search():
+    page = MagicMock()
+    modal = MagicMock()
+    rows = MagicMock()
+    row = MagicMock()
+    row.inner_text.return_value = "9860246700001620"
+    rows.nth.return_value = row
+
+    def locator(sel):
+        if sel == "#wallet-add-modal___BV_modal_body_":
+            return modal
+        if sel == "tr.pointer":
+            return rows
+        return MagicMock()
+
+    page.locator.side_effect = locator
+
+    with (
+        patch("automation.engine._submit_card_filter") as submit,
+        patch("automation.engine._wait_modal_container_visible"),
+        patch("automation.engine._wait_modal_card_data_ready", return_value="9860246700001620"),
+        patch("automation.engine._verify_modal_card_number"),
+    ):
+        open_matched_card_row(page, "9860246700001620", 0)
+
+    submit.assert_not_called()
+    row.click.assert_called_once()
 
 
 def test_timing_outcome_from_delete_results():
@@ -615,3 +799,168 @@ def test_result_excel_and_telegram_path_for_delete(tmp_path, monkeypatch):
     assert "OK=1" in sent["text"]
     assert sent["doc"] == str(result_xlsx)
     assert sent["registry"] is True
+
+
+# --- Strict search settle (stale 100-row table) ---
+
+
+def test_search_waits_through_stale_100_rows_then_finds_card():
+    """100 old rows before Enter; target appears only after filter refresh."""
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    stale = (100, tuple(f"OLD{i:014d}" for i in range(5)))
+    fresh = (1, (card,))
+    fps = [stale, stale, stale, fresh]
+    matches = [
+        (None, 100, "OLD"),
+        (None, 100, "OLD"),
+        (None, 100, "OLD"),
+        (0, 1, card),
+    ]
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 800),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
+        patch("automation.engine._table_row_fingerprint", side_effect=fps),
+        patch("automation.engine._try_match_strict_row_index", side_effect=matches),
+    ):
+        page.locator.return_value = MagicMock()
+        idx = find_strict_matching_row_index(page, card)
+
+    assert idx == 0
+
+
+def test_search_old_rows_linger_then_update_to_target():
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    stale = (100, ("AAAAAAAAAAAAAAA1", "AAAAAAAAAAAAAAA2"))
+    updated = (1, (card,))
+    fps = [stale, stale, stale, updated]
+    matches = [(None, 100, "A"), (None, 100, "A"), (None, 100, "A"), (0, 1, card)]
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 800),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
+        patch("automation.engine._table_row_fingerprint", side_effect=fps),
+        patch("automation.engine._try_match_strict_row_index", side_effect=matches),
+    ):
+        assert find_strict_matching_row_index(page, card) == 0
+
+
+def test_search_empty_after_refresh_returns_none_skip():
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    before = (100, ("OLD0000000000001",))
+    empty = (0, tuple())
+    fps = [before, empty, empty]
+    matches = [(None, 100, "OLD"), (None, 0, ""), (None, 0, "")]
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 800),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._table_row_fingerprint", side_effect=fps),
+        patch("automation.engine._try_match_strict_row_index", side_effect=matches),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
+    ):
+        assert find_strict_matching_row_index(page, card) is None
+
+
+def test_search_unsettled_stale_table_raises_not_skip():
+    from automation.engine import CardSearchUnsettledError, find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    stale = (100, tuple(f"OLD{i:014d}" for i in range(5)))
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 50),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._table_row_fingerprint", return_value=stale),
+        patch(
+            "automation.engine._try_match_strict_row_index",
+            return_value=(None, 100, "OLD"),
+        ),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
+    ):
+        with pytest.raises(CardSearchUnsettledError):
+            find_strict_matching_row_index(page, card)
+
+
+def test_unsettled_search_maps_to_fail_technical_not_skip():
+    from automation.engine import CardSearchUnsettledError, RESULT_FAIL_TECHNICAL
+
+    page = MagicMock()
+    with patch(
+        "automation.engine.find_and_open_card_for_delete",
+        side_effect=CardSearchUnsettledError("9990080815129999"),
+    ):
+        result = ensure_wallet_deleted(page, "9990080815129999", _cfg())
+    assert result == RESULT_FAIL_TECHNICAL
+    assert result != RESULT_SKIP_NOT_FOUND
+
+
+def test_post_delete_unsettled_verify_is_fail_delete_timeout():
+    from automation.engine import CardSearchUnsettledError, classify_after_delete_confirm
+
+    page = MagicMock()
+    with (
+        patch("automation.engine._wait_form_hidden_after_delete", return_value=True),
+        patch("automation.engine._wait_confirm_dialog_gone"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch(
+            "automation.engine.card_exists_strict",
+            side_effect=CardSearchUnsettledError("9990080815129999"),
+        ),
+    ):
+        assert (
+            classify_after_delete_confirm(page, "9990080815129999")
+            == RESULT_FAIL_DELETE_TIMEOUT
+        )
+
+
+def test_settled_without_match_after_row_set_change():
+    """Fingerprint changes to a new non-empty set without the card → SKIP (None)."""
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    before = (100, ("OLD0000000000001", "OLD0000000000002"))
+    other = (2, ("1111111111111111", "2222222222222222"))
+    fps = [before, other, other, other]
+    matches = [(None, 100, "OLD"), (None, 2, "1111"), (None, 2, "1111"), (None, 2, "1111")]
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 800),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
+        patch("automation.engine._table_row_fingerprint", side_effect=fps),
+        patch("automation.engine._try_match_strict_row_index", side_effect=matches),
+    ):
+        assert find_strict_matching_row_index(page, card) is None

@@ -64,6 +64,10 @@ _ROW_MATCH_POLL_MS = 150
 _ROW_TEXT_READ_TIMEOUT_MS = 500
 _CARD_SEARCH_ENTER_CHECK_MS = 2000
 _CARD_SEARCH_FALLBACK_CLICK_TIMEOUT_MS = 2000
+_DELETE_SEARCH_TIMEOUT_MS = 10_000
+_DELETE_SEARCH_STABLE_POLLS = 3
+_DELETE_SEARCH_SAMPLE_ROWS = 5
+_EMPTY_WALLET_TOTAL_RE = re.compile(r"Всего:\s*0", re.IGNORECASE)
 
 
 class OpenCardStageError(Exception):
@@ -81,6 +85,17 @@ class OpenCardStageError(Exception):
         text = message or f"open_card failed stage={stage} card={card}"
         super().__init__(text)
         self.__cause__ = cause
+
+
+class CardSearchUnsettledError(Exception):
+    """Card filter did not produce a confirmed table update within the wait window."""
+
+    def __init__(self, card: str, message: str | None = None) -> None:
+        self.card = card
+        super().__init__(
+            message
+            or f"поиск карты не подтвердил обновление результатов: {mask_card(card)}"
+        )
 
 ALLOWED_ACTIONS = {
     "remove_partner",
@@ -840,22 +855,199 @@ def open_card_strict(page: Page, card: str) -> None:
 
 
 def card_exists_strict(page: Page, card: str) -> bool:
-    """Strict search: True only when a table row exactly matches the card digits."""
-    log.info("🔎 [Delete] strict search card=%s", mask_card(card))
-    _submit_card_filter(page, card)
-    page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+    """Strict search: True only when a table row exactly matches the card digits.
 
+    Raises CardSearchUnsettledError when the filter result set never settles.
+    """
+    return find_strict_matching_row_index(page, card) is not None
+
+
+def _table_row_fingerprint(page: Page, card: str) -> tuple[int, tuple[str, ...]]:
+    """Compact fingerprint of current wallet table rows (count + sample texts)."""
     rows = page.locator(ROW_SELECTOR)
-    card_digits = normalize_card_digits(card)
-    match_index, rows_count, _ = _try_match_strict_row_index(rows, card_digits, card)
-    found = match_index is not None
+    try:
+        count = rows.count()
+    except Exception:
+        return 0, tuple()
+    samples: list[str] = []
+    for i in range(min(count, _DELETE_SEARCH_SAMPLE_ROWS)):
+        text = _read_row_text(rows.nth(i), row_index=i, card=card)
+        if text is None:
+            samples.append("")
+        else:
+            samples.append(normalize_card_digits(text) or shorten_for_log(text, max_len=64))
+    return count, tuple(samples)
+
+
+def _page_shows_empty_wallet_results(page: Page) -> bool:
+    try:
+        body = page.locator("body").inner_text(timeout=1_000)
+    except Exception:
+        return False
+    return bool(_EMPTY_WALLET_TOTAL_RE.search(body or ""))
+
+
+def find_strict_matching_row_index(page: Page, card: str) -> int | None:
+    """Fill search once, wait for filter refresh, return strict match index or None.
+
+    None means the filter settled and the card is absent (SKIP_NOT_FOUND).
+    Raises CardSearchUnsettledError when results never leave the pre-filter state
+    (e.g. still showing the previous 100 rows) — callers must NOT treat that as skip.
+    """
+    _close_stale_modal(page)
+
+    before_fp = _table_row_fingerprint(page, card)
     log.info(
-        "🔎 [Delete] strict search result card=%s found=%s rows=%s",
+        "🔎 [Delete] strict search start card=%s before_rows=%s",
         mask_card(card),
-        found,
-        rows_count,
+        before_fp[0],
     )
-    return found
+    _submit_card_filter(page, card)
+
+    card_digits = normalize_card_digits(card)
+    timeout_ms = max(_DELETE_SEARCH_TIMEOUT_MS, wallet_editor_row_match_timeout_ms())
+    deadline = time.monotonic() + timeout_ms / 1000.0
+
+    filter_changed = False
+    stable_ticks = 0
+    last_fp: tuple[int, tuple[str, ...]] | None = None
+    last_rows = before_fp[0]
+
+    while time.monotonic() < deadline:
+        rows = page.locator(ROW_SELECTOR)
+        match_index, rows_count, _ = _try_match_strict_row_index(rows, card_digits, card)
+        last_rows = rows_count
+        if match_index is not None:
+            log.info(
+                "🔎 [Delete] strict search result card=%s found=True index=%s rows=%s "
+                "filter_changed=%s",
+                mask_card(card),
+                match_index,
+                rows_count,
+                filter_changed,
+            )
+            return match_index
+
+        current_fp = _table_row_fingerprint(page, card)
+        if current_fp != before_fp:
+            filter_changed = True
+
+        empty = rows_count == 0 or _page_shows_empty_wallet_results(page)
+        if empty and filter_changed:
+            log.info(
+                "🔎 [Delete] strict search result card=%s found=False rows=0 "
+                "reason=empty_after_filter",
+                mask_card(card),
+            )
+            return None
+
+        if filter_changed:
+            if current_fp == last_fp:
+                stable_ticks += 1
+            else:
+                stable_ticks = 1
+                last_fp = current_fp
+            if stable_ticks >= _DELETE_SEARCH_STABLE_POLLS:
+                log.info(
+                    "🔎 [Delete] strict search result card=%s found=False rows=%s "
+                    "reason=settled_without_match",
+                    mask_card(card),
+                    rows_count,
+                )
+                return None
+        else:
+            stable_ticks = 0
+            last_fp = current_fp
+
+        page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    if not filter_changed:
+        log.error(
+            "❌ [Delete] search unsettled card=%s before_rows=%s last_rows=%s "
+            "(stale table never refreshed)",
+            mask_card(card),
+            before_fp[0],
+            last_rows,
+        )
+        raise CardSearchUnsettledError(card)
+
+    # Filter changed at some point but never stayed stable long enough — still
+    # treat as unsettled rather than false SKIP.
+    log.error(
+        "❌ [Delete] search unsettled card=%s rows=%s reason=no_stable_result",
+        mask_card(card),
+        last_rows,
+    )
+    raise CardSearchUnsettledError(card)
+
+
+def open_matched_card_row(page: Page, card: str, match_index: int) -> None:
+    """Open wallet form from an already-matched row — does not re-fill search."""
+    modal = page.locator(MODAL_BODY)
+    rows = page.locator(ROW_SELECTOR)
+
+    row_text = _read_row_text(rows.nth(match_index), row_index=match_index, card=card)
+    if row_text is None:
+        log.info(
+            "[Card] row_not_found card=%s reason=row_text_unreadable index=%s",
+            card,
+            match_index,
+        )
+        raise OpenCardStageError(
+            "row_match",
+            card,
+            message=f"row text unreadable before click: {card}",
+        )
+
+    rows.nth(match_index).click()
+    log.info(
+        "[Card] row_clicked card=%s index=%s selector=%s (reuse search results)",
+        card,
+        match_index,
+        ROW_SELECTOR,
+    )
+
+    try:
+        _wait_modal_container_visible(modal, card)
+    except OpenCardStageError:
+        log.info(
+            "[Card] modal_container failed card=%s row_index=%s row_clicked=true",
+            card,
+            match_index,
+        )
+        raise
+    log.info("[Card] modal_container_visible card=%s", card)
+
+    modal_card_value = _wait_modal_card_data_ready(page, card)
+    log.info("[Card] modal_data_visible card=%s", card)
+
+    try:
+        _verify_modal_card_number(card, modal_card_value)
+    except OpenCardStageError as exc:
+        if exc.stage == "card_verify":
+            log.info(
+                "[Card] modal_card_mismatch card=%s expected_tail=%s actual_tail=%s",
+                card,
+                mask_card(card),
+                mask_card(modal_card_value),
+            )
+        raise
+
+    log.info("[Card] modal_card_verified card=%s", card)
+    log.info(f"✅ [Card] card modal opened card={card}")
+
+
+def find_and_open_card_for_delete(page: Page, card: str) -> int | None:
+    """One search fill + open the matched row (no second search).
+
+    Returns match index, or None when the card is absent (SKIP_NOT_FOUND).
+    Raises OpenCardStageError when the row was found but the form failed to open.
+    """
+    match_index = find_strict_matching_row_index(page, card)
+    if match_index is None:
+        return None
+    open_matched_card_row(page, card, match_index)
+    return match_index
 
 
 def _button_looks_danger(button) -> bool:
@@ -888,6 +1080,18 @@ def _find_wallet_delete_button(page: Page):
     if not modal.is_visible():
         return None
 
+    # Scroll form to bottom so the red delete control is in view.
+    try:
+        modal.evaluate(
+            """el => {
+                el.scrollTop = el.scrollHeight;
+                const root = el.closest('.modal-body, .modal-content, .modal') || el;
+                if (root && root !== el) root.scrollTop = root.scrollHeight;
+            }"""
+        )
+    except Exception as exc:
+        log.warning("⚠️ [Delete] scroll form to delete button failed: %s", exc)
+
     buttons = modal.locator("button")
     exact_matches = []
     for i in range(buttons.count()):
@@ -904,6 +1108,10 @@ def _find_wallet_delete_button(page: Page):
 
     for btn in exact_matches:
         if _button_looks_danger(btn):
+            try:
+                btn.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
             return btn
     return None
 
@@ -1185,26 +1393,59 @@ def classify_after_delete_confirm(page: Page, card: str) -> str:
 
 
 def ensure_wallet_deleted(page: Page, card: str, cfg: RunConfig) -> str:
-    """Full wallet delete: strict search → open → Удалить → confirm OK → verify gone."""
+    """Full wallet delete: one pre-search → open matched row → Удалить → OK → verify.
+
+    Card number is typed into search exactly twice on the success path:
+    1) initial find (then open without re-typing);
+    2) post-delete verification search.
+    """
     log.info("🗑️ [Delete] start card=%s dry_run=%s", mask_card(card), cfg.dry_run)
     try:
-        if not card_exists_strict(page, card):
-            log.info("ℹ️ [Delete] card not found → SKIP_NOT_FOUND card=%s", mask_card(card))
-            return RESULT_SKIP_NOT_FOUND
-
+        # dry_run / stop paths: search once; open only when mutating.
         if cfg.dry_run:
-            log.info("ℹ️ [Delete] dry_run → DRY_RUN_WOULD_DELETE (no click) card=%s", mask_card(card))
+            try:
+                match_index = find_strict_matching_row_index(page, card)
+            except CardSearchUnsettledError:
+                log.error(
+                    "❌ [Delete] dry_run search unsettled card=%s",
+                    mask_card(card),
+                )
+                return RESULT_FAIL_TECHNICAL
+            if match_index is None:
+                log.info(
+                    "ℹ️ [Delete] card not found → SKIP_NOT_FOUND card=%s",
+                    mask_card(card),
+                )
+                return RESULT_SKIP_NOT_FOUND
+            log.info(
+                "ℹ️ [Delete] dry_run → DRY_RUN_WOULD_DELETE (no open/click) card=%s",
+                mask_card(card),
+            )
             return RESULT_DRY_RUN_WOULD_DELETE
 
         try:
-            open_card_strict(page, card)
+            match_index = find_and_open_card_for_delete(page, card)
+        except CardSearchUnsettledError:
+            log.error("❌ [Delete] search unsettled card=%s", mask_card(card))
+            return RESULT_FAIL_TECHNICAL
         except OpenCardStageError as exc:
-            log.error("❌ [Delete] open_card failed card=%s stage=%s", mask_card(card), exc.stage)
+            log.error(
+                "❌ [Delete] open_card failed card=%s stage=%s",
+                mask_card(card),
+                exc.stage,
+            )
             try:
                 _close_stale_modal(page)
             except Exception:
                 pass
             return RESULT_FAIL_OPEN_CARD
+
+        if match_index is None:
+            log.info(
+                "ℹ️ [Delete] card not found → SKIP_NOT_FOUND card=%s",
+                mask_card(card),
+            )
+            return RESULT_SKIP_NOT_FOUND
 
         delete_btn = _find_wallet_delete_button(page)
         if delete_btn is None:
@@ -1238,7 +1479,11 @@ def ensure_wallet_deleted(page: Page, card: str, cfg: RunConfig) -> str:
         try:
             _click_delete_confirm_ok(dialog)
         except Exception as exc:
-            log.error("❌ [Delete] confirm OK click failed card=%s: %s", mask_card(card), exc)
+            log.error(
+                "❌ [Delete] confirm OK click failed card=%s: %s",
+                mask_card(card),
+                exc,
+            )
             try:
                 _close_stale_modal(page)
             except Exception:
