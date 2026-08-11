@@ -738,7 +738,8 @@ def _resolve_search_card(card: str) -> tuple[str, bool]:
     )
 
 
-def _submit_card_filter(page: Page, card: str) -> None:
+def _fill_card_search_input(page: Page, card: str) -> str:
+    """Fill the card search input once. Does not press Enter."""
     search_card, normalized_changed = _resolve_search_card(card)
     card_input = page.locator(CARD_INPUT)
     card_input.fill("")
@@ -749,12 +750,25 @@ def _submit_card_filter(page: Page, card: str) -> None:
         mask_card(search_card),
         normalized_changed,
     )
+    return search_card
 
+
+def _press_card_search_enter(
+    page: Page,
+    *,
+    search_tail_for_log: str = "",
+    try_apply_fallback: bool = True,
+) -> None:
+    """Press Enter on the card search field without changing its value."""
+    card_input = page.locator(CARD_INPUT)
     card_input.press("Enter")
     log.info(
         "[Card] search submitted via enter search_tail=%s",
-        mask_card(search_card),
+        mask_card(search_tail_for_log) if search_tail_for_log else "current",
     )
+
+    if not try_apply_fallback:
+        return
 
     deadline = time.monotonic() + _CARD_SEARCH_ENTER_CHECK_MS / 1000.0
     while time.monotonic() < deadline:
@@ -764,7 +778,7 @@ def _submit_card_filter(page: Page, card: str) -> None:
 
     log.info(
         "[Card] search fallback apply search_tail=%s",
-        mask_card(search_card),
+        mask_card(search_tail_for_log) if search_tail_for_log else "current",
     )
     try:
         page.locator(APPLY_BUTTON).click(
@@ -773,8 +787,14 @@ def _submit_card_filter(page: Page, card: str) -> None:
     except PlaywrightTimeoutError:
         log.info(
             "[Card] search fallback apply skipped search_tail=%s reason=button unavailable",
-            mask_card(search_card),
+            mask_card(search_tail_for_log) if search_tail_for_log else "current",
         )
+
+
+def _submit_card_filter(page: Page, card: str) -> None:
+    """Fill card search once and press Enter (used by open_card / delete)."""
+    search_card = _fill_card_search_input(page, card)
+    _press_card_search_enter(page, search_tail_for_log=search_card)
 
 
 def open_card_with_row_matcher(page: Page, card: str, wait_for_row) -> None:
@@ -857,7 +877,8 @@ def open_card_strict(page: Page, card: str) -> None:
 def card_exists_strict(page: Page, card: str) -> bool:
     """Strict search: True only when a table row exactly matches the card digits.
 
-    Raises CardSearchUnsettledError when the filter result set never settles.
+    Raises CardSearchUnsettledError when the UI cannot produce a trustworthy result
+    even after a second Enter (without re-filling the card field).
     """
     return find_strict_matching_row_index(page, card) is not None
 
@@ -887,12 +908,92 @@ def _page_shows_empty_wallet_results(page: Page) -> bool:
     return bool(_EMPTY_WALLET_TOTAL_RE.search(body or ""))
 
 
+def _poll_strict_card_search(
+    page: Page,
+    card: str,
+    before_fp: tuple[int, tuple[str, ...]],
+    *,
+    timeout_ms: int,
+    accept_stable_empty_without_change: bool = False,
+) -> tuple[str, int | None]:
+    """Poll until found / confirmed absent / unsettled.
+
+    Returns:
+      ("found", index) | ("absent", None) | ("unsettled", None)
+    """
+    card_digits = normalize_card_digits(card)
+    deadline = time.monotonic() + timeout_ms / 1000.0
+
+    filter_changed = False
+    stable_ticks = 0
+    empty_stable_ticks = 0
+    last_fp: tuple[int, tuple[str, ...]] | None = None
+    last_rows = before_fp[0]
+    before_empty = before_fp[0] == 0
+
+    while time.monotonic() < deadline:
+        rows = page.locator(ROW_SELECTOR)
+        match_index, rows_count, _ = _try_match_strict_row_index(rows, card_digits, card)
+        last_rows = rows_count
+        if match_index is not None:
+            return "found", match_index
+
+        current_fp = _table_row_fingerprint(page, card)
+        if current_fp != before_fp:
+            filter_changed = True
+
+        empty = rows_count == 0 or _page_shows_empty_wallet_results(page)
+
+        if empty and filter_changed:
+            return "absent", None
+
+        if accept_stable_empty_without_change and empty and before_empty:
+            if current_fp == last_fp:
+                empty_stable_ticks += 1
+            else:
+                empty_stable_ticks = 1
+                last_fp = current_fp
+            if empty_stable_ticks >= _DELETE_SEARCH_STABLE_POLLS:
+                return "absent", None
+        elif filter_changed:
+            if current_fp == last_fp:
+                stable_ticks += 1
+            else:
+                stable_ticks = 1
+                last_fp = current_fp
+            if stable_ticks >= _DELETE_SEARCH_STABLE_POLLS:
+                return "absent", None
+        else:
+            stable_ticks = 0
+            if not (accept_stable_empty_without_change and empty and before_empty):
+                empty_stable_ticks = 0
+            last_fp = current_fp
+
+        page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    log.info(
+        "🔎 [Delete] search poll unsettled card=%s before_rows=%s last_rows=%s "
+        "filter_changed=%s accept_stable_empty=%s",
+        mask_card(card),
+        before_fp[0],
+        last_rows,
+        filter_changed,
+        accept_stable_empty_without_change,
+    )
+    return "unsettled", None
+
+
 def find_strict_matching_row_index(page: Page, card: str) -> int | None:
     """Fill search once, wait for filter refresh, return strict match index or None.
 
-    None means the filter settled and the card is absent (SKIP_NOT_FOUND).
-    Raises CardSearchUnsettledError when results never leave the pre-filter state
-    (e.g. still showing the previous 100 rows) — callers must NOT treat that as skip.
+    Flow:
+      1) fill card + Enter
+      2) poll for match / confirmed absence / unsettled
+      3) if unsettled → press Enter again WITHOUT fill, poll again
+      4) stable empty after second Enter → None (card absent)
+      5) still unsettled after retry → CardSearchUnsettledError (real UI failure)
+
+    None means confirmed absence (SKIP_NOT_FOUND / post-delete gone).
     """
     _close_stale_modal(page)
 
@@ -902,81 +1003,73 @@ def find_strict_matching_row_index(page: Page, card: str) -> int | None:
         mask_card(card),
         before_fp[0],
     )
-    _submit_card_filter(page, card)
+    search_card = _fill_card_search_input(page, card)
+    _press_card_search_enter(page, search_tail_for_log=search_card)
 
-    card_digits = normalize_card_digits(card)
     timeout_ms = max(_DELETE_SEARCH_TIMEOUT_MS, wallet_editor_row_match_timeout_ms())
-    deadline = time.monotonic() + timeout_ms / 1000.0
-
-    filter_changed = False
-    stable_ticks = 0
-    last_fp: tuple[int, tuple[str, ...]] | None = None
-    last_rows = before_fp[0]
-
-    while time.monotonic() < deadline:
-        rows = page.locator(ROW_SELECTOR)
-        match_index, rows_count, _ = _try_match_strict_row_index(rows, card_digits, card)
-        last_rows = rows_count
-        if match_index is not None:
-            log.info(
-                "🔎 [Delete] strict search result card=%s found=True index=%s rows=%s "
-                "filter_changed=%s",
-                mask_card(card),
-                match_index,
-                rows_count,
-                filter_changed,
-            )
-            return match_index
-
-        current_fp = _table_row_fingerprint(page, card)
-        if current_fp != before_fp:
-            filter_changed = True
-
-        empty = rows_count == 0 or _page_shows_empty_wallet_results(page)
-        if empty and filter_changed:
-            log.info(
-                "🔎 [Delete] strict search result card=%s found=False rows=0 "
-                "reason=empty_after_filter",
-                mask_card(card),
-            )
-            return None
-
-        if filter_changed:
-            if current_fp == last_fp:
-                stable_ticks += 1
-            else:
-                stable_ticks = 1
-                last_fp = current_fp
-            if stable_ticks >= _DELETE_SEARCH_STABLE_POLLS:
-                log.info(
-                    "🔎 [Delete] strict search result card=%s found=False rows=%s "
-                    "reason=settled_without_match",
-                    mask_card(card),
-                    rows_count,
-                )
-                return None
-        else:
-            stable_ticks = 0
-            last_fp = current_fp
-
-        page.wait_for_timeout(_ROW_MATCH_POLL_MS)
-
-    if not filter_changed:
-        log.error(
-            "❌ [Delete] search unsettled card=%s before_rows=%s last_rows=%s "
-            "(stale table never refreshed)",
+    # First pass: empty→empty is NOT yet proof of absence (common after delete).
+    status, index = _poll_strict_card_search(
+        page,
+        card,
+        before_fp,
+        timeout_ms=timeout_ms,
+        accept_stable_empty_without_change=False,
+    )
+    if status == "found":
+        log.info(
+            "🔎 [Delete] strict search result card=%s found=True index=%s",
             mask_card(card),
-            before_fp[0],
-            last_rows,
+            index,
         )
-        raise CardSearchUnsettledError(card)
+        return index
+    if status == "absent":
+        log.info(
+            "🔎 [Delete] strict search result card=%s found=False reason=settled_absent",
+            mask_card(card),
+        )
+        return None
 
-    # Filter changed at some point but never stayed stable long enough — still
-    # treat as unsettled rather than false SKIP.
-    log.error(
-        "❌ [Delete] search unsettled card=%s rows=%s reason=no_stable_result",
+    log.info(
+        "🔎 [Delete] search unsettled after first Enter — retry Enter without refill "
+        "card=%s before_rows=%s",
         mask_card(card),
-        last_rows,
+        before_fp[0],
+    )
+    _press_card_search_enter(
+        page,
+        search_tail_for_log=search_card,
+        try_apply_fallback=True,
+    )
+    # Snapshot after second Enter becomes the baseline for empty confirmation.
+    retry_before_fp = _table_row_fingerprint(page, card)
+    status2, index2 = _poll_strict_card_search(
+        page,
+        card,
+        retry_before_fp,
+        timeout_ms=timeout_ms,
+        accept_stable_empty_without_change=True,
+    )
+    if status2 == "found":
+        log.info(
+            "🔎 [Delete] strict search result card=%s found=True index=%s "
+            "after_second_enter=True",
+            mask_card(card),
+            index2,
+        )
+        return index2
+    if status2 == "absent":
+        log.info(
+            "🔎 [Delete] strict search result card=%s found=False "
+            "reason=stable_empty_after_second_enter",
+            mask_card(card),
+        )
+        return None
+
+    log.error(
+        "❌ [Delete] search failed card=%s reason=ui_unresponsive_after_second_enter "
+        "before_rows=%s",
+        mask_card(card),
+        before_fp[0],
     )
     raise CardSearchUnsettledError(card)
 

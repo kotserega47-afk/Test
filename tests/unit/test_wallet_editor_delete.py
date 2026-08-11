@@ -826,7 +826,8 @@ def test_search_waits_through_stale_100_rows_then_finds_card():
         patch("automation.engine._ROW_MATCH_POLL_MS", 10),
         patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
         patch("automation.engine._close_stale_modal"),
-        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._fill_card_search_input", return_value=card),
+        patch("automation.engine._press_card_search_enter"),
         patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
         patch("automation.engine._table_row_fingerprint", side_effect=fps),
         patch("automation.engine._try_match_strict_row_index", side_effect=matches),
@@ -853,7 +854,8 @@ def test_search_old_rows_linger_then_update_to_target():
         patch("automation.engine._ROW_MATCH_POLL_MS", 10),
         patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
         patch("automation.engine._close_stale_modal"),
-        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._fill_card_search_input", return_value=card),
+        patch("automation.engine._press_card_search_enter"),
         patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
         patch("automation.engine._table_row_fingerprint", side_effect=fps),
         patch("automation.engine._try_match_strict_row_index", side_effect=matches),
@@ -877,7 +879,8 @@ def test_search_empty_after_refresh_returns_none_skip():
         patch("automation.engine._ROW_MATCH_POLL_MS", 10),
         patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
         patch("automation.engine._close_stale_modal"),
-        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._fill_card_search_input", return_value=card),
+        patch("automation.engine._press_card_search_enter"),
         patch("automation.engine._table_row_fingerprint", side_effect=fps),
         patch("automation.engine._try_match_strict_row_index", side_effect=matches),
         patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
@@ -886,18 +889,24 @@ def test_search_empty_after_refresh_returns_none_skip():
 
 
 def test_search_unsettled_stale_table_raises_not_skip():
+    """100 stale rows that never refresh even after second Enter → technical error."""
     from automation.engine import CardSearchUnsettledError, find_strict_matching_row_index
 
     page = MagicMock()
     card = "9990080815129999"
     stale = (100, tuple(f"OLD{i:014d}" for i in range(5)))
+    enter_calls = []
+
+    def counting_enter(*args, **kwargs):
+        enter_calls.append(1)
 
     with (
-        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 50),
-        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 40),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 5),
         patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
         patch("automation.engine._close_stale_modal"),
-        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._fill_card_search_input", return_value=card) as fill,
+        patch("automation.engine._press_card_search_enter", side_effect=counting_enter),
         patch("automation.engine._table_row_fingerprint", return_value=stale),
         patch(
             "automation.engine._try_match_strict_row_index",
@@ -907,6 +916,137 @@ def test_search_unsettled_stale_table_raises_not_skip():
     ):
         with pytest.raises(CardSearchUnsettledError):
             find_strict_matching_row_index(page, card)
+
+    fill.assert_called_once()
+    assert len(enter_calls) == 2
+
+
+def test_zero_rows_second_enter_stable_empty_is_absent():
+    """0 rows → Enter → 0 rows → second Enter → 0 rows ⇒ confirmed absent."""
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    empty = (0, tuple())
+    enter_calls = []
+
+    def counting_enter(*args, **kwargs):
+        enter_calls.append(kwargs)
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 40),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 5),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._fill_card_search_input", return_value=card) as fill,
+        patch("automation.engine._press_card_search_enter", side_effect=counting_enter),
+        patch("automation.engine._table_row_fingerprint", return_value=empty),
+        patch(
+            "automation.engine._try_match_strict_row_index",
+            return_value=(None, 0, ""),
+        ),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
+    ):
+        assert find_strict_matching_row_index(page, card) is None
+
+    fill.assert_called_once()
+    assert len(enter_calls) == 2
+
+
+def test_zero_rows_second_enter_card_appears_is_found():
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    empty = (0, tuple())
+    phase = {"enter": 0}
+
+    def press_enter(*args, **kwargs):
+        phase["enter"] += 1
+
+    def fingerprint(_page, _card):
+        return empty
+
+    def try_match(rows, digits, card_arg):
+        # Only after the second Enter do we "see" the card.
+        if phase["enter"] >= 2:
+            return 0, 1, card
+        return None, 0, ""
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 40),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 5),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._fill_card_search_input", return_value=card) as fill,
+        patch("automation.engine._press_card_search_enter", side_effect=press_enter),
+        patch("automation.engine._table_row_fingerprint", side_effect=fingerprint),
+        patch("automation.engine._try_match_strict_row_index", side_effect=try_match),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
+    ):
+        assert find_strict_matching_row_index(page, card) == 0
+
+    fill.assert_called_once()
+    assert phase["enter"] == 2
+
+
+def test_retry_enter_does_not_call_fill_again():
+    from automation.engine import find_strict_matching_row_index
+
+    page = MagicMock()
+    card = "9990080815129999"
+    empty = (0, tuple())
+
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 40),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 5),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._fill_card_search_input", return_value=card) as fill,
+        patch("automation.engine._press_card_search_enter") as enter,
+        patch("automation.engine._table_row_fingerprint", return_value=empty),
+        patch(
+            "automation.engine._try_match_strict_row_index",
+            return_value=(None, 0, ""),
+        ),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
+    ):
+        find_strict_matching_row_index(page, card)
+
+    fill.assert_called_once_with(page, card)
+    assert enter.call_count == 2
+
+
+def test_control_search_zero_rows_maps_to_ok_deleted():
+    page = MagicMock()
+    delete_btn = MagicMock()
+    dialog = MagicMock()
+
+    with (
+        patch("automation.engine.find_strict_matching_row_index", return_value=0),
+        patch("automation.engine.open_matched_card_row"),
+        patch("automation.engine._find_wallet_delete_button", return_value=delete_btn),
+        patch("automation.engine._wait_delete_confirm_dialog", return_value=dialog),
+        patch("automation.engine._click_delete_confirm_ok"),
+        patch("automation.engine._wait_form_hidden_after_delete", return_value=True),
+        patch("automation.engine._wait_confirm_dialog_gone"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        # post-delete control search: confirmed absent after empty settle
+        patch("automation.engine.card_exists_strict", return_value=False),
+    ):
+        assert ensure_wallet_deleted(page, "9990080815129999", _cfg()) == RESULT_OK_DELETED
+
+
+def test_initial_search_zero_rows_maps_to_skip_not_found():
+    page = MagicMock()
+    with patch("automation.engine.find_and_open_card_for_delete", return_value=None):
+        assert (
+            ensure_wallet_deleted(page, "9990080815129999", _cfg())
+            == RESULT_SKIP_NOT_FOUND
+        )
 
 
 def test_unsettled_search_maps_to_fail_technical_not_skip():
@@ -958,7 +1098,8 @@ def test_settled_without_match_after_row_set_change():
         patch("automation.engine._ROW_MATCH_POLL_MS", 10),
         patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
         patch("automation.engine._close_stale_modal"),
-        patch("automation.engine._submit_card_filter"),
+        patch("automation.engine._fill_card_search_input", return_value=card),
+        patch("automation.engine._press_card_search_enter"),
         patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
         patch("automation.engine._table_row_fingerprint", side_effect=fps),
         patch("automation.engine._try_match_strict_row_index", side_effect=matches),

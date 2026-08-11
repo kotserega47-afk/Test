@@ -13,6 +13,8 @@ from telegram.ext import Application
 
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
+# Ensure Telegram token redaction / httpx quieting is installed for this process.
+import utils.logger  # noqa: F401
 
 from core.schedules import load_schedules, Schedule
 from core.scheduler_clocks_control import _apply_scheduler_clock_reset_if_requested
