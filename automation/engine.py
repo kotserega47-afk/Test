@@ -47,6 +47,7 @@ from integrations.wallet_editor_registry_lifecycle import (
 
 BASE_DIR = "/tmp"
 
+WALLET_URL = "https://antares.plus/lkcard/#/wallet"
 CARD_INPUT = 'input[placeholder="Карта"]'
 APPLY_BUTTON = 'button:has-text("Применить")'
 ROW_SELECTOR = "tr.pointer"
@@ -89,10 +90,46 @@ ALLOWED_ACTIONS = {
     "add_group",
     "set_group",
     "clear_groups",
+    "delete",
 }
 DIRECTION_LABEL = "Направление"
 GROUP_LABELS = ("Группа", "Группы")
 GROUP_VALUE_ACTIONS = frozenset({"add_group", "set_group"})
+
+RESULT_OK_DELETED = "OK_DELETED"
+RESULT_DRY_RUN_WOULD_DELETE = "DRY_RUN_WOULD_DELETE"
+RESULT_STOP_BEFORE_DELETE = "STOP_BEFORE_DELETE"
+RESULT_SKIP_NOT_FOUND = "SKIP_NOT_FOUND"
+RESULT_FAIL_OPEN_CARD = "FAIL_OPEN_CARD"
+RESULT_FAIL_DELETE_BUTTON_NOT_FOUND = "FAIL_DELETE_BUTTON_NOT_FOUND"
+RESULT_FAIL_CONFIRM_DIALOG_NOT_FOUND = "FAIL_CONFIRM_DIALOG_NOT_FOUND"
+RESULT_FAIL_DELETE_TIMEOUT = "FAIL_DELETE_TIMEOUT"
+RESULT_FAIL_STILL_EXISTS = "FAIL_STILL_EXISTS"
+RESULT_FAIL_TECHNICAL = "FAIL_TECHNICAL"
+RESULT_FAIL_DELETE_CONFLICT = "FAIL_DELETE_CONFLICT"
+
+DELETE_BUTTON_TEXT = "Удалить"
+DELETE_CONFIRM_TEXT = "Удалить кошелек?"
+DELETE_CONFIRM_OK_TEXT = "OK"
+_DELETE_CONFIRM_TIMEOUT_MS = 10_000
+_DELETE_MODAL_CLOSE_TIMEOUT_MS = 15_000
+_DELETE_CONFIRM_POLL_MS = 100
+
+DELETE_RESULT_CODES = frozenset(
+    {
+        RESULT_OK_DELETED,
+        RESULT_DRY_RUN_WOULD_DELETE,
+        RESULT_STOP_BEFORE_DELETE,
+        RESULT_SKIP_NOT_FOUND,
+        RESULT_FAIL_OPEN_CARD,
+        RESULT_FAIL_DELETE_BUTTON_NOT_FOUND,
+        RESULT_FAIL_CONFIRM_DIALOG_NOT_FOUND,
+        RESULT_FAIL_DELETE_TIMEOUT,
+        RESULT_FAIL_STILL_EXISTS,
+        RESULT_FAIL_TECHNICAL,
+        RESULT_FAIL_DELETE_CONFLICT,
+    }
+)
 ALLOWED_STATUSES = {
     "Готов к работе",
     "Не готов. Sim",
@@ -330,7 +367,7 @@ def _wait_for_wallet_page_ready(page: Page, *, timeout_ms: int = _WALLET_UI_READ
 
 def _ensure_logged_in(page: Page, context, cfg: RunConfig) -> None:
     log.info("🔐 [Auth] opening wallet page")
-    page.goto("https://antares.plus/lkcard/#/wallet")
+    page.goto(WALLET_URL)
 
     if "#/login" not in page.url:
         _wait_for_wallet_page_ready(page)
@@ -795,6 +832,425 @@ def open_card_with_row_matcher(page: Page, card: str, wait_for_row) -> None:
 
 def open_card(page: Page, card: str) -> None:
     open_card_with_row_matcher(page, card, _wait_for_matching_row)
+
+
+def open_card_strict(page: Page, card: str) -> None:
+    """Open wallet form using strict card row match (delete / lifecycle ops)."""
+    open_card_with_row_matcher(page, card, _wait_for_strict_matching_row)
+
+
+def card_exists_strict(page: Page, card: str) -> bool:
+    """Strict search: True only when a table row exactly matches the card digits."""
+    log.info("🔎 [Delete] strict search card=%s", mask_card(card))
+    _submit_card_filter(page, card)
+    page.wait_for_timeout(_ROW_MATCH_POLL_MS)
+
+    rows = page.locator(ROW_SELECTOR)
+    card_digits = normalize_card_digits(card)
+    match_index, rows_count, _ = _try_match_strict_row_index(rows, card_digits, card)
+    found = match_index is not None
+    log.info(
+        "🔎 [Delete] strict search result card=%s found=%s rows=%s",
+        mask_card(card),
+        found,
+        rows_count,
+    )
+    return found
+
+
+def _button_looks_danger(button) -> bool:
+    classes = (button.get_attribute("class") or "").casefold()
+    if "btn-danger" in classes or "danger" in classes:
+        return True
+    try:
+        color = button.evaluate(
+            """el => {
+                const s = window.getComputedStyle(el);
+                return (s.backgroundColor || '') + '|' + (s.color || '');
+            }"""
+        )
+    except Exception:
+        return False
+    # Approximate red: high R relative to G/B in rgb(...)
+    for part in str(color).split("|"):
+        m = re.search(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", part)
+        if not m:
+            continue
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if r >= 160 and r > g + 40 and r > b + 40:
+            return True
+    return False
+
+
+def _find_wallet_delete_button(page: Page):
+    """Red button with exact text «Удалить» inside the open wallet form."""
+    modal = page.locator(MODAL_BODY)
+    if not modal.is_visible():
+        return None
+
+    buttons = modal.locator("button")
+    exact_matches = []
+    for i in range(buttons.count()):
+        btn = buttons.nth(i)
+        try:
+            if not btn.is_visible():
+                continue
+            text = (btn.inner_text(timeout=1000) or "").strip()
+        except Exception:
+            continue
+        if text != DELETE_BUTTON_TEXT:
+            continue
+        exact_matches.append(btn)
+
+    for btn in exact_matches:
+        if _button_looks_danger(btn):
+            return btn
+    return None
+
+
+def _find_delete_confirm_dialog(page: Page):
+    """Visible confirmation dialog containing «Удалить кошелек?»."""
+    for selector in (".modal.show", "[role='dialog']", ".modal"):
+        dialogs = page.locator(selector)
+        count = dialogs.count()
+        for i in range(count):
+            dialog = dialogs.nth(i)
+            try:
+                if not dialog.is_visible():
+                    continue
+                text = dialog.inner_text(timeout=1000) or ""
+            except Exception:
+                continue
+            if DELETE_CONFIRM_TEXT in text:
+                return dialog
+    return None
+
+
+def _wait_delete_confirm_dialog(page: Page):
+    deadline = time.monotonic() + _DELETE_CONFIRM_TIMEOUT_MS / 1000.0
+    while time.monotonic() < deadline:
+        dialog = _find_delete_confirm_dialog(page)
+        if dialog is not None:
+            return dialog
+        page.wait_for_timeout(_DELETE_CONFIRM_POLL_MS)
+    return None
+
+
+def _click_delete_confirm_ok(dialog) -> None:
+    """Click button with exact text OK inside the confirmation dialog only."""
+    buttons = dialog.locator("button")
+    for i in range(buttons.count()):
+        btn = buttons.nth(i)
+        try:
+            if not btn.is_visible():
+                continue
+            text = (btn.inner_text(timeout=1000) or "").strip()
+        except Exception:
+            continue
+        if text == DELETE_CONFIRM_OK_TEXT:
+            btn.click()
+            return
+    raise RuntimeError("кнопка OK не найдена внутри диалога подтверждения удаления")
+
+
+def _pause_stop_before_delete(page: Page, cfg: RunConfig) -> None:
+    pause_ms = cfg.stop_before_save_pause_ms
+    try:
+        if pause_ms is None:
+            log.info(
+                "ℹ️ [Delete] stop_before_delete — waiting for Enter in console "
+                "(browser stays open)"
+            )
+            try:
+                input("stop_before_delete: press Enter to continue… ")
+            except EOFError:
+                page.wait_for_timeout(3_000)
+        else:
+            log.info("ℹ️ [Delete] stop_before_delete pause_ms=%s", pause_ms)
+            page.wait_for_timeout(max(0, int(pause_ms)))
+    except Exception as exc:
+        log.warning("⚠️ [Delete] stop_before_delete pause ended: %s", exc)
+
+
+def _status_from_delete_result(result: str) -> str:
+    """Map typed delete codes to Excel status column (typed codes preserved)."""
+    code = (result or "").strip()
+    if code in DELETE_RESULT_CODES:
+        return code
+    if code.lower().startswith("skip") or code.lower().startswith("dry_run"):
+        return RESULT_SKIP_NOT_FOUND if "not" in code.lower() else code
+    return RESULT_FAIL_TECHNICAL
+
+
+def timing_outcome_from_result(result: str) -> str:
+    """Map Wallet Editor / delete result codes to WE/timing outcome."""
+    code = (result or "").strip()
+    upper = code.upper()
+    lower = code.lower()
+    if upper == RESULT_OK_DELETED or upper == "OK" or lower.startswith("ok"):
+        return "ok"
+    if (
+        upper == RESULT_SKIP_NOT_FOUND
+        or upper == RESULT_DRY_RUN_WOULD_DELETE
+        or upper == RESULT_STOP_BEFORE_DELETE
+        or lower.startswith("skip")
+        or lower.startswith("dry_run")
+        or lower.startswith("stop_before")
+    ):
+        return "skip"
+    if upper.startswith("FAIL") or lower.startswith("fail"):
+        return "fail"
+    if not lower.startswith("skip") and (
+        lower.startswith("set")
+        or "removed" in lower
+        or "added" in lower
+        or "cleared" in lower
+        or lower == "saved"
+    ):
+        return "ok"
+    if lower.startswith("skip"):
+        return "skip"
+    return "fail"
+
+
+def _wallet_form_visible(page: Page) -> bool:
+    try:
+        return bool(page.locator(MODAL_BODY).is_visible())
+    except Exception:
+        return False
+
+
+def _search_input_ready(page: Page) -> bool:
+    try:
+        return bool(page.locator(CARD_INPUT).is_visible())
+    except Exception:
+        return False
+
+
+def _dismiss_confirm_dialog_without_ok(page: Page) -> None:
+    """Dismiss leftover «Удалить кошелек?» without clicking OK or Удалить again."""
+    dialog = _find_delete_confirm_dialog(page)
+    if dialog is None:
+        return
+    log.info("🗑️ [Delete] dismissing leftover confirm dialog without OK")
+    try:
+        close_btn = dialog.locator(
+            "button.close, button[aria-label='Close'], "
+            ".close, [data-dismiss='modal']"
+        )
+        if close_btn.count() > 0:
+            candidate = close_btn.first
+            if candidate.is_visible():
+                candidate.click(timeout=2_000)
+                page.wait_for_timeout(_DELETE_CONFIRM_POLL_MS)
+                if _find_delete_confirm_dialog(page) is None:
+                    return
+    except Exception as exc:
+        log.warning("⚠️ [Delete] confirm close button failed: %s", exc)
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(_DELETE_CONFIRM_POLL_MS)
+    except Exception as exc:
+        log.warning("⚠️ [Delete] Escape on confirm failed: %s", exc)
+
+
+def _goto_wallet_page(page: Page) -> None:
+    log.info("🔄 [Delete] navigating to wallet page to restore search UI")
+    page.goto(WALLET_URL)
+    _wait_for_wallet_page_ready(page)
+
+
+def ensure_wallet_search_ready(page: Page, *, allow_goto: bool = True) -> bool:
+    """Restore a clean wallet list page so strict search can run.
+
+    Never clicks «Удалить» or confirm «OK». Returns True when CARD_INPUT is usable
+    and no wallet form / delete-confirm overlay blocks the page.
+    """
+    try:
+        if _find_delete_confirm_dialog(page) is not None:
+            _dismiss_confirm_dialog_without_ok(page)
+
+        if _wallet_form_visible(page):
+            try:
+                _close_stale_modal(page)
+            except Exception as exc:
+                log.warning("⚠️ [Delete] safe form close failed: %s", exc)
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(_DELETE_CONFIRM_POLL_MS)
+                except Exception:
+                    pass
+
+        if (
+            _search_input_ready(page)
+            and not _wallet_form_visible(page)
+            and _find_delete_confirm_dialog(page) is None
+        ):
+            return True
+
+        if not allow_goto:
+            return False
+
+        _goto_wallet_page(page)
+
+        if _find_delete_confirm_dialog(page) is not None:
+            _dismiss_confirm_dialog_without_ok(page)
+        if _wallet_form_visible(page):
+            try:
+                _close_stale_modal(page)
+            except Exception:
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+        return (
+            _search_input_ready(page)
+            and not _wallet_form_visible(page)
+            and _find_delete_confirm_dialog(page) is None
+        )
+    except Exception as exc:
+        log.error("❌ [Delete] ensure_wallet_search_ready failed: %s", exc)
+        return False
+
+
+def _wait_form_hidden_after_delete(page: Page) -> bool:
+    """Wait for wallet form to close after confirm OK. True if hidden."""
+    try:
+        page.locator(MODAL_BODY).wait_for(
+            state="hidden",
+            timeout=_DELETE_MODAL_CLOSE_TIMEOUT_MS,
+        )
+        return True
+    except PlaywrightTimeoutError:
+        return False
+
+
+def _wait_confirm_dialog_gone(page: Page, *, timeout_ms: int = 5_000) -> None:
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        if _find_delete_confirm_dialog(page) is None:
+            return
+        page.wait_for_timeout(_DELETE_CONFIRM_POLL_MS)
+
+
+def classify_after_delete_confirm(page: Page, card: str) -> str:
+    """After OK: recover UI if needed, then classify by strict post-search only."""
+    form_closed = _wait_form_hidden_after_delete(page)
+    if form_closed:
+        log.info("✅ [Delete] form closed after OK card=%s", mask_card(card))
+        _wait_confirm_dialog_gone(page)
+    else:
+        log.warning(
+            "⚠️ [Delete] form close timeout — recovering UI before verification "
+            "card=%s",
+            mask_card(card),
+        )
+        # Do NOT click OK / Удалить again — only dismiss overlays and restore search.
+        if _find_delete_confirm_dialog(page) is not None:
+            _dismiss_confirm_dialog_without_ok(page)
+        if _wallet_form_visible(page):
+            try:
+                _close_stale_modal(page)
+            except Exception as exc:
+                log.warning("⚠️ [Delete] recovery form close failed: %s", exc)
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+    if not ensure_wallet_search_ready(page, allow_goto=True):
+        log.error(
+            "❌ [Delete] cannot restore UI for verification search card=%s",
+            mask_card(card),
+        )
+        return RESULT_FAIL_DELETE_TIMEOUT
+
+    try:
+        still_exists = card_exists_strict(page, card)
+    except Exception as exc:
+        log.error(
+            "❌ [Delete] verification search failed card=%s: %s",
+            mask_card(card),
+            exc,
+        )
+        return RESULT_FAIL_DELETE_TIMEOUT
+
+    if still_exists:
+        log.error("❌ [Delete] card still exists after delete card=%s", mask_card(card))
+        return RESULT_FAIL_STILL_EXISTS
+
+    log.info("✅ [Delete] card deleted (strict search empty) card=%s", mask_card(card))
+    return RESULT_OK_DELETED
+
+
+def ensure_wallet_deleted(page: Page, card: str, cfg: RunConfig) -> str:
+    """Full wallet delete: strict search → open → Удалить → confirm OK → verify gone."""
+    log.info("🗑️ [Delete] start card=%s dry_run=%s", mask_card(card), cfg.dry_run)
+    try:
+        if not card_exists_strict(page, card):
+            log.info("ℹ️ [Delete] card not found → SKIP_NOT_FOUND card=%s", mask_card(card))
+            return RESULT_SKIP_NOT_FOUND
+
+        if cfg.dry_run:
+            log.info("ℹ️ [Delete] dry_run → DRY_RUN_WOULD_DELETE (no click) card=%s", mask_card(card))
+            return RESULT_DRY_RUN_WOULD_DELETE
+
+        try:
+            open_card_strict(page, card)
+        except OpenCardStageError as exc:
+            log.error("❌ [Delete] open_card failed card=%s stage=%s", mask_card(card), exc.stage)
+            try:
+                _close_stale_modal(page)
+            except Exception:
+                pass
+            return RESULT_FAIL_OPEN_CARD
+
+        delete_btn = _find_wallet_delete_button(page)
+        if delete_btn is None:
+            log.error("❌ [Delete] button «Удалить» not found card=%s", mask_card(card))
+            try:
+                _close_stale_modal(page)
+            except Exception:
+                pass
+            return RESULT_FAIL_DELETE_BUTTON_NOT_FOUND
+
+        if cfg.stop_before_delete:
+            log.info(
+                "ℹ️ [Delete] stop_before_delete — form open, not clicking Удалить card=%s",
+                mask_card(card),
+            )
+            _pause_stop_before_delete(page, cfg)
+            return RESULT_STOP_BEFORE_DELETE
+
+        delete_btn.click()
+        log.info("🗑️ [Delete] clicked Удалить card=%s", mask_card(card))
+
+        dialog = _wait_delete_confirm_dialog(page)
+        if dialog is None:
+            log.error("❌ [Delete] confirm dialog not found card=%s", mask_card(card))
+            try:
+                _close_stale_modal(page)
+            except Exception:
+                pass
+            return RESULT_FAIL_CONFIRM_DIALOG_NOT_FOUND
+
+        try:
+            _click_delete_confirm_ok(dialog)
+        except Exception as exc:
+            log.error("❌ [Delete] confirm OK click failed card=%s: %s", mask_card(card), exc)
+            try:
+                _close_stale_modal(page)
+            except Exception:
+                pass
+            return RESULT_FAIL_CONFIRM_DIALOG_NOT_FOUND
+
+        log.info("🗑️ [Delete] confirmed OK card=%s", mask_card(card))
+        # Source of truth is strict post-search, not form close alone.
+        return classify_after_delete_confirm(page, card)
+    except Exception as exc:
+        log.exception("❌ [Delete] technical failure card=%s: %s", mask_card(card), exc)
+        return RESULT_FAIL_TECHNICAL
 
 
 def _partner_matches_chip(chip_text: str, partner: str) -> bool:
@@ -1336,10 +1792,13 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
     log.info(f"📥 [Input] reading excel file={file_path}")
     df = pd.read_excel(file_path)
 
-    required = {"card", "action", "value"}
+    required = {"card", "action"}
     missing = required - set(df.columns)
     if missing:
         raise Exception(f"Отсутствуют обязательные колонки: {sorted(missing)}")
+
+    if "value" not in df.columns:
+        df["value"] = ""
 
     if "status" not in df.columns:
         df["status"] = ""
@@ -1373,6 +1832,48 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
     return df
 
 
+def _validate_delete_conflicts(df: pd.DataFrame) -> int:
+    """Reject cards where delete is mixed with other actions (or duplicated)."""
+    fail_count = 0
+    for card, group in df.groupby(df["card"].astype(str), sort=False):
+        actions = [str(a).strip().lower() for a in group["action"].tolist()]
+        if "delete" not in actions:
+            continue
+        if len(group) == 1 and actions == ["delete"]:
+            continue
+        for idx in group.index:
+            if _row_already_resolved(df.at[idx, "status"]):
+                continue
+            df.at[idx, "status"] = RESULT_FAIL_DELETE_CONFLICT
+            df.at[idx, "comment"] = (
+                "delete должен быть единственным действием для карты в одном запуске"
+            )
+            fail_count += 1
+            log.error(
+                "❌ [Input] delete conflict card=%s row=%s actions=%s",
+                mask_card(str(card)),
+                idx,
+                actions,
+            )
+    return fail_count
+
+
+def _row_already_resolved(status: object) -> bool:
+    s = str(status or "").strip().upper()
+    if not s:
+        return False
+    return s in {"FAIL", "SKIP"} or s.startswith("FAIL_") or s.startswith("SKIP_")
+
+
+def _count_pre_playwright_fails(df: pd.DataFrame) -> int:
+    return int(
+        df["status"]
+        .astype(str)
+        .map(lambda s: str(s).strip().upper().startswith("FAIL"))
+        .sum()
+    )
+
+
 def _ensure_result_date_columns(df: pd.DataFrame) -> None:
     for col_idx, col in enumerate((OPERATION_DATE_COLUMN, DISABLE_DATE_COLUMN)):
         if col in df.columns:
@@ -1404,7 +1905,7 @@ def _apply_add_partner_hold_precheck(
     operation_date = now.strftime(EXCEL_DATE_FORMAT)
     for idx, row in df.iterrows():
         status = str(row.get("status", "")).strip().upper()
-        if status in {"FAIL", "SKIP"}:
+        if _row_already_resolved(status):
             continue
         if str(row.get("action", "")).strip().lower() != "add_partner":
             continue
@@ -1442,7 +1943,7 @@ def _apply_add_partner_hold_precheck(
 def _group_actions(df: pd.DataFrame):
     grouped = defaultdict(list)
     for idx, row in df.iterrows():
-        if str(row.get("status", "")).strip().upper() in {"FAIL", "SKIP"}:
+        if _row_already_resolved(row.get("status", "")):
             continue
         grouped[str(row["card"])].append((idx, row["action"], row["value"]))
     log.info(f"🗂️ [Input] grouped cards={len(grouped)}")
@@ -1473,13 +1974,16 @@ def run(file_path: str, cfg: RunConfig):
         _ensure_result_date_columns(df)
 
         _validate_set_direction_pre_playwright(df)
+        _validate_delete_conflicts(df)
         hold_snapshot = load_hold_pairs_snapshot()
         _apply_add_partner_hold_precheck(df, hold_snapshot, stats)
-        stats.fail += int((df["status"] == "FAIL").sum())
+        stats.fail += _count_pre_playwright_fails(df)
 
         grouped = _group_actions(df)
 
         slow_mo = wallet_editor_playwright_slow_mo_ms()
+        if cfg.slow_mo_ms is not None:
+            slow_mo = int(cfg.slow_mo_ms)
         log.info("[WalletEditor] playwright slow_mo_ms=%s profile=%s scope=disable", slow_mo, profile)
 
         with sync_playwright() as p:
@@ -1511,12 +2015,74 @@ def run(file_path: str, cfg: RunConfig):
                         log.info(f"ℹ️ [Card] skip card={card} — no runnable actions")
                         continue
 
+                    is_delete_card = len(actions) == 1 and actions[0][1] == "delete"
+
                     card_failed = False
                     card_mutated = False
 
                     with log_step_duration(
                         profile=profile, scope="disable", step="card", card=card
-                    ):
+                    ) as card_timing:
+                        if is_delete_card:
+                            idx, action, _value = actions[0]
+                            processed_at = now_msk()
+                            log.info(
+                                "➡️ [Card] processing row=%s card=%s action=delete",
+                                idx,
+                                card,
+                            )
+                            try:
+                                with log_step_duration(
+                                    profile=profile,
+                                    scope="disable",
+                                    step="action:delete",
+                                    card=card,
+                                ) as action_timing:
+                                    result = ensure_wallet_deleted(page, card, cfg)
+                                    action_timing.outcome = timing_outcome_from_result(
+                                        result
+                                    )
+                                status = _status_from_delete_result(result)
+                                df.at[idx, "status"] = status
+                                df.at[idx, "comment"] = result
+                                _apply_result_row_dates(
+                                    df,
+                                    idx,
+                                    action=action,
+                                    status=status,
+                                    processed_at=processed_at,
+                                )
+                                stats.inc(result)
+                                card_timing.outcome = timing_outcome_from_result(result)
+                                log.info("✅ [Card] row=%s result=%s", idx, result)
+                            except Exception as e:
+                                df.at[idx, "status"] = RESULT_FAIL_TECHNICAL
+                                df.at[idx, "comment"] = str(e)
+                                _apply_result_row_dates(
+                                    df,
+                                    idx,
+                                    action=action,
+                                    status=RESULT_FAIL_TECHNICAL,
+                                    processed_at=processed_at,
+                                )
+                                stats.fail += 1
+                                card_timing.outcome = "fail"
+                                log.exception(
+                                    "❌ [Card] delete failed card=%s: %s", card, e
+                                )
+                            # Leave page clean for the next card (no leftover form).
+                            if not cfg.stop_before_delete:
+                                try:
+                                    ensure_wallet_search_ready(page, allow_goto=True)
+                                except Exception as cleanup_exc:
+                                    log.warning(
+                                        "⚠️ [Delete] post-row UI cleanup failed card=%s: %s",
+                                        mask_card(card),
+                                        cleanup_exc,
+                                    )
+                            log.info(f"✅ [Card] finished card={card}")
+                            continue
+
                         try:
                             with log_step_duration(
                                 profile=profile,
@@ -1543,7 +2109,7 @@ def run(file_path: str, cfg: RunConfig):
                                         scope="disable",
                                         step=f"action:{action}",
                                         card=card,
-                                    ):
+                                    ) as action_timing:
                                         if action == "remove_partner":
                                             result = ensure_partner_removed(page, value, cfg)
                                         elif action == "add_partner":
@@ -1558,10 +2124,19 @@ def run(file_path: str, cfg: RunConfig):
                                             result = ensure_group_set(page, value, cfg)
                                         elif action == "clear_groups":
                                             result = ensure_groups_cleared(page, value, cfg)
+                                        elif action == "delete":
+                                            # Conflict validation should prevent this path.
+                                            result = RESULT_FAIL_DELETE_CONFLICT
                                         else:
                                             result = "skip: unsupported action"
+                                        action_timing.outcome = timing_outcome_from_result(
+                                            result
+                                        )
 
-                                    status = "OK" if not result.startswith("skip") else "SKIP"
+                                    if action == "delete":
+                                        status = _status_from_delete_result(result)
+                                    else:
+                                        status = "OK" if not result.startswith("skip") else "SKIP"
                                     if status == "OK":
                                         card_mutated = True
 
@@ -1578,6 +2153,10 @@ def run(file_path: str, cfg: RunConfig):
                                     stats.inc(result)
 
                                     log.info(f"✅ [Card] row={idx} result={result}")
+
+                                    # delete is terminal for the card
+                                    if action == "delete" and status == RESULT_OK_DELETED:
+                                        break
 
                                 except Exception as e:
                                     df.at[idx, "status"] = "FAIL"
@@ -1621,6 +2200,7 @@ def run(file_path: str, cfg: RunConfig):
 
                         except Exception as e:
                             card_failed = True
+                            card_timing.outcome = "fail"
 
                             log.exception(f"❌ [Card] fatal failure card={card}: {e}")
 

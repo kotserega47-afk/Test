@@ -21,6 +21,9 @@ log = get_logger(_log_name, icon)
 
 ACTION_REMOVE_PARTNER = "remove_partner"
 ACTION_ADD_PARTNER = "add_partner"
+# Full wallet delete (action=delete): appendable to registry as history, but not
+# eligible for hold/otlezka lifecycle (requires remove_partner + status=OK + partner).
+ACTION_DELETE = "delete"
 HOLD_MARK = "HOLD"
 MISSING_OTLEZKA_DATE_TEXT = "Нет даты отлёжки"
 MISSING_OTLEZKA_STATUS = "НЕТ ДАТЫ ОТЛЁЖКИ"

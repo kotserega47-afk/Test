@@ -400,6 +400,14 @@ def resolve_operator_for_user(telegram_user_id: int) -> tuple[OperatorCredential
 class RunConfig:
     headless: bool = True
     dry_run: bool = False
+    # Local/CLI only: fill form but do not click Save. Default False — production unchanged.
+    stop_before_save: bool = False
+    # Local/CLI only: open wallet form but do not click «Удалить». Default False — production unchanged.
+    stop_before_delete: bool = False
+    # None → WALLET_EDITOR_PLAYWRIGHT_SLOW_MO_MS / default 0. Set by local visible CLI.
+    slow_mo_ms: int | None = None
+    # When stop_before_save / stop_before_delete: None = interactive Enter; int = wait ms then continue/close.
+    stop_before_save_pause_ms: int | None = None
     retries: int = 3
     delay: float = 1.0
     auth_state_path: str = field(default_factory=wallet_editor_auth_state_path)

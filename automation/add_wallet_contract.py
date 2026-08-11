@@ -70,6 +70,7 @@ DISABLE_MARKERS = frozenset({"action", "value"})
 
 RESULT_OK = "OK"
 RESULT_DRY_RUN = "DRY_RUN_WOULD_CREATE"
+RESULT_STOP_BEFORE_SAVE = "STOP_BEFORE_SAVE"
 RESULT_SKIP_DUP_CARD = "SKIP_DUPLICATE_CARD"
 RESULT_SKIP_DUP_FILE = "SKIP_DUPLICATE_IN_FILE"
 RESULT_FAIL_INVALID = "FAIL_INVALID_ROW"
@@ -260,6 +261,7 @@ class AddWalletBatchSummary:
     total: int = 0
     ok: int = 0
     dry_run_would_create: int = 0
+    stop_before_save: int = 0
     skip: int = 0
     fail: int = 0
     dry_run: bool = False
@@ -270,6 +272,8 @@ class AddWalletBatchSummary:
             self.ok += 1
         elif result == RESULT_DRY_RUN:
             self.dry_run_would_create += 1
+        elif result == RESULT_STOP_BEFORE_SAVE:
+            self.stop_before_save += 1
         elif result in SKIP_RESULTS:
             self.skip += 1
         elif result in FAIL_RESULTS:
@@ -281,6 +285,7 @@ class AddWalletBatchSummary:
             f"Всего строк: {self.total}\n"
             f"OK: {self.ok}\n"
             f"Dry-run would create: {self.dry_run_would_create}\n"
+            f"Stop before save: {self.stop_before_save}\n"
             f"Skip: {self.skip}\n"
             f"Fail: {self.fail}\n"
             f"dry_run: {self.dry_run}"
@@ -333,7 +338,7 @@ def detect_excel_routing(
 
     return ExcelRouting.AMBIGUOUS, (
         "не удалось определить тип файла: нужны card+phone (Add Wallet) "
-        "или card+action+value (disable)"
+        "или card+action (disable / delete)"
     )
 
 

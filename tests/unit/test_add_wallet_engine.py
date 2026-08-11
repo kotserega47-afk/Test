@@ -13,6 +13,7 @@ from automation.add_wallet_contract import (
     RESULT_FAIL_VALIDATION,
     RESULT_OK,
     RESULT_SKIP_DUP_CARD,
+    RESULT_STOP_BEFORE_SAVE,
 )
 from automation.add_wallet_engine import (
     ADD_WALLET_LOWER_FORM_CONTROL_TYPES,
@@ -135,6 +136,26 @@ def test_dry_run_would_create(mock_exists):
     cfg = RunConfig(login="u", password="p", dry_run=True)
     result = _process_row(page, _row(), cfg=cfg, operator_profile="DENIS")
     assert result.result == RESULT_DRY_RUN
+
+
+@patch("automation.add_wallet_engine.save_add_wallet_modal")
+@patch("automation.add_wallet_engine.fill_add_wallet_form")
+@patch("automation.add_wallet_engine.open_add_wallet_modal")
+@patch("automation.add_wallet_engine._assert_create_modal")
+@patch("automation.add_wallet_engine.card_exists_strict", side_effect=[False])
+def test_stop_before_save_skips_save(
+    mock_exists,
+    mock_assert,
+    mock_open,
+    mock_fill,
+    mock_save,
+):
+    page = MagicMock()
+    cfg = RunConfig(login="u", password="p", dry_run=False, stop_before_save=True)
+    result = _process_row(page, _row(), cfg=cfg, operator_profile="DENIS")
+    assert result.result == RESULT_STOP_BEFORE_SAVE
+    mock_fill.assert_called_once()
+    mock_save.assert_not_called()
 
 
 @patch("automation.add_wallet_engine.save_add_wallet_modal")

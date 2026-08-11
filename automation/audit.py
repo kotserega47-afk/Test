@@ -27,14 +27,20 @@ class Stats:
     def inc(self, result: str) -> None:
         result = (result or "").strip().lower()
 
-        if result.startswith("skip"):
+        if (
+            result.startswith("skip")
+            or result.startswith("dry_run")
+            or result.startswith("stop_before")
+        ):
             self.skip += 1
         elif (
-                result.startswith("set")
-                or "set_status" in result
-                or "removed" in result
-                or "added" in result
-                or result == "saved"
+            result.startswith("ok")
+            or result.startswith("set")
+            or "set_status" in result
+            or "removed" in result
+            or "added" in result
+            or "cleared" in result
+            or result == "saved"
         ):
             self.ok += 1
         else:
@@ -255,6 +261,13 @@ def next_retry_fail_comment(
     )
 
 
+@dataclass
+class StepTiming:
+    """Mutable timing outcome for log_step_duration callers."""
+
+    outcome: str = "ok"
+
+
 def log_timing(
     *,
     profile: str,
@@ -283,13 +296,13 @@ def log_step_duration(
     scope: str,
     step: str,
     card: str | None = None,
-) -> Iterator[None]:
+) -> Iterator[StepTiming]:
     started = time.perf_counter()
-    outcome = "ok"
+    timing = StepTiming(outcome="ok")
     try:
-        yield
+        yield timing
     except Exception:
-        outcome = "fail"
+        timing.outcome = "fail"
         raise
     finally:
         duration_ms = round((time.perf_counter() - started) * 1000)
@@ -298,6 +311,6 @@ def log_step_duration(
             scope=scope,
             step=step,
             duration_ms=duration_ms,
-            outcome=outcome,
+            outcome=timing.outcome,
             card=card,
         )

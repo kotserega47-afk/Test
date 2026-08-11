@@ -26,6 +26,7 @@ from automation.add_wallet_contract import (
     RESULT_OK,
     RESULT_SKIP_DUP_CARD,
     RESULT_SKIP_DUP_FILE,
+    RESULT_STOP_BEFORE_SAVE,
     make_row_result,
     prepare_add_wallet_batch,
     write_result_excel,
@@ -1213,6 +1214,17 @@ def _process_row(
                 dry_run=False,
             )
 
+        if cfg.stop_before_save:
+            _log("stop_before_save", card=row.card, extra="save skipped")
+            return make_row_result(
+                row,
+                row_number=row.row_number,
+                result=RESULT_STOP_BEFORE_SAVE,
+                comment="form filled; save skipped (stop_before_save)",
+                operator_profile=operator_profile,
+                dry_run=False,
+            )
+
         _log("save_clicked", card=row.card)
         save_outcome = save_add_wallet_modal(page)
 
@@ -1300,8 +1312,18 @@ def run(
         write_result_excel(results, out_path)
         return out_path, summary
 
-    slow_mo = wallet_editor_playwright_slow_mo_ms()
-    _log("batch_summary", extra=f"rows={len(batch.rows)} dry_run={cfg.dry_run}")
+    slow_mo = (
+        cfg.slow_mo_ms
+        if cfg.slow_mo_ms is not None
+        else wallet_editor_playwright_slow_mo_ms()
+    )
+    _log(
+        "batch_summary",
+        extra=(
+            f"rows={len(batch.rows)} dry_run={cfg.dry_run} "
+            f"stop_before_save={cfg.stop_before_save} slow_mo={slow_mo}"
+        ),
+    )
 
     with sync_playwright() as p:
         browser = None
@@ -1330,6 +1352,26 @@ def run(
                     card=row.card,
                     extra=f"result={item.result}",
                 )
+                if item.result == RESULT_STOP_BEFORE_SAVE:
+                    pause_ms = cfg.stop_before_save_pause_ms
+                    try:
+                        if pause_ms is None:
+                            try:
+                                input(
+                                    "Форма заполнена (save не нажат). "
+                                    "Enter — закрыть браузер без сохранения… "
+                                )
+                            except EOFError:
+                                page.wait_for_timeout(30_000)
+                        else:
+                            page.wait_for_timeout(max(0, int(pause_ms)))
+                    except Exception as pause_exc:
+                        _log(
+                            "stop_before_save_pause_ended",
+                            card=row.card,
+                            extra=f"reason={pause_exc}",
+                        )
+                    break
         finally:
             close_playwright_stack(page=page, context=context, browser=browser)
 

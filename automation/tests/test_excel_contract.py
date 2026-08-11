@@ -240,6 +240,31 @@ def test_clear_groups_action_normalized_lowercase(tmp_path):
     assert df.iloc[0]["action"] == "clear_groups"
 
 
+def test_delete_is_allowed_action():
+    assert "delete" in ALLOWED_ACTIONS
+
+
+def test_prepare_df_accepts_delete_without_value(tmp_path):
+    path = tmp_path / "delete.xlsx"
+    pd.DataFrame(
+        {"card": ["9860246700001620"], "action": ["delete"]}
+    ).to_excel(path, index=False)
+
+    df = _prepare_df(str(path))
+    assert df.iloc[0]["action"] == "delete"
+    assert df.iloc[0]["value"] == ""
+
+
+def test_prepare_df_delete_normalized(tmp_path):
+    path = tmp_path / "delete_norm.xlsx"
+    pd.DataFrame(
+        {"card": ["9860246700001620"], "action": [" DELETE "]}
+    ).to_excel(path, index=False)
+
+    df = _prepare_df(str(path))
+    assert df.iloc[0]["action"] == "delete"
+
+
 def test_prepare_df_rejects_unknown_action(tmp_path):
     path = tmp_path / "wallet.xlsx"
     pd.DataFrame(
