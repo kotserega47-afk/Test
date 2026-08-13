@@ -228,7 +228,7 @@ class SetAggregateIntent:
             value = getattr(self, key)
             if value is None:
                 continue
-            text = str(value).strip()
+            text = normalize_set_aggregate_optional_cell(value)
             if text:
                 out[key] = text
         return out
@@ -249,20 +249,56 @@ def present_set_aggregate_optional_columns(columns: object) -> frozenset[str]:
     return frozenset(present)
 
 
-def _cell_optional(raw: object) -> str:
+def normalize_set_aggregate_optional_cell(raw: object) -> str:
+    """Normalize optional Excel cell for phone/account/merchant_id_sbp/account_number.
+
+    Integer-valued Excel/pandas numerics (``float`` / ``int`` / numpy scalars) become
+    digit strings without a trailing ``.0``. Plain text is left unchanged — no global
+    ``.0`` string stripping. Empty / NaN → ``""``.
+    """
     if raw is None:
         return ""
     try:
         import pandas as pd
 
-        if isinstance(raw, float) and pd.isna(raw):
+        # pd.isna handles float nan, pd.NA, NaT; avoid bool arrays from list-likes.
+        if not isinstance(raw, (list, tuple, dict)) and pd.isna(raw):
             return ""
     except Exception:
         pass
+
+    # bool is a numbers.Integral subclass — keep textual form.
+    if isinstance(raw, bool):
+        return str(raw)
+
+    import math
+    import numbers
+
+    if isinstance(raw, numbers.Integral):
+        return str(int(raw))
+
+    if isinstance(raw, numbers.Real):
+        try:
+            number = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            text = str(raw).strip()
+            return "" if not text or text.lower() == "nan" else text
+        if not math.isfinite(number):
+            return ""
+        if number.is_integer():
+            return str(int(number))
+        # Keep meaningful fractional part (do not strip ".0" from arbitrary text).
+        text = str(raw).strip()
+        return "" if not text or text.lower() == "nan" else text
+
     text = str(raw).strip()
-    if text.lower() == "nan":
+    if not text or text.lower() == "nan":
         return ""
     return text
+
+
+def _cell_optional(raw: object) -> str:
+    return normalize_set_aggregate_optional_cell(raw)
 
 
 def intent_from_excel_row(

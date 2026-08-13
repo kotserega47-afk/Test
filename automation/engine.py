@@ -2225,20 +2225,21 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
     df["value"] = values
 
     # Preserve optional set_aggregate columns as trimmed strings when present.
+    # Integer Excel numerics (e.g. phone 998… as float) must not become "….0".
+    from automation.set_aggregate_engine import (
+        normalize_set_aggregate_column_name,
+        normalize_set_aggregate_optional_cell,
+    )
+
     present_optional = present_set_aggregate_optional_columns(original_columns)
     df.attrs["set_aggregate_optional_columns"] = present_optional
     df.attrs["excel_columns"] = tuple(original_columns)
     for col in list(df.columns):
-        from automation.set_aggregate_engine import normalize_set_aggregate_column_name
-
         if normalize_set_aggregate_column_name(col) is None:
             continue
-        cleaned = []
-        for raw in df[col].tolist():
-            if pd.isna(raw):
-                cleaned.append("")
-            else:
-                cleaned.append(str(raw).strip())
+        cleaned = [
+            normalize_set_aggregate_optional_cell(raw) for raw in df[col].tolist()
+        ]
         df[col] = cleaned
 
     bad_actions = sorted({a for a in df["action"].unique() if a not in ALLOWED_ACTIONS})

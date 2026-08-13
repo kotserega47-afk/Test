@@ -37,6 +37,7 @@ from automation.set_aggregate_engine import (
     ensure_set_aggregate,
     fill_set_aggregate_nested_fields,
     intent_from_excel_row,
+    normalize_set_aggregate_optional_cell,
     present_set_aggregate_optional_columns,
     switch_to_single_aggregate,
     target_is_sole_active,
@@ -101,6 +102,119 @@ def test_prepare_df_accepts_set_aggregate_and_optional_columns(tmp_path):
     assert df.iloc[0]["phone"] == "998901234567"
     assert "phone" in df.attrs["set_aggregate_optional_columns"]
     assert "account" in df.attrs["set_aggregate_optional_columns"]
+
+
+def test_normalize_optional_float_phone_strips_dot_zero():
+    assert normalize_set_aggregate_optional_cell(998927534931.0) == "998927534931"
+    assert normalize_set_aggregate_optional_cell(998927534931) == "998927534931"
+
+
+def test_normalize_optional_keeps_text_and_fraction():
+    assert normalize_set_aggregate_optional_cell("998927534931") == "998927534931"
+    assert normalize_set_aggregate_optional_cell("12.5") == "12.5"
+    assert normalize_set_aggregate_optional_cell(12.5) == "12.5"
+    # Do not globally strip a textual ".0" suffix.
+    assert normalize_set_aggregate_optional_cell("code.0") == "code.0"
+
+
+def test_normalize_optional_empty_cells():
+    assert normalize_set_aggregate_optional_cell("") == ""
+    assert normalize_set_aggregate_optional_cell(None) == ""
+    assert normalize_set_aggregate_optional_cell(float("nan")) == ""
+    assert normalize_set_aggregate_optional_cell(pd.NA) == ""
+
+
+def test_prepare_df_normalizes_excel_numeric_optional_fields(tmp_path):
+    path = tmp_path / "set_agg_numeric.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["9990080812345678"],
+            "action": ["set_aggregate"],
+            "value": ["Sim A (1)"],
+            "phone": [998927534931.0],
+            "account": [12345.0],
+            "merchant_id_sbp": [456789.0],
+            "account_number": [1001.0],
+        }
+    ).to_excel(path, index=False)
+
+    df = _prepare_df(str(path))
+    assert df.iloc[0]["phone"] == "998927534931"
+    assert df.iloc[0]["account"] == "12345"
+    assert df.iloc[0]["merchant_id_sbp"] == "456789"
+    assert df.iloc[0]["account_number"] == "1001"
+    assert ".0" not in df.iloc[0]["phone"]
+
+
+def test_intent_phone_float_from_excel_row_without_dot_zero():
+    row = pd.Series(
+        {
+            "card": "9990080812345678",
+            "action": "set_aggregate",
+            "value": "Sim A (1)",
+            "phone": 998927534931.0,
+            "account": 42.0,
+        }
+    )
+    intent = intent_from_excel_row(
+        card="9990080812345678",
+        aggregate="Sim A (1)",
+        row=row,
+        present_optional=frozenset({"phone", "account"}),
+        columns=row.index,
+    )
+    assert intent.phone == "998927534931"
+    assert intent.account == "42"
+    assert intent.provided_optional()["phone"] == "998927534931"
+    assert ".0" not in intent.phone
+
+
+def test_intent_text_phone_unchanged_and_empty_not_provided():
+    row = pd.Series(
+        {
+            "card": "9990080812345678",
+            "action": "set_aggregate",
+            "value": "Sim A (1)",
+            "phone": "998927534931",
+            "account": "",
+        }
+    )
+    intent = intent_from_excel_row(
+        card="9990080812345678",
+        aggregate="Sim A (1)",
+        row=row,
+        present_optional=frozenset({"phone", "account"}),
+        columns=row.index,
+    )
+    assert intent.phone == "998927534931"
+    assert intent.account == ""
+    assert intent.provided_optional() == {"phone": "998927534931"}
+
+
+def test_ui_fill_receives_phone_without_dot_zero():
+    page = MagicMock()
+    intent = SetAggregateIntent(
+        card="9990080812345678",
+        aggregate="Sim A (1)",
+        phone=998927534931.0,  # type: ignore[arg-type]  # Excel float leak
+    )
+    with (
+        patch(
+            "automation.set_aggregate_engine._nested_field_visible",
+            side_effect=[False, True],
+        ),
+        patch("automation.set_aggregate_engine._aw") as aw_mod,
+    ):
+        aw_mod.return_value.MODAL_BODY = "#modal"
+        fill_set_aggregate_nested_fields(page, intent)
+        phone_calls = [
+            c
+            for c in aw_mod.return_value.fill_aggregate_field_if_present.call_args_list
+            if c.args[1] == ("Телефон",)
+        ]
+        assert len(phone_calls) == 1
+        assert phone_calls[0].args[2] == "998927534931"
+        assert ".0" not in phone_calls[0].args[2]
 
 
 def test_empty_set_aggregate_value_pre_playwright_fail():
