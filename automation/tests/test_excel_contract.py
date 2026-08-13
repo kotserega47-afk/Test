@@ -273,3 +273,39 @@ def test_prepare_df_rejects_unknown_action(tmp_path):
 
     with pytest.raises(Exception, match="Недопустимые action"):
         _prepare_df(str(path))
+
+
+def test_set_aggregate_is_allowed_action():
+    assert "set_aggregate" in ALLOWED_ACTIONS
+
+
+def test_prepare_df_accepts_set_aggregate(tmp_path):
+    path = tmp_path / "set_aggregate.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["9990080812345678"],
+            "action": ["Set_Aggregate"],
+            "value": ["ЧБР"],
+            "phone": ["998901234567"],
+        }
+    ).to_excel(path, index=False)
+
+    df = _prepare_df(str(path))
+    assert df.iloc[0]["action"] == "set_aggregate"
+    assert df.iloc[0]["value"] == "ЧБР"
+    assert df.iloc[0]["phone"] == "998901234567"
+
+
+def test_empty_set_aggregate_pre_playwright_fail():
+    df = pd.DataFrame(
+        {
+            "card": ["9990080812345678"],
+            "action": ["set_aggregate"],
+            "value": ["  "],
+            "status": [""],
+            "comment": [""],
+        }
+    )
+    fail_count = _validate_set_direction_pre_playwright(df)
+    assert fail_count == 1
+    assert df.iloc[0]["status"] == "FAIL"

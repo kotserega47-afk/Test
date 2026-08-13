@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local visible Wallet Editor (disable / delete) runner — no Telegram polling.
+"""Local visible Wallet Editor (disable / delete / set_aggregate) runner — no Telegram polling.
 
 Safe delete observation (opens form, stops before «Удалить»):
 
@@ -8,6 +8,21 @@ Safe delete observation (opens form, stops before «Удалить»):
     --profile WALTER ^
     --slow-mo 500 ^
     --stop-before-delete
+
+Safe set_aggregate observation (switch + fill, no Save):
+
+  .venv\\Scripts\\python.exe tools\\run_wallet_editor_visible.py ^
+    --file .local\\wallet_editor\\input\\set_aggregate_sample.xlsx ^
+    --profile WALTER ^
+    --slow-mo 500 ^
+    --stop-before-save
+
+Real save for set_aggregate (only after explicit confirmation):
+
+  .venv\\Scripts\\python.exe tools\\run_wallet_editor_visible.py ^
+    --file .local\\wallet_editor\\input\\set_aggregate_sample.xlsx ^
+    --profile WALTER ^
+    --confirm-save
 
 Real delete (only after explicit confirmation):
 
@@ -36,6 +51,7 @@ load_dotenv(_REPO_ROOT / ".env")
 
 from automation.engine import (  # noqa: E402
     RESULT_STOP_BEFORE_DELETE,
+    RESULT_STOP_BEFORE_SAVE,
     _prepare_df,
     run as run_wallet_editor,
 )
@@ -99,7 +115,7 @@ def _resolve_profile_credentials(profile: str | None) -> tuple[str, str, str, st
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Visible local Wallet Editor disable/delete (no Telegram).",
+        description="Visible local Wallet Editor disable/delete/set_aggregate (no Telegram).",
     )
     p.add_argument("--file", required=True, help="Path to Excel (.xlsx) with card+action")
     p.add_argument(
@@ -124,9 +140,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Required for real delete when Excel contains action=delete",
     )
     p.add_argument(
+        "--stop-before-save",
+        action="store_true",
+        help=(
+            "For set_aggregate: switch aggregate and fill fields, "
+            "but do not click «Сохранить» (safe mode)"
+        ),
+    )
+    p.add_argument(
+        "--confirm-save",
+        action="store_true",
+        help="Required for real Save when Excel contains action=set_aggregate",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Search only for delete rows; never click «Удалить» (DRY_RUN_WOULD_DELETE)",
+        help="Search only for delete/set_aggregate rows; never mutate",
     )
     p.add_argument(
         "--yes",
@@ -138,7 +167,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "After stop-before-delete: wait N ms then close browser "
+            "After stop-before-delete / stop-before-save: wait N ms then close browser "
             "(default: wait for Enter in console)"
         ),
     )
@@ -160,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
 
     df = _prepare_df(str(file_path))
     has_delete = (df["action"] == "delete").any()
+    has_set_aggregate = (df["action"] == "set_aggregate").any()
 
     if has_delete and not args.dry_run:
         if not args.stop_before_delete and not args.confirm_delete:
@@ -173,6 +203,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.stop_before_delete and args.confirm_delete:
             raise SystemExit(
                 "Нельзя одновременно --stop-before-delete и --confirm-delete."
+            )
+
+    if has_set_aggregate and not args.dry_run:
+        if not args.stop_before_save and not args.confirm_save:
+            raise SystemExit(
+                "В Excel есть action=set_aggregate. Для реального Save нужны:\n"
+                "  1) без --stop-before-save\n"
+                "  2) с --confirm-save\n"
+                "Сейчас запуск заблокирован. Для наблюдения используйте "
+                "--stop-before-save (или --dry-run)."
+            )
+        if args.stop_before_save and args.confirm_save:
+            raise SystemExit(
+                "Нельзя одновременно --stop-before-save и --confirm-save."
             )
 
     profile_label, login, password, auth_state_path = _resolve_profile_credentials(
@@ -189,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Excel:              {file_path}", flush=True)
     print(f"Rows:               {len(df)}", flush=True)
     print(f"Has delete:         {bool(has_delete)}", flush=True)
+    print(f"Has set_aggregate:  {bool(has_set_aggregate)}", flush=True)
     print(f"Profile:            {profile_label}", flush=True)
     print(f"Auth state exists:  {Path(auth_state_path).exists()}", flush=True)
     print(f"Auth state path:    {auth_state_path}", flush=True)
@@ -199,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"dry_run:            {args.dry_run}", flush=True)
     print(f"stop_before_delete: {args.stop_before_delete}", flush=True)
     print(f"confirm_delete:     {args.confirm_delete}", flush=True)
+    print(f"stop_before_save:   {args.stop_before_save}", flush=True)
+    print(f"confirm_save:       {args.confirm_save}", flush=True)
     print(f"Result Excel:       {result_path}", flush=True)
     print("Telegram:            not started (local CLI only)", flush=True)
     print("============================================", flush=True)
@@ -213,13 +260,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     pause_ms = None
-    if args.stop_before_delete:
+    if args.stop_before_delete or args.stop_before_save:
         pause_ms = args.pause_ms
 
     cfg = RunConfig(
         headless=False,
         dry_run=bool(args.dry_run),
         stop_before_delete=bool(args.stop_before_delete),
+        stop_before_save=bool(args.stop_before_save),
         slow_mo_ms=int(args.slow_mo),
         stop_before_save_pause_ms=pause_ms,
         login=login,
@@ -235,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Result Excel: {out_path}")
     if args.stop_before_delete:
         print(f"(safe mode result code: {RESULT_STOP_BEFORE_DELETE})")
+    if args.stop_before_save:
+        print(f"(safe mode result code: {RESULT_STOP_BEFORE_SAVE})")
     return 0
 
 

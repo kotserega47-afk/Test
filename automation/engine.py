@@ -43,6 +43,23 @@ from integrations.wallet_editor_registry_lifecycle import (
     OPERATION_DATE_COLUMN,
     result_row_dates,
 )
+from automation.set_aggregate_engine import (
+    RESULT_DRY_RUN_WOULD_SET_AGGREGATE,
+    RESULT_FAIL_AGGREGATE_FIELDS,
+    RESULT_FAIL_AGGREGATE_NOT_FOUND,
+    RESULT_FAIL_AGGREGATE_SWITCH,
+    RESULT_FAIL_SAVE_TIMEOUT,
+    RESULT_FAIL_SET_AGGREGATE_CONFLICT,
+    RESULT_FAIL_VALIDATION,
+    RESULT_FAIL_VERIFY,
+    RESULT_OK_SET_AGGREGATE,
+    RESULT_STOP_BEFORE_SAVE,
+    SET_AGGREGATE_RESULT_CODES,
+    ensure_set_aggregate,
+    intent_from_excel_row,
+    normalize_set_aggregate_column_name,
+    present_set_aggregate_optional_columns,
+)
 
 
 BASE_DIR = "/tmp"
@@ -106,6 +123,7 @@ ALLOWED_ACTIONS = {
     "set_group",
     "clear_groups",
     "delete",
+    "set_aggregate",
 }
 DIRECTION_LABEL = "Направление"
 GROUP_LABELS = ("Группа", "Группы")
@@ -1273,6 +1291,26 @@ def _pause_stop_before_delete(page: Page, cfg: RunConfig) -> None:
         log.warning("⚠️ [Delete] stop_before_delete pause ended: %s", exc)
 
 
+def _pause_stop_before_save(page: Page, cfg: RunConfig) -> None:
+    """Local/CLI pause after form fill — does not click «Сохранить»."""
+    pause_ms = cfg.stop_before_save_pause_ms
+    try:
+        if pause_ms is None:
+            log.info(
+                "ℹ️ [SetAggregate] stop_before_save — waiting for Enter in console "
+                "(browser stays open)"
+            )
+            try:
+                input("stop_before_save: press Enter to continue… ")
+            except EOFError:
+                page.wait_for_timeout(3_000)
+        else:
+            log.info("ℹ️ [SetAggregate] stop_before_save pause_ms=%s", pause_ms)
+            page.wait_for_timeout(max(0, int(pause_ms)))
+    except Exception as exc:
+        log.warning("⚠️ [SetAggregate] stop_before_save pause ended: %s", exc)
+
+
 def _status_from_delete_result(result: str) -> str:
     """Map typed delete codes to Excel status column (typed codes preserved)."""
     code = (result or "").strip()
@@ -1283,17 +1321,36 @@ def _status_from_delete_result(result: str) -> str:
     return RESULT_FAIL_TECHNICAL
 
 
+def _status_from_set_aggregate_result(result: str) -> str:
+    """Map typed set_aggregate codes to Excel status column."""
+    code = (result or "").strip()
+    if code in SET_AGGREGATE_RESULT_CODES:
+        return code
+    if code.lower().startswith("skip") or code.lower().startswith("dry_run"):
+        return RESULT_SKIP_NOT_FOUND if "not" in code.lower() else code
+    if code.lower().startswith("stop_before"):
+        return RESULT_STOP_BEFORE_SAVE
+    return RESULT_FAIL_TECHNICAL
+
+
 def timing_outcome_from_result(result: str) -> str:
     """Map Wallet Editor / delete result codes to WE/timing outcome."""
     code = (result or "").strip()
     upper = code.upper()
     lower = code.lower()
-    if upper == RESULT_OK_DELETED or upper == "OK" or lower.startswith("ok"):
+    if (
+        upper == RESULT_OK_DELETED
+        or upper == RESULT_OK_SET_AGGREGATE
+        or upper == "OK"
+        or lower.startswith("ok")
+    ):
         return "ok"
     if (
         upper == RESULT_SKIP_NOT_FOUND
         or upper == RESULT_DRY_RUN_WOULD_DELETE
+        or upper == RESULT_DRY_RUN_WOULD_SET_AGGREGATE
         or upper == RESULT_STOP_BEFORE_DELETE
+        or upper == RESULT_STOP_BEFORE_SAVE
         or lower.startswith("skip")
         or lower.startswith("dry_run")
         or lower.startswith("stop_before")
@@ -2097,6 +2154,7 @@ def _validate_set_direction_pre_playwright(df: pd.DataFrame) -> int:
         "set_direction": "пустое значение для set_direction",
         "add_group": "пустое значение для add_group",
         "set_group": "пустое значение для set_group",
+        "set_aggregate": "пустое значение для set_aggregate",
     }
     fail_count = 0
     for idx, row in df.iterrows():
@@ -2129,6 +2187,7 @@ def save(page: Page, cfg: RunConfig):
 def _prepare_df(file_path: str) -> pd.DataFrame:
     log.info(f"📥 [Input] reading excel file={file_path}")
     df = pd.read_excel(file_path)
+    original_columns = list(df.columns)
 
     required = {"card", "action"}
     missing = required - set(df.columns)
@@ -2162,6 +2221,23 @@ def _prepare_df(file_path: str) -> pd.DataFrame:
             values.append(str(raw).strip())
     df["value"] = values
 
+    # Preserve optional set_aggregate columns as trimmed strings when present.
+    present_optional = present_set_aggregate_optional_columns(original_columns)
+    df.attrs["set_aggregate_optional_columns"] = present_optional
+    df.attrs["excel_columns"] = tuple(original_columns)
+    for col in list(df.columns):
+        from automation.set_aggregate_engine import normalize_set_aggregate_column_name
+
+        if normalize_set_aggregate_column_name(col) is None:
+            continue
+        cleaned = []
+        for raw in df[col].tolist():
+            if pd.isna(raw):
+                cleaned.append("")
+            else:
+                cleaned.append(str(raw).strip())
+        df[col] = cleaned
+
     bad_actions = sorted({a for a in df["action"].unique() if a not in ALLOWED_ACTIONS})
     if bad_actions:
         raise Exception(f"Недопустимые action: {bad_actions}")
@@ -2189,6 +2265,32 @@ def _validate_delete_conflicts(df: pd.DataFrame) -> int:
             fail_count += 1
             log.error(
                 "❌ [Input] delete conflict card=%s row=%s actions=%s",
+                mask_card(str(card)),
+                idx,
+                actions,
+            )
+    return fail_count
+
+
+def _validate_set_aggregate_conflicts(df: pd.DataFrame) -> int:
+    """Reject cards where set_aggregate is mixed with non-set_aggregate actions."""
+    fail_count = 0
+    for card, group in df.groupby(df["card"].astype(str), sort=False):
+        actions = [str(a).strip().lower() for a in group["action"].tolist()]
+        if "set_aggregate" not in actions:
+            continue
+        if all(a == "set_aggregate" for a in actions):
+            continue
+        for idx in group.index:
+            if _row_already_resolved(df.at[idx, "status"]):
+                continue
+            df.at[idx, "status"] = RESULT_FAIL_SET_AGGREGATE_CONFLICT
+            df.at[idx, "comment"] = (
+                "set_aggregate нельзя смешивать с другими action для одной карты"
+            )
+            fail_count += 1
+            log.error(
+                "❌ [Input] set_aggregate conflict card=%s row=%s actions=%s",
                 mask_card(str(card)),
                 idx,
                 actions,
@@ -2313,6 +2415,7 @@ def run(file_path: str, cfg: RunConfig):
 
         _validate_set_direction_pre_playwright(df)
         _validate_delete_conflicts(df)
+        _validate_set_aggregate_conflicts(df)
         hold_snapshot = load_hold_pairs_snapshot()
         _apply_add_partner_hold_precheck(df, hold_snapshot, stats)
         stats.fail += _count_pre_playwright_fails(df)
@@ -2421,6 +2524,82 @@ def run(file_path: str, cfg: RunConfig):
                             log.info(f"✅ [Card] finished card={card}")
                             continue
 
+                        is_set_aggregate_card = bool(actions) and all(
+                            action == "set_aggregate" for _, action, _ in actions
+                        )
+                        if is_set_aggregate_card:
+                            present_optional = frozenset(
+                                df.attrs.get("set_aggregate_optional_columns") or ()
+                            )
+                            excel_columns = df.attrs.get("excel_columns") or tuple(df.columns)
+                            for idx, action, value in actions:
+                                processed_at = now_msk()
+                                log.info(
+                                    "➡️ [Card] processing row=%s card=%s action=set_aggregate value=%s",
+                                    idx,
+                                    card,
+                                    value,
+                                )
+                                try:
+                                    with log_step_duration(
+                                        profile=profile,
+                                        scope="disable",
+                                        step="action:set_aggregate",
+                                        card=card,
+                                    ) as action_timing:
+                                        intent = intent_from_excel_row(
+                                            card=card,
+                                            aggregate=str(value),
+                                            row=df.loc[idx],
+                                            present_optional=present_optional,
+                                            columns=excel_columns,
+                                        )
+                                        result = ensure_set_aggregate(page, intent, cfg)
+                                        action_timing.outcome = timing_outcome_from_result(
+                                            result
+                                        )
+                                    status = _status_from_set_aggregate_result(result)
+                                    df.at[idx, "status"] = status
+                                    df.at[idx, "comment"] = result
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status=status,
+                                        processed_at=processed_at,
+                                    )
+                                    stats.inc(result)
+                                    card_timing.outcome = timing_outcome_from_result(result)
+                                    log.info("✅ [Card] row=%s result=%s", idx, result)
+                                except Exception as e:
+                                    df.at[idx, "status"] = RESULT_FAIL_TECHNICAL
+                                    df.at[idx, "comment"] = str(e)
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status=RESULT_FAIL_TECHNICAL,
+                                        processed_at=processed_at,
+                                    )
+                                    stats.fail += 1
+                                    card_timing.outcome = "fail"
+                                    log.exception(
+                                        "❌ [Card] set_aggregate failed card=%s: %s",
+                                        card,
+                                        e,
+                                    )
+                                if not cfg.stop_before_save:
+                                    try:
+                                        ensure_wallet_search_ready(page, allow_goto=True)
+                                    except Exception as cleanup_exc:
+                                        log.warning(
+                                            "⚠️ [SetAggregate] post-row UI cleanup failed card=%s: %s",
+                                            mask_card(card),
+                                            cleanup_exc,
+                                        )
+                            log.info(f"✅ [Card] finished card={card}")
+                            continue
+
                         try:
                             with log_step_duration(
                                 profile=profile,
@@ -2465,6 +2644,8 @@ def run(file_path: str, cfg: RunConfig):
                                         elif action == "delete":
                                             # Conflict validation should prevent this path.
                                             result = RESULT_FAIL_DELETE_CONFLICT
+                                        elif action == "set_aggregate":
+                                            result = RESULT_FAIL_SET_AGGREGATE_CONFLICT
                                         else:
                                             result = "skip: unsupported action"
                                         action_timing.outcome = timing_outcome_from_result(
@@ -2473,6 +2654,8 @@ def run(file_path: str, cfg: RunConfig):
 
                                     if action == "delete":
                                         status = _status_from_delete_result(result)
+                                    elif action == "set_aggregate":
+                                        status = _status_from_set_aggregate_result(result)
                                     else:
                                         status = "OK" if not result.startswith("skip") else "SKIP"
                                     if status == "OK":
