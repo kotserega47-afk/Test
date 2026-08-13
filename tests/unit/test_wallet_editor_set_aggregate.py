@@ -36,6 +36,7 @@ from automation.set_aggregate_engine import (
     apply_set_aggregate_on_open_form,
     ensure_set_aggregate,
     fill_set_aggregate_nested_fields,
+    fill_set_aggregate_nested_fields_from_locators,
     intent_from_excel_row,
     normalize_set_aggregate_optional_cell,
     present_set_aggregate_optional_columns,
@@ -200,23 +201,29 @@ def test_ui_fill_receives_phone_without_dot_zero():
         aggregate="Sim A (1)",
         phone=998927534931.0,  # type: ignore[arg-type]  # Excel float leak
     )
+    phone_field = MagicMock()
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            side_effect=[False, True],
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            return_value={"phone": phone_field},
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine.read_top_level_phone",
+            return_value="7900",
+        ),
+        patch(
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            return_value=[],
+        ),
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
     ):
-        aw_mod.return_value.MODAL_BODY = "#modal"
         fill_set_aggregate_nested_fields(page, intent)
-        phone_calls = [
-            c
-            for c in aw_mod.return_value.fill_aggregate_field_if_present.call_args_list
-            if c.args[1] == ("Телефон",)
-        ]
-        assert len(phone_calls) == 1
-        assert phone_calls[0].args[2] == "998927534931"
-        assert ".0" not in phone_calls[0].args[2]
+
+    assert fill_conf.call_args.kwargs["value"] == "998927534931"
+    assert ".0" not in fill_conf.call_args.kwargs["value"]
+    assert fill_conf.call_args.kwargs["field"] is phone_field
 
 
 def test_empty_set_aggregate_value_pre_playwright_fail():
@@ -611,17 +618,15 @@ def test_successful_switch_does_not_false_fail_on_first_mismatch():
 def test_nested_fields_appear_with_delay_then_phone_filled():
     page = MagicMock()
     intent = _intent(phone="998927534931")
-    calls = {"fields": 0, "fill": 0}
+    order: list[str] = []
 
-    def wait_fields(p, name, **_kwargs):
-        calls["fields"] += 1
-        if calls["fields"] == 1:
-            # first internal wait path via apply uses wait_for_aggregate_fields_visible once
-            return
+    def wait_req(p, intent_arg, *, expected_top_phone):
+        order.append("wait")
+        return {"phone": MagicMock(name="phone")}
 
-    def fill(p, intent_arg):
-        calls["fill"] += 1
-        assert calls["fields"] >= 1  # fields confirmed before fill
+    def fill_from(p, intent_arg, fields, *, expected_top_phone):
+        order.append("fill")
+        assert "phone" in fields
 
     with (
         patch(
@@ -642,21 +647,23 @@ def test_nested_fields_appear_with_delay_then_phone_filled():
             return_value=["ЧБР"],
         ),
         patch(
-            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields",
-            side_effect=fill,
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            side_effect=wait_req,
         ),
         patch(
-            "automation.set_aggregate_engine.wait_for_set_aggregate_fields_visible",
-            side_effect=wait_fields,
+            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields_from_locators",
+            side_effect=fill_from,
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine.detect_set_aggregate_expansion",
+            side_effect=AssertionError("must not wait for Device"),
+        ),
     ):
         err, top = apply_set_aggregate_on_open_form(page, intent)
 
     assert err is None
     assert top == "79001112233"
-    assert calls["fill"] == 1
-    assert calls["fields"] == 1
+    assert order == ["wait", "fill"]
 
 
 def test_phone_fill_only_after_switch_confirmed_order():
@@ -686,46 +693,48 @@ def test_phone_fill_only_after_switch_confirmed_order():
             return_value=[],
         ),
         patch(
-            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields",
-            side_effect=lambda *a, **k: order.append("fill"),
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            side_effect=lambda *a, **k: order.append("wait") or {"phone": MagicMock()},
         ),
         patch(
-            "automation.set_aggregate_engine.wait_for_set_aggregate_fields_visible",
-            side_effect=lambda *a, **k: order.append("fields"),
+            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields_from_locators",
+            side_effect=lambda *a, **k: order.append("fill"),
         ),
     ):
         err, _ = apply_set_aggregate_on_open_form(page, intent)
 
     assert err is None
-    assert order == ["switch", "fields", "fill"]
+    assert order == ["switch", "wait", "fill"]
 
 
 def test_top_level_phone_not_written_during_fill():
+    from automation.set_aggregate_engine import (
+        _pick_nested_phone_item,
+        fill_requested_nested_fields,
+    )
+
+    phones = [
+        {"label": "Телефон", "id": "top", "value": "79001112233", "visible": True},
+        {"label": "Телефон", "id": "nested", "value": "", "visible": True},
+    ]
+    nested = _pick_nested_phone_item(phones, expected_top_phone="79001112233")
+    assert nested is not None
+    assert nested["id"] == "nested"
+
     page = MagicMock()
     intent = _intent(phone="998927534931")
-    top_fill_calls = []
-
-    with (
-        patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            side_effect=[False, True],  # no nested card, nested phone yes
-        ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
-    ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        modal = MagicMock()
-        page.locator.return_value = modal
-
-        def fill_if_present(m, labels, value, required=False):
-            if labels == ("Телефон",):
-                top_fill_calls.append(("nested", value))
-
-        aw.fill_aggregate_field_if_present.side_effect = fill_if_present
-        fill_set_aggregate_nested_fields(page, intent)
-
-    assert top_fill_calls == [("nested", "998927534931")]
-    assert not hasattr(aw, "_fill_text_by_label") or not aw._fill_text_by_label.called
+    phone_field = MagicMock()
+    with patch(
+        "automation.set_aggregate_engine._fill_locator_confirmed"
+    ) as fill_conf:
+        fill_requested_nested_fields(
+            page,
+            intent,
+            {"phone": phone_field},
+            expected_top_phone="79001112233",
+        )
+    assert fill_conf.call_args.kwargs["field"] is phone_field
+    assert fill_conf.call_args.kwargs["value"] == "998927534931"
 
 
 def test_stop_before_save_after_fill_not_before():
@@ -784,84 +793,227 @@ def test_already_sole_active_skips_switch_but_fills_card():
             return_value=["ЧБР"],
         ),
         patch(
-            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields"
-        ) as fill,
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            return_value={},
+        ) as wait,
         patch(
-            "automation.set_aggregate_engine.wait_for_set_aggregate_fields_visible"
-        ),
+            "automation.set_aggregate_engine.fill_set_aggregate_nested_fields_from_locators"
+        ) as fill,
     ):
         err, top = apply_set_aggregate_on_open_form(page, intent)
 
     assert err is None
     assert top == "79001112233"
     switch.assert_not_called()
+    wait.assert_called_once()
     fill.assert_called_once()
 
 
-def test_nested_card_filled_only_when_field_present():
+def test_nested_phone_wait_skips_device_and_missing_card():
+    from automation.set_aggregate_engine import wait_for_requested_nested_fields
+
     page = MagicMock()
-    intent = _intent(phone=None)
+    intent = _intent(aggregate="Sim A (1)", phone="998927534931")
+    polls = {"n": 0}
+
+    def labeled(_page=None):
+        polls["n"] += 1
+        if polls["n"] < 3:
+            return [
+                {
+                    "label": "Телефон",
+                    "id": "top",
+                    "value": "79001112233",
+                    "visible": True,
+                    "disabled": False,
+                    "readOnly": False,
+                    "rowIndex": 0,
+                }
+            ]
+        return [
+            {
+                "label": "Телефон",
+                "id": "top",
+                "value": "79001112233",
+                "visible": True,
+                "disabled": False,
+                "readOnly": False,
+                "rowIndex": 0,
+            },
+            {
+                "label": "Телефон",
+                "id": "nested",
+                "value": "",
+                "visible": True,
+                "disabled": False,
+                "readOnly": False,
+                "rowIndex": 5,
+            },
+        ]
+
+    phone_loc = MagicMock(name="nested_phone")
+    with (
+        patch(
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            side_effect=labeled,
+        ),
+        patch(
+            "automation.set_aggregate_engine._locator_for_labeled_input",
+            return_value=phone_loc,
+        ),
+        patch(
+            "automation.set_aggregate_engine.detect_set_aggregate_expansion",
+            side_effect=AssertionError("Device must not be queried"),
+        ),
+        patch("automation.set_aggregate_engine._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.set_aggregate_engine._NESTED_FIELD_WAIT_MS", 2000),
+    ):
+        fields = wait_for_requested_nested_fields(
+            page, intent, expected_top_phone="79001112233"
+        )
+
+    assert fields == {"phone": phone_loc}
+    assert polls["n"] == 3
+
+
+def test_fill_uses_waited_locator_without_research():
+    page = MagicMock()
+    intent = _intent(phone="998901234567")
+    phone_field = MagicMock(name="waited")
+    research = MagicMock(side_effect=AssertionError("must not re-scan labels"))
 
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=True,
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            side_effect=research,
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        page.locator.return_value = MagicMock(name="modal")
-        fill_set_aggregate_nested_fields(page, intent)
-        aw.fill_aggregate_field_if_present.assert_any_call(
-            page.locator.return_value, ("Карта",), intent.card, required=False
+        # from_locators does one opportunistic card scan — allow empty list once
+        research.side_effect = None
+        research.return_value = []
+        fill_set_aggregate_nested_fields_from_locators(
+            page,
+            intent,
+            {"phone": phone_field},
+            expected_top_phone="7900",
         )
 
+    assert fill_conf.call_args.kwargs["field"] is phone_field
+    # fill_requested may call _list only on retry resolve; first fill uses waited locator
+    assert fill_conf.call_count == 1
 
-def test_aggregate_without_nested_card_skips_card_fill():
+
+def test_fill_confirm_retries_once_with_fresh_locator():
+    from automation.set_aggregate_engine import _fill_locator_confirmed
+
+    page = MagicMock()
+    first = MagicMock(name="first")
+    second = MagicMock(name="second")
+    resolve = MagicMock(return_value=second)
+    values = {"n": 0}
+
+    def read_val(_field):
+        values["n"] += 1
+        return "" if values["n"] == 1 else "998901234567"
+
+    with (
+        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine._read_locator_value",
+            side_effect=read_val,
+        ),
+    ):
+        aw_mod.return_value._fill_locator_text = MagicMock()
+        _fill_locator_confirmed(
+            page,
+            field=first,
+            value="998901234567",
+            label="Телефон",
+            resolve_fresh=resolve,
+            card="999",
+            timing_prefix="nested_phone",
+        )
+
+    assert aw_mod.return_value._fill_locator_text.call_count == 2
+    resolve.assert_called_once()
+
+
+def test_nested_phone_timeout_fail_aggregate_fields():
     page = MagicMock()
     intent = _intent(aggregate="Sim A (1)", phone="998927534931")
 
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            side_effect=[False, True],  # card absent, phone present
+            "automation.set_aggregate_engine.find_aggregate_state",
+            return_value=True,
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine.target_is_sole_active",
+            return_value=True,
+        ),
+        patch(
+            "automation.set_aggregate_engine.read_top_level_phone",
+            return_value="7900",
+        ),
+        patch(
+            "automation.set_aggregate_engine.active_aggregate_names",
+            return_value=["Sim A (1)"],
+        ),
+        patch(
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            side_effect=RuntimeError(
+                "requested nested fields not visible: ['phone']"
+            ),
+        ),
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        page.locator.return_value = MagicMock()
-        fill_set_aggregate_nested_fields(page, intent)
-        labels = [c.args[1] for c in aw.fill_aggregate_field_if_present.call_args_list]
-        assert ("Карта",) not in labels
-        assert ("Телефон",) in labels
+        err, _ = apply_set_aggregate_on_open_form(page, intent)
+
+    assert err == RESULT_FAIL_AGGREGATE_FIELDS
 
 
-def test_phone_fills_only_nested_aggregate_field():
+def test_nested_card_not_waited_when_absent():
     page = MagicMock()
-    intent = _intent(phone="998901234567")
+    intent = _intent(aggregate="Sim A (1)", phone="998927534931")
+    phone_field = MagicMock()
 
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            side_effect=[False, True],
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            return_value=[
+                {
+                    "label": "Телефон",
+                    "id": "top",
+                    "value": "7900",
+                    "visible": True,
+                },
+                {
+                    "label": "Телефон",
+                    "id": "nested",
+                    "value": "",
+                    "visible": True,
+                },
+            ],
         ),
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
         patch("automation.set_aggregate_engine._aw") as aw_mod,
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        modal = MagicMock()
-        page.locator.return_value = modal
-        fill_set_aggregate_nested_fields(page, intent)
+        aw_mod.return_value._fill_locator_text = MagicMock()
+        fill_set_aggregate_nested_fields_from_locators(
+            page,
+            intent,
+            {"phone": phone_field},
+            expected_top_phone="7900",
+        )
 
-        phone_calls = [
-            c
-            for c in aw.fill_aggregate_field_if_present.call_args_list
-            if c.args[1] == ("Телефон",)
-        ]
-        assert len(phone_calls) == 1
-        assert phone_calls[0].args[2] == "998901234567"
+    # No nested card fill attempt via _fill_locator_text for Карта
+    for call in aw_mod.return_value._fill_locator_text.call_args_list:
+        assert call.args[1] != "Карта"
+    assert fill_conf.call_args.kwargs["field"] is phone_field
 
 
 def test_missing_phone_column_does_not_touch_phones():
@@ -870,17 +1022,25 @@ def test_missing_phone_column_does_not_touch_phones():
 
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=False,
+            "automation.set_aggregate_engine.read_top_level_phone",
+            return_value="7900",
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            return_value={},
+        ) as wait,
+        patch(
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            return_value=[],
+        ),
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        page.locator.return_value = MagicMock()
         fill_set_aggregate_nested_fields(page, intent)
-        labels_touched = [c.args[1] for c in aw.fill_aggregate_field_if_present.call_args_list]
-        assert ("Телефон",) not in labels_touched
+
+    wait.assert_called_once()
+    fill_conf.assert_not_called()
 
 
 def test_optional_fields_only_when_columns_present():
@@ -891,19 +1051,32 @@ def test_optional_fields_only_when_columns_present():
         merchant_id_sbp="mid",
         account_number="4082",
     )
+    fields = {
+        "phone": MagicMock(),
+        "account": MagicMock(),
+        "merchant_id_sbp": MagicMock(),
+        "account_number": MagicMock(),
+    }
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=True,
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            return_value=[],
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        aw.ACCOUNT_NUMBER_LABELS = ("Номер счёта",)
-        page.locator.return_value = MagicMock()
-        fill_set_aggregate_nested_fields(page, intent)
-        assert aw.fill_aggregate_field_if_present.call_count == 5
+        fill_set_aggregate_nested_fields_from_locators(
+            page, intent, fields, expected_top_phone="7900"
+        )
+
+    keys = [c.kwargs["timing_prefix"] for c in fill_conf.call_args_list]
+    assert keys == [
+        "nested_phone",
+        "nested_account",
+        "nested_merchant_id_sbp",
+        "nested_account_number",
+    ]
 
 
 def test_absent_optional_fields_not_cleared():
@@ -913,17 +1086,23 @@ def test_absent_optional_fields_not_cleared():
     )
     with (
         patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=True,
+            "automation.set_aggregate_engine.read_top_level_phone",
+            return_value="7900",
         ),
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch(
+            "automation.set_aggregate_engine.wait_for_requested_nested_fields",
+            return_value={},
+        ),
+        patch(
+            "automation.set_aggregate_engine._list_labeled_inputs",
+            return_value=[],
+        ),
+        patch(
+            "automation.set_aggregate_engine._fill_locator_confirmed"
+        ) as fill_conf,
     ):
-        aw = aw_mod.return_value
-        aw.MODAL_BODY = "#modal"
-        page.locator.return_value = MagicMock()
         fill_set_aggregate_nested_fields(page, intent)
-        # Only nested card when present
-        assert aw.fill_aggregate_field_if_present.call_count == 1
+    fill_conf.assert_not_called()
 
 
 def test_unknown_aggregate_no_save():

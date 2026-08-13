@@ -75,6 +75,8 @@ _AGGREGATE_TOGGLE_TIMEOUT_MS = 8_000
 _AGGREGATE_TOGGLE_POLL_MS = 75
 _AGGREGATE_UNCHECK_ROUNDS = 12
 _AGGREGATE_FIELDS_WAIT_MS = 5_000
+_NESTED_FIELD_POLL_MS = 50
+_NESTED_FIELD_WAIT_MS = 5_000
 _SET_AGGREGATE_TIMING_PROFILE = "wallet_editor"
 _SET_AGGREGATE_TIMING_SCOPE = "set_aggregate"
 
@@ -634,6 +636,7 @@ def detect_set_aggregate_expansion(page: "Page") -> str | None:
 def wait_for_set_aggregate_fields_visible(
     page: "Page", aggregate_name: str, *, card: str | None = None
 ) -> None:
+    """Legacy expansion wait (Device/etc.) — prefer ``wait_for_requested_nested_fields``."""
     with _time_set_aggregate_step("aggregate_fields_wait", card=card):
         deadline = time.monotonic() + _AGGREGATE_FIELDS_WAIT_MS / 1000.0
         while time.monotonic() < deadline:
@@ -647,6 +650,444 @@ def wait_for_set_aggregate_fields_visible(
                 return
             page.wait_for_timeout(_AGGREGATE_TOGGLE_POLL_MS)
         raise RuntimeError(f"aggregate fields not visible: {aggregate_name}")
+
+
+# One DOM pass: all visible text inputs grouped by normalized label.
+_LIST_LABELED_INPUTS_JS = r"""
+(root) => {
+  const norm = (s) => (s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const out = [];
+  const rows = root.querySelectorAll('div.row');
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const lab = row.querySelector('label');
+    if (!lab) continue;
+    const label = norm(lab.innerText || lab.textContent || '');
+    if (!label) continue;
+    const input = row.querySelector(
+      "input[type='text'], input[type='password'], " +
+      "input:not([type='checkbox']):not([type='radio']):not([type='hidden']):not([type='submit']):not([type='button'])"
+    );
+    if (!input) continue;
+    const rects = input.getClientRects();
+    const visible = !!(rects && rects.length > 0);
+    out.push({
+      label: label,
+      id: (input.id || '').trim(),
+      value: (input.value || '').trim(),
+      visible: visible,
+      disabled: !!input.disabled,
+      readOnly: !!input.readOnly,
+      rowIndex: i,
+    });
+  }
+  return out;
+}
+"""
+
+
+def _list_labeled_inputs(page: "Page") -> list[dict]:
+    aw = _aw()
+    modal = page.locator(aw.MODAL_BODY)
+    try:
+        raw = modal.evaluate(_LIST_LABELED_INPUTS_JS)
+    except Exception as exc:
+        log.warning("⚠️ [SetAggregate] labeled inputs evaluate failed: %s", exc)
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _inputs_for_labels(
+    labeled: list[dict], labels: tuple[str, ...]
+) -> list[dict]:
+    wanted = {_normalize_aggregate_label_text(x).casefold() for x in labels}
+    out: list[dict] = []
+    for item in labeled:
+        name = _normalize_aggregate_label_text(str(item.get("label") or ""))
+        if name.casefold() in wanted:
+            out.append(item)
+    return out
+
+
+def _locator_for_labeled_input(page: "Page", item: dict):
+    """Fresh Playwright locator for a labeled-input snapshot entry."""
+    aw = _aw()
+    modal = page.locator(aw.MODAL_BODY)
+    checkbox_id = str(item.get("id") or "").strip()
+    if checkbox_id:
+        escaped = _css_escape_ident(checkbox_id)
+        loc = modal.locator(f'input[id="{escaped}"]')
+        try:
+            if loc.count() > 0:
+                return loc.first
+        except Exception:
+            pass
+    # Fallback: Nth matching label row input (rowIndex from evaluate).
+    try:
+        row_index = int(item.get("rowIndex"))
+    except Exception:
+        return None
+    row = modal.locator("div.row").nth(row_index)
+    inp = row.locator(
+        "input[type='text'], input[type='password'], "
+        "input:not([type='checkbox']):not([type='radio']):not([type='hidden'])"
+    )
+    try:
+        if inp.count() == 0:
+            return None
+    except Exception:
+        return None
+    return inp.first
+
+
+def _pick_nested_phone_item(
+    phone_items: list[dict], *, expected_top_phone: str
+) -> dict | None:
+    """Choose nested phone input; never the wallet top-level phone."""
+    visible = [
+        p
+        for p in phone_items
+        if p.get("visible") and not p.get("disabled") and not p.get("readOnly")
+    ]
+    if len(visible) < 2:
+        return None
+
+    top_digits = normalize_card_digits(expected_top_phone)
+    top_idx = 0
+    if top_digits:
+        for i, item in enumerate(visible):
+            if normalize_card_digits(str(item.get("value") or "")) == top_digits:
+                top_idx = i
+                break
+
+    for i, item in enumerate(visible):
+        if i == top_idx:
+            continue
+        return item
+    # Ambiguous: only top matched and nothing else left.
+    return None
+
+
+def _pick_nested_generic_item(items: list[dict]) -> dict | None:
+    visible = [
+        p
+        for p in items
+        if p.get("visible") and not p.get("disabled") and not p.get("readOnly")
+    ]
+    if not visible:
+        return None
+    # For Телефон/Карта duplicates the nested control is the last one.
+    return visible[-1]
+
+
+_FIELD_LABELS: dict[str, tuple[str, ...]] = {
+    "phone": ("Телефон",),
+    "account": ("Аккаунт",),
+    "merchant_id_sbp": ("MerchantId СБП",),
+    "account_number": (
+        "Номер счёта",
+        "Номер счета",
+        "Номер расчёта",
+        "Номер расчета",
+    ),
+}
+
+
+def wait_for_requested_nested_fields(
+    page: "Page",
+    intent: SetAggregateIntent,
+    *,
+    expected_top_phone: str,
+) -> dict[str, object]:
+    """Wait only for Excel-provided nested fields; return ready locators.
+
+    Does not wait for Device / nested Card. Phone wait excludes the top-level
+    wallet phone. Raises RuntimeError on timeout → FAIL_AGGREGATE_FIELDS.
+    """
+    provided = intent.provided_optional()
+    if not provided:
+        log.info(
+            "[SetAggregate] nested_fields_skip reason=no_optional_fields aggregate=%s",
+            intent.aggregate,
+        )
+        return {}
+
+    needed = set(provided.keys())
+    found: dict[str, object] = {}
+    deadline = time.monotonic() + _NESTED_FIELD_WAIT_MS / 1000.0
+    phone_search_count = 0
+    phone_wait_started: float | None = None
+
+    while time.monotonic() < deadline:
+        labeled = _list_labeled_inputs(page)
+
+        if "phone" in needed and "phone" not in found:
+            if phone_wait_started is None:
+                phone_wait_started = time.perf_counter()
+            phone_search_count += 1
+            phones = _inputs_for_labels(labeled, _FIELD_LABELS["phone"])
+            item = _pick_nested_phone_item(
+                phones, expected_top_phone=expected_top_phone
+            )
+            if item is not None:
+                loc = _locator_for_labeled_input(page, item)
+                if loc is not None:
+                    found["phone"] = loc
+                    duration_ms = round(
+                        (time.perf_counter() - phone_wait_started) * 1000
+                    )
+                    log_timing(
+                        profile=_SET_AGGREGATE_TIMING_PROFILE,
+                        scope=_SET_AGGREGATE_TIMING_SCOPE,
+                        step="nested_phone_wait",
+                        duration_ms=duration_ms,
+                        outcome="ok",
+                        card=intent.card,
+                    )
+                    log.info(
+                        "[SetAggregate] nested_phone_found searches=%s "
+                        "wait_ms=%s top_phone=%s",
+                        phone_search_count,
+                        duration_ms,
+                        _mask_phone(expected_top_phone),
+                    )
+
+        for key in ("account", "merchant_id_sbp", "account_number"):
+            if key not in needed or key in found:
+                continue
+            items = _inputs_for_labels(labeled, _FIELD_LABELS[key])
+            item = _pick_nested_generic_item(items)
+            if item is None and len(items) == 1 and items[0].get("visible"):
+                item = items[0]
+            if item is not None:
+                loc = _locator_for_labeled_input(page, item)
+                if loc is not None:
+                    found[key] = loc
+
+        if needed <= set(found.keys()):
+            return found
+
+        page.wait_for_timeout(_NESTED_FIELD_POLL_MS)
+
+    if phone_wait_started is not None and "phone" not in found:
+        log_timing(
+            profile=_SET_AGGREGATE_TIMING_PROFILE,
+            scope=_SET_AGGREGATE_TIMING_SCOPE,
+            step="nested_phone_wait",
+            duration_ms=round((time.perf_counter() - phone_wait_started) * 1000),
+            outcome="fail",
+            card=intent.card,
+        )
+
+    missing = sorted(needed - set(found.keys()))
+    raise RuntimeError(
+        f"requested nested fields not visible: {missing} "
+        f"aggregate={intent.aggregate}"
+    )
+
+
+def _read_locator_value(field) -> str:
+    try:
+        return str(field.input_value() or "").strip()
+    except Exception:
+        try:
+            return str(field.evaluate("el => el.value") or "").strip()
+        except Exception:
+            return ""
+
+
+def _fill_locator_confirmed(
+    page: "Page",
+    *,
+    field,
+    value: str,
+    label: str,
+    resolve_fresh,
+    card: str | None = None,
+    timing_prefix: str = "nested_phone",
+) -> None:
+    """Fill a known locator; confirm value; one fresh-locator retry if needed."""
+    aw = _aw()
+    current = field
+    attempts = 0
+    with _time_set_aggregate_step(f"{timing_prefix}_fill", card=card):
+        for attempt in range(1, 3):
+            attempts = attempt
+            try:
+                aw._fill_locator_text(current, label, value)
+            except Exception as exc:
+                if attempt >= 2:
+                    raise
+                log.info(
+                    "[SetAggregate] %s_fill_error attempt=%s err=%s — retry fresh",
+                    timing_prefix,
+                    attempt,
+                    type(exc).__name__,
+                )
+                current = resolve_fresh()
+                if current is None:
+                    raise
+                continue
+
+            with _time_set_aggregate_step(
+                f"{timing_prefix}_confirm", card=card
+            ):
+                actual = _read_locator_value(current)
+                if _values_match(value, actual):
+                    log.info(
+                        "[SetAggregate] %s_fill_confirmed attempts=%s value=%s",
+                        timing_prefix,
+                        attempts,
+                        _mask_secret_field(value)
+                        if timing_prefix != "nested_phone"
+                        else _mask_phone(value),
+                    )
+                    return
+
+            log.info(
+                "[SetAggregate] %s_fill_mismatch attempt=%s — retry fresh locator",
+                timing_prefix,
+                attempt,
+            )
+            current = resolve_fresh()
+            if current is None:
+                break
+
+    raise RuntimeError(f"failed to set nested field {label}")
+
+
+def fill_requested_nested_fields(
+    page: "Page",
+    intent: SetAggregateIntent,
+    fields: dict[str, object],
+    *,
+    expected_top_phone: str,
+) -> None:
+    """Fill locators returned by wait — no second full label scan."""
+    provided = intent.provided_optional()
+
+    def resolve_phone():
+        labeled = _list_labeled_inputs(page)
+        phones = _inputs_for_labels(labeled, _FIELD_LABELS["phone"])
+        item = _pick_nested_phone_item(
+            phones, expected_top_phone=expected_top_phone
+        )
+        return _locator_for_labeled_input(page, item) if item else None
+
+    if "phone" in provided:
+        field = fields.get("phone")
+        if field is None:
+            raise RuntimeError("nested phone locator missing after wait")
+        log.info(
+            "[SetAggregate] fill_start nested_phone=%s (top-level phone untouched)",
+            _mask_phone(provided["phone"]),
+        )
+        _fill_locator_confirmed(
+            page,
+            field=field,
+            value=provided["phone"],
+            label="Телефон",
+            resolve_fresh=resolve_phone,
+            card=intent.card,
+            timing_prefix="nested_phone",
+        )
+        log.info(
+            "[SetAggregate] fill_done field=phone value=%s",
+            _mask_phone(provided["phone"]),
+        )
+
+    for key, labels in (
+        ("account", ("Аккаунт",)),
+        ("merchant_id_sbp", ("MerchantId СБП",)),
+        ("account_number", _FIELD_LABELS["account_number"]),
+    ):
+        if key not in provided:
+            continue
+        field = fields.get(key)
+        if field is None:
+            raise RuntimeError(f"nested {key} locator missing after wait")
+
+        def resolve_key(k=key, labs=labels):
+            labeled = _list_labeled_inputs(page)
+            items = _inputs_for_labels(labeled, labs)
+            item = _pick_nested_generic_item(items)
+            if item is None and len(items) == 1:
+                item = items[0]
+            return _locator_for_labeled_input(page, item) if item else None
+
+        log.info(
+            "[SetAggregate] fill_start field=%s value=%s",
+            key,
+            _mask_secret_field(provided[key]),
+        )
+        _fill_locator_confirmed(
+            page,
+            field=field,
+            value=provided[key],
+            label=labels[0],
+            resolve_fresh=resolve_key,
+            card=intent.card,
+            timing_prefix=f"nested_{key}",
+        )
+        log.info("[SetAggregate] fill_done field=%s", key)
+
+
+def fill_set_aggregate_nested_fields_from_locators(
+    page: "Page",
+    intent: SetAggregateIntent,
+    fields: dict[str, object],
+    *,
+    expected_top_phone: str,
+) -> None:
+    """Fill using locators from wait — no Device wait, no second full label scan."""
+    with _time_set_aggregate_step("aggregate_fill", card=intent.card):
+        # Nested «Карта» is not an Excel optional column — never wait for it.
+        # One-shot opportunistic fill only if already present (e.g. ЧБР).
+        labeled = _list_labeled_inputs(page)
+        cards = _inputs_for_labels(labeled, ("Карта",))
+        visible_cards = [c for c in cards if c.get("visible")]
+        if len(visible_cards) >= 2:
+            loc = _locator_for_labeled_input(page, visible_cards[-1])
+            if loc is not None:
+                log.info(
+                    "[SetAggregate] fill_start nested_card=%s",
+                    mask_card(intent.card),
+                )
+                try:
+                    _aw()._fill_locator_text(loc, "Карта", intent.card)
+                    log.info(
+                        "[SetAggregate] fill_done field=card value=%s",
+                        mask_card(intent.card),
+                    )
+                except Exception as exc:
+                    log.info(
+                        "[SetAggregate] fill_skip field=card reason=%s",
+                        type(exc).__name__,
+                    )
+        else:
+            log.info(
+                "[SetAggregate] fill_skip field=card reason=not_present_for_aggregate "
+                "aggregate=%s search_card=%s",
+                intent.aggregate,
+                mask_card(intent.card),
+            )
+
+        fill_requested_nested_fields(
+            page, intent, fields, expected_top_phone=expected_top_phone
+        )
+
+
+def fill_set_aggregate_nested_fields(page: "Page", intent: SetAggregateIntent) -> None:
+    """Compatibility wrapper: wait requested fields then fill their locators."""
+    top_phone = read_top_level_phone(page)
+    fields = wait_for_requested_nested_fields(
+        page, intent, expected_top_phone=top_phone
+    )
+    fill_set_aggregate_nested_fields_from_locators(
+        page, intent, fields, expected_top_phone=top_phone
+    )
 
 
 def _wait_aggregate_checked_state(
@@ -872,83 +1313,6 @@ def switch_to_single_aggregate(
         )
 
 
-def fill_set_aggregate_nested_fields(page: "Page", intent: SetAggregateIntent) -> None:
-    """Fill nested aggregate fields that exist; never require missing «Карта»."""
-    with _time_set_aggregate_step("aggregate_fill", card=intent.card):
-        aw = _aw()
-        modal = page.locator(aw.MODAL_BODY)
-
-        if _nested_field_visible(page, ("Карта",)):
-            log.info(
-                "[SetAggregate] fill_start nested_card=%s",
-                mask_card(intent.card),
-            )
-            aw.fill_aggregate_field_if_present(
-                modal, ("Карта",), intent.card, required=False
-            )
-            log.info(
-                "[SetAggregate] fill_done field=card value=%s",
-                mask_card(intent.card),
-            )
-        else:
-            log.info(
-                "[SetAggregate] fill_skip field=card reason=not_present_for_aggregate "
-                "aggregate=%s search_card=%s",
-                intent.aggregate,
-                mask_card(intent.card),
-            )
-
-        provided = intent.provided_optional()
-        if "phone" in provided:
-            if not _nested_field_visible(page, ("Телефон",)):
-                log.info(
-                    "[SetAggregate] fill_skip field=phone reason=nested_phone_not_visible"
-                )
-            else:
-                log.info(
-                    "[SetAggregate] fill_start nested_phone=%s (top-level phone untouched)",
-                    _mask_phone(provided["phone"]),
-                )
-                # Nested aggregate phone only (last «Телефон» when duplicates exist).
-                aw.fill_aggregate_field_if_present(
-                    modal, ("Телефон",), provided["phone"]
-                )
-                log.info(
-                    "[SetAggregate] fill_done field=phone value=%s",
-                    _mask_phone(provided["phone"]),
-                )
-        else:
-            log.info(
-                "[SetAggregate] fill_skip field=phone reason=column_absent_or_empty"
-            )
-
-        if "account" in provided:
-            log.info(
-                "[SetAggregate] fill_start field=account value=%s",
-                _mask_secret_field(provided["account"]),
-            )
-            aw.fill_aggregate_field_if_present(modal, ("Аккаунт",), provided["account"])
-            log.info("[SetAggregate] fill_done field=account")
-        if "merchant_id_sbp" in provided:
-            log.info(
-                "[SetAggregate] fill_start field=merchant_id_sbp value=%s",
-                _mask_secret_field(provided["merchant_id_sbp"]),
-            )
-            aw.fill_aggregate_field_if_present(
-                modal, ("MerchantId СБП",), provided["merchant_id_sbp"]
-            )
-            log.info("[SetAggregate] fill_done field=merchant_id_sbp")
-        if "account_number" in provided:
-            log.info(
-                "[SetAggregate] fill_start field=account_number value=%s",
-                _mask_secret_field(provided["account_number"]),
-            )
-            aw.fill_aggregate_field_if_present(
-                modal, aw.ACCOUNT_NUMBER_LABELS, provided["account_number"]
-            )
-            log.info("[SetAggregate] fill_done field=account_number")
-
-
 def _values_match(expected: str, actual: str | None) -> bool:
     if actual is None:
         return False
@@ -1146,27 +1510,17 @@ def apply_set_aggregate_on_open_form(
 
         try:
             log.info(
-                "[SetAggregate] waiting_nested_fields aggregate=%s",
+                "[SetAggregate] waiting_requested_nested_fields aggregate=%s "
+                "provided=%s",
                 intent.aggregate,
+                sorted(intent.provided_optional().keys()),
             )
-            wait_for_set_aggregate_fields_visible(
-                page, intent.aggregate, card=intent.card
+            fields = wait_for_requested_nested_fields(
+                page, intent, expected_top_phone=top_phone
             )
-            log.info(
-                "[SetAggregate] nested_fields_visible aggregate=%s",
-                intent.aggregate,
+            fill_set_aggregate_nested_fields_from_locators(
+                page, intent, fields, expected_top_phone=top_phone
             )
-        except Exception as exc:
-            log.error(
-                "❌ [SetAggregate] FAIL_AGGREGATE_FIELDS card=%s aggregate=%s reason=%s",
-                mask_card(intent.card),
-                intent.aggregate,
-                exc,
-            )
-            return RESULT_FAIL_AGGREGATE_FIELDS, top_phone
-
-        try:
-            fill_set_aggregate_nested_fields(page, intent)
             log.info(
                 "[SetAggregate] fill_completed card=%s aggregate=%s provided=%s",
                 mask_card(intent.card),
