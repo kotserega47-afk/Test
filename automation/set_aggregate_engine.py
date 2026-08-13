@@ -933,22 +933,93 @@ def map_save_outcome(outcome: "SaveWaitOutcome") -> str | None:
     return RESULT_FAIL_TECHNICAL
 
 
+def verify_set_aggregate_after_save(
+    page: "Page",
+    intent: SetAggregateIntent,
+    *,
+    expected_top_phone: str,
+) -> str:
+    """Re-open wallet after shared Save and confirm aggregate state.
+
+    Returns ``OK_SET_AGGREGATE`` or a FAIL_* code.
+    """
+    from automation.engine import (
+        CardSearchUnsettledError,
+        OpenCardStageError,
+        _close_stale_modal,
+        ensure_wallet_search_ready,
+        find_strict_matching_row_index,
+        open_matched_card_row,
+    )
+
+    try:
+        if not ensure_wallet_search_ready(page, allow_goto=True):
+            return RESULT_FAIL_VERIFY
+        verify_index = find_strict_matching_row_index(page, intent.card)
+        if verify_index is None:
+            return RESULT_FAIL_VERIFY
+        open_matched_card_row(page, intent.card, verify_index)
+    except (CardSearchUnsettledError, OpenCardStageError) as exc:
+        log.error("❌ [SetAggregate] verify open failed: %s", exc)
+        try:
+            _close_stale_modal(page)
+        except Exception:
+            pass
+        return RESULT_FAIL_VERIFY
+
+    reason = verify_set_aggregate(
+        page, intent, expected_top_phone=expected_top_phone
+    )
+    try:
+        _close_stale_modal(page)
+    except Exception:
+        pass
+
+    if reason:
+        log.error(
+            "❌ [SetAggregate] FAIL_VERIFY card=%s reason=%s",
+            mask_card(intent.card),
+            reason,
+        )
+        return RESULT_FAIL_VERIFY
+
+    log.info("✅ [SetAggregate] OK_SET_AGGREGATE card=%s", mask_card(intent.card))
+    return RESULT_OK_SET_AGGREGATE
+
+
+def save_shared_wallet_form(page: "Page", cfg: "RunConfig") -> str | None:
+    """Click Save once for the open wallet form.
+
+    Returns None on success, or FAIL_VALIDATION / FAIL_SAVE_TIMEOUT / FAIL_TECHNICAL.
+    """
+    if cfg.dry_run:
+        return None
+    aw = _aw()
+    try:
+        outcome = aw.save_add_wallet_modal(page)
+    except Exception as exc:
+        log.error("❌ [SetAggregate] shared save click failed: %s", exc)
+        return RESULT_FAIL_SAVE_TIMEOUT
+    return map_save_outcome(outcome)
+
+
 def ensure_set_aggregate(
     page: "Page", intent: SetAggregateIntent, cfg: "RunConfig"
 ) -> str:
-    """Full set_aggregate flow: strict search → open → switch/fill → save → verify."""
+    """Standalone set_aggregate (single-action Excel): open → apply → save → verify.
+
+    Grouped multi-action cards should use ``apply_set_aggregate_on_open_form`` +
+    shared Save + ``verify_set_aggregate_after_save`` instead.
+    """
     from automation.engine import (
         CardSearchUnsettledError,
         OpenCardStageError,
         _close_stale_modal,
         _pause_stop_before_save,
-        ensure_wallet_search_ready,
         find_and_open_card_for_delete,
         find_strict_matching_row_index,
-        open_matched_card_row,
     )
 
-    aw = _aw()
     log.info(
         "🧩 [SetAggregate] start card=%s aggregate=%s dry_run=%s stop_before_save=%s",
         mask_card(intent.card),
@@ -1000,58 +1071,17 @@ def ensure_set_aggregate(
             _pause_stop_before_save(page, cfg)
             return RESULT_STOP_BEFORE_SAVE
 
-        try:
-            outcome = aw.save_add_wallet_modal(page)
-        except Exception as exc:
-            log.error("❌ [SetAggregate] save click failed: %s", exc)
-            try:
-                _close_stale_modal(page)
-            except Exception:
-                pass
-            return RESULT_FAIL_SAVE_TIMEOUT
-
-        save_err = map_save_outcome(outcome)
+        save_err = save_shared_wallet_form(page, cfg)
         if save_err:
-            detail = outcome.detail or save_err
-            log.error("❌ [SetAggregate] save failed: %s detail=%s", save_err, detail)
             try:
                 _close_stale_modal(page)
             except Exception:
                 pass
             return save_err
 
-        # Post-save verification: search again and open without relying on stale DOM.
-        try:
-            if not ensure_wallet_search_ready(page, allow_goto=True):
-                return RESULT_FAIL_VERIFY
-            verify_index = find_strict_matching_row_index(page, intent.card)
-            if verify_index is None:
-                return RESULT_FAIL_VERIFY
-            open_matched_card_row(page, intent.card, verify_index)
-        except (CardSearchUnsettledError, OpenCardStageError) as exc:
-            log.error("❌ [SetAggregate] verify open failed: %s", exc)
-            try:
-                _close_stale_modal(page)
-            except Exception:
-                pass
-            return RESULT_FAIL_VERIFY
-
-        reason = verify_set_aggregate(page, intent, expected_top_phone=top_phone)
-        try:
-            _close_stale_modal(page)
-        except Exception:
-            pass
-
-        if reason:
-            log.error(
-                "❌ [SetAggregate] FAIL_VERIFY card=%s reason=%s",
-                mask_card(intent.card),
-                reason,
-            )
-            return RESULT_FAIL_VERIFY
-
-        log.info("✅ [SetAggregate] OK_SET_AGGREGATE card=%s", mask_card(intent.card))
-        return RESULT_OK_SET_AGGREGATE
+        return verify_set_aggregate_after_save(
+            page, intent, expected_top_phone=top_phone
+        )
 
     except Exception as exc:
         log.exception(

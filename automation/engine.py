@@ -55,10 +55,13 @@ from automation.set_aggregate_engine import (
     RESULT_OK_SET_AGGREGATE,
     RESULT_STOP_BEFORE_SAVE,
     SET_AGGREGATE_RESULT_CODES,
+    apply_set_aggregate_on_open_form,
     ensure_set_aggregate,
     intent_from_excel_row,
     normalize_set_aggregate_column_name,
     present_set_aggregate_optional_columns,
+    save_shared_wallet_form,
+    verify_set_aggregate_after_save,
 )
 
 
@@ -2273,29 +2276,67 @@ def _validate_delete_conflicts(df: pd.DataFrame) -> int:
 
 
 def _validate_set_aggregate_conflicts(df: pd.DataFrame) -> int:
-    """Reject cards where set_aggregate is mixed with non-set_aggregate actions."""
+    """Reject incompatible set_aggregate combinations for one card.
+
+    Allowed: set_aggregate mixed with set_status / partners / groups / direction.
+    Conflicts:
+    - more than one set_aggregate with different values;
+    - duplicate identical set_aggregate rows (keep first, mark the rest).
+    Mixing with delete is handled by ``_validate_delete_conflicts``.
+    """
     fail_count = 0
     for card, group in df.groupby(df["card"].astype(str), sort=False):
-        actions = [str(a).strip().lower() for a in group["action"].tolist()]
-        if "set_aggregate" not in actions:
+        set_rows = [
+            (idx, str(row.get("value", "")).strip())
+            for idx, row in group.iterrows()
+            if str(row.get("action", "")).strip().lower() == "set_aggregate"
+        ]
+        if len(set_rows) <= 1:
             continue
-        if all(a == "set_aggregate" for a in actions):
+
+        distinct = {value for _, value in set_rows if value}
+        if len(distinct) > 1:
+            for idx in group.index:
+                if _row_already_resolved(df.at[idx, "status"]):
+                    continue
+                df.at[idx, "status"] = RESULT_FAIL_SET_AGGREGATE_CONFLICT
+                df.at[idx, "comment"] = (
+                    "несколько разных set_aggregate для одной карты в одном запуске"
+                )
+                fail_count += 1
+                log.error(
+                    "❌ [Input] set_aggregate multi-value conflict card=%s row=%s",
+                    mask_card(str(card)),
+                    idx,
+                )
             continue
-        for idx in group.index:
+
+        # Identical duplicates: keep the first runnable row, skip the rest.
+        first_kept = False
+        for idx, _value in set_rows:
             if _row_already_resolved(df.at[idx, "status"]):
                 continue
-            df.at[idx, "status"] = RESULT_FAIL_SET_AGGREGATE_CONFLICT
-            df.at[idx, "comment"] = (
-                "set_aggregate нельзя смешивать с другими action для одной карты"
-            )
-            fail_count += 1
-            log.error(
-                "❌ [Input] set_aggregate conflict card=%s row=%s actions=%s",
+            if not first_kept:
+                first_kept = True
+                continue
+            df.at[idx, "status"] = "SKIP"
+            df.at[idx, "comment"] = "дубликат set_aggregate для карты — пропущен"
+            fail_count += 0
+            log.info(
+                "ℹ️ [Input] duplicate set_aggregate skipped card=%s row=%s",
                 mask_card(str(card)),
                 idx,
-                actions,
             )
     return fail_count
+
+
+def _order_card_actions(
+    actions: list[tuple],
+) -> list[tuple]:
+    """Run set_aggregate first (excel-relative order), then other actions in excel order."""
+    set_aggs = [item for item in actions if item[1] == "set_aggregate"]
+    others = [item for item in actions if item[1] != "set_aggregate"]
+    return set_aggs + others
 
 
 def _row_already_resolved(status: object) -> bool:
@@ -2524,101 +2565,92 @@ def run(file_path: str, cfg: RunConfig):
                             log.info(f"✅ [Card] finished card={card}")
                             continue
 
-                        is_set_aggregate_card = bool(actions) and all(
-                            action == "set_aggregate" for _, action, _ in actions
-                        )
-                        if is_set_aggregate_card:
+                        try:
+                            ordered_actions = _order_card_actions(list(actions))
+                            has_set_aggregate = any(
+                                action == "set_aggregate"
+                                for _, action, _ in ordered_actions
+                            )
                             present_optional = frozenset(
                                 df.attrs.get("set_aggregate_optional_columns") or ()
                             )
-                            excel_columns = df.attrs.get("excel_columns") or tuple(df.columns)
-                            for idx, action, value in actions:
-                                processed_at = now_msk()
-                                log.info(
-                                    "➡️ [Card] processing row=%s card=%s action=set_aggregate value=%s",
-                                    idx,
-                                    card,
-                                    value,
-                                )
-                                try:
-                                    with log_step_duration(
-                                        profile=profile,
-                                        scope="disable",
-                                        step="action:set_aggregate",
-                                        card=card,
-                                    ) as action_timing:
-                                        intent = intent_from_excel_row(
-                                            card=card,
-                                            aggregate=str(value),
-                                            row=df.loc[idx],
-                                            present_optional=present_optional,
-                                            columns=excel_columns,
-                                        )
-                                        result = ensure_set_aggregate(page, intent, cfg)
-                                        action_timing.outcome = timing_outcome_from_result(
-                                            result
-                                        )
-                                    status = _status_from_set_aggregate_result(result)
-                                    df.at[idx, "status"] = status
-                                    df.at[idx, "comment"] = result
-                                    _apply_result_row_dates(
-                                        df,
-                                        idx,
-                                        action=action,
-                                        status=status,
-                                        processed_at=processed_at,
-                                    )
-                                    stats.inc(result)
-                                    card_timing.outcome = timing_outcome_from_result(result)
-                                    log.info("✅ [Card] row=%s result=%s", idx, result)
-                                except Exception as e:
-                                    df.at[idx, "status"] = RESULT_FAIL_TECHNICAL
-                                    df.at[idx, "comment"] = str(e)
-                                    _apply_result_row_dates(
-                                        df,
-                                        idx,
-                                        action=action,
-                                        status=RESULT_FAIL_TECHNICAL,
-                                        processed_at=processed_at,
-                                    )
-                                    stats.fail += 1
-                                    card_timing.outcome = "fail"
-                                    log.exception(
-                                        "❌ [Card] set_aggregate failed card=%s: %s",
-                                        card,
-                                        e,
-                                    )
-                                if not cfg.stop_before_save:
-                                    try:
-                                        ensure_wallet_search_ready(page, allow_goto=True)
-                                    except Exception as cleanup_exc:
-                                        log.warning(
-                                            "⚠️ [SetAggregate] post-row UI cleanup failed card=%s: %s",
-                                            mask_card(card),
-                                            cleanup_exc,
-                                        )
-                            log.info(f"✅ [Card] finished card={card}")
-                            continue
+                            excel_columns = df.attrs.get("excel_columns") or tuple(
+                                df.columns
+                            )
 
-                        try:
                             with log_step_duration(
                                 profile=profile,
                                 scope="disable",
                                 step="open_card",
                                 card=card,
                             ):
-                                retry(
-                                    lambda: open_card(page, card),
-                                    cfg.retries,
-                                    cfg.delay,
-                                    step_name=f"open_card:{card}",
+                                if has_set_aggregate:
+                                    try:
+                                        match_index = find_and_open_card_for_delete(
+                                            page, card
+                                        )
+                                    except CardSearchUnsettledError as exc:
+                                        raise OpenCardStageError(
+                                            "search_unsettled",
+                                            card,
+                                            cause=exc,
+                                        ) from exc
+                                    if match_index is None:
+                                        processed_at = now_msk()
+                                        for idx, action, _value in ordered_actions:
+                                            if str(df.at[idx, "status"]).strip():
+                                                continue
+                                            df.at[idx, "status"] = RESULT_SKIP_NOT_FOUND
+                                            df.at[idx, "comment"] = RESULT_SKIP_NOT_FOUND
+                                            _apply_result_row_dates(
+                                                df,
+                                                idx,
+                                                action=action,
+                                                status=RESULT_SKIP_NOT_FOUND,
+                                                processed_at=processed_at,
+                                            )
+                                            stats.inc(RESULT_SKIP_NOT_FOUND)
+                                        card_timing.outcome = "skip"
+                                        log.info(
+                                            "ℹ️ [Card] not found → SKIP_NOT_FOUND card=%s",
+                                            mask_card(card),
+                                        )
+                                        log.info(f"✅ [Card] finished card={card}")
+                                        continue
+                                else:
+                                    retry(
+                                        lambda: open_card(page, card),
+                                        cfg.retries,
+                                        cfg.delay,
+                                        step_name=f"open_card:{card}",
+                                    )
+
+                            set_agg_pending: tuple | None = None
+                            # (idx, intent, top_phone, processed_at)
+                            abort_remaining = False
+                            mutated_indices: list[int] = []
+
+                            for idx, action, value in ordered_actions:
+                                log.info(
+                                    f"➡️ [Card] processing row={idx} card={card} "
+                                    f"action={action} value={value}"
                                 )
-
-                            for idx, action, value in actions:
-                                log.info(f"➡️ [Card] processing row={idx} card={card} action={action} value={value}")
-
-                                # единая точка времени (MSK, время обработки строки)
                                 processed_at = now_msk()
+
+                                if abort_remaining:
+                                    df.at[idx, "status"] = "FAIL"
+                                    df.at[idx, "comment"] = (
+                                        "пропущено: предыдущий set_aggregate не применён"
+                                    )
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status="FAIL",
+                                        processed_at=processed_at,
+                                    )
+                                    stats.fail += 1
+                                    continue
 
                                 try:
                                     with log_step_duration(
@@ -2627,39 +2659,103 @@ def run(file_path: str, cfg: RunConfig):
                                         step=f"action:{action}",
                                         card=card,
                                     ) as action_timing:
+                                        if action == "set_aggregate":
+                                            intent = intent_from_excel_row(
+                                                card=card,
+                                                aggregate=str(value),
+                                                row=df.loc[idx],
+                                                present_optional=present_optional,
+                                                columns=excel_columns,
+                                            )
+                                            err, top_phone = (
+                                                apply_set_aggregate_on_open_form(
+                                                    page, intent
+                                                )
+                                            )
+                                            if err:
+                                                result = err
+                                                status = _status_from_set_aggregate_result(
+                                                    result
+                                                )
+                                                df.at[idx, "status"] = status
+                                                df.at[idx, "comment"] = result
+                                                _apply_result_row_dates(
+                                                    df,
+                                                    idx,
+                                                    action=action,
+                                                    status=status,
+                                                    processed_at=processed_at,
+                                                )
+                                                stats.inc(result)
+                                                action_timing.outcome = (
+                                                    timing_outcome_from_result(result)
+                                                )
+                                                abort_remaining = True
+                                                log.error(
+                                                    "❌ [Card] set_aggregate blocked card=%s result=%s",
+                                                    mask_card(card),
+                                                    result,
+                                                )
+                                                continue
+                                            # Defer OK until shared Save + verify.
+                                            set_agg_pending = (
+                                                idx,
+                                                intent,
+                                                top_phone,
+                                                processed_at,
+                                            )
+                                            card_mutated = True
+                                            mutated_indices.append(idx)
+                                            action_timing.outcome = "ok"
+                                            log.info(
+                                                "✅ [Card] set_aggregate applied (pending save) row=%s",
+                                                idx,
+                                            )
+                                            continue
+
                                         if action == "remove_partner":
-                                            result = ensure_partner_removed(page, value, cfg)
+                                            result = ensure_partner_removed(
+                                                page, value, cfg
+                                            )
                                         elif action == "add_partner":
-                                            result = ensure_partner_added(page, value, cfg)
+                                            result = ensure_partner_added(
+                                                page, value, cfg
+                                            )
                                         elif action == "set_status":
                                             result = ensure_status_set(page, value, cfg)
                                         elif action == "set_direction":
-                                            result = ensure_direction_set(page, value, cfg)
+                                            result = ensure_direction_set(
+                                                page, value, cfg
+                                            )
                                         elif action == "add_group":
-                                            result = ensure_group_added(page, value, cfg)
+                                            result = ensure_group_added(
+                                                page, value, cfg
+                                            )
                                         elif action == "set_group":
                                             result = ensure_group_set(page, value, cfg)
                                         elif action == "clear_groups":
-                                            result = ensure_groups_cleared(page, value, cfg)
+                                            result = ensure_groups_cleared(
+                                                page, value, cfg
+                                            )
                                         elif action == "delete":
-                                            # Conflict validation should prevent this path.
                                             result = RESULT_FAIL_DELETE_CONFLICT
-                                        elif action == "set_aggregate":
-                                            result = RESULT_FAIL_SET_AGGREGATE_CONFLICT
                                         else:
                                             result = "skip: unsupported action"
-                                        action_timing.outcome = timing_outcome_from_result(
-                                            result
+                                        action_timing.outcome = (
+                                            timing_outcome_from_result(result)
                                         )
 
                                     if action == "delete":
                                         status = _status_from_delete_result(result)
-                                    elif action == "set_aggregate":
-                                        status = _status_from_set_aggregate_result(result)
                                     else:
-                                        status = "OK" if not result.startswith("skip") else "SKIP"
+                                        status = (
+                                            "OK"
+                                            if not result.startswith("skip")
+                                            else "SKIP"
+                                        )
                                     if status == "OK":
                                         card_mutated = True
+                                        mutated_indices.append(idx)
 
                                     df.at[idx, "status"] = status
                                     df.at[idx, "comment"] = result
@@ -2670,14 +2766,10 @@ def run(file_path: str, cfg: RunConfig):
                                         status=status,
                                         processed_at=processed_at,
                                     )
-
                                     stats.inc(result)
-
-                                    log.info(f"✅ [Card] row={idx} result={result}")
-
-                                    # delete is terminal for the card
-                                    if action == "delete" and status == RESULT_OK_DELETED:
-                                        break
+                                    log.info(
+                                        f"✅ [Card] row={idx} result={result}"
+                                    )
 
                                 except Exception as e:
                                     df.at[idx, "status"] = "FAIL"
@@ -2689,17 +2781,73 @@ def run(file_path: str, cfg: RunConfig):
                                         status="FAIL",
                                         processed_at=processed_at,
                                     )
-
                                     stats.fail += 1
-                                    log.exception(f"❌ [Card] row={idx} failed card={card}: {e}")
+                                    log.exception(
+                                        f"❌ [Card] row={idx} failed card={card}: {e}"
+                                    )
+                                    if action == "set_aggregate":
+                                        abort_remaining = True
+
+                            if abort_remaining:
+                                log.warning(
+                                    "⚠️ [Card] abort save after set_aggregate failure card=%s",
+                                    mask_card(card),
+                                )
+                                try:
+                                    _close_stale_modal(page)
+                                except Exception:
+                                    pass
+                                try:
+                                    ensure_wallet_search_ready(page, allow_goto=True)
+                                except Exception:
+                                    pass
+                                log.info(f"✅ [Card] finished card={card}")
+                                continue
 
                             explicit_status_in_excel = any(
-                                action == "set_status" for _, action, _ in actions
+                                action == "set_status"
+                                for _, action, _ in ordered_actions
                             )
                             if _apply_auto_no_partners_status_after_actions(
                                 page, cfg, explicit_status_in_excel
                             ):
                                 card_mutated = True
+
+                            if cfg.stop_before_save and card_mutated:
+                                log.info(
+                                    "ℹ️ [Card] stop_before_save — all actions applied, "
+                                    "Save not clicked card=%s",
+                                    mask_card(card),
+                                )
+                                _pause_stop_before_save(page, cfg)
+                                processed_at = now_msk()
+                                if set_agg_pending is not None:
+                                    idx, _intent, _top, _pat = set_agg_pending
+                                    df.at[idx, "status"] = RESULT_STOP_BEFORE_SAVE
+                                    df.at[idx, "comment"] = RESULT_STOP_BEFORE_SAVE
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action="set_aggregate",
+                                        status=RESULT_STOP_BEFORE_SAVE,
+                                        processed_at=processed_at,
+                                    )
+                                    stats.inc(RESULT_STOP_BEFORE_SAVE)
+                                for idx in mutated_indices:
+                                    if set_agg_pending and idx == set_agg_pending[0]:
+                                        continue
+                                    if str(df.at[idx, "status"]).strip() == "OK":
+                                        # Downgrade provisional OK — Save never happened.
+                                        prev = str(df.at[idx, "comment"] or "")
+                                        df.at[idx, "status"] = RESULT_STOP_BEFORE_SAVE
+                                        df.at[idx, "comment"] = (
+                                            f"{prev} | save skipped (stop_before_save)"
+                                            if prev
+                                            else RESULT_STOP_BEFORE_SAVE
+                                        )
+                                card_timing.outcome = "skip"
+                                log.info(f"✅ [Card] finished card={card}")
+                                continue
 
                             if card_mutated:
                                 with log_step_duration(
@@ -2708,14 +2856,81 @@ def run(file_path: str, cfg: RunConfig):
                                     step="save",
                                     card=card,
                                 ):
-                                    retry(
-                                        lambda: save(page, cfg),
-                                        cfg.retries,
-                                        cfg.delay,
-                                        step_name=f"save:{card}",
-                                    )
+                                    if set_agg_pending is not None:
+                                        save_err = save_shared_wallet_form(page, cfg)
+                                        if save_err:
+                                            processed_at = now_msk()
+                                            idx, intent, _top, _pat = set_agg_pending
+                                            df.at[idx, "status"] = save_err
+                                            df.at[idx, "comment"] = save_err
+                                            _apply_result_row_dates(
+                                                df,
+                                                idx,
+                                                action="set_aggregate",
+                                                status=save_err,
+                                                processed_at=processed_at,
+                                            )
+                                            stats.inc(save_err)
+                                            for midx in mutated_indices:
+                                                if midx == idx:
+                                                    continue
+                                                if str(df.at[midx, "status"]).strip() == "OK":
+                                                    df.at[midx, "status"] = save_err
+                                                    df.at[midx, "comment"] = (
+                                                        f"save failed: {save_err}"
+                                                    )
+                                            set_agg_pending = None
+                                            raise RuntimeError(save_err)
+                                    else:
+                                        retry(
+                                            lambda: save(page, cfg),
+                                            cfg.retries,
+                                            cfg.delay,
+                                            step_name=f"save:{card}",
+                                        )
                             else:
-                                log.info(f"ℹ️ [Card] skip save card={card} — no mutations")
+                                log.info(
+                                    f"ℹ️ [Card] skip save card={card} — no mutations"
+                                )
+
+                            if set_agg_pending is not None:
+                                idx, intent, top_phone, processed_at = set_agg_pending
+                                with log_step_duration(
+                                    profile=profile,
+                                    scope="disable",
+                                    step="action:set_aggregate_verify",
+                                    card=card,
+                                ) as verify_timing:
+                                    result = verify_set_aggregate_after_save(
+                                        page,
+                                        intent,
+                                        expected_top_phone=top_phone,
+                                    )
+                                    verify_timing.outcome = timing_outcome_from_result(
+                                        result
+                                    )
+                                status = _status_from_set_aggregate_result(result)
+                                df.at[idx, "status"] = status
+                                df.at[idx, "comment"] = result
+                                _apply_result_row_dates(
+                                    df,
+                                    idx,
+                                    action="set_aggregate",
+                                    status=status,
+                                    processed_at=processed_at,
+                                )
+                                stats.inc(result)
+                                card_timing.outcome = timing_outcome_from_result(result)
+                                log.info(
+                                    "✅ [Card] set_aggregate verified row=%s result=%s",
+                                    idx,
+                                    result,
+                                )
+                            else:
+                                try:
+                                    ensure_wallet_search_ready(page, allow_goto=True)
+                                except Exception:
+                                    pass
 
                             log.info(f"✅ [Card] finished card={card}")
 

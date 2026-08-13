@@ -14,8 +14,10 @@ from automation.engine import (
     RESULT_OK_SET_AGGREGATE,
     RESULT_SKIP_NOT_FOUND,
     RESULT_STOP_BEFORE_SAVE,
+    _order_card_actions,
     _prepare_df,
     _status_from_set_aggregate_result,
+    _validate_delete_conflicts,
     _validate_set_aggregate_conflicts,
     _validate_set_direction_pre_playwright,
     timing_outcome_from_result,
@@ -116,18 +118,77 @@ def test_empty_set_aggregate_value_pre_playwright_fail():
     assert "set_aggregate" in df.iloc[0]["comment"]
 
 
-def test_set_aggregate_conflict_with_other_action():
+def test_set_aggregate_with_set_status_allowed():
     df = pd.DataFrame(
         {
             "card": ["111", "111"],
             "action": ["set_aggregate", "set_status"],
-            "value": ["ЧБР", "Тест"],
+            "value": ["Sim A (1)", "Тест"],
+            "status": ["", ""],
+            "comment": ["", ""],
+        }
+    )
+    assert _validate_set_aggregate_conflicts(df) == 0
+    assert list(df["status"]) == ["", ""]
+
+
+def test_two_different_set_aggregate_conflict():
+    df = pd.DataFrame(
+        {
+            "card": ["111", "111"],
+            "action": ["set_aggregate", "set_aggregate"],
+            "value": ["Sim A (1)", "ЧБР"],
             "status": ["", ""],
             "comment": ["", ""],
         }
     )
     assert _validate_set_aggregate_conflicts(df) == 2
     assert (df["status"] == RESULT_FAIL_SET_AGGREGATE_CONFLICT).all()
+
+
+def test_duplicate_identical_set_aggregate_skips_second():
+    df = pd.DataFrame(
+        {
+            "card": ["111", "111"],
+            "action": ["set_aggregate", "set_aggregate"],
+            "value": ["Sim A (1)", "Sim A (1)"],
+            "status": ["", ""],
+            "comment": ["", ""],
+        }
+    )
+    assert _validate_set_aggregate_conflicts(df) == 0
+    assert df.iloc[0]["status"] == ""
+    assert df.iloc[1]["status"] == "SKIP"
+
+
+def test_delete_plus_set_aggregate_still_conflict():
+    df = pd.DataFrame(
+        {
+            "card": ["111", "111"],
+            "action": ["delete", "set_aggregate"],
+            "value": ["", "Sim A (1)"],
+            "status": ["", ""],
+            "comment": ["", ""],
+        }
+    )
+    assert _validate_delete_conflicts(df) == 2
+
+
+def test_order_card_actions_set_aggregate_first():
+    actions = [
+        (0, "set_status", "Тест"),
+        (1, "set_aggregate", "Sim A (1)"),
+        (2, "add_partner", "P1"),
+    ]
+    ordered = _order_card_actions(actions)
+    assert [a for _, a, _ in ordered] == [
+        "set_aggregate",
+        "set_status",
+        "add_partner",
+    ]
+    # Original row indices preserved for result writing
+    assert ordered[0][0] == 1
+    assert ordered[1][0] == 0
 
 
 def test_intent_optional_columns_absent_vs_present():
@@ -1021,29 +1082,45 @@ def test_run_processes_rows_independently(tmp_path):
     ).to_excel(path, index=False)
 
     mock_sync, mock_page = _playwright_mocks()
-    results = {0: RESULT_OK_SET_AGGREGATE, 1: RESULT_SKIP_NOT_FOUND}
-    calls = []
+    open_cards: list[str] = []
 
-    def fake_ensure(page, intent, cfg):
-        calls.append(intent.card)
-        # map by order
-        return results[len(calls) - 1]
+    def fake_open(page, card):
+        open_cards.append(card)
+        if card == "2222222222222222":
+            return None
+        return 0
 
     with (
         patch("automation.engine.sync_playwright", return_value=mock_sync),
         patch("automation.engine._ensure_logged_in"),
         patch("automation.engine.require_wallet_editor_antares_credentials"),
         patch("automation.engine.load_hold_pairs_snapshot") as hold,
-        patch("automation.engine.ensure_set_aggregate", side_effect=fake_ensure),
+        patch(
+            "automation.engine.find_and_open_card_for_delete",
+            side_effect=fake_open,
+        ),
+        patch(
+            "automation.engine.apply_set_aggregate_on_open_form",
+            return_value=(None, "7900"),
+        ),
+        patch("automation.engine.save_shared_wallet_form", return_value=None),
+        patch(
+            "automation.engine.verify_set_aggregate_after_save",
+            return_value=RESULT_OK_SET_AGGREGATE,
+        ),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch("automation.engine.close_playwright_stack"),
+        patch(
+            "automation.engine._apply_auto_no_partners_status_after_actions",
+            return_value=False,
+        ),
     ):
         hold.return_value = MagicMock(available=True, pairs=set(), error=None)
         out, stats = __import__("automation.engine", fromlist=["run"]).run(
             str(path), _cfg(result_file_path=str(tmp_path / "out.xlsx"))
         )
 
-    assert calls == ["1111111111111111", "2222222222222222"]
+    assert open_cards == ["1111111111111111", "2222222222222222"]
     assert stats.ok == 1
     assert stats.skip == 1
     result_df = pd.read_excel(out)
@@ -1239,3 +1316,304 @@ def test_sim_a_without_card_applies_and_fills_phone_then_stop():
     assert result == RESULT_STOP_BEFORE_SAVE
     assert order == ["open", "fill_done", "stop"]
     save.assert_not_called()
+
+
+# --- Grouped-flow: set_aggregate mixed with other card actions ---
+
+
+def _run_wallet_editor_with_patches(
+    tmp_path,
+    rows: dict,
+    *,
+    stop_before_save: bool = False,
+    apply_err=None,
+    save_err=None,
+    verify_result: str = RESULT_OK_SET_AGGREGATE,
+    open_return=0,
+):
+    """Run engine.run with playwright + set_aggregate grouped-flow patches."""
+    from contextlib import ExitStack
+
+    path = tmp_path / "in.xlsx"
+    out = tmp_path / "out.xlsx"
+    pd.DataFrame(rows).to_excel(path, index=False)
+
+    mock_sync, _page = _playwright_mocks()
+    order: list[str] = []
+
+    def _open(*a, **k):
+        order.append("open")
+        return open_return
+
+    def _apply(*a, **k):
+        order.append("apply")
+        return (apply_err, "79001112233")
+
+    def _save(*a, **k):
+        order.append("save")
+        return save_err
+
+    def _verify(*a, **k):
+        order.append("verify")
+        return verify_result
+
+    classic_open = MagicMock(side_effect=lambda *a, **k: order.append("classic_open"))
+
+    patch_specs = [
+        ("automation.engine.sync_playwright", {"return_value": mock_sync}),
+        ("automation.engine._ensure_logged_in", {}),
+        ("automation.engine.require_wallet_editor_antares_credentials", {}),
+        (
+            "automation.engine.load_hold_pairs_snapshot",
+            {
+                "return_value": MagicMock(
+                    available=True, pairs=set(), error=None
+                )
+            },
+        ),
+        ("automation.engine.find_and_open_card_for_delete", {"side_effect": _open}),
+        ("automation.engine.open_card", {"new": classic_open}),
+        (
+            "automation.engine.apply_set_aggregate_on_open_form",
+            {"side_effect": _apply},
+        ),
+        ("automation.engine.save_shared_wallet_form", {"side_effect": _save}),
+        (
+            "automation.engine.verify_set_aggregate_after_save",
+            {"side_effect": _verify},
+        ),
+        (
+            "automation.engine.ensure_status_set",
+            {
+                "side_effect": lambda *a, **k: (
+                    order.append("set_status") or "set: Тест"
+                )
+            },
+        ),
+        (
+            "automation.engine.ensure_partner_added",
+            {
+                "side_effect": lambda *a, **k: (
+                    order.append("add_partner") or "added partner"
+                )
+            },
+        ),
+        ("automation.engine.ensure_partner_removed", {"return_value": "removed"}),
+        (
+            "automation.engine.ensure_group_added",
+            {
+                "side_effect": lambda *a, **k: (
+                    order.append("add_group") or "added group"
+                )
+            },
+        ),
+        ("automation.engine.ensure_group_set", {"return_value": "set group"}),
+        (
+            "automation.engine.ensure_groups_cleared",
+            {"return_value": "cleared groups"},
+        ),
+        (
+            "automation.engine.ensure_direction_set",
+            {
+                "side_effect": lambda *a, **k: (
+                    order.append("set_direction") or "set: IN"
+                )
+            },
+        ),
+        ("automation.engine.ensure_wallet_search_ready", {"return_value": True}),
+        ("automation.engine.close_playwright_stack", {}),
+        (
+            "automation.engine._apply_auto_no_partners_status_after_actions",
+            {"return_value": False},
+        ),
+        (
+            "automation.engine._pause_stop_before_save",
+            {"side_effect": lambda *a, **k: order.append("stop")},
+        ),
+        (
+            "automation.engine.save",
+            {
+                "side_effect": lambda *a, **k: (
+                    order.append("classic_save") or "saved"
+                )
+            },
+        ),
+        ("automation.engine.retry", {"new": lambda fn, *a, **k: fn()}),
+        ("automation.engine._close_stale_modal", {}),
+    ]
+
+    with ExitStack() as stack:
+        for target, kwargs in patch_specs:
+            stack.enter_context(patch(target, **kwargs))
+        result_path, stats = __import__("automation.engine", fromlist=["run"]).run(
+            str(path),
+            _cfg(
+                result_file_path=str(out),
+                stop_before_save=stop_before_save,
+                stop_before_save_pause_ms=0,
+            ),
+        )
+
+    df = pd.read_excel(result_path)
+    return df, stats, order, classic_open
+
+
+def test_grouped_set_aggregate_plus_set_status_one_open_one_save(tmp_path):
+    # Excel order: status first, aggregate second — engine must reorder.
+    df, _stats, order, classic_open = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_status", "set_aggregate"],
+            "value": ["Тест", "Sim A (1)"],
+            "phone": ["", "998927534931"],
+        },
+    )
+    assert order == ["open", "apply", "set_status", "save", "verify"]
+    assert order.count("open") == 1
+    assert order.count("save") == 1
+    assert df.iloc[0]["action"] == "set_status"
+    assert df.iloc[0]["status"] == "OK"
+    assert df.iloc[1]["action"] == "set_aggregate"
+    assert df.iloc[1]["status"] == RESULT_OK_SET_AGGREGATE
+    assert RESULT_FAIL_SET_AGGREGATE_CONFLICT not in list(df["status"].astype(str))
+    classic_open.assert_not_called()
+
+
+def test_grouped_set_aggregate_plus_partner(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_aggregate", "add_partner"],
+            "value": ["Sim A (1)", "PartnerX"],
+        },
+    )
+    assert order[:3] == ["open", "apply", "add_partner"]
+    assert "save" in order and "verify" in order
+    assert df.iloc[0]["status"] == RESULT_OK_SET_AGGREGATE
+    assert df.iloc[1]["status"] == "OK"
+
+
+def test_grouped_set_aggregate_plus_group(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["add_group", "set_aggregate"],
+            "value": ["42", "Sim A (1)"],
+        },
+    )
+    assert order.index("apply") < order.index("add_group")
+    assert df.iloc[0]["action"] == "add_group"
+    assert df.iloc[0]["status"] == "OK"
+    assert df.iloc[1]["status"] == RESULT_OK_SET_AGGREGATE
+
+
+def test_grouped_multiple_compatible_actions(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111"] * 4,
+            "action": [
+                "set_status",
+                "add_partner",
+                "set_aggregate",
+                "add_group",
+            ],
+            "value": ["Тест", "P1", "Sim A (1)", "7"],
+        },
+    )
+    assert order[0] == "open"
+    assert order[1] == "apply"
+    assert set(order[2:5]) == {"set_status", "add_partner", "add_group"}
+    assert order[-2:] == ["save", "verify"]
+    assert list(df["status"]) == [
+        "OK",
+        "OK",
+        RESULT_OK_SET_AGGREGATE,
+        "OK",
+    ]
+
+
+def test_grouped_apply_failure_blocks_others_and_save(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_status", "set_aggregate"],
+            "value": ["Тест", "Sim A (1)"],
+        },
+        apply_err=RESULT_FAIL_AGGREGATE_SWITCH,
+    )
+    assert "save" not in order
+    assert "verify" not in order
+    assert "set_status" not in order
+    assert order == ["open", "apply"]
+    assert df.iloc[1]["status"] == RESULT_FAIL_AGGREGATE_SWITCH
+    assert df.iloc[0]["status"] == "FAIL"
+    assert "set_aggregate не применён" in str(df.iloc[0]["comment"])
+
+
+def test_grouped_save_failure_no_false_ok_set_aggregate(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_aggregate", "set_status"],
+            "value": ["Sim A (1)", "Тест"],
+        },
+        save_err=RESULT_FAIL_VALIDATION,
+    )
+    assert "save" in order
+    assert "verify" not in order
+    assert RESULT_OK_SET_AGGREGATE not in list(df["status"].astype(str))
+    assert df.iloc[0]["status"] == RESULT_FAIL_VALIDATION
+    assert df.iloc[1]["status"] == RESULT_FAIL_VALIDATION
+
+
+def test_grouped_verify_runs_after_shared_save(tmp_path):
+    _df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111"],
+            "action": ["set_aggregate"],
+            "value": ["Sim A (1)"],
+        },
+    )
+    assert order == ["open", "apply", "save", "verify"]
+    assert order.index("verify") > order.index("save")
+
+
+def test_grouped_stop_before_save_after_all_actions_no_save(tmp_path):
+    df, _stats, order, _ = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_status", "set_aggregate"],
+            "value": ["Тест", "Sim A (1)"],
+        },
+        stop_before_save=True,
+    )
+    assert order == ["open", "apply", "set_status", "stop"]
+    assert "save" not in order
+    assert "verify" not in order
+    assert df.iloc[1]["status"] == RESULT_STOP_BEFORE_SAVE
+    assert df.iloc[0]["status"] == RESULT_STOP_BEFORE_SAVE
+
+
+def test_grouped_regression_without_set_aggregate(tmp_path):
+    df, _stats, order, classic_open = _run_wallet_editor_with_patches(
+        tmp_path,
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_status", "add_partner"],
+            "value": ["Тест", "P1"],
+        },
+    )
+    assert "classic_open" in order
+    assert order.count("classic_open") == 1
+    assert "classic_save" in order
+    assert "open" not in order
+    assert list(df["status"]) == ["OK", "OK"]
+    classic_open.assert_called_once()
