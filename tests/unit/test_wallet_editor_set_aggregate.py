@@ -42,7 +42,9 @@ from automation.set_aggregate_engine import (
     switch_to_single_aggregate,
     target_is_sole_active,
     verify_set_aggregate,
+    verify_set_aggregate_after_save,
 )
+from automation.engine import OpenCardStageError
 
 
 def _cfg(**kwargs) -> RunConfig:
@@ -1005,11 +1007,10 @@ def test_successful_flow_with_verify():
             "automation.add_wallet_engine.save_add_wallet_modal",
             return_value=SaveWaitOutcome(status="closed"),
         ) as save,
-        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
-            "automation.engine.find_strict_matching_row_index", return_value=0
+            "automation.engine._wait_form_hidden_after_delete", return_value=True
         ),
-        patch("automation.engine.open_matched_card_row"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
             return_value=None,
@@ -1041,11 +1042,10 @@ def test_fail_verify_on_mismatch():
             "automation.add_wallet_engine.save_add_wallet_modal",
             return_value=SaveWaitOutcome(status="closed"),
         ),
-        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
-            "automation.engine.find_strict_matching_row_index", return_value=0
+            "automation.engine._wait_form_hidden_after_delete", return_value=True
         ),
-        patch("automation.engine.open_matched_card_row"),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
             return_value="nested card mismatch",
@@ -1731,3 +1731,185 @@ def test_grouped_regression_without_set_aggregate(tmp_path):
     assert "open" not in order
     assert list(df["status"]) == ["OK", "OK"]
     classic_open.assert_called_once()
+
+
+def test_verify_after_save_first_open_ok():
+    page = MagicMock()
+    intent = _intent(phone="998927534931")
+    fill_calls: list[str] = []
+
+    with (
+        patch(
+            "automation.engine._wait_form_hidden_after_delete", return_value=True
+        ),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch(
+            "automation.engine.find_and_open_card_for_delete",
+            side_effect=lambda *a, **k: fill_calls.append("open") or 0,
+        ) as open_fn,
+        patch(
+            "automation.set_aggregate_engine.verify_set_aggregate",
+            return_value=None,
+        ),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.add_wallet_engine.save_add_wallet_modal") as save,
+    ):
+        result = verify_set_aggregate_after_save(
+            page, intent, expected_top_phone="79001112233"
+        )
+
+    assert result == RESULT_OK_SET_AGGREGATE
+    open_fn.assert_called_once()
+    save.assert_not_called()
+    assert fill_calls == ["open"]
+
+
+def test_verify_after_save_retry_click_opens_ok():
+    """First open_matched click fails; retry click opens → OK_SET_AGGREGATE."""
+    page = MagicMock()
+    intent = _intent(phone="998927534931")
+    modal = MagicMock()
+    rows_a = MagicMock()
+    rows_b = MagicMock()
+    row1 = MagicMock()
+    row1.inner_text.return_value = intent.card
+    row2 = MagicMock()
+    row2.inner_text.return_value = intent.card
+    rows_a.nth.return_value = row1
+    rows_b.nth.return_value = row2
+    row_locators = [rows_a, rows_b]
+    fill_count = {"n": 0}
+    wait_n = {"n": 0}
+
+    def locator(sel):
+        if "modal_body" in sel or sel.endswith("modal_body_"):
+            return modal
+        if sel == "tr.pointer":
+            return row_locators.pop(0)
+        return MagicMock()
+
+    page.locator.side_effect = locator
+
+    def wait_modal(*_a, **_k):
+        wait_n["n"] += 1
+        if wait_n["n"] == 1:
+            raise OpenCardStageError("modal_container", intent.card)
+
+    def fake_fill(page_arg, card):
+        fill_count["n"] += 1
+        return card
+
+    with (
+        patch(
+            "automation.engine._wait_form_hidden_after_delete", return_value=True
+        ),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch(
+            "automation.engine.find_strict_matching_row_index", return_value=0
+        ),
+        patch(
+            "automation.engine._fill_card_search_input", side_effect=fake_fill
+        ),
+        patch("automation.engine._submit_card_filter") as submit,
+        patch(
+            "automation.engine._wait_modal_container_visible",
+            side_effect=wait_modal,
+        ),
+        patch(
+            "automation.engine._wait_modal_card_data_ready",
+            return_value=intent.card,
+        ),
+        patch("automation.engine._verify_modal_card_number"),
+        patch(
+            "automation.set_aggregate_engine.verify_set_aggregate",
+            return_value=None,
+        ),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.add_wallet_engine.save_add_wallet_modal") as save,
+    ):
+        # Drive verify through real find_and_open → open_matched retry.
+        result = verify_set_aggregate_after_save(
+            page, intent, expected_top_phone="7900"
+        )
+
+    assert result == RESULT_OK_SET_AGGREGATE
+    assert row1.click.call_count == 1
+    assert row2.click.call_count == 1
+    assert wait_n["n"] == 2
+    submit.assert_not_called()  # find_strict handles fill; open must not submit again
+    save.assert_not_called()
+    assert row_locators == []
+
+
+def test_verify_after_save_both_clicks_fail():
+    page = MagicMock()
+    intent = _intent()
+    modal = MagicMock()
+    rows = MagicMock()
+    row = MagicMock()
+    row.inner_text.return_value = intent.card
+    rows.nth.return_value = row
+
+    def locator(sel):
+        if "modal_body" in sel or sel.endswith("modal_body_"):
+            return modal
+        if sel == "tr.pointer":
+            return rows
+        return MagicMock()
+
+    page.locator.side_effect = locator
+
+    with (
+        patch(
+            "automation.engine._wait_form_hidden_after_delete", return_value=True
+        ),
+        patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch(
+            "automation.engine.find_strict_matching_row_index", return_value=0
+        ),
+        patch(
+            "automation.engine._wait_modal_container_visible",
+            side_effect=OpenCardStageError("modal_container", intent.card),
+        ),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.add_wallet_engine.save_add_wallet_modal") as save,
+    ):
+        result = verify_set_aggregate_after_save(
+            page, intent, expected_top_phone="7900"
+        )
+
+    assert result == RESULT_FAIL_VERIFY
+    assert row.click.call_count == 2
+    save.assert_not_called()
+
+
+def test_verify_waits_form_closed_and_search_ready_before_open():
+    page = MagicMock()
+    intent = _intent()
+    order: list[str] = []
+
+    with (
+        patch(
+            "automation.engine._wait_form_hidden_after_delete",
+            side_effect=lambda *a, **k: order.append("wait_closed") or True,
+        ),
+        patch(
+            "automation.engine.ensure_wallet_search_ready",
+            side_effect=lambda *a, **k: order.append("search_ready") or True,
+        ),
+        patch(
+            "automation.engine.find_and_open_card_for_delete",
+            side_effect=lambda *a, **k: order.append("open") or 0,
+        ),
+        patch(
+            "automation.set_aggregate_engine.verify_set_aggregate",
+            side_effect=lambda *a, **k: order.append("check") or None,
+        ),
+        patch("automation.engine._close_stale_modal"),
+    ):
+        result = verify_set_aggregate_after_save(
+            page, intent, expected_top_phone="7900"
+        )
+
+    assert result == RESULT_OK_SET_AGGREGATE
+    assert order == ["wait_closed", "search_ready", "open", "check"]

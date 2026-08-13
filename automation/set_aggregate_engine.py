@@ -977,24 +977,46 @@ def verify_set_aggregate_after_save(
 ) -> str:
     """Re-open wallet after shared Save and confirm aggregate state.
 
+    Uses the shared delete/open flow: wait for form close → search ready →
+    one card fill + Enter → strict match → row click (with one click retry,
+    no second fill) → field checks. Does not click Save again.
+
     Returns ``OK_SET_AGGREGATE`` or a FAIL_* code.
     """
     from automation.engine import (
         CardSearchUnsettledError,
         OpenCardStageError,
         _close_stale_modal,
+        _wait_form_hidden_after_delete,
         ensure_wallet_search_ready,
-        find_strict_matching_row_index,
-        open_matched_card_row,
+        find_and_open_card_for_delete,
     )
+
+    # Save already waited for close; confirm UI is fully back on the list page.
+    if not _wait_form_hidden_after_delete(page):
+        log.warning(
+            "⚠️ [SetAggregate] form still visible before verify — forcing close card=%s",
+            mask_card(intent.card),
+        )
+        try:
+            _close_stale_modal(page)
+        except Exception:
+            pass
 
     try:
         if not ensure_wallet_search_ready(page, allow_goto=True):
+            log.error(
+                "❌ [SetAggregate] verify search UI not ready card=%s",
+                mask_card(intent.card),
+            )
             return RESULT_FAIL_VERIFY
-        verify_index = find_strict_matching_row_index(page, intent.card)
+        verify_index = find_and_open_card_for_delete(page, intent.card)
         if verify_index is None:
+            log.error(
+                "❌ [SetAggregate] verify card not found after save card=%s",
+                mask_card(intent.card),
+            )
             return RESULT_FAIL_VERIFY
-        open_matched_card_row(page, intent.card, verify_index)
     except (CardSearchUnsettledError, OpenCardStageError) as exc:
         log.error("❌ [SetAggregate] verify open failed: %s", exc)
         try:

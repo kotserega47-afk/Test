@@ -820,8 +820,6 @@ def _submit_card_filter(page: Page, card: str) -> None:
 
 def open_card_with_row_matcher(page: Page, card: str, wait_for_row) -> None:
     """Stable card open flow shared by Disable Wallet and Edit Wallet."""
-    modal = page.locator(MODAL_BODY)
-
     _close_stale_modal(page)
 
     log.info("🔎 [Card] searching card raw_tail=%s", mask_card(card))
@@ -835,55 +833,7 @@ def open_card_with_row_matcher(page: Page, card: str, wait_for_row) -> None:
     card_digits = normalize_card_digits(card)
     match_index = wait_for_row(page, rows, card, card_digits)
 
-    row_text = _read_row_text(rows.nth(match_index), row_index=match_index, card=card)
-    if row_text is None:
-        log.info(
-            "[Card] row_not_found card=%s reason=row_text_unreadable index=%s",
-            card,
-            match_index,
-        )
-        raise OpenCardStageError(
-            "row_match",
-            card,
-            message=f"row text unreadable before click: {card}",
-        )
-
-    rows.nth(match_index).click()
-    log.info(
-        "[Card] row_clicked card=%s index=%s selector=%s",
-        card,
-        match_index,
-        ROW_SELECTOR,
-    )
-
-    try:
-        _wait_modal_container_visible(modal, card)
-    except OpenCardStageError:
-        log.info(
-            "[Card] modal_container failed card=%s row_index=%s row_clicked=true",
-            card,
-            match_index,
-        )
-        raise
-    log.info("[Card] modal_container_visible card=%s", card)
-
-    modal_card_value = _wait_modal_card_data_ready(page, card)
-    log.info("[Card] modal_data_visible card=%s", card)
-
-    try:
-        _verify_modal_card_number(card, modal_card_value)
-    except OpenCardStageError as exc:
-        if exc.stage == "card_verify":
-            log.info(
-                "[Card] modal_card_mismatch card=%s expected_tail=%s actual_tail=%s",
-                card,
-                mask_card(card),
-                mask_card(modal_card_value),
-            )
-        raise
-
-    log.info("[Card] modal_card_verified card=%s", card)
-    log.info(f"✅ [Card] card modal opened card={card}")
+    open_matched_card_row(page, card, match_index)
 
 
 def open_card(page: Page, card: str) -> None:
@@ -1096,40 +1046,67 @@ def find_strict_matching_row_index(page: Page, card: str) -> int | None:
 
 
 def open_matched_card_row(page: Page, card: str, match_index: int) -> None:
-    """Open wallet form from an already-matched row — does not re-fill search."""
+    """Open wallet form from an already-matched row — does not re-fill search.
+
+    If the first row click does not open the form (``modal_container`` timeout),
+    re-acquire a fresh row locator and click once more without submitting the
+    card filter again. Only after both clicks fail is ``OpenCardStageError`` raised.
+    """
     modal = page.locator(MODAL_BODY)
-    rows = page.locator(ROW_SELECTOR)
+    last_container_error: OpenCardStageError | None = None
 
-    row_text = _read_row_text(rows.nth(match_index), row_index=match_index, card=card)
-    if row_text is None:
+    for attempt in range(1, 3):
+        rows = page.locator(ROW_SELECTOR)
+        row = rows.nth(match_index)
+        row_text = _read_row_text(row, row_index=match_index, card=card)
+        if row_text is None:
+            log.info(
+                "[Card] row_not_found card=%s reason=row_text_unreadable index=%s "
+                "attempt=%s",
+                card,
+                match_index,
+                attempt,
+            )
+            raise OpenCardStageError(
+                "row_match",
+                card,
+                message=f"row text unreadable before click: {card}",
+            )
+
+        row.click()
         log.info(
-            "[Card] row_not_found card=%s reason=row_text_unreadable index=%s",
+            "[Card] row_clicked card=%s index=%s selector=%s attempt=%s "
+            "(reuse search results)",
             card,
             match_index,
-        )
-        raise OpenCardStageError(
-            "row_match",
-            card,
-            message=f"row text unreadable before click: {card}",
+            ROW_SELECTOR,
+            attempt,
         )
 
-    rows.nth(match_index).click()
-    log.info(
-        "[Card] row_clicked card=%s index=%s selector=%s (reuse search results)",
-        card,
-        match_index,
-        ROW_SELECTOR,
-    )
+        try:
+            _wait_modal_container_visible(modal, card)
+            last_container_error = None
+            break
+        except OpenCardStageError as exc:
+            last_container_error = exc
+            log.info(
+                "[Card] modal_container failed card=%s row_index=%s "
+                "row_clicked=true attempt=%s",
+                card,
+                match_index,
+                attempt,
+            )
+            if attempt >= 2:
+                raise
+            log.warning(
+                "⚠️ [Card] retrying row click without re-fill card=%s index=%s",
+                mask_card(card),
+                match_index,
+            )
 
-    try:
-        _wait_modal_container_visible(modal, card)
-    except OpenCardStageError:
-        log.info(
-            "[Card] modal_container failed card=%s row_index=%s row_clicked=true",
-            card,
-            match_index,
-        )
-        raise
+    if last_container_error is not None:
+        raise last_container_error
+
     log.info("[Card] modal_container_visible card=%s", card)
 
     modal_card_value = _wait_modal_card_data_ready(page, card)

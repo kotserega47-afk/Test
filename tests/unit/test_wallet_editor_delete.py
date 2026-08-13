@@ -586,8 +586,10 @@ def test_open_matched_card_row_does_not_resubmit_search():
     row = MagicMock()
     row.inner_text.return_value = "9860246700001620"
     rows.nth.return_value = row
+    locator_calls: list[str] = []
 
     def locator(sel):
+        locator_calls.append(sel)
         if sel == "#wallet-add-modal___BV_modal_body_":
             return modal
         if sel == "tr.pointer":
@@ -606,6 +608,89 @@ def test_open_matched_card_row_does_not_resubmit_search():
 
     submit.assert_not_called()
     row.click.assert_called_once()
+    assert locator_calls.count("tr.pointer") == 1
+
+
+def test_open_matched_card_row_retries_fresh_locator_without_refill():
+    page = MagicMock()
+    modal = MagicMock()
+    rows_first = MagicMock()
+    rows_second = MagicMock()
+    row1 = MagicMock()
+    row1.inner_text.return_value = "9860246700001620"
+    row2 = MagicMock()
+    row2.inner_text.return_value = "9860246700001620"
+    rows_first.nth.return_value = row1
+    rows_second.nth.return_value = row2
+    row_locators = [rows_first, rows_second]
+
+    def locator(sel):
+        if sel == "#wallet-add-modal___BV_modal_body_":
+            return modal
+        if sel == "tr.pointer":
+            return row_locators.pop(0)
+        return MagicMock()
+
+    page.locator.side_effect = locator
+    wait_calls = {"n": 0}
+
+    def wait_modal(*_a, **_k):
+        wait_calls["n"] += 1
+        if wait_calls["n"] == 1:
+            raise OpenCardStageError("modal_container", "9860246700001620")
+
+    with (
+        patch("automation.engine._submit_card_filter") as submit,
+        patch(
+            "automation.engine._fill_card_search_input",
+            side_effect=AssertionError("must not re-fill"),
+        ),
+        patch("automation.engine._wait_modal_container_visible", side_effect=wait_modal),
+        patch(
+            "automation.engine._wait_modal_card_data_ready",
+            return_value="9860246700001620",
+        ),
+        patch("automation.engine._verify_modal_card_number"),
+    ):
+        open_matched_card_row(page, "9860246700001620", 0)
+
+    submit.assert_not_called()
+    row1.click.assert_called_once()
+    row2.click.assert_called_once()
+    assert wait_calls["n"] == 2
+    assert row_locators == []  # both fresh locators consumed
+
+
+def test_open_matched_card_row_both_clicks_fail():
+    page = MagicMock()
+    modal = MagicMock()
+    rows = MagicMock()
+    row = MagicMock()
+    row.inner_text.return_value = "9860246700001620"
+    rows.nth.return_value = row
+
+    def locator(sel):
+        if sel == "#wallet-add-modal___BV_modal_body_":
+            return modal
+        if sel == "tr.pointer":
+            return rows
+        return MagicMock()
+
+    page.locator.side_effect = locator
+
+    with (
+        patch(
+            "automation.engine._wait_modal_container_visible",
+            side_effect=OpenCardStageError("modal_container", "9860246700001620"),
+        ),
+        patch("automation.engine._wait_modal_card_data_ready") as data_ready,
+        pytest.raises(OpenCardStageError) as exc_info,
+    ):
+        open_matched_card_row(page, "9860246700001620", 0)
+
+    assert exc_info.value.stage == "modal_container"
+    assert row.click.call_count == 2
+    data_ready.assert_not_called()
 
 
 def test_timing_outcome_from_delete_results():
