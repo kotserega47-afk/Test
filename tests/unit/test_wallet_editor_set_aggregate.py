@@ -459,7 +459,27 @@ def _patch_delayed_switch(ui: _DelayedAggUI, page: MagicMock):
 def _switch_patches(ui: _DelayedAggUI, aw):
     from contextlib import ExitStack
 
+    from automation.set_aggregate_engine import AggregateCheckboxSnapshot
+
+    def snap(_page=None, card=None):
+        return [
+            AggregateCheckboxSnapshot(name=n, checked=c, id=f"id-{n}")
+            for n, c in ui.snapshot()
+        ]
+
+    def locator_by_id(_page, checkbox_id: str):
+        name = checkbox_id[3:] if checkbox_id.startswith("id-") else checkbox_id
+        if name not in ui.checkboxes:
+            return None
+        return ui.checkboxes[name].first
+
     stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
+            side_effect=snap,
+        )
+    )
     stack.enter_context(
         patch(
             "automation.set_aggregate_engine.list_aggregate_checkbox_states",
@@ -486,6 +506,12 @@ def _switch_patches(ui: _DelayedAggUI, aw):
     )
     stack.enter_context(
         patch("automation.set_aggregate_engine._aw", return_value=aw)
+    )
+    stack.enter_context(
+        patch(
+            "automation.set_aggregate_engine._checkbox_locator_by_id",
+            side_effect=locator_by_id,
+        )
     )
     stack.enter_context(
         patch(
@@ -549,46 +575,23 @@ def test_dom_recreate_invalidates_old_locator_during_switch():
 def test_switch_timeout_returns_fail_aggregate_switch():
     page = MagicMock()
     page.wait_for_timeout = MagicMock()
-    # Target never becomes checked → timeout
-    ui = _DelayedAggUI({"Old": True, "Sim A (1)": False}, delay_reads=50)
-    # After uncheck, never apply check settle for target: force find_state stuck
+    ui = _DelayedAggUI({"Old": True, "Sim A (1)": False}, delay_reads=1)
     aw = _patch_delayed_switch(ui, page)
 
-    def stuck_find(p, name):
-        snap = dict(ui.snapshot())
-        if name == "Sim A (1)":
-            return False  # never confirms checked
-        return snap.get(name)
+    def wait_state(page_arg, name, *, want_checked, timeout_ms=0):
+        if not want_checked:
+            ui.state[name] = False
+            ui._pending.pop(name, None)
+            return True
+        return False
 
-    with (
-        patch(
-            "automation.set_aggregate_engine.list_aggregate_checkbox_states",
-            side_effect=lambda p: ui.snapshot(),
-        ),
-        patch(
-            "automation.set_aggregate_engine.find_aggregate_state",
-            side_effect=stuck_find,
-        ),
-        patch(
-            "automation.set_aggregate_engine.active_aggregate_names",
-            side_effect=lambda p: [n for n, c in ui.snapshot() if c],
-        ),
-        patch(
-            "automation.set_aggregate_engine.target_is_sole_active",
-            return_value=False,
-        ),
-        patch("automation.set_aggregate_engine._aw", return_value=aw),
-        patch(
-            "automation.set_aggregate_engine._fresh_aggregate_checkbox",
-            side_effect=lambda p, name: (
-                ui.checkboxes[name].first if name in ui.checkboxes else None
-            ),
-        ),
-        patch("automation.set_aggregate_engine._AGGREGATE_TOGGLE_POLL_MS", 1),
-        patch("automation.set_aggregate_engine._AGGREGATE_TOGGLE_TIMEOUT_MS", 30),
-    ):
-        with pytest.raises(AggregateSwitchError) as exc:
-            switch_to_single_aggregate(page, "Sim A (1)")
+    with _switch_patches(ui, aw):
+        with patch(
+            "automation.set_aggregate_engine._wait_aggregate_checked_state",
+            side_effect=wait_state,
+        ):
+            with pytest.raises(AggregateSwitchError) as exc:
+                switch_to_single_aggregate(page, "Sim A (1)")
     assert "timeout" in exc.value.reason
 
 
@@ -610,7 +613,7 @@ def test_nested_fields_appear_with_delay_then_phone_filled():
     intent = _intent(phone="998927534931")
     calls = {"fields": 0, "fill": 0}
 
-    def wait_fields(p, name):
+    def wait_fields(p, name, **_kwargs):
         calls["fields"] += 1
         if calls["fields"] == 1:
             # first internal wait path via apply uses wait_for_aggregate_fields_visible once
@@ -1012,6 +1015,10 @@ def test_successful_flow_with_verify():
         ),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
+            "automation.engine.find_strict_matching_row_index", return_value=0
+        ),
+        patch("automation.engine.open_matched_card_row"),
+        patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
             return_value=None,
         ) as verify,
@@ -1046,6 +1053,10 @@ def test_fail_verify_on_mismatch():
             "automation.engine._wait_form_hidden_after_delete", return_value=True
         ),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
+        patch(
+            "automation.engine.find_strict_matching_row_index", return_value=0
+        ),
+        patch("automation.engine.open_matched_card_row"),
         patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
             return_value="nested card mismatch",
@@ -1109,68 +1120,67 @@ def test_validation_and_timeout_mapping():
 def test_verify_checks_top_phone_unchanged_and_nested_only_provided():
     page = MagicMock()
     intent = _intent(phone="998901234567", account=None)
+    modal = MagicMock()
+    page.locator.return_value = modal
+    modal.evaluate.return_value = {
+        "top_phone": "79001112233",
+        "nested_card": None,
+        "phone": "998901234567",
+    }
 
     with (
         patch(
-            "automation.set_aggregate_engine.target_is_sole_active",
-            return_value=True,
+            "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
+            return_value=[
+                __import__(
+                    "automation.set_aggregate_engine",
+                    fromlist=["AggregateCheckboxSnapshot"],
+                ).AggregateCheckboxSnapshot(
+                    name="ЧБР", checked=True, id="agg-1"
+                )
+            ],
         ),
-        patch(
-            "automation.set_aggregate_engine.read_nested_field",
-            side_effect=lambda page, labels: {
-                ("Карта",): "9990080812345678",
-                ("Телефон",): "998901234567",
-            }.get(labels),
-        ),
-        patch(
-            "automation.set_aggregate_engine.read_top_level_phone",
-            return_value="79001112233",
-        ),
-        patch(
-            "automation.set_aggregate_engine.detect_set_aggregate_expansion",
-            return_value="Аккаунт",
-        ),
-        patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=True,
-        ),
+        patch("automation.set_aggregate_engine.switch_to_single_aggregate") as switch,
         patch("automation.set_aggregate_engine._aw") as aw_mod,
     ):
+        aw_mod.return_value.MODAL_BODY = "#modal"
         aw_mod.return_value.ACCOUNT_NUMBER_LABELS = ("Номер счёта",)
         assert (
             verify_set_aggregate(page, intent, expected_top_phone="79001112233")
             is None
         )
+        switch.assert_not_called()
+        # Only provided nested phone requested
+        wanted = modal.evaluate.call_args.args[1]
+        assert wanted["phone"] is True
+        assert wanted["account"] is False
 
 
 def test_verify_fails_when_top_phone_changed():
     page = MagicMock()
     intent = _intent(phone=None)
+    modal = MagicMock()
+    page.locator.return_value = modal
+    modal.evaluate.return_value = {
+        "top_phone": "CHANGED",
+        "nested_card": None,
+    }
 
     with (
         patch(
-            "automation.set_aggregate_engine.target_is_sole_active",
-            return_value=True,
-        ),
-        patch(
-            "automation.set_aggregate_engine.read_nested_field",
-            return_value="9990080812345678",
-        ),
-        patch(
-            "automation.set_aggregate_engine.read_top_level_phone",
-            return_value="CHANGED",
-        ),
-        patch(
-            "automation.set_aggregate_engine.detect_set_aggregate_expansion",
-            return_value="Аккаунт",
-        ),
-        patch(
-            "automation.set_aggregate_engine._nested_field_visible",
-            return_value=True,
+            "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
+            return_value=[
+                __import__(
+                    "automation.set_aggregate_engine",
+                    fromlist=["AggregateCheckboxSnapshot"],
+                ).AggregateCheckboxSnapshot(
+                    name="ЧБР", checked=True, id="agg-1"
+                )
+            ],
         ),
         patch("automation.set_aggregate_engine._aw") as aw_mod,
     ):
-        aw_mod.return_value.ACCOUNT_NUMBER_LABELS = ("Номер счёта",)
+        aw_mod.return_value.MODAL_BODY = "#modal"
         reason = verify_set_aggregate(
             page, intent, expected_top_phone="79001112233"
         )
@@ -1321,45 +1331,23 @@ def test_aggregate_label_matches_with_inner_span_text():
 
 
 def test_field_captions_near_checkboxes_are_not_aggregates():
-    """«Бакай» / «Номер слота» without for→checkbox must not appear in aggregate list."""
-    from automation.set_aggregate_engine import list_aggregate_checkbox_states
+    """Snapshot must include only real custom-checkbox aggregates."""
+    from automation.set_aggregate_engine import (
+        list_aggregate_checkbox_states,
+        parse_aggregate_snapshot_raw,
+    )
+
+    # DOM evaluate returns only checkbox-bound aggregates (Бакай/слот excluded by JS).
+    raw = [
+        {"name": "Sim A (1)", "checked": True, "id": "agg-1"},
+    ]
+    parsed = parse_aggregate_snapshot_raw(raw)
+    assert [(e.name, e.checked) for e in parsed] == [("Sim A (1)", True)]
 
     page = MagicMock()
     modal = MagicMock()
-
-    sim_label = _make_for_id_label("Sim A (1)", "agg-1")
-    bakai = MagicMock()
-    bakai.inner_text.return_value = "Бакай"
-    bakai.get_attribute.return_value = None  # no for=
-    empty = MagicMock()
-    empty.count.return_value = 0
-    bakai.locator.return_value = empty  # not in custom-checkbox
-
-    slot = MagicMock()
-    slot.inner_text.return_value = "Номер слота"
-    slot.get_attribute.return_value = None
-    slot.locator.return_value = empty
-
-    labels = MagicMock()
-    labels.count.return_value = 3
-    labels.nth.side_effect = lambda i: [sim_label, bakai, slot][i]
-
-    sim_cb = MagicMock()
-    sim_cb.count.return_value = 1
-    sim_cb.first = MagicMock()
-    sim_cb.first.is_checked.return_value = True
-
-    def modal_locator(sel):
-        if sel == "label":
-            return labels
-        if 'id="agg-1"' in sel:
-            return sim_cb
-        miss = MagicMock()
-        miss.count.return_value = 0
-        return miss
-
-    modal.locator.side_effect = modal_locator
     page.locator.return_value = modal
+    modal.evaluate.return_value = raw
 
     with patch("automation.set_aggregate_engine._aw") as aw_mod:
         aw_mod.return_value.MODAL_BODY = "#modal"
@@ -1367,7 +1355,16 @@ def test_field_captions_near_checkboxes_are_not_aggregates():
         states = list_aggregate_checkbox_states(page)
 
     assert states == [("Sim A (1)", True)]
-    assert [n for n, c in states if c] == ["Sim A (1)"]
+    # Ordinary field captions must never appear even if somehow in raw payload without id
+    filtered = parse_aggregate_snapshot_raw(
+        [
+            {"name": "Бакай", "checked": False, "id": ""},
+            {"name": "Номер слота", "checked": False, "id": ""},
+            {"name": "Телефон", "checked": False, "id": ""},
+            {"name": "Sim A (1)", "checked": True, "id": "agg-1"},
+        ]
+    )
+    assert [e.name for e in filtered] == ["Sim A (1)"]
 
 
 def test_preceding_following_neighbor_checkbox_not_used():
@@ -1390,11 +1387,16 @@ def test_preceding_following_neighbor_checkbox_not_used():
 
 
 def test_active_list_only_sim_a_when_field_labels_present():
-    from automation.set_aggregate_engine import active_aggregate_names
+    from automation.set_aggregate_engine import (
+        AggregateCheckboxSnapshot,
+        active_aggregate_names,
+    )
 
     with patch(
-        "automation.set_aggregate_engine.list_aggregate_checkbox_states",
-        return_value=[("Sim A (1)", True)],
+        "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
+        return_value=[
+            AggregateCheckboxSnapshot(name="Sim A (1)", checked=True, id="agg-1")
+        ],
     ):
         assert active_aggregate_names(MagicMock()) == ["Sim A (1)"]
 
@@ -1736,7 +1738,6 @@ def test_grouped_regression_without_set_aggregate(tmp_path):
 def test_verify_after_save_first_open_ok():
     page = MagicMock()
     intent = _intent(phone="998927534931")
-    fill_calls: list[str] = []
 
     with (
         patch(
@@ -1744,9 +1745,9 @@ def test_verify_after_save_first_open_ok():
         ),
         patch("automation.engine.ensure_wallet_search_ready", return_value=True),
         patch(
-            "automation.engine.find_and_open_card_for_delete",
-            side_effect=lambda *a, **k: fill_calls.append("open") or 0,
-        ) as open_fn,
+            "automation.engine.find_strict_matching_row_index", return_value=0
+        ) as find,
+        patch("automation.engine.open_matched_card_row") as open_row,
         patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
             return_value=None,
@@ -1759,9 +1760,9 @@ def test_verify_after_save_first_open_ok():
         )
 
     assert result == RESULT_OK_SET_AGGREGATE
-    open_fn.assert_called_once()
+    find.assert_called_once()
+    open_row.assert_called_once()
     save.assert_not_called()
-    assert fill_calls == ["open"]
 
 
 def test_verify_after_save_retry_click_opens_ok():
@@ -1898,8 +1899,12 @@ def test_verify_waits_form_closed_and_search_ready_before_open():
             side_effect=lambda *a, **k: order.append("search_ready") or True,
         ),
         patch(
-            "automation.engine.find_and_open_card_for_delete",
-            side_effect=lambda *a, **k: order.append("open") or 0,
+            "automation.engine.find_strict_matching_row_index",
+            side_effect=lambda *a, **k: order.append("search") or 0,
+        ),
+        patch(
+            "automation.engine.open_matched_card_row",
+            side_effect=lambda *a, **k: order.append("open"),
         ),
         patch(
             "automation.set_aggregate_engine.verify_set_aggregate",
@@ -1912,4 +1917,4 @@ def test_verify_waits_form_closed_and_search_ready_before_open():
         )
 
     assert result == RESULT_OK_SET_AGGREGATE
-    assert order == ["wait_closed", "search_ready", "open", "check"]
+    assert order == ["wait_closed", "search_ready", "search", "open", "check"]

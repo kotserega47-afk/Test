@@ -23,6 +23,7 @@ from automation.engine import (
     RESULT_OK_DELETED,
     RESULT_SKIP_NOT_FOUND,
     RESULT_STOP_BEFORE_DELETE,
+    MODAL_FIRST_CLICK_TIMEOUT_MS,
     OpenCardStageError,
     _click_delete_confirm_ok,
     _find_delete_confirm_dialog,
@@ -597,10 +598,17 @@ def test_open_matched_card_row_does_not_resubmit_search():
         return MagicMock()
 
     page.locator.side_effect = locator
+    wait_kwargs: list[dict] = []
+
+    def wait_modal(*_a, **kwargs):
+        wait_kwargs.append(kwargs)
 
     with (
         patch("automation.engine._submit_card_filter") as submit,
-        patch("automation.engine._wait_modal_container_visible"),
+        patch(
+            "automation.engine._wait_modal_container_visible",
+            side_effect=wait_modal,
+        ),
         patch("automation.engine._wait_modal_card_data_ready", return_value="9860246700001620"),
         patch("automation.engine._verify_modal_card_number"),
     ):
@@ -609,9 +617,16 @@ def test_open_matched_card_row_does_not_resubmit_search():
     submit.assert_not_called()
     row.click.assert_called_once()
     assert locator_calls.count("tr.pointer") == 1
+    assert wait_kwargs[0]["timeout_ms"] == MODAL_FIRST_CLICK_TIMEOUT_MS
+    assert wait_kwargs[0]["soft"] is True
 
 
 def test_open_matched_card_row_retries_fresh_locator_without_refill():
+    from automation.engine import (
+        MODAL_FIRST_CLICK_TIMEOUT_MS,
+        _MODAL_CONTAINER_TIMEOUT_MS,
+    )
+
     page = MagicMock()
     modal = MagicMock()
     rows_first = MagicMock()
@@ -632,11 +647,11 @@ def test_open_matched_card_row_retries_fresh_locator_without_refill():
         return MagicMock()
 
     page.locator.side_effect = locator
-    wait_calls = {"n": 0}
+    wait_calls: list[dict] = []
 
-    def wait_modal(*_a, **_k):
-        wait_calls["n"] += 1
-        if wait_calls["n"] == 1:
+    def wait_modal(*_a, **kwargs):
+        wait_calls.append(kwargs)
+        if len(wait_calls) == 1:
             raise OpenCardStageError("modal_container", "9860246700001620")
 
     with (
@@ -657,8 +672,11 @@ def test_open_matched_card_row_retries_fresh_locator_without_refill():
     submit.assert_not_called()
     row1.click.assert_called_once()
     row2.click.assert_called_once()
-    assert wait_calls["n"] == 2
-    assert row_locators == []  # both fresh locators consumed
+    assert wait_calls[0]["timeout_ms"] == MODAL_FIRST_CLICK_TIMEOUT_MS
+    assert wait_calls[0]["soft"] is True
+    assert wait_calls[1]["timeout_ms"] == _MODAL_CONTAINER_TIMEOUT_MS
+    assert wait_calls[1]["soft"] is False
+    assert row_locators == []
 
 
 def test_open_matched_card_row_both_clicks_fail():

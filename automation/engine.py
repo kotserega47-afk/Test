@@ -78,6 +78,8 @@ SAVE_BUTTON = 'button:has-text("Сохранить")'
 _WALLET_UI_READY_TIMEOUT_MS = 15_000
 _AUTH_NETWORKIDLE_TIMEOUT_MS = 60_000
 _MODAL_CONTAINER_TIMEOUT_MS = 10_000
+# First row-click often needs a second attempt; fail fast then retry without re-fill.
+MODAL_FIRST_CLICK_TIMEOUT_MS = 2_000
 _MODAL_DATA_TIMEOUT_MS = 10_000
 _MODAL_DATA_POLL_MS = 100
 _ROW_MATCH_POLL_MS = 150
@@ -690,11 +692,32 @@ def _try_get_modal_card_value_fast(page: Page) -> str | None:
     return None
 
 
-def _wait_modal_container_visible(modal, card: str) -> None:
+def _wait_modal_container_visible(
+    modal,
+    card: str,
+    *,
+    timeout_ms: int | None = None,
+    soft: bool = False,
+) -> None:
+    timeout = (
+        _MODAL_CONTAINER_TIMEOUT_MS if timeout_ms is None else max(0, int(timeout_ms))
+    )
     try:
-        modal.wait_for(state="visible", timeout=_MODAL_CONTAINER_TIMEOUT_MS)
+        modal.wait_for(state="visible", timeout=timeout)
     except Exception as exc:
-        log.error("[Card] open_card timeout stage=modal_container card=%s", card)
+        if soft:
+            log.info(
+                "[Card] open_card soft timeout stage=modal_container card=%s "
+                "timeout_ms=%s — will retry click",
+                card,
+                timeout,
+            )
+        else:
+            log.error(
+                "[Card] open_card timeout stage=modal_container card=%s timeout_ms=%s",
+                card,
+                timeout,
+            )
         raise OpenCardStageError("modal_container", card, exc) from exc
     log.info("[Card] modal container visible card=%s", card)
 
@@ -1048,9 +1071,10 @@ def find_strict_matching_row_index(page: Page, card: str) -> int | None:
 def open_matched_card_row(page: Page, card: str, match_index: int) -> None:
     """Open wallet form from an already-matched row — does not re-fill search.
 
-    If the first row click does not open the form (``modal_container`` timeout),
-    re-acquire a fresh row locator and click once more without submitting the
-    card filter again. Only after both clicks fail is ``OpenCardStageError`` raised.
+    First click waits only ``MODAL_FIRST_CLICK_TIMEOUT_MS``. If the form does not
+    appear, re-acquire a fresh row locator and click once more (no card re-fill /
+    no second Enter / no «Применить»). The second click uses the full modal
+    timeout. ``OpenCardStageError`` is raised only after both clicks fail.
     """
     modal = page.locator(MODAL_BODY)
     last_container_error: OpenCardStageError | None = None
@@ -1083,8 +1107,18 @@ def open_matched_card_row(page: Page, card: str, match_index: int) -> None:
             attempt,
         )
 
+        first_attempt = attempt == 1
         try:
-            _wait_modal_container_visible(modal, card)
+            _wait_modal_container_visible(
+                modal,
+                card,
+                timeout_ms=(
+                    MODAL_FIRST_CLICK_TIMEOUT_MS
+                    if first_attempt
+                    else _MODAL_CONTAINER_TIMEOUT_MS
+                ),
+                soft=first_attempt,
+            )
             last_container_error = None
             break
         except OpenCardStageError as exc:
