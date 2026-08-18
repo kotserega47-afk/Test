@@ -11,8 +11,45 @@ if TYPE_CHECKING:
     from automation.add_wallet_engine import SaveWaitOutcome
     from automation.runtime import RunConfig
 
-from automation.audit import log, log_timing, mask_card, normalize_card_digits
-import re
+from automation.audit import log, mask_card
+from automation.wallet_form_helpers import (
+    MODAL_BODY,
+    AggregateCheckboxSnapshot,  # noqa: F401
+    AggregateSwitchError,
+    NESTED_FIELD_LABELS,
+    _checkbox_locator_by_id,  # noqa: F401
+    _fresh_aggregate_checkbox,  # noqa: F401
+    _inputs_for_labels,
+    _list_labeled_inputs,
+    _locator_for_labeled_input,
+    _pick_nested_generic_item,  # noqa: F401
+    _pick_nested_phone_item,  # noqa: F401
+    _snapshot_entry,
+    _wait_aggregate_checked_state,  # noqa: F401
+    active_aggregate_names,
+    aggregate_checkbox_for_label,  # noqa: F401
+    aggregate_label_matches,
+    css_escape_ident,  # noqa: F401
+    fill_locator_confirmed as _fill_locator_confirmed,
+    fill_locator_text,
+    find_aggregate_checkbox_label,  # noqa: F401
+    find_aggregate_state,
+    list_aggregate_checkbox_states,  # noqa: F401
+    mask_phone as _mask_phone,
+    mask_secret_field as _mask_secret_field,
+    normalize_label_text as _normalize_aggregate_label_text,  # noqa: F401
+    opportunistic_nested_card_item,
+    parse_aggregate_snapshot_raw,  # noqa: F401
+    read_locator_value as _read_locator_value,
+    read_top_level_phone,
+    resolve_nested_field_locator,
+    snapshot_aggregate_checkboxes as _snapshot_aggregate_checkboxes,
+    switch_to_single_aggregate as _switch_to_single_aggregate,
+    target_is_sole_active,
+    time_form_step,
+    values_match as _values_match,
+    wait_for_requested_nested_fields as _wait_for_requested_nested_fields,
+)
 import time
 
 RESULT_OK_SET_AGGREGATE = "OK_SET_AGGREGATE"
@@ -71,58 +108,12 @@ _OPTIONAL_COLUMN_ALIASES: dict[str, str] = {
 }
 
 # Antares checkbox/DOM settle after aggregate toggles (UI updates asynchronously).
-_AGGREGATE_TOGGLE_TIMEOUT_MS = 8_000
-_AGGREGATE_TOGGLE_POLL_MS = 75
-_AGGREGATE_UNCHECK_ROUNDS = 12
 _AGGREGATE_FIELDS_WAIT_MS = 5_000
 _NESTED_FIELD_POLL_MS = 50
 _NESTED_FIELD_WAIT_MS = 5_000
 _SET_AGGREGATE_TIMING_PROFILE = "wallet_editor"
 _SET_AGGREGATE_TIMING_SCOPE = "set_aggregate"
-
-# One DOM evaluate: only real aggregate checkboxes inside .custom-control.custom-checkbox.
-_AGGREGATE_SNAPSHOT_JS = r"""
-(root) => {
-  const out = [];
-  const seen = new Set();
-  const boxes = root.querySelectorAll('.custom-control.custom-checkbox');
-  for (const box of boxes) {
-    const input = box.querySelector('input[type="checkbox"]');
-    if (!input) continue;
-    const id = (input.id || '').trim();
-    if (!id) continue;
-    let label = null;
-    try {
-      label = root.querySelector('label[for="' + CSS.escape(id) + '"]');
-    } catch (e) {
-      label = null;
-    }
-    if (!label) {
-      const labels = root.querySelectorAll('label[for]');
-      for (const candidate of labels) {
-        if ((candidate.getAttribute('for') || '') === id) {
-          label = candidate;
-          break;
-        }
-      }
-    }
-    if (!label) {
-      label = box.querySelector('label');
-    }
-    if (!label) continue;
-    const raw = (label.innerText || label.textContent || '')
-      .replace(/\u00a0/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!raw) continue;
-    const key = raw.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ name: raw, checked: !!input.checked, id: id });
-  }
-  return out;
-}
-"""
+_FIELD_LABELS = NESTED_FIELD_LABELS
 
 # Nested field labels that indicate aggregate expansion (Sim A / ЧБР / etc.).
 _SET_AGGREGATE_EXPANSION_LABELS = (
@@ -138,148 +129,17 @@ _SET_AGGREGATE_EXPANSION_LABELS = (
 )
 
 
-class AggregateSwitchError(RuntimeError):
-    """Raised when aggregate checkbox switch cannot be confirmed within timeout."""
-
-    def __init__(self, reason: str) -> None:
-        self.reason = reason
-        super().__init__(reason)
-
-
-@dataclass(frozen=True)
-class AggregateCheckboxSnapshot:
-    """One real aggregate checkbox from a single DOM snapshot."""
-
-    name: str
-    checked: bool
-    id: str
-
-
 def _time_set_aggregate_step(step: str, *, card: str | None = None):
-    """Context manager for safe WE/timing logs (no full card/phone values)."""
-
-    class _Timer:
-        def __enter__(self):
-            self._started = time.perf_counter()
-            self.outcome = "ok"
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            if exc_type is not None:
-                self.outcome = "fail"
-            duration_ms = round((time.perf_counter() - self._started) * 1000)
-            log_timing(
-                profile=_SET_AGGREGATE_TIMING_PROFILE,
-                scope=_SET_AGGREGATE_TIMING_SCOPE,
-                step=step,
-                duration_ms=duration_ms,
-                outcome=self.outcome,
-                card=card,
-            )
-            return False
-
-    return _Timer()
-
-
-def _mask_phone(value: object) -> str:
-    digits = "".join(c for c in str(value or "") if c.isdigit())
-    if len(digits) <= 4:
-        return "***"
-    return f"***{digits[-4:]}"
-
-
-def _mask_secret_field(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    digits = "".join(c for c in text if c.isdigit())
-    if len(digits) >= 6:
-        return _mask_phone(digits)
-    if len(text) <= 4:
-        return "***"
-    return f"***{text[-4:]}"
-
-
-def _normalize_aggregate_label_text(text: str) -> str:
-    """Collapse whitespace from label.inner_text (may include nested <span>)."""
-    return re.sub(r"\s+", " ", (text or "").replace("\u00a0", " ")).strip()
+    return time_form_step(
+        step,
+        card=card,
+        profile=_SET_AGGREGATE_TIMING_PROFILE,
+        scope=_SET_AGGREGATE_TIMING_SCOPE,
+    )
 
 
 def _css_escape_ident(value: str) -> str:
-    """Minimal CSS ident escape for getElementById-style selectors."""
-    # Prefer attribute selector over #id when id has special chars.
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def aggregate_checkbox_for_label(modal, label_el):
-    """Resolve checkbox strictly — never via neighboring preceding/following inputs.
-
-    Allowed bindings only:
-    1) ``label[for]`` → ``input[type=checkbox][id=...]`` inside the same modal;
-    2) ``input[type=checkbox]`` inside the nearest ``.custom-control.custom-checkbox``.
-    """
-    try:
-        for_id = label_el.get_attribute("for")
-    except Exception:
-        for_id = None
-
-    if for_id:
-        for_id = str(for_id).strip()
-        if for_id:
-            escaped = _css_escape_ident(for_id)
-            checkbox = modal.locator(
-                f'input[type="checkbox"][id="{escaped}"]'
-            )
-            try:
-                if checkbox.count() > 0:
-                    return checkbox.first
-            except Exception:
-                pass
-            # for= points elsewhere (text input etc.) — not an aggregate checkbox.
-            return None
-
-    # Fallback: same custom-checkbox container only (no form-check wandering, no XPath neighbors).
-    try:
-        container = label_el.locator(
-            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), "
-            "' custom-checkbox ')][1]"
-        )
-        if container.count() == 0:
-            return None
-        checkbox = container.locator('input[type="checkbox"]')
-        if checkbox.count() == 0:
-            return None
-        return checkbox.first
-    except Exception:
-        return None
-
-
-def aggregate_label_matches(text: str, aggregate_name: str) -> bool:
-    left = _normalize_aggregate_label_text(text).casefold()
-    right = _normalize_aggregate_label_text(aggregate_name).casefold()
-    return bool(left) and left == right
-
-
-def find_aggregate_checkbox_label(modal, aggregate_name: str):
-    """Find label whose normalized text matches and has a strict checkbox binding."""
-    labels = modal.locator("label")
-    try:
-        count = labels.count()
-    except Exception:
-        return None
-    for i in range(count):
-        label_el = labels.nth(i)
-        try:
-            text = _normalize_aggregate_label_text(
-                label_el.inner_text(timeout=500)
-            )
-        except Exception:
-            continue
-        if not aggregate_label_matches(text, aggregate_name):
-            continue
-        if aggregate_checkbox_for_label(modal, label_el) is not None:
-            return label_el
-    return None
+    return css_escape_ident(value)
 
 
 def _aw():
@@ -287,7 +147,6 @@ def _aw():
     import automation.add_wallet_engine as aw
 
     return aw
-
 
 @dataclass(frozen=True)
 class SetAggregateIntent:
@@ -429,207 +288,58 @@ def intent_from_excel_row(
 
 
 def _read_input_value(field) -> str:
-    try:
-        return str(field.input_value() or "").strip()
-    except Exception:
-        try:
-            return str(field.evaluate("el => el.value") or "").strip()
-        except Exception:
-            return ""
+    return _read_locator_value(field)
 
 
-def read_top_level_phone(page: "Page") -> str:
-    """Main wallet phone (first «Телефон» input) — never the nested aggregate phone."""
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    matches = aw._find_all_text_inputs_by_label_in(modal, "Телефон")
-    if not matches:
-        field = aw._find_text_input_by_label_in(modal, "Телефон")
-        if field is None:
-            return ""
-        return _read_input_value(field)
-    return _read_input_value(matches[0])
+def snapshot_aggregate_checkboxes(page: "Page", *, card: str | None = None):
+    return _snapshot_aggregate_checkboxes(
+        page, card=card, timing_scope=_SET_AGGREGATE_TIMING_SCOPE
+    )
 
 
-def read_nested_field(page: "Page", labels: tuple[str, ...]) -> str | None:
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    for label in labels:
-        field = aw._find_aggregate_field_input(modal, label)
-        if field is None:
-            continue
-        try:
-            if not field.is_visible():
-                continue
-        except Exception:
-            pass
-        return _read_input_value(field)
-    return None
+def wait_for_requested_nested_fields(
+    page: "Page",
+    intent: SetAggregateIntent,
+    *,
+    expected_top_phone: str,
+) -> dict[str, object]:
+    """Wait only for Excel-provided nested fields; return ready locators."""
+    return _wait_for_requested_nested_fields(
+        page,
+        needed=intent.provided_optional(),
+        expected_top_phone=expected_top_phone,
+        aggregate=intent.aggregate,
+        card=intent.card,
+        timing_scope=_SET_AGGREGATE_TIMING_SCOPE,
+    )
 
 
-def parse_aggregate_snapshot_raw(
-    raw: object,
-) -> list[AggregateCheckboxSnapshot]:
-    """Normalize evaluate() payload into AggregateCheckboxSnapshot list."""
-    aw = _aw()
-    out: list[AggregateCheckboxSnapshot] = []
-    seen: set[str] = set()
-    if not isinstance(raw, list):
-        return out
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        name = _normalize_aggregate_label_text(str(item.get("name") or ""))
-        checkbox_id = str(item.get("id") or "").strip()
-        if not name or not checkbox_id:
-            continue
-        if aw._is_kyc_label_text(name):
-            continue
-        key = name.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(
-            AggregateCheckboxSnapshot(
-                name=name,
-                checked=bool(item.get("checked")),
-                id=checkbox_id,
-            )
-        )
-    return out
-
-
-def snapshot_aggregate_checkboxes(
-    page: "Page", *, card: str | None = None
-) -> list[AggregateCheckboxSnapshot]:
-    """One DOM evaluate → real aggregate checkboxes only (no field captions)."""
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    with _time_set_aggregate_step("aggregate_snapshot", card=card):
-        try:
-            raw = modal.evaluate(_AGGREGATE_SNAPSHOT_JS)
-        except Exception as exc:
-            log.warning("⚠️ [SetAggregate] aggregate snapshot failed: %s", exc)
-            return []
-        return parse_aggregate_snapshot_raw(raw)
-
-
-def list_aggregate_checkbox_states(page: "Page") -> list[tuple[str, bool]]:
-    """Fresh snapshot of real aggregate checkboxes only.
-
-    Field captions such as «Бакай» / «Номер слота» / «Телефон» that are not bound
-    via ``.custom-control.custom-checkbox`` + checkbox ``id``/``label[for]`` are
-    excluded. Never uses preceding/following XPath neighbors.
-    """
-    return [(e.name, e.checked) for e in snapshot_aggregate_checkboxes(page)]
-
-
-def find_aggregate_state(page: "Page", aggregate_name: str) -> bool | None:
-    """Return checked state for exact aggregate label, or None if not found."""
-    for entry in snapshot_aggregate_checkboxes(page):
-        if aggregate_label_matches(entry.name, aggregate_name):
-            return entry.checked
-    return None
-
-
-def active_aggregate_names(page: "Page") -> list[str]:
-    return [e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]
-
-
-def target_is_sole_active(page: "Page", aggregate_name: str) -> bool:
-    active = [e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]
-    if len(active) != 1:
-        return False
-    return aggregate_label_matches(active[0], aggregate_name)
-
-
-def _snapshot_entry(
-    snap: list[AggregateCheckboxSnapshot], aggregate_name: str
-) -> AggregateCheckboxSnapshot | None:
-    for entry in snap:
-        if aggregate_label_matches(entry.name, aggregate_name):
-            return entry
-    return None
-
-
-def _checkbox_locator_by_id(page: "Page", checkbox_id: str):
-    """Fresh checkbox locator by id — never reuse stale handles across toggles."""
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    escaped = _css_escape_ident(checkbox_id)
-    checkbox = modal.locator(f'input[type="checkbox"][id="{escaped}"]')
-    try:
-        if checkbox.count() == 0:
-            return None
-    except Exception:
-        return None
-    return checkbox.first
-
-
-def _fresh_aggregate_checkbox(page: "Page", aggregate_name: str):
-    """Resolve aggregate checkbox via latest DOM snapshot id (DOM may recreate)."""
-    entry = _snapshot_entry(snapshot_aggregate_checkboxes(page), aggregate_name)
-    if entry is None:
-        return None
-    return _checkbox_locator_by_id(page, entry.id)
-
-
-def _nested_field_visible(page: "Page", labels: tuple[str, ...]) -> bool:
-    """True when a nested aggregate control for the label is visible.
-
-    For «Карта» / «Телефон» require a duplicate input (top-level + nested). A single
-    match is the wallet-level field and must not be treated as aggregate-internal.
-    """
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    for label in labels:
-        if label in {"Карта", "Телефон"}:
-            matches = aw._find_all_text_inputs_by_label_in(modal, label)
-            if len(matches) < 2:
-                continue
-            try:
-                if matches[-1].is_visible():
-                    return True
-            except Exception:
-                return True
-            continue
-        field = aw._find_aggregate_field_input(modal, label)
-        if field is None:
-            continue
-        try:
-            if field.is_visible():
-                return True
-        except Exception:
-            return True
-    return False
+def switch_to_single_aggregate(
+    page: "Page", aggregate_name: str, *, card: str | None = None
+) -> None:
+    _switch_to_single_aggregate(
+        page,
+        aggregate_name,
+        card=card,
+        timing_scope=_SET_AGGREGATE_TIMING_SCOPE,
+    )
 
 
 def detect_set_aggregate_expansion(page: "Page") -> str | None:
-    """Detect nested aggregate block (Sim A / ЧБР / etc.) without false top-level hits."""
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-
+    """Detect nested aggregate block without false top-level hits."""
+    labeled = _list_labeled_inputs(page)
     for label in _SET_AGGREGATE_EXPANSION_LABELS:
         if label in {"Карта", "Телефон"}:
             continue
-        field = aw._find_text_input_by_label_in(modal, label)
-        if field is None:
-            continue
-        try:
-            if field.is_visible():
+        items = _inputs_for_labels(labeled, (label,))
+        for item in items:
+            if item.get("visible"):
                 return label
-        except Exception:
-            return label
-
-    # Duplicate nested «Карта» / «Телефон» (top-level + aggregate).
     for label in ("Карта", "Телефон"):
-        matches = aw._find_all_text_inputs_by_label_in(modal, label)
-        if len(matches) >= 2:
-            try:
-                if matches[-1].is_visible():
-                    return label
-            except Exception:
-                return label
+        items = _inputs_for_labels(labeled, (label,))
+        visible = [i for i in items if i.get("visible")]
+        if len(visible) >= 2:
+            return label
     return None
 
 
@@ -648,314 +358,11 @@ def wait_for_set_aggregate_fields_visible(
                     detected,
                 )
                 return
-            page.wait_for_timeout(_AGGREGATE_TOGGLE_POLL_MS)
+            remaining_ms = (deadline - time.monotonic()) * 1000
+            if remaining_ms <= 0:
+                break
+            page.wait_for_timeout(min(75, remaining_ms))
         raise RuntimeError(f"aggregate fields not visible: {aggregate_name}")
-
-
-# One DOM pass: all visible text inputs grouped by normalized label.
-_LIST_LABELED_INPUTS_JS = r"""
-(root) => {
-  const norm = (s) => (s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-  const out = [];
-  const rows = root.querySelectorAll('div.row');
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const lab = row.querySelector('label');
-    if (!lab) continue;
-    const label = norm(lab.innerText || lab.textContent || '');
-    if (!label) continue;
-    const input = row.querySelector(
-      "input[type='text'], input[type='password'], " +
-      "input:not([type='checkbox']):not([type='radio']):not([type='hidden']):not([type='submit']):not([type='button'])"
-    );
-    if (!input) continue;
-    const rects = input.getClientRects();
-    const visible = !!(rects && rects.length > 0);
-    out.push({
-      label: label,
-      id: (input.id || '').trim(),
-      value: (input.value || '').trim(),
-      visible: visible,
-      disabled: !!input.disabled,
-      readOnly: !!input.readOnly,
-      rowIndex: i,
-    });
-  }
-  return out;
-}
-"""
-
-
-def _list_labeled_inputs(page: "Page") -> list[dict]:
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    try:
-        raw = modal.evaluate(_LIST_LABELED_INPUTS_JS)
-    except Exception as exc:
-        log.warning("⚠️ [SetAggregate] labeled inputs evaluate failed: %s", exc)
-        return []
-    if not isinstance(raw, list):
-        return []
-    return [item for item in raw if isinstance(item, dict)]
-
-
-def _inputs_for_labels(
-    labeled: list[dict], labels: tuple[str, ...]
-) -> list[dict]:
-    wanted = {_normalize_aggregate_label_text(x).casefold() for x in labels}
-    out: list[dict] = []
-    for item in labeled:
-        name = _normalize_aggregate_label_text(str(item.get("label") or ""))
-        if name.casefold() in wanted:
-            out.append(item)
-    return out
-
-
-def _locator_for_labeled_input(page: "Page", item: dict):
-    """Fresh Playwright locator for a labeled-input snapshot entry."""
-    aw = _aw()
-    modal = page.locator(aw.MODAL_BODY)
-    checkbox_id = str(item.get("id") or "").strip()
-    if checkbox_id:
-        escaped = _css_escape_ident(checkbox_id)
-        loc = modal.locator(f'input[id="{escaped}"]')
-        try:
-            if loc.count() > 0:
-                return loc.first
-        except Exception:
-            pass
-    # Fallback: Nth matching label row input (rowIndex from evaluate).
-    try:
-        row_index = int(item.get("rowIndex"))
-    except Exception:
-        return None
-    row = modal.locator("div.row").nth(row_index)
-    inp = row.locator(
-        "input[type='text'], input[type='password'], "
-        "input:not([type='checkbox']):not([type='radio']):not([type='hidden'])"
-    )
-    try:
-        if inp.count() == 0:
-            return None
-    except Exception:
-        return None
-    return inp.first
-
-
-def _pick_nested_phone_item(
-    phone_items: list[dict], *, expected_top_phone: str
-) -> dict | None:
-    """Choose nested phone input; never the wallet top-level phone."""
-    visible = [
-        p
-        for p in phone_items
-        if p.get("visible") and not p.get("disabled") and not p.get("readOnly")
-    ]
-    if len(visible) < 2:
-        return None
-
-    top_digits = normalize_card_digits(expected_top_phone)
-    top_idx = 0
-    if top_digits:
-        for i, item in enumerate(visible):
-            if normalize_card_digits(str(item.get("value") or "")) == top_digits:
-                top_idx = i
-                break
-
-    for i, item in enumerate(visible):
-        if i == top_idx:
-            continue
-        return item
-    # Ambiguous: only top matched and nothing else left.
-    return None
-
-
-def _pick_nested_generic_item(items: list[dict]) -> dict | None:
-    visible = [
-        p
-        for p in items
-        if p.get("visible") and not p.get("disabled") and not p.get("readOnly")
-    ]
-    if not visible:
-        return None
-    # For Телефон/Карта duplicates the nested control is the last one.
-    return visible[-1]
-
-
-_FIELD_LABELS: dict[str, tuple[str, ...]] = {
-    "phone": ("Телефон",),
-    "account": ("Аккаунт",),
-    "merchant_id_sbp": ("MerchantId СБП",),
-    "account_number": (
-        "Номер счёта",
-        "Номер счета",
-        "Номер расчёта",
-        "Номер расчета",
-    ),
-}
-
-
-def wait_for_requested_nested_fields(
-    page: "Page",
-    intent: SetAggregateIntent,
-    *,
-    expected_top_phone: str,
-) -> dict[str, object]:
-    """Wait only for Excel-provided nested fields; return ready locators.
-
-    Does not wait for Device / nested Card. Phone wait excludes the top-level
-    wallet phone. Raises RuntimeError on timeout → FAIL_AGGREGATE_FIELDS.
-    """
-    provided = intent.provided_optional()
-    if not provided:
-        log.info(
-            "[SetAggregate] nested_fields_skip reason=no_optional_fields aggregate=%s",
-            intent.aggregate,
-        )
-        return {}
-
-    needed = set(provided.keys())
-    found: dict[str, object] = {}
-    deadline = time.monotonic() + _NESTED_FIELD_WAIT_MS / 1000.0
-    phone_search_count = 0
-    phone_wait_started: float | None = None
-
-    while time.monotonic() < deadline:
-        labeled = _list_labeled_inputs(page)
-
-        if "phone" in needed and "phone" not in found:
-            if phone_wait_started is None:
-                phone_wait_started = time.perf_counter()
-            phone_search_count += 1
-            phones = _inputs_for_labels(labeled, _FIELD_LABELS["phone"])
-            item = _pick_nested_phone_item(
-                phones, expected_top_phone=expected_top_phone
-            )
-            if item is not None:
-                loc = _locator_for_labeled_input(page, item)
-                if loc is not None:
-                    found["phone"] = loc
-                    duration_ms = round(
-                        (time.perf_counter() - phone_wait_started) * 1000
-                    )
-                    log_timing(
-                        profile=_SET_AGGREGATE_TIMING_PROFILE,
-                        scope=_SET_AGGREGATE_TIMING_SCOPE,
-                        step="nested_phone_wait",
-                        duration_ms=duration_ms,
-                        outcome="ok",
-                        card=intent.card,
-                    )
-                    log.info(
-                        "[SetAggregate] nested_phone_found searches=%s "
-                        "wait_ms=%s top_phone=%s",
-                        phone_search_count,
-                        duration_ms,
-                        _mask_phone(expected_top_phone),
-                    )
-
-        for key in ("account", "merchant_id_sbp", "account_number"):
-            if key not in needed or key in found:
-                continue
-            items = _inputs_for_labels(labeled, _FIELD_LABELS[key])
-            item = _pick_nested_generic_item(items)
-            if item is None and len(items) == 1 and items[0].get("visible"):
-                item = items[0]
-            if item is not None:
-                loc = _locator_for_labeled_input(page, item)
-                if loc is not None:
-                    found[key] = loc
-
-        if needed <= set(found.keys()):
-            return found
-
-        page.wait_for_timeout(_NESTED_FIELD_POLL_MS)
-
-    if phone_wait_started is not None and "phone" not in found:
-        log_timing(
-            profile=_SET_AGGREGATE_TIMING_PROFILE,
-            scope=_SET_AGGREGATE_TIMING_SCOPE,
-            step="nested_phone_wait",
-            duration_ms=round((time.perf_counter() - phone_wait_started) * 1000),
-            outcome="fail",
-            card=intent.card,
-        )
-
-    missing = sorted(needed - set(found.keys()))
-    raise RuntimeError(
-        f"requested nested fields not visible: {missing} "
-        f"aggregate={intent.aggregate}"
-    )
-
-
-def _read_locator_value(field) -> str:
-    try:
-        return str(field.input_value() or "").strip()
-    except Exception:
-        try:
-            return str(field.evaluate("el => el.value") or "").strip()
-        except Exception:
-            return ""
-
-
-def _fill_locator_confirmed(
-    page: "Page",
-    *,
-    field,
-    value: str,
-    label: str,
-    resolve_fresh,
-    card: str | None = None,
-    timing_prefix: str = "nested_phone",
-) -> None:
-    """Fill a known locator; confirm value; one fresh-locator retry if needed."""
-    aw = _aw()
-    current = field
-    attempts = 0
-    with _time_set_aggregate_step(f"{timing_prefix}_fill", card=card):
-        for attempt in range(1, 3):
-            attempts = attempt
-            try:
-                aw._fill_locator_text(current, label, value)
-            except Exception as exc:
-                if attempt >= 2:
-                    raise
-                log.info(
-                    "[SetAggregate] %s_fill_error attempt=%s err=%s — retry fresh",
-                    timing_prefix,
-                    attempt,
-                    type(exc).__name__,
-                )
-                current = resolve_fresh()
-                if current is None:
-                    raise
-                continue
-
-            with _time_set_aggregate_step(
-                f"{timing_prefix}_confirm", card=card
-            ):
-                actual = _read_locator_value(current)
-                if _values_match(value, actual):
-                    log.info(
-                        "[SetAggregate] %s_fill_confirmed attempts=%s value=%s",
-                        timing_prefix,
-                        attempts,
-                        _mask_secret_field(value)
-                        if timing_prefix != "nested_phone"
-                        else _mask_phone(value),
-                    )
-                    return
-
-            log.info(
-                "[SetAggregate] %s_fill_mismatch attempt=%s — retry fresh locator",
-                timing_prefix,
-                attempt,
-            )
-            current = resolve_fresh()
-            if current is None:
-                break
-
-    raise RuntimeError(f"failed to set nested field {label}")
 
 
 def fill_requested_nested_fields(
@@ -969,12 +376,9 @@ def fill_requested_nested_fields(
     provided = intent.provided_optional()
 
     def resolve_phone():
-        labeled = _list_labeled_inputs(page)
-        phones = _inputs_for_labels(labeled, _FIELD_LABELS["phone"])
-        item = _pick_nested_phone_item(
-            phones, expected_top_phone=expected_top_phone
+        return resolve_nested_field_locator(
+            page, "phone", expected_top_phone=expected_top_phone
         )
-        return _locator_for_labeled_input(page, item) if item else None
 
     if "phone" in provided:
         field = fields.get("phone")
@@ -992,6 +396,7 @@ def fill_requested_nested_fields(
             resolve_fresh=resolve_phone,
             card=intent.card,
             timing_prefix="nested_phone",
+            timing_scope=_SET_AGGREGATE_TIMING_SCOPE,
         )
         log.info(
             "[SetAggregate] fill_done field=phone value=%s",
@@ -1001,7 +406,7 @@ def fill_requested_nested_fields(
     for key, labels in (
         ("account", ("Аккаунт",)),
         ("merchant_id_sbp", ("MerchantId СБП",)),
-        ("account_number", _FIELD_LABELS["account_number"]),
+        ("account_number", NESTED_FIELD_LABELS["account_number"]),
     ):
         if key not in provided:
             continue
@@ -1009,13 +414,8 @@ def fill_requested_nested_fields(
         if field is None:
             raise RuntimeError(f"nested {key} locator missing after wait")
 
-        def resolve_key(k=key, labs=labels):
-            labeled = _list_labeled_inputs(page)
-            items = _inputs_for_labels(labeled, labs)
-            item = _pick_nested_generic_item(items)
-            if item is None and len(items) == 1:
-                item = items[0]
-            return _locator_for_labeled_input(page, item) if item else None
+        def resolve_key(k=key):
+            return resolve_nested_field_locator(page, k)
 
         log.info(
             "[SetAggregate] fill_start field=%s value=%s",
@@ -1030,6 +430,7 @@ def fill_requested_nested_fields(
             resolve_fresh=resolve_key,
             card=intent.card,
             timing_prefix=f"nested_{key}",
+            timing_scope=_SET_AGGREGATE_TIMING_SCOPE,
         )
         log.info("[SetAggregate] fill_done field=%s", key)
 
@@ -1043,20 +444,16 @@ def fill_set_aggregate_nested_fields_from_locators(
 ) -> None:
     """Fill using locators from wait — no Device wait, no second full label scan."""
     with _time_set_aggregate_step("aggregate_fill", card=intent.card):
-        # Nested «Карта» is not an Excel optional column — never wait for it.
-        # One-shot opportunistic fill only if already present (e.g. ЧБР).
-        labeled = _list_labeled_inputs(page)
-        cards = _inputs_for_labels(labeled, ("Карта",))
-        visible_cards = [c for c in cards if c.get("visible")]
-        if len(visible_cards) >= 2:
-            loc = _locator_for_labeled_input(page, visible_cards[-1])
+        item = opportunistic_nested_card_item(page)
+        if item is not None:
+            loc = _locator_for_labeled_input(page, item)
             if loc is not None:
                 log.info(
                     "[SetAggregate] fill_start nested_card=%s",
                     mask_card(intent.card),
                 )
                 try:
-                    _aw()._fill_locator_text(loc, "Карта", intent.card)
+                    fill_locator_text(loc, "Карта", intent.card)
                     log.info(
                         "[SetAggregate] fill_done field=card value=%s",
                         mask_card(intent.card),
@@ -1088,243 +485,6 @@ def fill_set_aggregate_nested_fields(page: "Page", intent: SetAggregateIntent) -
     fill_set_aggregate_nested_fields_from_locators(
         page, intent, fields, expected_top_phone=top_phone
     )
-
-
-def _wait_aggregate_checked_state(
-    page: "Page",
-    aggregate_name: str,
-    *,
-    want_checked: bool,
-    timeout_ms: int = _AGGREGATE_TOGGLE_TIMEOUT_MS,
-) -> bool:
-    """Poll snapshots until the named aggregate reaches the desired checked state."""
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    last_state: bool | None = None
-    while time.monotonic() < deadline:
-        snap = snapshot_aggregate_checkboxes(page)
-        entry = _snapshot_entry(snap, aggregate_name)
-        if entry is not None:
-            last_state = entry.checked
-            if entry.checked is want_checked:
-                return True
-        page.wait_for_timeout(_AGGREGATE_TOGGLE_POLL_MS)
-    log.info(
-        "[SetAggregate] wait_checked_timeout aggregate=%s want_checked=%s last_state=%s",
-        aggregate_name,
-        want_checked,
-        last_state,
-    )
-    return False
-
-
-def _wait_target_sole_active(
-    page: "Page",
-    aggregate_name: str,
-    *,
-    timeout_ms: int = _AGGREGATE_TOGGLE_TIMEOUT_MS,
-    card: str | None = None,
-) -> bool:
-    """Poll snapshots until target is the only checked aggregate."""
-    with _time_set_aggregate_step("aggregate_switch_sole_active", card=card):
-        deadline = time.monotonic() + timeout_ms / 1000.0
-        last_active: list[str] = []
-        while time.monotonic() < deadline:
-            snap = snapshot_aggregate_checkboxes(page)
-            last_active = [e.name for e in snap if e.checked]
-            if len(last_active) == 1 and aggregate_label_matches(
-                last_active[0], aggregate_name
-            ):
-                log.info(
-                    "[SetAggregate] sole_active_confirmed aggregate=%s active=%s",
-                    aggregate_name,
-                    last_active,
-                )
-                return True
-            page.wait_for_timeout(_AGGREGATE_TOGGLE_POLL_MS)
-        log.info(
-            "[SetAggregate] sole_active_timeout aggregate=%s active=%s",
-            aggregate_name,
-            last_active,
-        )
-        return False
-
-
-def switch_to_single_aggregate(
-    page: "Page", aggregate_name: str, *, card: str | None = None
-) -> None:
-    """Uncheck other aggregates and check the target using fast DOM snapshots."""
-    snap = snapshot_aggregate_checkboxes(page, card=card)
-    before_active = [e.name for e in snap if e.checked]
-    log.info(
-        "[SetAggregate] switch_start target=%s active_before=%s",
-        aggregate_name,
-        before_active,
-    )
-
-    if _snapshot_entry(snap, aggregate_name) is None:
-        raise AggregateSwitchError(f"aggregate checkbox not found: {aggregate_name}")
-
-    if (
-        len(before_active) == 1
-        and aggregate_label_matches(before_active[0], aggregate_name)
-    ):
-        log.info(
-            "[SetAggregate] aggregate already sole active aggregate=%s — skip toggles",
-            aggregate_name,
-        )
-        return
-
-    # Uncheck every other checked aggregate (fresh snapshot + locator each time).
-    for round_idx in range(_AGGREGATE_UNCHECK_ROUNDS):
-        snap = snapshot_aggregate_checkboxes(page, card=card)
-        others = [
-            e
-            for e in snap
-            if e.checked and not aggregate_label_matches(e.name, aggregate_name)
-        ]
-        if not others:
-            log.info(
-                "[SetAggregate] no_other_active_left target=%s round=%s",
-                aggregate_name,
-                round_idx,
-            )
-            break
-
-        other = others[0]
-        log.info(
-            "[SetAggregate] uncheck_start aggregate=%s remaining_others=%s",
-            other.name,
-            [e.name for e in others],
-        )
-        with _time_set_aggregate_step("aggregate_switch_uncheck", card=card):
-            checkbox = _checkbox_locator_by_id(page, other.id)
-            if checkbox is None:
-                # DOM recreated — take a fresh snapshot id and retry once.
-                snap = snapshot_aggregate_checkboxes(page, card=card)
-                refreshed = _snapshot_entry(snap, other.name)
-                if refreshed is None:
-                    raise AggregateSwitchError(
-                        f"aggregate checkbox lost during switch: {other.name}"
-                    )
-                checkbox = _checkbox_locator_by_id(page, refreshed.id)
-                if checkbox is None:
-                    raise AggregateSwitchError(
-                        f"aggregate checkbox lost during switch: {other.name}"
-                    )
-            try:
-                checkbox.uncheck(force=True)
-            except Exception as exc:
-                log.info(
-                    "[SetAggregate] uncheck_click_error aggregate=%s err=%s — will re-query",
-                    other.name,
-                    type(exc).__name__,
-                )
-
-            if not _wait_aggregate_checked_state(
-                page, other.name, want_checked=False
-            ):
-                raise AggregateSwitchError(
-                    f"timeout waiting unchecked aggregate={other.name} "
-                    f"active={[e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]}"
-                )
-        log.info(
-            "[SetAggregate] uncheck_confirmed aggregate=%s active_now=%s",
-            other.name,
-            [e.name for e in snapshot_aggregate_checkboxes(page) if e.checked],
-        )
-    else:
-        raise AggregateSwitchError(
-            f"failed to uncheck other aggregates target={aggregate_name} "
-            f"active={[e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]}"
-        )
-
-    # Ensure target is checked (fresh snapshot id + poll).
-    log.info("[SetAggregate] check_start aggregate=%s", aggregate_name)
-    with _time_set_aggregate_step("aggregate_switch_check", card=card):
-        snap = snapshot_aggregate_checkboxes(page, card=card)
-        target = _snapshot_entry(snap, aggregate_name)
-        if target is None:
-            raise AggregateSwitchError(
-                f"aggregate checkbox not found after uncheck: {aggregate_name}"
-            )
-        checkbox = _checkbox_locator_by_id(page, target.id)
-        if checkbox is None:
-            raise AggregateSwitchError(
-                f"aggregate checkbox lost before check: {aggregate_name}"
-            )
-        try:
-            already = bool(checkbox.is_checked())
-        except Exception:
-            already = False
-            snap = snapshot_aggregate_checkboxes(page, card=card)
-            target = _snapshot_entry(snap, aggregate_name)
-            if target is None:
-                raise AggregateSwitchError(
-                    f"aggregate checkbox lost before check: {aggregate_name}"
-                )
-            checkbox = _checkbox_locator_by_id(page, target.id)
-            if checkbox is None:
-                raise AggregateSwitchError(
-                    f"aggregate checkbox lost before check: {aggregate_name}"
-                )
-
-        if not already:
-            try:
-                checkbox.check(force=True)
-            except Exception as exc:
-                log.info(
-                    "[SetAggregate] check_click_error aggregate=%s err=%s — will re-query",
-                    aggregate_name,
-                    type(exc).__name__,
-                )
-                snap = snapshot_aggregate_checkboxes(page, card=card)
-                target = _snapshot_entry(snap, aggregate_name)
-                if target is None:
-                    raise AggregateSwitchError(
-                        f"aggregate checkbox lost on check retry: {aggregate_name}"
-                    ) from exc
-                checkbox = _checkbox_locator_by_id(page, target.id)
-                if checkbox is None:
-                    raise AggregateSwitchError(
-                        f"aggregate checkbox lost on check retry: {aggregate_name}"
-                    ) from exc
-                checkbox.check(force=True)
-            log.info("[SetAggregate] check_clicked aggregate=%s", aggregate_name)
-        else:
-            log.info("[SetAggregate] check_already_on aggregate=%s", aggregate_name)
-
-        if not _wait_aggregate_checked_state(
-            page, aggregate_name, want_checked=True
-        ):
-            raise AggregateSwitchError(
-                f"timeout waiting checked aggregate={aggregate_name} "
-                f"active={[e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]}"
-            )
-    log.info(
-        "[SetAggregate] check_confirmed aggregate=%s active_now=%s",
-        aggregate_name,
-        [e.name for e in snapshot_aggregate_checkboxes(page) if e.checked],
-    )
-
-    if not _wait_target_sole_active(page, aggregate_name, card=card):
-        active = [e.name for e in snapshot_aggregate_checkboxes(page) if e.checked]
-        raise AggregateSwitchError(
-            f"timeout waiting sole active expected={aggregate_name!r} active={active!r}"
-        )
-
-
-def _values_match(expected: str, actual: str | None) -> bool:
-    if actual is None:
-        return False
-    exp = str(expected).strip()
-    act = str(actual).strip()
-    if exp == act:
-        return True
-    exp_d = normalize_card_digits(exp)
-    act_d = normalize_card_digits(act)
-    if exp_d and act_d and exp_d == act_d:
-        return True
-    return False
 
 
 _VERIFY_FIELDS_JS = r"""
@@ -1408,8 +568,7 @@ def verify_set_aggregate(
             return f"aggregate not found: {intent.aggregate!r}"
 
     with _time_set_aggregate_step("verify_fields", card=intent.card):
-        aw = _aw()
-        modal = page.locator(aw.MODAL_BODY)
+        modal = page.locator(MODAL_BODY)
         wanted = {
             "nested_card": True,
             "phone": "phone" in provided,

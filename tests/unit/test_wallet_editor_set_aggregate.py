@@ -212,7 +212,7 @@ def test_ui_fill_receives_phone_without_dot_zero():
             return_value="7900",
         ),
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             return_value=[],
         ),
         patch(
@@ -466,9 +466,9 @@ def _patch_delayed_switch(ui: _DelayedAggUI, page: MagicMock):
 def _switch_patches(ui: _DelayedAggUI, aw):
     from contextlib import ExitStack
 
-    from automation.set_aggregate_engine import AggregateCheckboxSnapshot
+    from automation.wallet_form_helpers import AggregateCheckboxSnapshot
 
-    def snap(_page=None, card=None):
+    def snap(_page=None, card=None, timing_scope="set_aggregate"):
         return [
             AggregateCheckboxSnapshot(name=n, checked=c, id=f"id-{n}")
             for n, c in ui.snapshot()
@@ -481,6 +481,12 @@ def _switch_patches(ui: _DelayedAggUI, aw):
         return ui.checkboxes[name].first
 
     stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "automation.wallet_form_helpers.snapshot_aggregate_checkboxes",
+            side_effect=snap,
+        )
+    )
     stack.enter_context(
         patch(
             "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
@@ -512,7 +518,10 @@ def _switch_patches(ui: _DelayedAggUI, aw):
         )
     )
     stack.enter_context(
-        patch("automation.set_aggregate_engine._aw", return_value=aw)
+        patch(
+            "automation.wallet_form_helpers._checkbox_locator_by_id",
+            side_effect=locator_by_id,
+        )
     )
     stack.enter_context(
         patch(
@@ -522,17 +531,17 @@ def _switch_patches(ui: _DelayedAggUI, aw):
     )
     stack.enter_context(
         patch(
-            "automation.set_aggregate_engine._fresh_aggregate_checkbox",
+            "automation.wallet_form_helpers._fresh_aggregate_checkbox",
             side_effect=lambda p, name: (
                 ui.checkboxes[name].first if name in ui.checkboxes else None
             ),
         )
     )
     stack.enter_context(
-        patch("automation.set_aggregate_engine._AGGREGATE_TOGGLE_POLL_MS", 1)
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_POLL_MS", 1)
     )
     stack.enter_context(
-        patch("automation.set_aggregate_engine._AGGREGATE_TOGGLE_TIMEOUT_MS", 2000)
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_TIMEOUT_MS", 2000)
     )
     return stack
 
@@ -585,7 +594,7 @@ def test_switch_timeout_returns_fail_aggregate_switch():
     ui = _DelayedAggUI({"Old": True, "Sim A (1)": False}, delay_reads=1)
     aw = _patch_delayed_switch(ui, page)
 
-    def wait_state(page_arg, name, *, want_checked, timeout_ms=0):
+    def wait_state(page_arg, name, *, want_checked, timeout_ms=0, timing_scope=None):
         if not want_checked:
             ui.state[name] = False
             ui._pending.pop(name, None)
@@ -594,7 +603,7 @@ def test_switch_timeout_returns_fail_aggregate_switch():
 
     with _switch_patches(ui, aw):
         with patch(
-            "automation.set_aggregate_engine._wait_aggregate_checked_state",
+            "automation.wallet_form_helpers._wait_aggregate_checked_state",
             side_effect=wait_state,
         ):
             with pytest.raises(AggregateSwitchError) as exc:
@@ -854,19 +863,19 @@ def test_nested_phone_wait_skips_device_and_missing_card():
     phone_loc = MagicMock(name="nested_phone")
     with (
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             side_effect=labeled,
         ),
         patch(
-            "automation.set_aggregate_engine._locator_for_labeled_input",
+            "automation.wallet_form_helpers._locator_for_labeled_input",
             return_value=phone_loc,
         ),
         patch(
             "automation.set_aggregate_engine.detect_set_aggregate_expansion",
             side_effect=AssertionError("Device must not be queried"),
         ),
-        patch("automation.set_aggregate_engine._NESTED_FIELD_POLL_MS", 1),
-        patch("automation.set_aggregate_engine._NESTED_FIELD_WAIT_MS", 2000),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 2000),
     ):
         fields = wait_for_requested_nested_fields(
             page, intent, expected_top_phone="79001112233"
@@ -884,7 +893,7 @@ def test_fill_uses_waited_locator_without_research():
 
     with (
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             side_effect=research,
         ),
         patch(
@@ -920,13 +929,12 @@ def test_fill_confirm_retries_once_with_fresh_locator():
         return "" if values["n"] == 1 else "998901234567"
 
     with (
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch("automation.wallet_form_helpers.fill_locator_text") as fill_text,
         patch(
-            "automation.set_aggregate_engine._read_locator_value",
+            "automation.wallet_form_helpers.read_locator_value",
             side_effect=read_val,
         ),
     ):
-        aw_mod.return_value._fill_locator_text = MagicMock()
         _fill_locator_confirmed(
             page,
             field=first,
@@ -937,7 +945,7 @@ def test_fill_confirm_retries_once_with_fresh_locator():
             timing_prefix="nested_phone",
         )
 
-    assert aw_mod.return_value._fill_locator_text.call_count == 2
+    assert fill_text.call_count == 2
     resolve.assert_called_once()
 
 
@@ -981,7 +989,7 @@ def test_nested_card_not_waited_when_absent():
 
     with (
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             return_value=[
                 {
                     "label": "Телефон",
@@ -1000,9 +1008,8 @@ def test_nested_card_not_waited_when_absent():
         patch(
             "automation.set_aggregate_engine._fill_locator_confirmed"
         ) as fill_conf,
-        patch("automation.set_aggregate_engine._aw") as aw_mod,
+        patch("automation.wallet_form_helpers.fill_locator_text") as fill_text,
     ):
-        aw_mod.return_value._fill_locator_text = MagicMock()
         fill_set_aggregate_nested_fields_from_locators(
             page,
             intent,
@@ -1010,8 +1017,8 @@ def test_nested_card_not_waited_when_absent():
             expected_top_phone="7900",
         )
 
-    # No nested card fill attempt via _fill_locator_text for Карта
-    for call in aw_mod.return_value._fill_locator_text.call_args_list:
+    # No nested card fill attempt via fill_locator_text for Карта
+    for call in fill_text.call_args_list:
         assert call.args[1] != "Карта"
     assert fill_conf.call_args.kwargs["field"] is phone_field
 
@@ -1030,7 +1037,7 @@ def test_missing_phone_column_does_not_touch_phones():
             return_value={},
         ) as wait,
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             return_value=[],
         ),
         patch(
@@ -1059,7 +1066,7 @@ def test_optional_fields_only_when_columns_present():
     }
     with (
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             return_value=[],
         ),
         patch(
@@ -1094,7 +1101,7 @@ def test_absent_optional_fields_not_cleared():
             return_value={},
         ),
         patch(
-            "automation.set_aggregate_engine._list_labeled_inputs",
+            "automation.wallet_form_helpers._list_labeled_inputs",
             return_value=[],
         ),
         patch(
@@ -1528,10 +1535,7 @@ def test_field_captions_near_checkboxes_are_not_aggregates():
     page.locator.return_value = modal
     modal.evaluate.return_value = raw
 
-    with patch("automation.set_aggregate_engine._aw") as aw_mod:
-        aw_mod.return_value.MODAL_BODY = "#modal"
-        aw_mod.return_value._is_kyc_label_text.return_value = False
-        states = list_aggregate_checkbox_states(page)
+    states = list_aggregate_checkbox_states(page)
 
     assert states == [("Sim A (1)", True)]
     # Ordinary field captions must never appear even if somehow in raw payload without id
@@ -1572,7 +1576,7 @@ def test_active_list_only_sim_a_when_field_labels_present():
     )
 
     with patch(
-        "automation.set_aggregate_engine.snapshot_aggregate_checkboxes",
+        "automation.wallet_form_helpers.snapshot_aggregate_checkboxes",
         return_value=[
             AggregateCheckboxSnapshot(name="Sim A (1)", checked=True, id="agg-1")
         ],

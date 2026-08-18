@@ -4,17 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from automation.add_wallet_contract import (
-    AddWalletRow,
-    RESULT_DRY_RUN,
-    RESULT_FAIL_FILL,
-    RESULT_FAIL_NOT_FOUND,
-    RESULT_FAIL_SAVE_TIMEOUT,
-    RESULT_FAIL_VALIDATION,
-    RESULT_OK,
-    RESULT_SKIP_DUP_CARD,
-    RESULT_STOP_BEFORE_SAVE,
-)
 from automation.add_wallet_engine import (
     ADD_WALLET_LOWER_FORM_CONTROL_TYPES,
     FieldNotEditableError,
@@ -31,6 +20,7 @@ from automation.add_wallet_engine import (
     _fill_optional_text_by_label,
     _fill_optional_textarea_by_label,
     _fill_phase2_top_level_fields,
+    _fill_single_aggregate,
     _process_row,
     card_exists_strict,
     checkbox_label_matches,
@@ -44,8 +34,25 @@ from automation.add_wallet_engine import (
     wait_for_aggregate_fields_visible,
     wait_modal_closed_or_error,
 )
+from automation.add_wallet_contract import (
+    AddWalletRow,
+    RESULT_DRY_RUN,
+    RESULT_FAIL_FILL,
+    RESULT_FAIL_NOT_FOUND,
+    RESULT_FAIL_SAVE_TIMEOUT,
+    RESULT_FAIL_TECHNICAL,
+    RESULT_FAIL_VALIDATION,
+    RESULT_OK,
+    RESULT_SKIP_DUP_CARD,
+    RESULT_STOP_BEFORE_SAVE,
+)
 from automation.audit import row_matches_card_strict
+from automation.engine import CardSearchUnsettledError
 from automation.runtime import RunConfig
+from automation.wallet_form_helpers import (
+    AggregateSwitchError,
+    requested_nested_fields_for_add_row,
+)
 
 
 def _row(**kwargs) -> AddWalletRow:
@@ -93,33 +100,13 @@ def test_row_matches_card_strict_equality_only():
     assert row_matches_card("99901108103475349990110810347534", digits) is True
 
 
-def test_card_exists_strict_match():
+def test_card_exists_strict_uses_engine_search():
     page = MagicMock()
-    row = MagicMock()
-    row.inner_text.return_value = "9990110810347534"
-    rows = MagicMock()
-    rows.count.return_value = 1
-    rows.nth.return_value = row
-
-    def locator(selector: str):
-        if selector == "tr.pointer":
-            return rows
-        if selector == 'input[placeholder="Карта"]':
-            return MagicMock()
-        if selector == 'button:has-text("Применить")':
-            return MagicMock()
-        return MagicMock()
-
-    page.locator.side_effect = locator
-    page.wait_for_timeout = MagicMock()
-    body = MagicMock()
-    body.inner_text.return_value = "Всего: 1"
-    page.locator.return_value = body
-
-    with patch("automation.add_wallet_engine._submit_card_filter"):
-        with patch("automation.add_wallet_engine._page_shows_empty_results", return_value=False):
-            page.locator.side_effect = locator
-            assert card_exists_strict(page, "9990110810347534") is True
+    with patch(
+        "automation.add_wallet_engine.engine_card_exists_strict", return_value=True
+    ) as engine_search:
+        assert card_exists_strict(page, "9990110810347534") is True
+    engine_search.assert_called_once_with(page, "9990110810347534")
 
 
 @patch("automation.add_wallet_engine.card_exists_strict", side_effect=[True])
@@ -355,7 +342,9 @@ def test_fill_aggregate_modal_fields_nested_values():
 
 
 def test_fill_aggregate_modal_fields_uses_last_duplicate_card():
-    block = _FakeBlock([_FakeRow("Карта"), _FakeRow("Карта"), _FakeRow("Аккаунт")])
+    block = _FakeBlock(
+        [_FakeRow("Карта"), _FakeRow("Карта"), _FakeRow("Телефон"), _FakeRow("Аккаунт")]
+    )
     row = _row(card="9990110810347534")
     fill_aggregate_modal_fields(block, row)
     assert block.rows[0]._input.values == []
@@ -388,8 +377,11 @@ def test_detect_aggregate_expansion_none():
     assert _detect_aggregate_expansion(block) is None
 
 
-@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
-@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
+@patch("automation.add_wallet_engine._fill_confirmed_nested_field")
+@patch(
+    "automation.add_wallet_engine.wait_for_requested_nested_fields",
+    return_value={"phone": MagicMock(), "card": MagicMock()},
+)
 @patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
 @patch("automation.add_wallet_engine._fill_multiselect_list")
 @patch("automation.add_wallet_engine._select_by_label")
@@ -400,22 +392,24 @@ def test_fill_add_wallet_form_selects_single_aggregate(
     mock_multi,
     mock_select_agg,
     mock_wait_fields,
-    mock_fill_modal,
+    mock_fill_nested,
 ):
     page = MagicMock()
-    modal = MagicMock()
-    page.locator.return_value = modal
     row = _row(aggregate="ЧБР")
 
     fill_add_wallet_form(page, row)
 
-    mock_select_agg.assert_called_once_with(page, "ЧБР")
-    mock_wait_fields.assert_called_once_with(page, "ЧБР")
-    mock_fill_modal.assert_called_once_with(modal, row)
+    mock_select_agg.assert_called_once_with(page, "ЧБР", card=row.card)
+    mock_wait_fields.assert_called_once()
+    assert mock_wait_fields.call_args.kwargs["needed"]["phone"] == row.phone
+    assert "card" in mock_wait_fields.call_args.kwargs["needed"]
 
 
-@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
-@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
+@patch("automation.add_wallet_engine._fill_confirmed_nested_field")
+@patch(
+    "automation.add_wallet_engine.wait_for_requested_nested_fields",
+    return_value={"phone": MagicMock(), "card": MagicMock()},
+)
 @patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
 @patch("automation.add_wallet_engine._fill_multiselect_list")
 @patch("automation.add_wallet_engine._select_by_label")
@@ -426,49 +420,31 @@ def test_fill_add_wallet_form_tinkoff_aggregate(
     mock_multi,
     mock_select_agg,
     mock_wait_fields,
-    mock_fill_modal,
+    mock_fill_nested,
 ):
     page = MagicMock()
     row = _row(aggregate="Тинькофф АПК")
     fill_add_wallet_form(page, row)
-    mock_select_agg.assert_called_once_with(page, "Тинькофф АПК")
+    mock_select_agg.assert_called_once_with(page, "Тинькофф АПК", card=row.card)
 
 
-def test_select_single_aggregate_checkbox_checks_matching_label():
+def test_select_single_aggregate_checkbox_delegates_to_switch():
     page = MagicMock()
-    modal = MagicMock()
-    page.locator.return_value = modal
-
-    chbr_label = MagicMock()
-    chbr_label.inner_text.return_value = "ЧБР"
-    tinkoff_label = MagicMock()
-    tinkoff_label.inner_text.return_value = "Тинькофф АПК"
-
-    labels = MagicMock()
-    labels.count.return_value = 2
-    labels.nth.side_effect = lambda i: (chbr_label, tinkoff_label)[i]
-    modal.locator.return_value = labels
-
-    checkbox = MagicMock()
-    checkbox.count.return_value = 1
-    checkbox.first.is_checked.return_value = False
-
-    with patch("automation.add_wallet_engine._checkbox_for_label", return_value=checkbox):
-        select_single_aggregate_checkbox(page, "ЧБР")
-
-    checkbox.first.check.assert_called_once_with(force=True)
+    with patch("automation.add_wallet_engine.switch_to_single_aggregate") as switch:
+        select_single_aggregate_checkbox(page, "ЧБР", card="9990110810347534")
+    switch.assert_called_once_with(
+        page, "ЧБР", card="9990110810347534", timing_scope="add_wallet"
+    )
 
 
 def test_select_single_aggregate_unknown_raises():
     page = MagicMock()
-    modal = MagicMock()
-    page.locator.return_value = modal
-    labels = MagicMock()
-    labels.count.return_value = 0
-    modal.locator.return_value = labels
-
-    with pytest.raises(RuntimeError, match="aggregate checkbox not found"):
-        select_single_aggregate_checkbox(page, "UnknownAgg")
+    with patch(
+        "automation.add_wallet_engine.switch_to_single_aggregate",
+        side_effect=AggregateSwitchError("aggregate checkbox not found: UnknownAgg"),
+    ):
+        with pytest.raises(RuntimeError, match="aggregate checkbox not found"):
+            select_single_aggregate_checkbox(page, "UnknownAgg")
 
 
 @patch("automation.add_wallet_engine.time.monotonic", side_effect=[0, 0, 10])
@@ -841,8 +817,11 @@ def test_fill_add_wallet_form_omitted_fields_not_filled(
 
 
 @patch("automation.add_wallet_engine._fill_phase2_top_level_fields")
-@patch("automation.add_wallet_engine.fill_aggregate_modal_fields")
-@patch("automation.add_wallet_engine.wait_for_aggregate_fields_visible")
+@patch("automation.add_wallet_engine._fill_confirmed_nested_field")
+@patch(
+    "automation.add_wallet_engine.wait_for_requested_nested_fields",
+    return_value={"phone": MagicMock(), "card": MagicMock()},
+)
 @patch("automation.add_wallet_engine.select_single_aggregate_checkbox")
 @patch("automation.add_wallet_engine._fill_multiselect_list")
 @patch("automation.add_wallet_engine._find_select_by_label")
@@ -853,7 +832,7 @@ def test_fill_add_wallet_form_explicit_fields_still_filled(
     mock_multi,
     mock_select_agg,
     mock_wait_fields,
-    mock_fill_modal,
+    mock_fill_nested,
     mock_phase2,
 ):
     page = MagicMock()
@@ -869,7 +848,7 @@ def test_fill_add_wallet_form_explicit_fields_still_filled(
 
     select_labels = [call.args[1] for call in mock_find_select.call_args_list]
     assert select_labels == ["Направление", "Статус", "Состояние", "Пул"]
-    mock_select_agg.assert_called_once_with(page, "ЧБР")
+    mock_select_agg.assert_called_once_with(page, "ЧБР", card=row.card)
 
 
 @patch("automation.add_wallet_engine._fill_kyc_checkbox")
@@ -1086,3 +1065,363 @@ def test_set_multiselect_idempotent_on_second_call(
 
     mock_remove.assert_called_once_with(multiselect, "Partner B")
     mock_add.assert_not_called()
+
+
+def test_sim_a_requested_fields_are_nested_phone_only():
+    row = _row(aggregate="Sim A (1)", phone="79491103311", account="")
+    needed = requested_nested_fields_for_add_row(row)
+    assert set(needed) == {"phone"}
+    assert needed["phone"] == "79491103311"
+
+
+def test_nested_phone_not_confused_with_top_level():
+    from automation.wallet_form_helpers import _pick_nested_phone_item
+
+    phones = [
+        {"label": "Телефон", "id": "top", "value": "79491103311", "visible": True},
+        {"label": "Телефон", "id": "nested", "value": "", "visible": True},
+    ]
+    nested = _pick_nested_phone_item(phones, expected_top_phone="79491103311")
+    assert nested is not None
+    assert nested["id"] == "nested"
+
+
+def test_wait_sim_a_does_not_require_device_or_nested_card():
+    from automation.wallet_form_helpers import wait_for_requested_nested_fields
+
+    page = MagicMock()
+    phone_loc = MagicMock(name="nested_phone")
+    polls = {"n": 0}
+
+    def labeled(_page=None):
+        polls["n"] += 1
+        rows = [
+            {
+                "label": "Телефон",
+                "id": "top",
+                "value": "79491103311",
+                "visible": True,
+                "disabled": False,
+                "readOnly": False,
+                "rowIndex": 0,
+            },
+            {
+                "label": "Девайс",
+                "id": "device",
+                "value": "",
+                "visible": True,
+                "disabled": False,
+                "readOnly": False,
+                "rowIndex": 3,
+            },
+        ]
+        if polls["n"] >= 2:
+            rows.append(
+                {
+                    "label": "Телефон",
+                    "id": "nested",
+                    "value": "",
+                    "visible": True,
+                    "disabled": False,
+                    "readOnly": False,
+                    "rowIndex": 5,
+                }
+            )
+        return rows
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            side_effect=labeled,
+        ),
+        patch(
+            "automation.wallet_form_helpers._locator_for_labeled_input",
+            return_value=phone_loc,
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 2000),
+    ):
+        fields = wait_for_requested_nested_fields(
+            page,
+            needed={"phone": "998900000000"},
+            expected_top_phone="79491103311",
+            aggregate="Sim A (1)",
+            card="9990110810347534",
+            timing_scope="add_wallet",
+        )
+
+    assert fields == {"phone": phone_loc}
+    assert polls["n"] == 2
+
+
+def test_aggregate_already_sole_active_skips_clicks():
+    page = MagicMock()
+    from automation.wallet_form_helpers import (
+        AggregateCheckboxSnapshot,
+        switch_to_single_aggregate,
+    )
+
+    snap = [
+        AggregateCheckboxSnapshot(name="Sim A (1)", checked=True, id="a1"),
+        AggregateCheckboxSnapshot(name="ЧБР", checked=False, id="a2"),
+    ]
+    with patch(
+        "automation.wallet_form_helpers.snapshot_aggregate_checkboxes",
+        return_value=snap,
+    ) as snap_fn:
+        switch_to_single_aggregate(page, "Sim A (1)")
+    page.locator.assert_not_called()
+    assert snap_fn.called
+
+
+def test_multiple_active_aggregates_are_unchecked():
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+    from automation.wallet_form_helpers import (
+        AggregateCheckboxSnapshot,
+        switch_to_single_aggregate,
+    )
+
+    state = {
+        "A": True,
+        "B": True,
+        "ЧБР": False,
+    }
+    ids = {"A": "id-A", "B": "id-B", "ЧБР": "id-CBR"}
+    locators = {name: MagicMock(name=f"cb-{name}") for name in state}
+
+    def snap(_page=None, card=None, timing_scope="set_aggregate"):
+        return [
+            AggregateCheckboxSnapshot(name=n, checked=c, id=ids[n])
+            for n, c in state.items()
+        ]
+
+    def locator_by_id(_page, checkbox_id):
+        name = checkbox_id.split("id-", 1)[-1]
+        if name == "CBR":
+            name = "ЧБР"
+        cb = locators[name]
+
+        def uncheck(force=True, _name=name):
+            state[_name] = False
+
+        def check(force=True, _name=name):
+            state[_name] = True
+
+        def is_checked(_name=name):
+            return state[_name]
+
+        cb.uncheck.side_effect = uncheck
+        cb.check.side_effect = check
+        cb.is_checked.side_effect = is_checked
+        return cb
+
+    with (
+        patch(
+            "automation.wallet_form_helpers.snapshot_aggregate_checkboxes",
+            side_effect=snap,
+        ),
+        patch(
+            "automation.wallet_form_helpers._checkbox_locator_by_id",
+            side_effect=locator_by_id,
+        ),
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_TIMEOUT_MS", 50),
+    ):
+        switch_to_single_aggregate(page, "ЧБР")
+
+    assert state == {"A": False, "B": False, "ЧБР": True}
+    assert locators["A"].uncheck.called
+    assert locators["B"].uncheck.called
+
+
+def test_dom_recreate_uses_fresh_locator_after_uncheck():
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+    from automation.wallet_form_helpers import (
+        switch_to_single_aggregate,
+    )
+
+    generations = {"Old": 1, "Sim A (1)": 1}
+    state = {"Old": True, "Sim A (1)": False}
+
+    def snap(_page=None, card=None, timing_scope="set_aggregate"):
+        from automation.wallet_form_helpers import AggregateCheckboxSnapshot
+
+        return [
+            AggregateCheckboxSnapshot(
+                name=n, checked=state[n], id=f"id-{n}-g{generations[n]}"
+            )
+            for n in state
+        ]
+
+    def locator_by_id(_page, checkbox_id):
+        gen = int(checkbox_id.rsplit("g", 1)[-1])
+        name = "Old" if checkbox_id.startswith("id-Old") else "Sim A (1)"
+        cb = MagicMock(name=f"{name}-{gen}")
+
+        def is_checked():
+            if generations[name] != gen:
+                raise Exception("stale checkbox locator")
+            return state[name]
+
+        def uncheck(force=True):
+            if generations[name] != gen:
+                raise Exception("stale checkbox locator")
+            state[name] = False
+            generations[name] += 1
+
+        def check(force=True):
+            if generations[name] != gen:
+                raise Exception("stale checkbox locator")
+            state[name] = True
+            generations[name] += 1
+
+        cb.is_checked.side_effect = is_checked
+        cb.uncheck.side_effect = uncheck
+        cb.check.side_effect = check
+        return cb
+
+    with (
+        patch(
+            "automation.wallet_form_helpers.snapshot_aggregate_checkboxes",
+            side_effect=snap,
+        ),
+        patch(
+            "automation.wallet_form_helpers._checkbox_locator_by_id",
+            side_effect=locator_by_id,
+        ),
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._AGGREGATE_TOGGLE_TIMEOUT_MS", 200),
+    ):
+        switch_to_single_aggregate(page, "Sim A (1)")
+
+    assert state["Old"] is False
+    assert state["Sim A (1)"] is True
+    assert generations["Old"] > 1
+    assert generations["Sim A (1)"] > 1
+
+
+def test_required_input_missing_is_explicit_error():
+    block = _FakeBlock([_FakeRow("Аккаунт")])
+    with pytest.raises(RuntimeError, match="required nested field not found"):
+        fill_aggregate_field_if_present(block, ("Карта",), "123", required=True)
+
+
+def test_fill_mismatch_retries_once_then_errors():
+    from automation.wallet_form_helpers import fill_locator_confirmed
+
+    page = MagicMock()
+    first = MagicMock(name="first")
+    second = MagicMock(name="second")
+    resolve = MagicMock(return_value=second)
+
+    with (
+        patch("automation.wallet_form_helpers.fill_locator_text"),
+        patch(
+            "automation.wallet_form_helpers.read_locator_value",
+            return_value="wrong",
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="failed to set nested field"):
+            fill_locator_confirmed(
+                page,
+                field=first,
+                value="998901234567",
+                label="Телефон",
+                resolve_fresh=resolve,
+                card="9990110810347534",
+                timing_prefix="aggregate",
+                timing_scope="add_wallet",
+            )
+
+    assert resolve.call_count == 2
+
+
+def test_fill_uses_waited_locator_without_second_label_scan():
+    page = MagicMock()
+    phone_field = MagicMock(name="waited")
+    row = _row(aggregate="Sim A (1)")
+    research = MagicMock(side_effect=AssertionError("must not re-scan labels"))
+
+    with (
+        patch("automation.add_wallet_engine.select_single_aggregate_checkbox"),
+        patch(
+            "automation.add_wallet_engine.wait_for_requested_nested_fields",
+            return_value={"phone": phone_field},
+        ),
+        patch(
+            "automation.add_wallet_engine.opportunistic_nested_card_item",
+            return_value=None,
+        ),
+        patch("automation.add_wallet_engine.fill_locator_confirmed") as fill_conf,
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            side_effect=research,
+        ),
+    ):
+        _fill_single_aggregate(page, row)
+
+    assert fill_conf.call_count == 1
+    assert fill_conf.call_args.kwargs["field"] is phone_field
+    research.assert_not_called()
+
+
+def test_stale_search_rows_are_not_accepted_as_new_filter():
+    page = MagicMock()
+    card = "9990110810347534"
+    stale = (100, tuple(f"OLD{i:014d}" for i in range(5)))
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 40),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 5),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._fill_card_search_input", return_value=card) as fill,
+        patch("automation.engine._press_card_search_enter") as enter,
+        patch("automation.engine._table_row_fingerprint", return_value=stale),
+        patch(
+            "automation.engine._try_match_strict_row_index",
+            return_value=(None, 100, "OLD"),
+        ),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=False),
+    ):
+        with pytest.raises(CardSearchUnsettledError):
+            card_exists_strict(page, card)
+
+    fill.assert_called_once()
+    assert enter.call_count == 2
+
+
+def test_confirmed_absent_is_not_unsettled():
+    page = MagicMock()
+    card = "9990110810347534"
+    before = (100, ("OLD0000000000001",))
+    empty = (0, tuple())
+    fps = [before, empty, empty]
+    matches = [(None, 100, "OLD"), (None, 0, ""), (None, 0, "")]
+    with (
+        patch("automation.engine._DELETE_SEARCH_TIMEOUT_MS", 800),
+        patch("automation.engine._DELETE_SEARCH_STABLE_POLLS", 2),
+        patch("automation.engine._ROW_MATCH_POLL_MS", 10),
+        patch("automation.engine.wallet_editor_row_match_timeout_ms", return_value=0),
+        patch("automation.engine._close_stale_modal"),
+        patch("automation.engine._fill_card_search_input", return_value=card),
+        patch("automation.engine._press_card_search_enter"),
+        patch("automation.engine._table_row_fingerprint", side_effect=fps),
+        patch("automation.engine._try_match_strict_row_index", side_effect=matches),
+        patch("automation.engine._page_shows_empty_wallet_results", return_value=True),
+    ):
+        assert card_exists_strict(page, card) is False
+
+
+def test_unsettled_search_is_technical_not_skip():
+    page = MagicMock()
+    cfg = RunConfig(login="u", password="p", dry_run=False)
+    with patch(
+        "automation.add_wallet_engine.card_exists_strict",
+        side_effect=CardSearchUnsettledError("9990110810347534"),
+    ):
+        result = _process_row(page, _row(), cfg=cfg, operator_profile="DENIS")
+    assert result.result == RESULT_FAIL_TECHNICAL
+    assert "unsettled" in result.comment
+

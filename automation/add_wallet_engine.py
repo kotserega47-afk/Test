@@ -35,10 +35,31 @@ from automation.audit import (
     log,
     mask_card,
     normalize_card_digits,
-    row_matches_card_strict,
 )
-from automation.engine import _ensure_logged_in
-from automation.runtime import RunConfig, require_wallet_editor_antares_credentials, wallet_editor_playwright_slow_mo_ms
+from automation.engine import (
+    CardSearchUnsettledError,
+    _ensure_logged_in,
+    card_exists_strict as engine_card_exists_strict,
+)
+from automation.runtime import (
+    RunConfig,
+    require_wallet_editor_antares_credentials,
+    wallet_editor_playwright_slow_mo_ms,
+)
+from automation.wallet_form_helpers import (
+    AggregateSwitchError,
+    FieldNotEditableError,
+    _locator_for_labeled_input,
+    clear_locator_text as _clear_locator_text,
+    fill_locator_confirmed,
+    fill_locator_text as _fill_locator_text,
+    opportunistic_nested_card_item,
+    requested_nested_fields_for_add_row,
+    resolve_nested_field_locator,
+    switch_to_single_aggregate,
+    time_form_step,
+    wait_for_requested_nested_fields,
+)
 from core.playwright_cleanup import close_playwright_stack
 
 WALLET_URL = "https://antares.plus/lkcard/#/wallet"
@@ -80,6 +101,10 @@ _AGGREGATE_UNIQUE_VISIBILITY_LABELS = (
 _DUPLICATE_TOP_LEVEL_LABELS = frozenset({"Карта", "Телефон"})
 
 
+_ADD_WALLET_TIMING_PROFILE = "wallet_editor"
+_ADD_WALLET_TIMING_SCOPE = "add_wallet"
+
+
 @dataclass
 class SaveWaitOutcome:
     status: str
@@ -98,52 +123,6 @@ def _normalize_label_text(text: str) -> str:
 
 def _labels_match(actual: str, expected: str) -> bool:
     return _normalize_label_text(actual) == _normalize_label_text(expected)
-
-
-class FieldNotEditableError(Exception):
-    """Raised when a target input/textarea is readonly or disabled."""
-
-    def __init__(self, label: str) -> None:
-        self.label = label
-        super().__init__(f"field is readonly/disabled: {label}")
-
-
-def _attribute_is_truthy(value: str | None) -> bool:
-    if value is None:
-        return False
-    normalized = str(value).strip().casefold()
-    return normalized not in {"", "false", "0", "none"}
-
-
-def _is_field_editable(field) -> bool:
-    try:
-        return bool(field.evaluate("el => !el.readOnly && !el.disabled"))
-    except Exception:
-        pass
-    try:
-        readonly = _attribute_is_truthy(field.get_attribute("readonly"))
-        disabled = _attribute_is_truthy(field.get_attribute("disabled"))
-        return not (readonly or disabled)
-    except Exception:
-        return True
-
-
-def _assert_field_editable(field, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
-    if _is_field_editable(field):
-        return
-    log.info(f"{log_prefix} field_not_editable label={label}")
-    raise FieldNotEditableError(label)
-
-
-def _fill_locator_text(field, label: str, value: str, *, log_prefix: str = LOG_PREFIX) -> None:
-    _assert_field_editable(field, label, log_prefix=log_prefix)
-    field.fill("")
-    field.fill(value)
-
-
-def _clear_locator_text(field, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
-    _assert_field_editable(field, label, log_prefix=log_prefix)
-    field.fill("")
 
 
 def _clear_text_by_label(page: Page, label: str, *, log_prefix: str = LOG_PREFIX) -> None:
@@ -253,28 +232,19 @@ def _page_shows_empty_results(page: Page) -> bool:
 
 
 def card_exists_strict(page: Page, card: str) -> bool:
+    """Strict search via engine: fingerprint settle, second Enter without refill.
+
+    Raises ``CardSearchUnsettledError`` when the UI cannot produce a trustworthy
+    result (distinct from confirmed absence).
+    """
     _log("pre_search", card=card)
-    _submit_card_filter(page, card)
-    page.wait_for_timeout(_POLL_MS)
-
-    if _page_shows_empty_results(page):
-        rows = page.locator(ROW_SELECTOR)
-        if rows.count() == 0:
-            _log("duplicate_found", card=card, extra="no rows")
-            return False
-
-    rows = page.locator(ROW_SELECTOR)
-    card_digits = normalize_card_digits(card)
-    count = rows.count()
-    for i in range(count):
-        try:
-            row_text = rows.nth(i).inner_text(timeout=_ROW_READ_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            continue
-        if row_matches_card_strict(row_text, card_digits):
-            _log("duplicate_found", card=card, extra="strict match")
-            return True
-    return False
+    found = engine_card_exists_strict(page, card)
+    _log(
+        "duplicate_found" if found else "duplicate_absent",
+        card=card,
+        extra="strict match" if found else "confirmed absent",
+    )
+    return found
 
 
 def open_add_wallet_modal(page: Page) -> None:
@@ -978,16 +948,19 @@ def _find_aggregate_checkbox_label(modal, aggregate_name: str):
     return None
 
 
-def select_single_aggregate_checkbox(page: Page, aggregate_name: str) -> None:
-    modal = page.locator(MODAL_BODY)
-    label_el = _find_aggregate_checkbox_label(modal, aggregate_name)
-    if label_el is None:
-        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
-    checkbox = _checkbox_for_label(label_el)
-    if checkbox.count() == 0:
-        raise RuntimeError(f"aggregate checkbox not found: {aggregate_name}")
-    if not checkbox.first.is_checked():
-        checkbox.first.check(force=True)
+def select_single_aggregate_checkbox(
+    page: Page, aggregate_name: str, *, card: str | None = None
+) -> None:
+    """Keep the named aggregate as the only active checkbox; skip clicks if already sole."""
+    try:
+        switch_to_single_aggregate(
+            page,
+            aggregate_name,
+            card=card,
+            timing_scope=_ADD_WALLET_TIMING_SCOPE,
+        )
+    except AggregateSwitchError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _detect_aggregate_expansion(modal) -> str | None:
@@ -1042,6 +1015,9 @@ def fill_aggregate_field_if_present(
             matched_label = label
             break
     if field is None:
+        if required:
+            names = "/".join(labels)
+            raise RuntimeError(f"required nested field not found: {names}")
         return
     if not value:
         if required:
@@ -1059,22 +1035,128 @@ def fill_aggregate_field_if_present(
 
 
 def fill_aggregate_modal_fields(modal, row: AddWalletRow) -> None:
-    fill_aggregate_field_if_present(modal, ("Карта",), row.card, required=True)
-    fill_aggregate_field_if_present(modal, ("Телефон",), row.phone, required=True)
+    needed = requested_nested_fields_for_add_row(row)
+    fill_aggregate_field_if_present(
+        modal, ("Карта",), row.card, required="card" in needed
+    )
+    fill_aggregate_field_if_present(
+        modal, ("Телефон",), row.phone, required="phone" in needed
+    )
     fill_aggregate_field_if_present(modal, ("Аккаунт",), row.account)
     fill_aggregate_field_if_present(modal, ("MerchantId СБП",), row.merchant_id_sbp)
     fill_aggregate_field_if_present(modal, ACCOUNT_NUMBER_LABELS, row.account_number)
 
 
+def _fill_confirmed_nested_field(
+    page: Page,
+    *,
+    field,
+    value: str,
+    label: str,
+    key: str,
+    expected_top_phone: str,
+    card: str | None,
+) -> None:
+    def resolve_fresh():
+        return resolve_nested_field_locator(
+            page, key, expected_top_phone=expected_top_phone
+        )
+
+    fill_locator_confirmed(
+        page,
+        field=field,
+        value=value,
+        label=label,
+        resolve_fresh=resolve_fresh,
+        card=card,
+        timing_prefix="aggregate",
+        timing_scope=_ADD_WALLET_TIMING_SCOPE,
+    )
+
+
 def _fill_single_aggregate(page: Page, row: AddWalletRow) -> None:
     if not row.aggregate:
         return
-    select_single_aggregate_checkbox(page, row.aggregate)
+    select_single_aggregate_checkbox(page, row.aggregate, card=row.card)
     _log("aggregate_selected", extra=f"aggregate={row.aggregate}")
-    wait_for_aggregate_fields_visible(page, row.aggregate)
-    modal = page.locator(MODAL_BODY)
+
+    needed = requested_nested_fields_for_add_row(row)
+    _log(
+        "requested_nested_fields",
+        extra=f"aggregate={row.aggregate} fields={sorted(needed.keys())}",
+    )
+    fields = wait_for_requested_nested_fields(
+        page,
+        needed=needed,
+        expected_top_phone=row.phone,
+        aggregate=row.aggregate,
+        card=row.card,
+        timing_scope=_ADD_WALLET_TIMING_SCOPE,
+    )
+
     _log("aggregate_fill_started", extra=f"aggregate={row.aggregate}")
-    fill_aggregate_modal_fields(modal, row)
+    with time_form_step(
+        "aggregate_fill",
+        card=row.card,
+        profile=_ADD_WALLET_TIMING_PROFILE,
+        scope=_ADD_WALLET_TIMING_SCOPE,
+    ):
+        if "phone" in needed:
+            field = fields.get("phone")
+            if field is None:
+                raise RuntimeError("required nested field not found: Телефон")
+            _fill_confirmed_nested_field(
+                page,
+                field=field,
+                value=needed["phone"],
+                label="Телефон",
+                key="phone",
+                expected_top_phone=row.phone,
+                card=row.card,
+            )
+        for key, labels in (
+            ("account", ("Аккаунт",)),
+            ("merchant_id_sbp", ("MerchantId СБП",)),
+            ("account_number", ACCOUNT_NUMBER_LABELS),
+        ):
+            if key not in needed:
+                continue
+            field = fields.get(key)
+            if field is None:
+                raise RuntimeError(f"required nested field not found: {labels[0]}")
+            _fill_confirmed_nested_field(
+                page,
+                field=field,
+                value=needed[key],
+                label=labels[0],
+                key=key,
+                expected_top_phone=row.phone,
+                card=row.card,
+            )
+
+        nested_card_locator = fields.get("card")
+        if nested_card_locator is None:
+            item = opportunistic_nested_card_item(page)
+            if item is not None:
+                nested_card_locator = _locator_for_labeled_input(page, item)
+
+        if nested_card_locator is not None and row.card:
+            _fill_confirmed_nested_field(
+                page,
+                field=nested_card_locator,
+                value=row.card,
+                label="Карта",
+                key="card",
+                expected_top_phone=row.phone,
+                card=row.card,
+            )
+        elif "card" in needed:
+            raise RuntimeError("required nested field not found: Карта")
+        else:
+            _log(
+                "nested_card_skipped",
+                extra=f"aggregate={row.aggregate} reason=not_present",
+            )
     _log("aggregate_fill_completed", extra=f"aggregate={row.aggregate}")
 
 
@@ -1267,6 +1349,19 @@ def _process_row(
             comment="card not found after save",
             operator_profile=operator_profile,
             dry_run=False,
+        )
+    except CardSearchUnsettledError:
+        log.exception(
+            f"{LOG_PREFIX} stage=row_result card_tail={mask_card(row.card)} "
+            "error=card_search_unsettled"
+        )
+        return make_row_result(
+            row,
+            row_number=row.row_number,
+            result=RESULT_FAIL_TECHNICAL,
+            comment="card search UI unsettled",
+            operator_profile=operator_profile,
+            dry_run=cfg.dry_run,
         )
     except Exception as exc:
         log.exception(f"{LOG_PREFIX} stage=row_result card_tail={mask_card(row.card)} error={exc}")
