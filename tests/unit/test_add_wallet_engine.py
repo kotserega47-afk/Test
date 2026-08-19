@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+import time
 
 import pytest
 
@@ -1287,19 +1288,24 @@ def test_single_top_level_phone_is_not_treated_as_nested():
             side_effect=locator_for,
         ),
         patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
-        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 80),
-        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 20),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 1500),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 40),
     ):
+        started = time.perf_counter()
         fields = _wait_nested_fields(
             page,
             needed={},
             optional_keys={"phone": "79491103311"},
             aggregate="ESB",
         )
+        elapsed_ms = (time.perf_counter() - started) * 1000
 
     assert fields == {}
     locators["top"].fill.assert_not_called()
     locators["top"].click.assert_not_called()
+    assert elapsed_ms < 400, (
+        f"optional-only nested phone wait used full timeout: {elapsed_ms:.0f}ms"
+    )
 
 
 def test_optional_nested_phone_delayed_render_is_filled():

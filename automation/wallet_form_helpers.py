@@ -24,7 +24,8 @@ _AGGREGATE_TOGGLE_POLL_MS = 75
 _AGGREGATE_UNCHECK_ROUNDS = 12
 _NESTED_FIELD_POLL_MS = 50
 _NESTED_FIELD_WAIT_MS = 5_000
-# After mandatory nested fields appear, keep polling briefly for delayed nested phone.
+# Cap for optional nested phone: after mandatory fields appear, or when only
+# optional phone is requested (needed_keys empty).
 _OPTIONAL_NESTED_FIELD_GRACE_MS = 1_000
 
 _DEFAULT_TIMING_PROFILE = "wallet_editor"
@@ -848,8 +849,6 @@ def wait_for_requested_nested_fields(
         def _optional_deadline(now: float) -> float:
             if "phone" not in optional_keys_set or "phone" in found:
                 return now
-            if not needed_keys:
-                return deadline
             if required_done_at is None:
                 return deadline
             return min(
