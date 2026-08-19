@@ -1056,6 +1056,7 @@ def _fill_confirmed_nested_field(
     key: str,
     expected_top_phone: str,
     card: str | None,
+    timing_prefix: str = "aggregate",
 ) -> None:
     def resolve_fresh():
         return resolve_nested_field_locator(
@@ -1069,7 +1070,7 @@ def _fill_confirmed_nested_field(
         label=label,
         resolve_fresh=resolve_fresh,
         card=card,
-        timing_prefix="aggregate",
+        timing_prefix=timing_prefix,
         timing_scope=_ADD_WALLET_TIMING_SCOPE,
     )
 
@@ -1081,13 +1082,19 @@ def _fill_single_aggregate(page: Page, row: AddWalletRow) -> None:
     _log("aggregate_selected", extra=f"aggregate={row.aggregate}")
 
     needed = requested_nested_fields_for_add_row(row)
+    phone_value = str(row.phone or "").strip()
+    optional_nested = {"phone": phone_value} if phone_value else {}
     _log(
         "requested_nested_fields",
-        extra=f"aggregate={row.aggregate} fields={sorted(needed.keys())}",
+        extra=(
+            f"aggregate={row.aggregate} fields={sorted(needed.keys())} "
+            f"optional={sorted(optional_nested.keys())}"
+        ),
     )
     fields = wait_for_requested_nested_fields(
         page,
         needed=needed,
+        optional_keys=optional_nested,
         expected_top_phone=row.phone,
         aggregate=row.aggregate,
         card=row.card,
@@ -1101,19 +1108,29 @@ def _fill_single_aggregate(page: Page, row: AddWalletRow) -> None:
         profile=_ADD_WALLET_TIMING_PROFILE,
         scope=_ADD_WALLET_TIMING_SCOPE,
     ):
-        if "phone" in needed:
+        if phone_value:
             field = fields.get("phone")
             if field is None:
-                raise RuntimeError("required nested field not found: Телефон")
-            _fill_confirmed_nested_field(
-                page,
-                field=field,
-                value=needed["phone"],
-                label="Телефон",
-                key="phone",
-                expected_top_phone=row.phone,
-                card=row.card,
-            )
+                _log(
+                    "nested_phone_not_present",
+                    extra=f"aggregate={row.aggregate}",
+                )
+            else:
+                _log("nested_phone_found", extra=f"aggregate={row.aggregate}")
+                _fill_confirmed_nested_field(
+                    page,
+                    field=field,
+                    value=phone_value,
+                    label="Телефон",
+                    key="phone",
+                    expected_top_phone=row.phone,
+                    card=row.card,
+                    timing_prefix="nested_phone",
+                )
+                _log(
+                    "nested_phone_fill_confirmed",
+                    extra=f"aggregate={row.aggregate}",
+                )
         for key, labels in (
             ("account", ("Аккаунт",)),
             ("merchant_id_sbp", ("MerchantId СБП",)),

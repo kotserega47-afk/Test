@@ -24,6 +24,9 @@ _AGGREGATE_TOGGLE_POLL_MS = 75
 _AGGREGATE_UNCHECK_ROUNDS = 12
 _NESTED_FIELD_POLL_MS = 50
 _NESTED_FIELD_WAIT_MS = 5_000
+# Cap for optional nested phone: after mandatory fields appear, or when only
+# optional phone is requested (needed_keys empty).
+_OPTIONAL_NESTED_FIELD_GRACE_MS = 1_000
 
 _DEFAULT_TIMING_PROFILE = "wallet_editor"
 _DEFAULT_TIMING_SCOPE = "set_aggregate"
@@ -797,6 +800,14 @@ def read_top_level_phone(page: "Page") -> str:
     return str(visible[0].get("value") or "").strip()
 
 
+def _nonempty_field_keys(spec: Mapping[str, str] | set[str] | None) -> set[str]:
+    if not spec:
+        return set()
+    if isinstance(spec, Mapping):
+        return {key for key, value in spec.items() if str(value or "").strip()}
+    return {str(key) for key in spec if str(key or "").strip()}
+
+
 def wait_for_requested_nested_fields(
     page: "Page",
     *,
@@ -805,20 +816,24 @@ def wait_for_requested_nested_fields(
     aggregate: str = "",
     card: str | None = None,
     timing_scope: str = _DEFAULT_TIMING_SCOPE,
+    optional_keys: Mapping[str, str] | set[str] | None = None,
 ) -> dict[str, object]:
     """Wait only for requested nested fields; return ready locators.
 
     One ``modal.evaluate`` per poll. Does not wait for Device. Nested «Карта»
     is waited only when ``card`` is in ``needed``. Phone wait excludes the
     top-level wallet phone. Wall-clock timeout is ``_NESTED_FIELD_WAIT_MS``.
+
+    ``optional_keys`` (typically nested phone for Add Wallet) are collected
+    opportunistically: if they appear, they are returned; if not, they are
+    omitted without failing the wait.
     """
-    if isinstance(needed, Mapping):
-        needed_keys = {key for key, value in needed.items() if str(value or "").strip()}
-    else:
-        needed_keys = set(needed)
+    needed_keys = _nonempty_field_keys(needed)
+    optional_keys_set = _nonempty_field_keys(optional_keys) - needed_keys
+    want_phone = "phone" in needed_keys or "phone" in optional_keys_set
 
     with time_form_step("requested_fields_wait", card=card, scope=timing_scope):
-        if not needed_keys:
+        if not needed_keys and not optional_keys_set:
             log.info(
                 "[WalletForm] nested_fields_skip reason=no_optional_fields aggregate=%s",
                 aggregate,
@@ -829,11 +844,26 @@ def wait_for_requested_nested_fields(
         deadline = time.monotonic() + _NESTED_FIELD_WAIT_MS / 1000.0
         phone_search_count = 0
         phone_wait_started: float | None = None
+        required_done_at: float | None = None
 
-        while time.monotonic() < deadline:
+        def _optional_deadline(now: float) -> float:
+            if "phone" not in optional_keys_set or "phone" in found:
+                return now
+            if required_done_at is None:
+                return deadline
+            return min(
+                deadline,
+                required_done_at + _OPTIONAL_NESTED_FIELD_GRACE_MS / 1000.0,
+            )
+
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+
             labeled = _list_labeled_inputs(page)
 
-            if "phone" in needed_keys and "phone" not in found:
+            if want_phone and "phone" not in found:
                 if phone_wait_started is None:
                     phone_wait_started = time.perf_counter()
                 phone_search_count += 1
@@ -858,9 +888,10 @@ def wait_for_requested_nested_fields(
                         )
                         log.info(
                             "[WalletForm] nested_phone_found searches=%s "
-                            "wait_ms=%s top_phone=%s",
+                            "wait_ms=%s aggregate=%s top_phone=%s",
                             phone_search_count,
                             duration_ms,
+                            aggregate,
                             mask_phone(expected_top_phone),
                         )
 
@@ -879,28 +910,52 @@ def wait_for_requested_nested_fields(
                     if loc is not None:
                         found[key] = loc
 
-            if needed_keys <= set(found.keys()):
-                return found
+            missing_required = needed_keys - set(found.keys())
+            missing_optional = optional_keys_set - set(found.keys())
+            if not missing_required:
+                if required_done_at is None:
+                    required_done_at = time.monotonic()
+                if not missing_optional or time.monotonic() >= _optional_deadline(
+                    time.monotonic()
+                ):
+                    break
 
             remaining_ms = (deadline - time.monotonic()) * 1000
+            if not missing_required:
+                remaining_ms = min(
+                    remaining_ms,
+                    (_optional_deadline(time.monotonic()) - time.monotonic()) * 1000,
+                )
             if remaining_ms <= 0:
                 break
             page.wait_for_timeout(min(_NESTED_FIELD_POLL_MS, remaining_ms))
 
         if phone_wait_started is not None and "phone" not in found:
+            duration_ms = round((time.perf_counter() - phone_wait_started) * 1000)
+            phone_optional = "phone" in optional_keys_set
             log_timing(
                 profile=_DEFAULT_TIMING_PROFILE,
                 scope=timing_scope,
                 step="nested_phone_wait",
-                duration_ms=round((time.perf_counter() - phone_wait_started) * 1000),
-                outcome="fail",
+                duration_ms=duration_ms,
+                outcome="skip" if phone_optional else "fail",
                 card=card,
             )
+            if phone_optional:
+                log.info(
+                    "[WalletForm] nested_phone_not_present searches=%s "
+                    "wait_ms=%s aggregate=%s",
+                    phone_search_count,
+                    duration_ms,
+                    aggregate,
+                )
 
         missing = sorted(needed_keys - set(found.keys()))
-        raise RuntimeError(
-            f"requested nested fields not visible: {missing} aggregate={aggregate}"
-        )
+        if missing:
+            raise RuntimeError(
+                f"requested nested fields not visible: {missing} aggregate={aggregate}"
+            )
+        return found
 
 
 def fill_locator_confirmed(
@@ -991,15 +1046,12 @@ def opportunistic_nested_card_item(page: "Page") -> dict | None:
 
 
 def requested_nested_fields_for_add_row(row) -> dict[str, str]:
-    """Nested fields to wait/fill for Add Wallet — never Device.
+    """Mandatory nested fields to wait/fill for Add Wallet — never Device.
 
-    Sim A with phone: nested phone only (no Device, no nested Card wait).
+    Nested phone is optional and is handled separately after aggregate switch.
     Nested Card is waited only when the aggregate is known to provide it.
     """
     out: dict[str, str] = {}
-    phone = str(getattr(row, "phone", "") or "").strip()
-    if phone:
-        out["phone"] = phone
     account = str(getattr(row, "account", "") or "").strip()
     if account:
         out["account"] = account
