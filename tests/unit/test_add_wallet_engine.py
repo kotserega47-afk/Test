@@ -401,7 +401,8 @@ def test_fill_add_wallet_form_selects_single_aggregate(
 
     mock_select_agg.assert_called_once_with(page, "ЧБР", card=row.card)
     mock_wait_fields.assert_called_once()
-    assert mock_wait_fields.call_args.kwargs["needed"]["phone"] == row.phone
+    assert "phone" not in mock_wait_fields.call_args.kwargs["needed"]
+    assert mock_wait_fields.call_args.kwargs["optional_keys"]["phone"] == row.phone
     assert "card" in mock_wait_fields.call_args.kwargs["needed"]
 
 
@@ -1067,11 +1068,49 @@ def test_set_multiselect_idempotent_on_second_call(
     mock_add.assert_not_called()
 
 
-def test_sim_a_requested_fields_are_nested_phone_only():
+def test_sim_a_requested_fields_exclude_nested_phone():
     row = _row(aggregate="Sim A (1)", phone="79491103311", account="")
     needed = requested_nested_fields_for_add_row(row)
-    assert set(needed) == {"phone"}
-    assert needed["phone"] == "79491103311"
+    assert "phone" not in needed
+    assert needed == {}
+
+
+def test_esb_requested_fields_keep_account_number_strict():
+    row = _row(
+        aggregate="ESB",
+        phone="79491103311",
+        account_number="1124372420001234",
+    )
+    needed = requested_nested_fields_for_add_row(row)
+    assert "phone" not in needed
+    assert needed["account_number"] == "1124372420001234"
+
+
+def _labeled_input(label, *, id, value="", visible=True, row_index=0, **extra):
+    item = {
+        "label": label,
+        "id": id,
+        "value": value,
+        "visible": visible,
+        "disabled": False,
+        "readOnly": False,
+        "rowIndex": row_index,
+    }
+    item.update(extra)
+    return item
+
+
+def _wait_nested_fields(page, **kwargs):
+    from automation.wallet_form_helpers import wait_for_requested_nested_fields
+
+    defaults = {
+        "expected_top_phone": "79491103311",
+        "aggregate": "ESB",
+        "card": "9990110810347534",
+        "timing_scope": "add_wallet",
+    }
+    defaults.update(kwargs)
+    return wait_for_requested_nested_fields(page, **defaults)
 
 
 def test_nested_phone_not_confused_with_top_level():
@@ -1152,6 +1191,184 @@ def test_wait_sim_a_does_not_require_device_or_nested_card():
 
     assert fields == {"phone": phone_loc}
     assert polls["n"] == 2
+
+
+def test_esb_optional_nested_phone_not_present_does_not_fail():
+    page = MagicMock()
+    account_loc = MagicMock(name="account_number")
+
+    def labeled(_page=None):
+        return [
+            _labeled_input("Телефон", id="top", value="79491103311", row_index=0),
+            _labeled_input("Номер счета", id="acc", value="", row_index=4),
+        ]
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            side_effect=labeled,
+        ),
+        patch(
+            "automation.wallet_form_helpers._locator_for_labeled_input",
+            return_value=account_loc,
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 200),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 20),
+    ):
+        fields = _wait_nested_fields(
+            page,
+            needed={"account_number": "1124372420001234"},
+            optional_keys={"phone": "79491103311"},
+            aggregate="ESB",
+        )
+
+    assert "phone" not in fields
+    assert fields == {"account_number": account_loc}
+
+
+def test_optional_nested_phone_found_and_not_top_level():
+    page = MagicMock()
+    locators = {
+        "nested": MagicMock(name="nested_phone"),
+        "acc": MagicMock(name="account"),
+    }
+
+    def labeled(_page=None):
+        return [
+            _labeled_input("Телефон", id="top", value="79491103311", row_index=0),
+            _labeled_input("Телефон", id="nested", value="", row_index=5),
+            _labeled_input("Аккаунт", id="acc", value="", row_index=6),
+        ]
+
+    def locator_for(_page, item):
+        return locators.get(item["id"])
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            return_value=labeled(),
+        ),
+        patch(
+            "automation.wallet_form_helpers._locator_for_labeled_input",
+            side_effect=locator_for,
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 200),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 20),
+    ):
+        fields = _wait_nested_fields(
+            page,
+            needed={"account": "acc-1"},
+            optional_keys={"phone": "79491103311"},
+            aggregate="Sim A (1)",
+        )
+
+    assert fields["phone"] is locators["nested"]
+    assert fields["account"] is locators["acc"]
+
+
+def test_single_top_level_phone_is_not_treated_as_nested():
+    page = MagicMock()
+    locators = {"top": MagicMock(name="top_phone")}
+
+    def locator_for(_page, item):
+        return locators.get(item["id"])
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            return_value=[
+                _labeled_input("Телефон", id="top", value="79491103311", row_index=0),
+            ],
+        ),
+        patch(
+            "automation.wallet_form_helpers._locator_for_labeled_input",
+            side_effect=locator_for,
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 80),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 20),
+    ):
+        fields = _wait_nested_fields(
+            page,
+            needed={},
+            optional_keys={"phone": "79491103311"},
+            aggregate="ESB",
+        )
+
+    assert fields == {}
+    locators["top"].fill.assert_not_called()
+    locators["top"].click.assert_not_called()
+
+
+def test_optional_nested_phone_delayed_render_is_filled():
+    page = MagicMock()
+    phone_loc = MagicMock(name="nested_phone")
+    polls = {"n": 0}
+
+    def labeled(_page=None):
+        polls["n"] += 1
+        rows = [
+            _labeled_input("Телефон", id="top", value="79491103311", row_index=0),
+        ]
+        if polls["n"] >= 2:
+            rows.append(
+                _labeled_input("Телефон", id="nested", value="", row_index=5),
+            )
+        return rows
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            side_effect=labeled,
+        ),
+        patch(
+            "automation.wallet_form_helpers._locator_for_labeled_input",
+            return_value=phone_loc,
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 2000),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 20),
+    ):
+        fields = _wait_nested_fields(
+            page,
+            needed={},
+            optional_keys={"phone": "79491103311"},
+            aggregate="Sim A (1)",
+        )
+
+    assert fields == {"phone": phone_loc}
+    assert polls["n"] == 2
+    page.wait_for_timeout.assert_called()
+    for call in page.wait_for_timeout.call_args_list:
+        assert call.args[0] <= 50
+
+
+def test_missing_explicit_account_number_still_fails():
+    page = MagicMock()
+
+    with (
+        patch(
+            "automation.wallet_form_helpers._list_labeled_inputs",
+            return_value=[
+                _labeled_input("Телефон", id="top", value="79491103311", row_index=0),
+            ],
+        ),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_POLL_MS", 1),
+        patch("automation.wallet_form_helpers._NESTED_FIELD_WAIT_MS", 40),
+        patch("automation.wallet_form_helpers._OPTIONAL_NESTED_FIELD_GRACE_MS", 10),
+    ):
+        with pytest.raises(
+            RuntimeError,
+            match=r"requested nested fields not visible: \['account_number'\] aggregate=ESB",
+        ):
+            _wait_nested_fields(
+                page,
+                needed={"account_number": "1124372420001234"},
+                optional_keys={"phone": "79491103311"},
+                aggregate="ESB",
+            )
 
 
 def test_aggregate_already_sole_active_skips_clicks():
@@ -1364,7 +1581,73 @@ def test_fill_uses_waited_locator_without_second_label_scan():
 
     assert fill_conf.call_count == 1
     assert fill_conf.call_args.kwargs["field"] is phone_field
+    assert fill_conf.call_args.kwargs["timing_prefix"] == "nested_phone"
     research.assert_not_called()
+
+
+def test_fill_esb_skips_missing_nested_phone_and_fills_account_number():
+    page = MagicMock()
+    account_field = MagicMock(name="account_number")
+    card_field = MagicMock(name="card")
+    row = _row(aggregate="ESB", account_number="1124372420001234")
+
+    with (
+        patch("automation.add_wallet_engine.select_single_aggregate_checkbox"),
+        patch(
+            "automation.add_wallet_engine.wait_for_requested_nested_fields",
+            return_value={"account_number": account_field, "card": card_field},
+        ) as wait_fields,
+        patch(
+            "automation.add_wallet_engine.opportunistic_nested_card_item",
+            return_value=None,
+        ),
+        patch("automation.add_wallet_engine.fill_locator_confirmed") as fill_conf,
+        patch("automation.add_wallet_engine._log") as mock_log,
+    ):
+        _fill_single_aggregate(page, row)
+
+    assert "phone" not in wait_fields.call_args.kwargs["needed"]
+    assert wait_fields.call_args.kwargs["optional_keys"]["phone"] == row.phone
+    assert wait_fields.call_args.kwargs["needed"]["account_number"] == row.account_number
+    fill_labels = [call.kwargs["label"] for call in fill_conf.call_args_list]
+    assert "Телефон" not in fill_labels
+    assert "Номер счёта" in fill_labels
+    assert "Карта" in fill_labels
+    stages = [call.args[0] for call in mock_log.call_args_list]
+    assert "nested_phone_not_present" in stages
+    assert "nested_phone_fill_confirmed" not in stages
+
+
+def test_fill_nested_phone_when_present_uses_row_phone():
+    page = MagicMock()
+    phone_field = MagicMock(name="nested_phone")
+    account_field = MagicMock(name="account")
+    row = _row(aggregate="Sim A (1)", account="acc-1")
+
+    with (
+        patch("automation.add_wallet_engine.select_single_aggregate_checkbox"),
+        patch(
+            "automation.add_wallet_engine.wait_for_requested_nested_fields",
+            return_value={"phone": phone_field, "account": account_field},
+        ),
+        patch(
+            "automation.add_wallet_engine.opportunistic_nested_card_item",
+            return_value=None,
+        ),
+        patch("automation.add_wallet_engine.fill_locator_confirmed") as fill_conf,
+        patch("automation.add_wallet_engine._log") as mock_log,
+    ):
+        _fill_single_aggregate(page, row)
+
+    labels = [call.kwargs["label"] for call in fill_conf.call_args_list]
+    assert labels == ["Телефон", "Аккаунт"]
+    phone_call = fill_conf.call_args_list[0]
+    assert phone_call.kwargs["field"] is phone_field
+    assert phone_call.kwargs["value"] == row.phone
+    assert phone_call.kwargs["timing_prefix"] == "nested_phone"
+    stages = [call.args[0] for call in mock_log.call_args_list]
+    assert "nested_phone_found" in stages
+    assert "nested_phone_fill_confirmed" in stages
 
 
 def test_stale_search_rows_are_not_accepted_as_new_filter():
