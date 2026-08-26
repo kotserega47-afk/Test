@@ -259,6 +259,54 @@ def test_canonicalization_does_not_rewrite_stored_partner_name():
     assert row["partner"] != SOURCE_152
 
 
+def test_display_exact_does_not_bypass_canonical_source():
+    otlezka = _otlezka((DISPLAY_152, 99), (SOURCE_152, 3))
+    row, missing, _ = _recalc(DISPLAY_152, otlezka, AFFOR_ALIASES)
+    assert missing == set()
+    assert row["partner"] == DISPLAY_152
+    assert row["Дата включения"] == "04.06.2026"
+
+    from integrations.wallet_editor_partner_resolve import OtlezkaIndex
+
+    result = resolve_otlezka_days(
+        DISPLAY_152,
+        OtlezkaIndex(
+            days_by_norm={DISPLAY_152.casefold(): 99, SOURCE_152.casefold(): 3},
+            original_by_norm={
+                DISPLAY_152.casefold(): DISPLAY_152,
+                SOURCE_152.casefold(): SOURCE_152,
+            },
+        ),
+        AFFOR_ALIASES,
+    )
+    assert result.ok
+    assert result.via == VIA_ALIAS
+    assert result.days == 3
+    assert result.matched_norm == SOURCE_152.casefold()
+
+
+def test_active_display_row_does_not_override_active_source():
+    otlezka = pd.DataFrame(
+        [
+            {"partner": DISPLAY_152, "Полные дни": 99, "comment": "", "active": True},
+            {"partner": SOURCE_152, "Полные дни": 3, "comment": "", "active": True},
+        ]
+    )
+    row, missing, _ = _recalc(DISPLAY_152, otlezka, AFFOR_ALIASES)
+    assert missing == set()
+    assert row["Дата включения"] == "04.06.2026"
+
+
+def test_source_name_still_matches_exactly_when_display_row_exists():
+    row, missing, _ = _recalc(
+        SOURCE_152,
+        _otlezka((DISPLAY_152, 99), (SOURCE_152, 3)),
+        AFFOR_ALIASES,
+    )
+    assert missing == set()
+    assert row["Дата включения"] == "04.06.2026"
+
+
 def test_alias_to_missing_active_source_does_not_use_inactive_row():
     otlezka = pd.DataFrame(
         [

@@ -2,8 +2,9 @@
 
 Canonical name is Rules ``source_partners``. Display names (including
 renames that dropped the ``HH`` prefix) map through explicit
-``display_name → source_partners`` pairs, then a unique trailing
-terminal-id fallback. Zero or multiple id matches fail closed.
+``display_name → source_partners`` pairs before any exact match on the
+display string itself, then a unique trailing terminal-id fallback.
+Zero or multiple id matches fail closed.
 """
 
 from __future__ import annotations
@@ -260,7 +261,11 @@ def _unique_source_in_index(
     *,
     query: str,
 ) -> OtlezkaResolveResult | None:
-    """Resolve alias sources against active otlezka. None = continue to id fallback."""
+    """Resolve alias sources against active otlezka.
+
+    None means no usable alias hit: unmapped names continue to exact
+    lookup, mapped display names skip exact and use id fallback.
+    """
 
     if not sources:
         return None
@@ -322,8 +327,10 @@ def resolve_otlezka_days(
 ) -> OtlezkaResolveResult:
     """Lookup Отлёжка days for a registry partner name.
 
-    Order: exact normalized name, Rules display→source alias (with id check),
-    then unique trailing-id fallback. Ambiguous matches fail closed.
+    Order: Rules display→source alias when the query is a mapped display
+    name (canonical source wins over a same-string otlezka row); otherwise
+    exact normalized name; then unique trailing-id fallback. Ambiguous
+    matches fail closed.
     """
 
     aliases = aliases or PartnerAliasMap.empty()
@@ -332,16 +339,21 @@ def resolve_otlezka_days(
         return OtlezkaResolveResult(days=None, matched_norm=None, via=FAIL_MISSING, detail=_DETAIL_MISSING)
 
     partner_key = _norm(partner_name)
+    alias_sources = aliases.sources_for(partner_name)
+    if alias_sources:
+        alias_result = _unique_source_in_index(
+            alias_sources,
+            index,
+            query=partner_name,
+        )
+        if alias_result is not None:
+            return alias_result
+        # Mapped display name: never treat a same-string otlezka row as
+        # the canonical source setting.
+        return _terminal_id_fallback(partner_name, index)
+
     exact_days = index.days_for_norm(partner_key)
     if exact_days is not None:
         return OtlezkaResolveResult(days=exact_days, matched_norm=partner_key, via=VIA_EXACT)
-
-    alias_result = _unique_source_in_index(
-        aliases.sources_for(partner_name),
-        index,
-        query=partner_name,
-    )
-    if alias_result is not None:
-        return alias_result
 
     return _terminal_id_fallback(partner_name, index)
