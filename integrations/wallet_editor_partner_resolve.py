@@ -3,13 +3,15 @@
 Canonical name is Rules ``source_partners``. Display names (including
 renames that dropped the ``HH`` prefix) map through explicit
 ``display_name → source_partners`` pairs before any exact match on the
-display string itself, then a unique trailing terminal-id fallback.
-Zero or multiple id matches fail closed.
+display string itself. Mapped display names never use terminal-id
+fallback: missing canonical source fails closed. Unique trailing-id
+fallback is only for names without an explicit alias.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -29,6 +31,7 @@ VIA_EXACT = "exact"
 VIA_ALIAS = "alias"
 VIA_TERMINAL_ID = "terminal_id"
 FAIL_MISSING = "missing"
+FAIL_MISSING_CANONICAL = "missing_canonical_source"
 FAIL_AMBIGUOUS_ID = "ambiguous_terminal_id"
 FAIL_AMBIGUOUS_ALIAS = "ambiguous_alias"
 FAIL_ID_MISMATCH = "terminal_id_mismatch"
@@ -46,6 +49,9 @@ _DETAIL_ID_MISMATCH = (
     "source_partners ({canonical_id})."
 )
 _DETAIL_MISSING = ""
+_DETAIL_MISSING_CANONICAL = (
+    "Канонический source_partners из Rules «{source}» отсутствует среди active otlezka."
+)
 
 
 def _norm(value: object) -> str:
@@ -141,6 +147,8 @@ def build_partner_alias_map_from_hourly_payins(df: pd.DataFrame | None) -> Partn
 
 
 _aliases_cache: tuple[str, PartnerAliasMap] | None = None
+_aliases_negative: tuple[str, float] | None = None
+_NEGATIVE_CACHE_TTL_SECONDS = 30.0
 
 
 def load_partner_alias_map_from_workbook(path: str | Path) -> PartnerAliasMap:
@@ -149,16 +157,28 @@ def load_partner_alias_map_from_workbook(path: str | Path) -> PartnerAliasMap:
     return build_partner_alias_map_from_hourly_payins(frame)
 
 
+def _store_positive_alias_cache(cache_key: str, aliases: PartnerAliasMap) -> None:
+    global _aliases_cache, _aliases_negative
+    _aliases_cache = (cache_key, aliases)
+    _aliases_negative = None
+
+
 def runtime_partner_aliases() -> PartnerAliasMap:
     """Best-effort Rules aliases. Never raises. Skips Dropbox during pytest."""
 
-    global _aliases_cache
+    global _aliases_negative
     candidates = _alias_workbook_candidates()
     cache_key = _alias_cache_key(candidates)
+    now = time.monotonic()
     if _aliases_cache is not None and _aliases_cache[0] == cache_key:
         return _aliases_cache[1]
+    if (
+        _aliases_negative is not None
+        and _aliases_negative[0] == cache_key
+        and now < _aliases_negative[1]
+    ):
+        return PartnerAliasMap.empty()
 
-    aliases = PartnerAliasMap.empty()
     for path in candidates:
         try:
             aliases = load_partner_alias_map_from_workbook(path)
@@ -173,11 +193,12 @@ def runtime_partner_aliases() -> PartnerAliasMap:
             path,
             len(aliases.display_to_sources),
         )
-        _aliases_cache = (cache_key, aliases)
+        _store_positive_alias_cache(cache_key, aliases)
         return aliases
 
     if os.getenv("PYTEST_CURRENT_TEST"):
-        _aliases_cache = (cache_key, aliases)
+        aliases = PartnerAliasMap.empty()
+        _store_positive_alias_cache(cache_key, aliases)
         return aliases
 
     try:
@@ -189,14 +210,14 @@ def runtime_partner_aliases() -> PartnerAliasMap:
             "[WalletEditorRegistry] partner aliases loaded from rules snapshot display_rows=%s",
             len(aliases.display_to_sources),
         )
+        _store_positive_alias_cache(cache_key, aliases)
+        return aliases
     except Exception:
         log.warning(
             "[WalletEditorRegistry] partner aliases unavailable; exact+id lookup only"
         )
-        aliases = PartnerAliasMap.empty()
-
-    _aliases_cache = (cache_key, aliases)
-    return aliases
+        _aliases_negative = (cache_key, now + float(_NEGATIVE_CACHE_TTL_SECONDS))
+        return PartnerAliasMap.empty()
 
 
 def _alias_cache_key(paths: list[Path]) -> str:
@@ -263,8 +284,8 @@ def _unique_source_in_index(
 ) -> OtlezkaResolveResult | None:
     """Resolve alias sources against active otlezka.
 
-    None means no usable alias hit: unmapped names continue to exact
-    lookup, mapped display names skip exact and use id fallback.
+    None only when ``sources`` is empty (caller may exact-match / id-fallback).
+    A mapped display name always returns a result and never uses id fallback.
     """
 
     if not sources:
@@ -287,7 +308,12 @@ def _unique_source_in_index(
             detail=_id_mismatch_detail(query, source),
         )
     if _norm(source) not in index.days_by_norm:
-        return None
+        return OtlezkaResolveResult(
+            days=None,
+            matched_norm=None,
+            via=FAIL_MISSING_CANONICAL,
+            detail=_DETAIL_MISSING_CANONICAL.format(source=source),
+        )
 
     matched_norm = _norm(source)
     return OtlezkaResolveResult(
@@ -328,9 +354,10 @@ def resolve_otlezka_days(
     """Lookup Отлёжка days for a registry partner name.
 
     Order: Rules display→source alias when the query is a mapped display
-    name (canonical source wins over a same-string otlezka row); otherwise
-    exact normalized name; then unique trailing-id fallback. Ambiguous
-    matches fail closed.
+    name (canonical source wins over a same-string otlezka row; missing
+    canonical fails closed with no id fallback); otherwise exact
+    normalized name; then unique trailing-id fallback. Ambiguous matches
+    fail closed.
     """
 
     aliases = aliases or PartnerAliasMap.empty()
@@ -348,9 +375,12 @@ def resolve_otlezka_days(
         )
         if alias_result is not None:
             return alias_result
-        # Mapped display name: never treat a same-string otlezka row as
-        # the canonical source setting.
-        return _terminal_id_fallback(partner_name, index)
+        return OtlezkaResolveResult(
+            days=None,
+            matched_norm=None,
+            via=FAIL_MISSING_CANONICAL,
+            detail=_DETAIL_MISSING_CANONICAL.format(source=alias_sources[0]),
+        )
 
     exact_days = index.days_for_norm(partner_key)
     if exact_days is not None:

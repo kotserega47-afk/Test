@@ -264,10 +264,17 @@ def _otlezka_row_is_active(row: pd.Series) -> bool:
         return True
     if isinstance(value, bool):
         return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
     text = str(value).strip().lower()
     if text in {"", "nan", "none"}:
         return True
-    return text not in {"0", "false", "f", "no", "n", "inactive", "off"}
+    if text in {"0", "0.0", "false", "f", "no", "n", "inactive", "off"}:
+        return False
+    try:
+        return float(text) != 0.0
+    except ValueError:
+        return True
 
 
 def _load_otlezka_days_and_originals(
@@ -571,9 +578,28 @@ def save_warned_partners(partners: Iterable[str]) -> None:
 def sync_warned_partners_after_otlezka(
     otlezka_df: pd.DataFrame,
     warned: set[str],
+    *,
+    partner_aliases: "PartnerAliasMap | None" = None,
 ) -> set[str]:
-    configured = {_normalize_key(p) for p in load_otlezka_days(otlezka_df)}
-    updated = {p for p in warned if p not in configured}
+    from integrations.wallet_editor_partner_resolve import (
+        OtlezkaIndex,
+        PartnerAliasMap,
+        VIA_ALIAS,
+        VIA_EXACT,
+        resolve_otlezka_days,
+    )
+
+    aliases = partner_aliases if isinstance(partner_aliases, PartnerAliasMap) else PartnerAliasMap.empty()
+    days, originals = _load_otlezka_days_and_originals(otlezka_df)
+    index = OtlezkaIndex(days_by_norm=days, original_by_norm=originals)
+    updated: set[str] = set()
+    for partner in warned:
+        lookup = resolve_otlezka_days(partner, index, aliases)
+        if lookup.ok and lookup.via in {VIA_EXACT, VIA_ALIAS}:
+            continue
+        key = _normalize_key(partner)
+        if key:
+            updated.add(key)
     save_warned_partners({_cell_str(p) for p in updated})
     return updated
 

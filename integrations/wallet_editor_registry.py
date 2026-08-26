@@ -199,8 +199,14 @@ def _process_missing_otlezka_warnings(
     otlezka_df: pd.DataFrame,
     details: dict[str, str] | None = None,
 ) -> None:
+    from integrations.wallet_editor_partner_resolve import runtime_partner_aliases
+
     warned = load_warned_partners()
-    warned = sync_warned_partners_after_otlezka(otlezka_df, warned)
+    warned = sync_warned_partners_after_otlezka(
+        otlezka_df,
+        warned,
+        partner_aliases=runtime_partner_aliases(),
+    )
     if not missing_partners:
         return
     to_warn = partners_to_warn(missing_partners, warned)
