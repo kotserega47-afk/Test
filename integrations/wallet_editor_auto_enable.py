@@ -53,7 +53,7 @@ from integrations.wallet_editor_registry import (
     registry_stale_outbox_warning,
     wallet_editor_dropbox_path,
 )
-from integrations.wallet_editor_registry_lifecycle import recalculate_all_results
+from integrations.wallet_editor_registry_lifecycle import recalculate_all_results_runtime
 from integrations.wallet_editor_registry_xlsx import load_registry_frames
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
@@ -189,7 +189,7 @@ def load_registry_frames_for_planning(
     except ManualReadersNotReadyError as exc:
         raise RuntimeError(str(exc)) from exc
 
-    recalculated, _missing = recalculate_all_results(
+    recalculated, _missing = recalculate_all_results_runtime(
         all_df,
         hold_df,
         otlezka_df,

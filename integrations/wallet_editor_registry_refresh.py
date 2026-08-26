@@ -30,7 +30,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     STATUS_PROSROCHENO,
     _cell_str,
     normalize_all_results,
-    recalculate_all_results,
+    recalculate_all_results_runtime,
 )
 from integrations.wallet_editor_registry_settings import RegistrySettings, load_registry_settings
 from integrations.wallet_editor_registry_xlsx import load_registry_frames, save_registry_workbook
@@ -255,7 +255,7 @@ def _refresh_attempt(
         dropbox_path=dropbox_path,
         today=today,
         normalize_all_results=normalize_all_results,
-        recalculate_all_results=recalculate_all_results,
+        recalculate_all_results=recalculate_all_results_runtime,
         compute_lifecycle_diff=compute_lifecycle_diff,
         lifecycle_row_changed=_lifecycle_row_changed,
     )

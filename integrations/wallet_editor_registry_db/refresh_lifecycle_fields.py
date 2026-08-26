@@ -20,7 +20,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     MISSING_OTLEZKA_STATUS,
     _cell_str,
     normalize_all_results,
-    recalculate_all_results,
+    recalculate_all_results_runtime,
     result_row_fingerprint,
 )
 from integrations.wallet_editor_registry_refresh import _lifecycle_row_changed
@@ -96,7 +96,7 @@ def plan_lifecycle_patches(
     """
     before_df = normalize_all_results(all_results)
     stale_rows = sum(1 for idx in before_df.index if _is_stale_missing_otlezka_row(before_df.loc[idx]))
-    recalculated, missing_partners = recalculate_all_results(
+    recalculated, missing_partners = recalculate_all_results_runtime(
         before_df,
         hold_df,
         otlezka_df,
