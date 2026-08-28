@@ -17,7 +17,11 @@ from core.access_rules import AccessRules
 from core.access_guard import AccessContext, check_access, deny_message
 from core.job_dispatch import dispatch_job_async
 from core.job_runner import get_status, Actor, JOB_REGISTRY
-from integrations.wallet_editor_auto_enable import run_auto_enable, run_auto_enable_plan
+from integrations.wallet_editor_auto_enable import (
+    run_auto_enable_exclusive,
+    run_auto_enable_plan,
+    run_wallet_editor_auto_enable_job,
+)
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
 
@@ -230,6 +234,7 @@ JOB_REGISTRY.update(
         "download": run_download_job,
         "wallet_editor_registry_refresh": run_wallet_editor_registry_refresh_job,
         "wallet_editor_registry_replay": run_registry_outbox_replay_job,
+        "wallet_editor_auto_enable": run_wallet_editor_auto_enable_job,
     }
 )
 
@@ -488,9 +493,14 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         result = await loop.run_in_executor(
             None,
-            lambda: run_auto_enable(actor, manual=True),
+            lambda: run_auto_enable_exclusive(actor, manual=True),
         )
-        if result.skipped_reason == "disabled":
+        if result.skipped_reason == "busy":
+            await update.message.reply_text(
+                "⏳ Auto-Enable уже выполняется. Второй запуск отклонён, очередь не создавалась.\n"
+                f"correlation_id={result.correlation_id} verdict={result.verdict}"
+            )
+        elif result.skipped_reason == "disabled":
             await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
         elif result.skipped_reason == "error":
             await update.message.reply_text("⚠️ Auto-Enable run failed. См. route-отчёт.")
@@ -500,7 +510,8 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         else:
             await update.message.reply_text(
-                f"✅ Auto-Enable execution finished. Telegram report sent={result.sent}"
+                f"✅ Auto-Enable execution finished. Telegram report sent={result.sent} "
+                f"verdict={result.verdict} correlation_id={result.correlation_id}"
             )
     except Exception as e:
         log.exception("cmd_auto_enable_run failed")

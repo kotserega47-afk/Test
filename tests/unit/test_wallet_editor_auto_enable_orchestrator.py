@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
+
+os.environ.setdefault("TELEGRAM_CHAT_ID_ANALIZ", "1")
 
 import pandas as pd
 import pytest
@@ -221,7 +224,7 @@ def test_cmd_auto_enable_run_uses_guard_and_runs_orchestrator():
         "integrations.tg_commands._guard_or_deny",
         new=AsyncMock(return_value=False),
     ) as guard:
-        with patch("integrations.tg_commands.run_auto_enable") as run_fn:
+        with patch("integrations.tg_commands.run_auto_enable_exclusive") as run_fn:
             asyncio.run(cmd_auto_enable_run(update, MagicMock()))
             guard.assert_awaited_once_with(update, "auto_enable_run")
             run_fn.assert_not_called()
@@ -231,8 +234,14 @@ def test_cmd_auto_enable_run_uses_guard_and_runs_orchestrator():
         new=AsyncMock(return_value=True),
     ):
         with patch(
-            "integrations.tg_commands.run_auto_enable",
-            return_value=MagicMock(skipped_reason=None, sent=True),
+            "integrations.tg_commands.run_auto_enable_exclusive",
+            return_value=MagicMock(
+                skipped_reason=None,
+                sent=True,
+                phase="Phase B2 execution + registry patch",
+                verdict="EXECUTED",
+                correlation_id="abc",
+            ),
         ) as run_fn:
             asyncio.run(cmd_auto_enable_run(update, MagicMock()))
             run_fn.assert_called_once()

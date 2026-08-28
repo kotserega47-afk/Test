@@ -20,6 +20,12 @@ __pycache__/
 .pytest_cache/
 .env
 
+# One-shot Affor recon snapshots (real card IDs; never commit)
+/backups/affor_recon_2404_20260828/
+/backups/hh_affor_allowlist_2404.txt
+/backups/hh_affor_allowlist_2404_20260828.txt
+/account_ids_task.txt
+
 # Discovery frame dumps (local analysis artifacts)
 .discovery_frames/
 .discovery_frames_dense/

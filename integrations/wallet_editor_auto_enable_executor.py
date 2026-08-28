@@ -15,7 +15,6 @@ from playwright.sync_api import Page, sync_playwright
 from automation.engine import (
     _ensure_logged_in,
     _get_current_card_status,
-    _partner_already_selected,
     ensure_partner_added,
     ensure_status_set,
     get_partner_chips,
@@ -62,6 +61,12 @@ from integrations.wallet_editor_hold import (
     is_card_partner_on_hold,
     load_hold_pairs_snapshot,
 )
+from integrations.wallet_editor_partner_match import (
+    CHIP_PRESENT,
+    CHIP_UNRESOLVED,
+    partner_presence_on_chips,
+)
+from integrations.wallet_editor_partner_resolve import PartnerAliasMap, runtime_partner_aliases
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
@@ -77,6 +82,7 @@ REGISTRY_FAIL = "FAIL"
 ERROR_UNKNOWN_STATUS = "UNKNOWN_STATUS"
 ERROR_ALREADY_ADDED = "ALREADY_ADDED"
 ERROR_PARTNER_NOT_AVAILABLE = "PARTNER_NOT_AVAILABLE"
+ERROR_PARTNER_MATCH_UNRESOLVED = "PARTNER_MATCH_UNRESOLVED"
 ERROR_SERVICE_WORKS = "SERVICE_WORKS"
 
 _TECHNICAL_OUTCOME_CODES = frozenset(
@@ -278,8 +284,13 @@ def _unknown_status_comment(status: str) -> str:
     return "UNKNOWN_STATUS: статус карты не определён; ручной разбор"
 
 
-def _partner_present(get_chips_fn: Callable[[Page], list[str]], page: Page, partner: str) -> bool:
-    return _partner_already_selected(get_chips_fn(page), partner)
+def _partner_present(
+    get_chips_fn: Callable[[Page], list[str]],
+    page: Page,
+    partner: str,
+    aliases: PartnerAliasMap | None = None,
+) -> bool:
+    return partner_presence_on_chips(get_chips_fn(page), partner, aliases) == CHIP_PRESENT
 
 
 def _add_partner_or_outcome(
@@ -292,18 +303,35 @@ def _add_partner_or_outcome(
     get_status_fn: Callable[[Page], str],
     get_chips_fn: Callable[[Page], list[str]],
     add_partner_fn: Callable[[Page, str, RunConfig], str],
+    aliases: PartnerAliasMap | None = None,
 ) -> tuple[bool, EnableOutcome | None]:
     try:
         add_result = add_partner_fn(page, candidate.partner, cfg)
     except Exception as exc:
+        if "chip match unresolved" in str(exc).casefold():
+            return False, _outcome(
+                candidate,
+                registry_value=REGISTRY_FAIL,
+                registry_comment="PARTNER_MATCH_UNRESOLVED; fail closed; ручной разбор",
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+                partner_present_after=False,
+                mutated=False,
+                saved=False,
+                error_code=ERROR_PARTNER_MATCH_UNRESOLVED,
+                raw_error=str(exc),
+            )
         classification = classify_enable_exception(exc)
-        return _technical_fail_outcome(
+        return False, _technical_fail_outcome(
             candidate,
             classification,
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            partner_present_after=_partner_present(
+                get_chips_fn, page, candidate.partner, aliases
+            ),
             raw_error=str(exc),
         )
 
@@ -318,7 +346,9 @@ def _add_partner_or_outcome(
                 status_before=status_before,
                 status_after=get_status_fn(page),
                 partner_present_before=partner_present_before,
-                partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+                partner_present_after=_partner_present(
+                    get_chips_fn, page, candidate.partner, aliases
+                ),
                 error_code=ERROR_PARTNER_NOT_AVAILABLE,
                 raw_error=add_result,
             )
@@ -332,11 +362,13 @@ def _add_partner_or_outcome(
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            partner_present_after=_partner_present(
+                get_chips_fn, page, candidate.partner, aliases
+            ),
             raw_error=add_result,
         )
 
-    if not _partner_present(get_chips_fn, page, candidate.partner):
+    if not _partner_present(get_chips_fn, page, candidate.partner, aliases):
         return False, _technical_fail_outcome(
             candidate,
             RetryClassification(
@@ -398,6 +430,7 @@ def process_enable_candidate(
     add_partner_fn: Callable[[Page, str, RunConfig], str] = ensure_partner_added,
     set_status_fn: Callable[[Page, str, RunConfig], str] = ensure_status_set,
     save_fn: Callable[[Page, RunConfig], str] = save,
+    aliases: PartnerAliasMap | None = None,
 ) -> EnableOutcome:
     """Single-card enable pass: one open_card, read status/partners, decide, act, save."""
     working_statuses = working_statuses or build_status_set(settings.working_statuses)
@@ -406,6 +439,7 @@ def process_enable_candidate(
     )
     target_status = settings.auto_return_target_status
     hold_snapshot = hold_snapshot or HoldPairsSnapshot.empty_available()
+    aliases = aliases if aliases is not None else runtime_partner_aliases()
 
     if not hold_snapshot.available:
         log.error(
@@ -465,7 +499,27 @@ def process_enable_candidate(
         )
 
     chips_before = get_chips_fn(page)
-    partner_present_before = _partner_already_selected(chips_before, candidate.partner)
+    presence_before = partner_presence_on_chips(chips_before, candidate.partner, aliases)
+    if presence_before == CHIP_UNRESOLVED:
+        log.error(
+            "[AutoEnable] partner match unresolved card=%s partner=%s chips=%s",
+            candidate.card,
+            candidate.partner,
+            chips_before,
+        )
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_FAIL,
+            registry_comment="PARTNER_MATCH_UNRESOLVED; fail closed; ручной разбор",
+            status_before=status_before,
+            status_after=status_before,
+            partner_present_before=False,
+            partner_present_after=False,
+            mutated=False,
+            saved=False,
+            error_code=ERROR_PARTNER_MATCH_UNRESOLVED,
+        )
+    partner_present_before = presence_before == CHIP_PRESENT
 
     is_working = is_status_in_set(status_before, working_statuses)
     is_auto_return = is_status_in_set(status_before, auto_return_statuses)
@@ -506,6 +560,7 @@ def process_enable_candidate(
             get_status_fn=get_status_fn,
             get_chips_fn=get_chips_fn,
             add_partner_fn=add_partner_fn,
+            aliases=aliases,
         )
         if not ok:
             return outcome
@@ -547,7 +602,9 @@ def process_enable_candidate(
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            partner_present_after=_partner_present(
+                get_chips_fn, page, candidate.partner, aliases
+            ),
             mutated=True,
             saved=False,
             raw_error=str(exc),
@@ -564,6 +621,7 @@ def process_enable_candidate(
             get_status_fn=get_status_fn,
             get_chips_fn=get_chips_fn,
             add_partner_fn=add_partner_fn,
+            aliases=aliases,
         )
         if not ok:
             return outcome

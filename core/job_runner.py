@@ -6,9 +6,10 @@ import os
 import inspect
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from core.event_log import append_event
 from core.rules_provider import get_rules_snapshot, get_snapshot_v2
@@ -130,6 +131,32 @@ def _unlock(job_type: str) -> None:
                 p.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+@contextmanager
+def exclusive_job(job_type: str, actor: Actor) -> Iterator[str | None]:
+    """Hold the job lock for the duration of a run.
+
+    Yields ``None`` when another live run holds the lock (caller must not enqueue).
+    Yields ``job_id`` when the lock was acquired.
+    """
+
+    jt = (job_type or "").strip()
+    if not jt:
+        yield None
+        return
+    if not _try_lock(jt):
+        yield None
+        return
+
+    job_id = uuid.uuid4().hex[:12]
+    started = time.time()
+    _RUNNING[jt] = (job_id, started, actor.to_dict())
+    try:
+        yield job_id
+    finally:
+        _RUNNING.pop(jt, None)
+        _unlock(jt)
 
 
 def _invoke_job(fn: Callable[..., Any], actor: Actor) -> None:

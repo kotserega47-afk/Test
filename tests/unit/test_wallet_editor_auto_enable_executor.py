@@ -9,6 +9,7 @@ from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
 from integrations.wallet_editor_auto_enable_executor import (
     ERROR_ALREADY_ADDED,
     ERROR_CARD_NOT_FOUND,
+    ERROR_PARTNER_MATCH_UNRESOLVED,
     ERROR_PARTNER_NOT_AVAILABLE,
     ERROR_PLAYWRIGHT_TIMEOUT,
     ERROR_SERVICE_WORKS,
@@ -580,3 +581,48 @@ def test_deprecated_allowed_does_not_make_planovoy_auto_return(page):
     assert outcome.registry_value == REGISTRY_OK
     assert "статус изменён" not in outcome.registry_comment
     assert "Партнёр добавлен; статус карты:" in outcome.registry_comment
+
+
+def test_affor_display_chip_counts_as_already_selected(page):
+    from integrations.wallet_editor_partner_resolve import PartnerAliasMap
+
+    aliases = PartnerAliasMap.from_pairs(
+        [("Affor Тбанк abhsber (152)", "HH Affor Тбанк abhsber (152)")]
+    )
+    outcome = process_enable_candidate(
+        page,
+        _candidate(partner="HH Affor Тбанк abhsber (152)"),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=lambda _p: ["Affor Тбанк abhsber (152)"],
+        add_partner_fn=lambda *_a, **_k: pytest.fail("add_partner should not run"),
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+        aliases=aliases,
+    )
+    assert outcome.registry_value == REGISTRY_OK
+    assert outcome.error_code == ERROR_ALREADY_ADDED
+    assert outcome.mutated is False
+    assert outcome.saved is False
+
+
+def test_unresolved_alias_fails_closed_no_add(page):
+    from integrations.wallet_editor_partner_resolve import PartnerAliasMap
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(partner="Affor Тбанк abhsber (152)"),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=lambda _p: ["HH Affor Тбанк abhsber (152)"],
+        add_partner_fn=lambda *_a, **_k: pytest.fail("add_partner should not run"),
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+        aliases=PartnerAliasMap.unavailable(),
+    )
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == ERROR_PARTNER_MATCH_UNRESOLVED
+    assert outcome.mutated is False
+    assert outcome.saved is False

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.datetime_utils import now_msk
-from core.job_runner import Actor
+from core.job_runner import Actor, JOB_REGISTRY, exclusive_job
 from core.rules_provider import get_indexes_v2, get_snapshot_v2
 from core.rules_v2.accessors import BaseRulesAccessor
 from integrations.dropbox_watcher import download_file_with_rev
@@ -64,6 +65,14 @@ log = get_logger(name, icon)
 PHASE_A_LABEL = "Phase A dry-run"
 PHASE_B2_LABEL = "Phase B2 execution + registry patch"
 PLAN_ONLY_LABEL = "plan-only"
+AUTO_ENABLE_JOB_TYPE = "wallet_editor_auto_enable"
+
+VERDICT_BUSY = "BUSY"
+VERDICT_DISABLED = "DISABLED"
+VERDICT_MANUAL_SYNC_GATE = "MANUAL_SYNC_GATE"
+VERDICT_PLAN_ONLY = "PLAN_ONLY"
+VERDICT_EXECUTED = "EXECUTED"
+VERDICT_ERROR = "ERROR"
 
 
 def _actor_label(actor: Actor | None) -> str | None:
@@ -75,6 +84,41 @@ def _actor_label(actor: Actor | None) -> str | None:
     elif actor.chat_id is not None:
         parts.append(f"chat={actor.chat_id}")
     return ":".join(parts)
+
+
+def _correlation_id(value: str | None) -> str:
+    text = (value or "").strip()
+    return text or uuid.uuid4().hex
+
+
+def _finish_run(
+    *,
+    sent: bool,
+    report_text: str,
+    verdict: str,
+    correlation_id: str,
+    actor: Actor | None,
+    skipped_reason: str | None = None,
+    phase: str = PHASE_A_LABEL,
+    extra: str = "",
+) -> AutoEnableRunResult:
+    log.info(
+        "[AutoEnable] verdict=%s correlation_id=%s actor=%s skipped_reason=%s phase=%s%s",
+        verdict,
+        correlation_id,
+        _actor_label(actor) or "-",
+        skipped_reason or "-",
+        phase,
+        f" {extra}" if extra else "",
+    )
+    return AutoEnableRunResult(
+        sent=sent,
+        report_text=report_text,
+        skipped_reason=skipped_reason,
+        phase=phase,
+        correlation_id=correlation_id,
+        verdict=verdict,
+    )
 
 
 def _require_manual_sync_gate_for_auto_enable(
@@ -112,6 +156,8 @@ class AutoEnableRunResult:
     report_text: str
     skipped_reason: str | None = None
     phase: str = PHASE_A_LABEL
+    correlation_id: str = ""
+    verdict: str = ""
 
 
 def _send_to_route(route_key: str, text: str) -> bool:
@@ -309,12 +355,24 @@ def build_plan_report(
     return "\n".join(line for line in lines if line is not None)
 
 
-def build_pre_run_summary(plan: AutoEnablePlan) -> str:
-    return (
+def build_pre_run_summary(
+    plan: AutoEnablePlan,
+    *,
+    actor: Actor | None = None,
+    correlation_id: str | None = None,
+) -> str:
+    lines = [
         f"Найдено {plan.selected_after_dedup}, "
         f"будет обработано {plan.selected_for_run}, "
         f"batch count {len(plan.batches)}"
-    )
+    ]
+    if correlation_id:
+        lines.append(f"correlation_id={correlation_id}")
+    if actor is not None:
+        lines.append(
+            f"actor: kind={actor.kind} chat_id={actor.chat_id} user_id={actor.user_id}"
+        )
+    return "\n".join(lines)
 
 
 def build_phase_a_report(
@@ -564,16 +622,25 @@ def run_auto_enable_plan(
     settings: AutoEnableSettings | None = None,
     today: date | None = None,
     registry_frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None = None,
+    correlation_id: str | None = None,
 ) -> AutoEnableRunResult:
     """Build a fresh auto-enable plan and send plan-only report. No Antares, no registry patch."""
     settings = settings or load_auto_enable_settings()
     trigger = "manual /auto_enable_plan" if manual else "scheduled plan"
+    cid = _correlation_id(correlation_id)
 
     if not settings.enabled:
         report = _disabled_report(settings, manual=manual, actor=actor, trigger=trigger)
-        log.info("[AutoEnable] plan skipped: enabled=0")
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_DISABLED,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="disabled",
+            phase=PLAN_ONLY_LABEL,
+        )
 
     stale_warning = registry_stale_outbox_warning()
     if stale_warning:
@@ -588,7 +655,15 @@ def run_auto_enable_plan(
         report = gate_message or "manual sync gate failed"
         log.error("[AutoEnable] plan blocked by manual sync gate")
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="manual_sync_gate")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_MANUAL_SYNC_GATE,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="manual_sync_gate",
+            phase=PLAN_ONLY_LABEL,
+        )
 
     try:
         if registry_frames is None:
@@ -604,14 +679,19 @@ def run_auto_enable_plan(
             actor=actor,
             trigger=trigger,
         )
-        log.info(
-            "[AutoEnable] plan ready selected_after_dedup=%s selected_for_run=%s batches=%s (plan-only)",
-            plan.selected_after_dedup,
-            plan.selected_for_run,
-            len(plan.batches),
-        )
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, phase=PLAN_ONLY_LABEL)
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_PLAN_ONLY,
+            correlation_id=cid,
+            actor=actor,
+            phase=PLAN_ONLY_LABEL,
+            extra=(
+                f"selected_after_dedup={plan.selected_after_dedup} "
+                f"selected_for_run={plan.selected_for_run} batches={len(plan.batches)}"
+            ),
+        )
 
     except Exception as exc:
         log.exception("[AutoEnable] plan failed")
@@ -619,13 +699,22 @@ def run_auto_enable_plan(
             [
                 "🧩 WalletEditor Auto-Enable",
                 f"mode: {PLAN_ONLY_LABEL}",
+                f"correlation_id={cid}",
                 "",
                 f"status: error — {exc}",
                 "⚠️ Antares не изменялся. Registry не изменялся.",
             ]
         )
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="error")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_ERROR,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="error",
+            phase=PLAN_ONLY_LABEL,
+        )
 
 
 def run_auto_enable(
@@ -635,6 +724,7 @@ def run_auto_enable(
     settings: AutoEnableSettings | None = None,
     today: date | None = None,
     registry_frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None = None,
+    correlation_id: str | None = None,
 ) -> AutoEnableRunResult:
     """
     Auto-enable execution entrypoint.
@@ -645,12 +735,19 @@ def run_auto_enable(
     """
     settings = settings or load_auto_enable_settings()
     trigger = "manual /auto_enable_run" if manual else "scheduled"
+    cid = _correlation_id(correlation_id)
 
     if not settings.enabled:
         report = _disabled_report(settings, manual=manual, actor=actor, trigger=trigger)
-        log.info("[AutoEnable] skipped: enabled=0")
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="disabled")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_DISABLED,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="disabled",
+        )
 
     stale_warning = registry_stale_outbox_warning()
     if stale_warning:
@@ -665,7 +762,14 @@ def run_auto_enable(
         report = gate_message or "manual sync gate failed"
         log.error("[AutoEnable] run blocked by manual sync gate")
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="manual_sync_gate")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_MANUAL_SYNC_GATE,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="manual_sync_gate",
+        )
 
     try:
         if registry_frames is None:
@@ -689,16 +793,23 @@ def run_auto_enable(
                 trigger=trigger,
                 execution_note=execution_note,
             )
-            log.info(
-                "[AutoEnable] execution blocked selected_after_dedup=%s selected_for_run=%s batches=%s",
-                plan.selected_after_dedup,
-                plan.selected_for_run,
-                len(plan.batches),
-            )
             sent = _send_to_route(settings.telegram_route_report, report)
-            return AutoEnableRunResult(sent=sent, report_text=report, phase=PLAN_ONLY_LABEL)
+            return _finish_run(
+                sent=sent,
+                report_text=report,
+                verdict=VERDICT_PLAN_ONLY,
+                correlation_id=cid,
+                actor=actor,
+                phase=PLAN_ONLY_LABEL,
+                extra=(
+                    f"selected_after_dedup={plan.selected_after_dedup} "
+                    f"selected_for_run={plan.selected_for_run} batches={len(plan.batches)}"
+                ),
+            )
 
-        pre_run_summary = build_pre_run_summary(plan)
+        pre_run_summary = build_pre_run_summary(
+            plan, actor=actor, correlation_id=cid
+        )
         if manual and settings.approval_required:
             pre_run_summary = (
                 f"{pre_run_summary}\n"
@@ -712,12 +823,6 @@ def run_auto_enable(
             selected_after_dedup=plan.selected_after_dedup,
             selected_for_run=plan.selected_for_run,
         )
-        log.info(
-            "[AutoEnable] Phase B2 finished batches=%s selected_after_dedup=%s selected_for_run=%s",
-            len(plan.batches),
-            plan.selected_after_dedup,
-            plan.selected_for_run,
-        )
         final_report = "\n".join(
             [
                 pre_run_summary,
@@ -725,7 +830,18 @@ def run_auto_enable(
                 report,
             ]
         )
-        return AutoEnableRunResult(sent=sent, report_text=final_report, phase=PHASE_B2_LABEL)
+        return _finish_run(
+            sent=sent,
+            report_text=final_report,
+            verdict=VERDICT_EXECUTED,
+            correlation_id=cid,
+            actor=actor,
+            phase=PHASE_B2_LABEL,
+            extra=(
+                f"selected_after_dedup={plan.selected_after_dedup} "
+                f"selected_for_run={plan.selected_for_run} batches={len(plan.batches)}"
+            ),
+        )
 
     except Exception as exc:
         log.exception("[AutoEnable] run failed")
@@ -733,10 +849,71 @@ def run_auto_enable(
             [
                 "🧩 WalletEditor Auto-Enable",
                 "mode: error",
+                f"correlation_id={cid}",
                 "",
                 f"status: error — {exc}",
                 "⚠️ Registry patch not attempted.",
             ]
         )
         sent = _send_to_route(settings.telegram_route_report, report)
-        return AutoEnableRunResult(sent=sent, report_text=report, skipped_reason="error")
+        return _finish_run(
+            sent=sent,
+            report_text=report,
+            verdict=VERDICT_ERROR,
+            correlation_id=cid,
+            actor=actor,
+            skipped_reason="error",
+        )
+
+
+def run_auto_enable_exclusive(
+    actor: Actor | None = None,
+    *,
+    manual: bool = True,
+    settings: AutoEnableSettings | None = None,
+    today: date | None = None,
+    registry_frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None = None,
+) -> AutoEnableRunResult:
+    """Mutual exclusion for ``/auto_enable_run``. Busy second start does not enqueue."""
+    actor = actor or Actor(kind="cli")
+    with exclusive_job(AUTO_ENABLE_JOB_TYPE, actor) as job_id:
+        if job_id is None:
+            cid = _correlation_id(None)
+            report = "\n".join(
+                [
+                    "🧩 WalletEditor Auto-Enable",
+                    "verdict: BUSY",
+                    f"correlation_id={cid}",
+                    f"actor: kind={actor.kind} chat_id={actor.chat_id} user_id={actor.user_id}",
+                    "Second /auto_enable_run rejected; nothing enqueued.",
+                ]
+            )
+            log.info(
+                "[AutoEnable] verdict=%s correlation_id=%s actor=%s skipped_reason=busy",
+                VERDICT_BUSY,
+                cid,
+                _actor_label(actor) or "-",
+            )
+            return AutoEnableRunResult(
+                sent=False,
+                report_text=report,
+                skipped_reason="busy",
+                correlation_id=cid,
+                verdict=VERDICT_BUSY,
+            )
+        return run_auto_enable(
+            actor,
+            manual=manual,
+            settings=settings,
+            today=today,
+            registry_frames=registry_frames,
+            correlation_id=job_id,
+        )
+
+
+def run_wallet_editor_auto_enable_job(actor: Actor) -> None:
+    """JOB_REGISTRY entry. Lock is owned by request_job; do not nest exclusive_job."""
+    run_auto_enable(actor, manual=True)
+
+
+JOB_REGISTRY.setdefault(AUTO_ENABLE_JOB_TYPE, run_wallet_editor_auto_enable_job)

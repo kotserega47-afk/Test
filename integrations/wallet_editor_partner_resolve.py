@@ -78,10 +78,15 @@ class PartnerAliasMap:
     """Explicit Rules mapping: normalized display_name → source_partners names."""
 
     display_to_sources: Mapping[str, tuple[str, ...]]
+    available: bool = True
 
     @classmethod
     def empty(cls) -> "PartnerAliasMap":
         return cls({})
+
+    @classmethod
+    def unavailable(cls) -> "PartnerAliasMap":
+        return cls({}, available=False)
 
     @classmethod
     def from_pairs(cls, pairs: Iterable[tuple[str, str]]) -> "PartnerAliasMap":
@@ -177,7 +182,7 @@ def runtime_partner_aliases() -> PartnerAliasMap:
         and _aliases_negative[0] == cache_key
         and now < _aliases_negative[1]
     ):
-        return PartnerAliasMap.empty()
+        return PartnerAliasMap.unavailable()
 
     for path in candidates:
         try:
@@ -217,7 +222,7 @@ def runtime_partner_aliases() -> PartnerAliasMap:
             "[WalletEditorRegistry] partner aliases unavailable; exact+id lookup only"
         )
         _aliases_negative = (cache_key, now + float(_NEGATIVE_CACHE_TTL_SECONDS))
-        return PartnerAliasMap.empty()
+        return PartnerAliasMap.unavailable()
 
 
 def _alias_cache_key(paths: list[Path]) -> str:

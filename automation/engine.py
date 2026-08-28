@@ -1663,15 +1663,15 @@ def ensure_wallet_deleted(page: Page, card: str, cfg: RunConfig) -> str:
 
 
 def _partner_matches_chip(chip_text: str, partner: str) -> bool:
-    partner_norm = (partner or "").strip()
-    if not partner_norm:
-        return False
-    chip_norm = (chip_text or "").strip()
-    return partner_norm.lower() in chip_norm.lower()
+    from integrations.wallet_editor_partner_match import CHIP_PRESENT, chip_matches_partner
+
+    return chip_matches_partner(chip_text, partner) == CHIP_PRESENT
 
 
 def _partner_already_selected(chips: list[str], partner: str) -> bool:
-    return any(_partner_matches_chip(text, partner) for text in chips)
+    from integrations.wallet_editor_partner_match import CHIP_PRESENT, partner_presence_on_chips
+
+    return partner_presence_on_chips(chips, partner) == CHIP_PRESENT
 
 
 def _find_multiselect_by_label(page: Page, *label_texts: str):
@@ -1889,9 +1889,25 @@ def ensure_partner_added(page: Page, partner: str, cfg: RunConfig):
     chip_texts = [text for _, text in chip_pairs]
     log.info(f"🏷️ [Partners] current chips count={len(chip_texts)}")
 
-    if _partner_already_selected(chip_texts, partner):
+    from integrations.wallet_editor_partner_match import (
+        CHIP_PRESENT,
+        CHIP_UNRESOLVED,
+        partner_presence_on_chips,
+    )
+
+    presence = partner_presence_on_chips(chip_texts, partner)
+    if presence == CHIP_PRESENT:
         log.info(f"ℹ️ [Partners] partner already attached → skip add partner={partner}")
         return f"skip: partner already added: {partner}"
+    if presence == CHIP_UNRESOLVED:
+        log.error(
+            "❌ [Partners] chip match unresolved partner=%s chips=%s",
+            partner,
+            chip_texts,
+        )
+        raise Exception(
+            "partner chip match unresolved (alias missing/ambiguous); fail closed"
+        )
 
     log.info(f"➕ [Partners] partner not attached → adding partner={partner}")
 
