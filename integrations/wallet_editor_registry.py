@@ -43,7 +43,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     normalize_all_results,
     parse_disable_datetime,
     partners_to_warn,
-    recalculate_all_results,
+    recalculate_all_results_runtime,
     rows_from_result_excel,
     run_id_already_processed,
     save_warned_partners,
@@ -160,13 +160,30 @@ def _send_timeout_warning(chat_id: int) -> None:
     _send_chat_warning(chat_id, TIMEOUT_MESSAGE)
 
 
-def _send_missing_otlezka_warnings(chat_id: int, partners: list[str]) -> None:
+def _send_missing_otlezka_warnings(
+    chat_id: int,
+    partners: list[str],
+    *,
+    details: dict[str, str] | None = None,
+) -> None:
     from integrations.wallet_editor_registry_lifecycle import WARN_MESSAGE_TEMPLATE
 
+    details = details or {}
     for partner in partners:
         try:
+            message = WARN_MESSAGE_TEMPLATE.format(partner=partner)
+            extra = (details.get(partner) or "").strip()
+            if extra:
+                message = message.replace(
+                    "Партнёр:\n{partner}\n\n".format(partner=partner),
+                    "Партнёр:\n{partner}\n\nПричина:\n{extra}\n\n".format(
+                        partner=partner,
+                        extra=extra,
+                    ),
+                    1,
+                )
             send_message_sync(
-                WARN_MESSAGE_TEMPLATE.format(partner=partner),
+                message,
                 chat_id=str(chat_id),
             )
         except Exception:
@@ -180,15 +197,22 @@ def _process_missing_otlezka_warnings(
     task: WalletEditorTask,
     missing_partners: set[str],
     otlezka_df: pd.DataFrame,
+    details: dict[str, str] | None = None,
 ) -> None:
+    from integrations.wallet_editor_partner_resolve import runtime_partner_aliases
+
     warned = load_warned_partners()
-    warned = sync_warned_partners_after_otlezka(otlezka_df, warned)
+    warned = sync_warned_partners_after_otlezka(
+        otlezka_df,
+        warned,
+        partner_aliases=runtime_partner_aliases(),
+    )
     if not missing_partners:
         return
     to_warn = partners_to_warn(missing_partners, warned)
     if not to_warn:
         return
-    _send_missing_otlezka_warnings(task.chat_id, to_warn)
+    _send_missing_otlezka_warnings(task.chat_id, to_warn, details=details)
     for partner in to_warn:
         warned.add(partner.casefold())
     save_warned_partners(warned)
@@ -954,7 +978,7 @@ def build_registry_health_report(
         all_df, _runs = load_registry_frames_from_postgres()
         dropbox_path_for_hold = dropbox_path or ""
         hold_df, otlezka_df, _he, _oe = load_hold_otlezka_for_runtime(dropbox_path_for_hold)
-        recalculated, missing_partners = recalculate_all_results(
+        recalculated, missing_partners = recalculate_all_results_runtime(
             all_df,
             hold_df,
             otlezka_df,

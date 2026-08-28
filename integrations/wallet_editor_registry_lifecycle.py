@@ -6,7 +6,10 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    from integrations.wallet_editor_partner_resolve import PartnerAliasMap
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -250,10 +253,40 @@ def load_hold_pairs(hold_df: pd.DataFrame) -> set[tuple[str, str]]:
 
 
 def load_otlezka_days(otlezka_df: pd.DataFrame) -> dict[str, int]:
+    return dict(_load_otlezka_days_and_originals(otlezka_df)[0])
+
+
+def _otlezka_row_is_active(row: pd.Series) -> bool:
+    if "active" not in row.index:
+        return True
+    value = row.get("active")
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    text = str(value).strip().lower()
+    if text in {"", "nan", "none"}:
+        return True
+    if text in {"0", "0.0", "false", "f", "no", "n", "inactive", "off"}:
+        return False
+    try:
+        return float(text) != 0.0
+    except ValueError:
+        return True
+
+
+def _load_otlezka_days_and_originals(
+    otlezka_df: pd.DataFrame,
+) -> tuple[dict[str, int], dict[str, str]]:
     if otlezka_df is None or otlezka_df.empty:
-        return {}
-    result: dict[str, int] = {}
+        return {}, {}
+    days: dict[str, int] = {}
+    originals: dict[str, str] = {}
     for _, row in otlezka_df.iterrows():
+        if not _otlezka_row_is_active(row):
+            continue
         partner = _cell_str(row.get("partner", ""))
         if not partner:
             continue
@@ -261,11 +294,13 @@ def load_otlezka_days(otlezka_df: pd.DataFrame) -> dict[str, int]:
         if raw_days is None or (isinstance(raw_days, float) and pd.isna(raw_days)):
             continue
         try:
-            days = int(float(raw_days))
+            parsed_days = int(float(raw_days))
         except (TypeError, ValueError):
             continue
-        result[_normalize_key(partner)] = days
-    return result
+        key = _normalize_key(partner)
+        days[key] = parsed_days
+        originals[key] = partner
+    return days, originals
 
 
 def is_legacy_all_results(df: pd.DataFrame) -> bool:
@@ -391,12 +426,22 @@ def recalculate_all_results(
     otlezka_df: pd.DataFrame,
     *,
     today: date | None = None,
+    partner_aliases: "PartnerAliasMap | None" = None,
+    missing_details: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, set[str]]:
     """Recalculate lifecycle fields for every row. Returns (df, partners_missing_otlezka)."""
+    from integrations.wallet_editor_partner_resolve import (
+        OtlezkaIndex,
+        PartnerAliasMap,
+        resolve_otlezka_days,
+    )
+
     today = today or now_msk().date()
     df = normalize_all_results(all_results)
     hold_pairs = load_hold_pairs(hold_df)
-    otlezka_days = load_otlezka_days(otlezka_df)
+    otlezka_days, otlezka_originals = _load_otlezka_days_and_originals(otlezka_df)
+    otlezka_index = OtlezkaIndex(days_by_norm=otlezka_days, original_by_norm=otlezka_originals)
+    aliases = partner_aliases if isinstance(partner_aliases, PartnerAliasMap) else PartnerAliasMap.empty()
     missing_partners: set[str] = set()
 
     for idx in df.index:
@@ -451,10 +496,12 @@ def recalculate_all_results(
             continue
 
         disable_dt = parse_disable_datetime(df.at[idx, "Дата отключения"])
-        partner_key = _normalize_key(partner)
-        if partner_key not in otlezka_days:
+        lookup = resolve_otlezka_days(partner, otlezka_index, aliases)
+        if not lookup.ok:
             df.at[idx, "Дата включения"] = MISSING_OTLEZKA_DATE_TEXT
             missing_partners.add(partner)
+            if missing_details is not None:
+                missing_details[partner] = lookup.detail
             df.at[idx, "Статус включения"] = lifecycle_status(
                 vklyucheno=vklyucheno,
                 hold="",
@@ -475,7 +522,7 @@ def recalculate_all_results(
             )
             continue
 
-        reenable = (disable_dt.date() + timedelta(days=otlezka_days[partner_key])).strftime(EXCEL_DATE_FORMAT)
+        reenable = (disable_dt.date() + timedelta(days=int(lookup.days or 0))).strftime(EXCEL_DATE_FORMAT)
         df.at[idx, "Дата включения"] = reenable
         df.at[idx, "Статус включения"] = lifecycle_status(
             vklyucheno=vklyucheno,
@@ -486,6 +533,27 @@ def recalculate_all_results(
         )
 
     return df, missing_partners
+
+
+def recalculate_all_results_runtime(
+    all_results: pd.DataFrame,
+    hold_df: pd.DataFrame,
+    otlezka_df: pd.DataFrame,
+    *,
+    today: date | None = None,
+    missing_details: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, set[str]]:
+    """Recalculate using Rules display→source aliases when available."""
+    from integrations.wallet_editor_partner_resolve import runtime_partner_aliases
+
+    return recalculate_all_results(
+        all_results,
+        hold_df,
+        otlezka_df,
+        today=today,
+        partner_aliases=runtime_partner_aliases(),
+        missing_details=missing_details,
+    )
 
 
 def load_warned_partners() -> set[str]:
@@ -510,9 +578,28 @@ def save_warned_partners(partners: Iterable[str]) -> None:
 def sync_warned_partners_after_otlezka(
     otlezka_df: pd.DataFrame,
     warned: set[str],
+    *,
+    partner_aliases: "PartnerAliasMap | None" = None,
 ) -> set[str]:
-    configured = {_normalize_key(p) for p in load_otlezka_days(otlezka_df)}
-    updated = {p for p in warned if p not in configured}
+    from integrations.wallet_editor_partner_resolve import (
+        OtlezkaIndex,
+        PartnerAliasMap,
+        VIA_ALIAS,
+        VIA_EXACT,
+        resolve_otlezka_days,
+    )
+
+    aliases = partner_aliases if isinstance(partner_aliases, PartnerAliasMap) else PartnerAliasMap.empty()
+    days, originals = _load_otlezka_days_and_originals(otlezka_df)
+    index = OtlezkaIndex(days_by_norm=days, original_by_norm=originals)
+    updated: set[str] = set()
+    for partner in warned:
+        lookup = resolve_otlezka_days(partner, index, aliases)
+        if lookup.ok and lookup.via in {VIA_EXACT, VIA_ALIAS}:
+            continue
+        key = _normalize_key(partner)
+        if key:
+            updated.add(key)
     save_warned_partners({_cell_str(p) for p in updated})
     return updated
 

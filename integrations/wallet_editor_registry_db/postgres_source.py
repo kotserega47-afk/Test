@@ -28,7 +28,7 @@ from integrations.wallet_editor_registry_lifecycle import (
     mark_run_processed,
     missing_result_fingerprints,
     normalize_all_results,
-    recalculate_all_results,
+    recalculate_all_results_runtime,
     rows_from_result_excel,
     run_id_already_processed,
 )
@@ -158,10 +158,12 @@ def append_attempt_postgres(
             return _AppendOutcome.DUPLICATE, None, None
 
     merged_all = pd.concat([all_results_df, new_rows], ignore_index=True)
-    recalculated, missing_partners = recalculate_all_results(
+    missing_details: dict[str, str] = {}
+    recalculated, missing_partners = recalculate_all_results_runtime(
         merged_all,
         hold_df,
         otlezka_df,
+        missing_details=missing_details,
     )
 
     new_run = build_runs_row(
@@ -191,7 +193,12 @@ def append_attempt_postgres(
         return _AppendOutcome.TRANSIENT, None, None
 
     mark_run_processed(task.run_id)
-    process_missing_otlezka_warnings(task, missing_partners, otlezka_df)
+    process_missing_otlezka_warnings(
+        task,
+        missing_partners,
+        otlezka_df,
+        details=missing_details,
+    )
 
     start_idx = new_row_start_index
     result_rows = tuple(
@@ -252,7 +259,7 @@ def patch_attempt_postgres(
         all_results_df,
         updates,
     )
-    recalculated, _missing_partners = recalculate_all_results(
+    recalculated, _missing_partners = recalculate_all_results_runtime(
         patched_df,
         hold_df,
         otlezka_df,
