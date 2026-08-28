@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.9 |
-| **Последнее обновление** | 2026-07-01 |
+| **KB версия** | v1.10 |
+| **Последнее обновление** | 2026-08-28 |
 
 ---
 
@@ -138,6 +138,16 @@
 | WE-ADD-2 | **complete** | Phase 2 optional columns (29 fields); status default `Тест`; no direction/state/pool/aggregate defaults; KYC scoped checkbox fix (`b68ded7`) |
 
 Detail: `active_tasks/WALLET_EDITOR_WE-0-6_completed.md`
+
+---
+
+## Operational maintenance — closed
+
+| ID | Status | Summary | Verdict / date |
+|----|--------|---------|----------------|
+| **OPS-WE-HISTORY-CLEANUP-20260828** | **complete** | Targeted Wallet Editor registry history cleanup for **5998** cards (Excel input list). Phase 1: PostgreSQL `we_registry_results` on prod `charismatic-optimism` / `Postgres-X9pi` — **4039** cards found, **14174** historical rows deleted, PG backup `.local/wallet_editor_card_cleanup/run_20260828/we_registry_results_backup_20260828T160316Z.csv`. Phase 2: durable `{STATE_DIR}/wallet_editor/results/` on prod `Test` service — **1421** xlsx scanned, **190** changed, **15680** rows removed, durable backup `/data/state/wallet_editor/cleanup_backup_20260828/`. Unchanged: `we_registry_runs`, hold, Отлёжка, `processed_run_ids` (**1870**), rules, Telegram, Antares. Recovery verified: backfill/repair/outbox cannot restore pre-cleanup fingerprints; prod health OK. **Not** a blacklist — future disable/enable may create new history. | **`CLEANUP VERIFIED`** — 2026-08-28 |
+
+Artifacts: `.local/wallet_editor_card_cleanup/run_20260828/FINAL_VERDICT.json` (local ops; not application source).
 
 ---
 
@@ -318,3 +328,4 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | 2026-06-22 | WE-REGISTRY-OUTBOX-PHASE1 complete — durable outbox, replay, registry health (E-WE-20) |
 | 2026-06-23 | TASK-2026-06-23-01 / TASK-2026-06-24-01 closed — WalletEditor registry Postgres SoT + ops tooling (E-WE-21, E-WE-22) |
 | 2026-07-01 | TASK-2026-07-01-01…05 closed — WalletEditor Registry v2 (ManualSync, PG readers, TG export, projection removed); TASK-2026-07-01-06 KB + ops checklist (E-WE-23…E-WE-27) |
+| 2026-08-28 | OPS-WE-HISTORY-CLEANUP-20260828 complete — targeted Wallet Editor PG + durable history cleanup; **5998** cards; **CLEANUP VERIFIED**; no runtime/code changes |

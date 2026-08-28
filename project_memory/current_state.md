@@ -2,8 +2,8 @@
 
 | Мета | Значение |
 |------|----------|
-| **KB версия** | v1.9 |
-| **Снимок на дату** | 2026-07-01 |
+| **KB версия** | v1.10 |
+| **Снимок на дату** | 2026-08-28 |
 | **Среда** | repo snapshot (live prod — UNKNOWN) |
 
 ---
@@ -71,6 +71,7 @@
 - **WalletEditor registry outbox (Phase 1)** — durable `{STATE_DIR}/wallet_editor/outbox` + `results/{run_id}.xlsx`; replay `/registry_replay`; health `/registry_health`; repair re-append for restored-workbook trap (E-WE-20).
 - **WalletEditor registry (final architecture)** — PostgreSQL sole SoT for `all_results`/`runs`/lifecycle; Dropbox workbook = operator manual input only (`hold`, `Отлёжка`); ManualSync ingest; export via `/registry_export` → `RegistryExportBuilder` → Telegram; CLI export → local file; no runtime Dropbox projection (E-WE-23…E-WE-27).
 - **WalletEditor registry ops tooling** — CLI: `diagnose_processed_without_rows`, `backfill_processed_without_rows`, `refresh_registry_lifecycle_fields`, `export_wallet_editor_registry` (local PG export); Telegram `/registry_export`, `/registry_health`, `/registry_replay`; ops cutover checklist `ops/WALLET_EDITOR_POSTGRES_CUTOVER.md`.
+- **WalletEditor targeted history cleanup (2026-08-28)** — one-off operational maintenance: **5998** cards from operator Excel list; PG (`charismatic-optimism` / `Postgres-X9pi`) + durable `{STATE_DIR}/wallet_editor/results/` scrubbed; **14174** historical PG rows removed; **15680** durable rows removed from **190** xlsx; pre-cleanup fingerprints **0** in PG and durable after completion; recovery vectors (backfill / repair / active outbox) verified; prod `/registry_health` **OK** (`processed_without_rows=0`); **no blacklist** — new disable/enable after cleanup creates new history normally; verdict **`CLEANUP VERIFIED`**; artifacts `.local/wallet_editor_card_cleanup/run_20260828/`; durable backup `/data/state/wallet_editor/cleanup_backup_20260828/`; task **OPS-WE-HISTORY-CLEANUP-20260828** complete.
 
 ---
 
@@ -260,7 +261,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | **CLI export** | `tools/export_wallet_editor_registry.py` → local file via `RegistryExportBuilder` (no Dropbox) |
 | **Outbox** | Durable `{STATE_DIR}/wallet_editor/outbox` + `/registry_replay` for repair |
 | **Health** | `/registry_health` — projection DISABLED; export Telegram-only |
-
+| **Targeted history cleanup (2026-08-28)** | One-off ops only — **not** runtime feature; PG SoT + durable results scrubbed for **5998** card list; **no** blacklist; architecture unchanged (E-WE-20…E-WE-23); re-appearance of pre-cleanup fingerprint = problem; new live row after cleanup = normal |
 | **Auto-enable** | Rules `job_params` `wallet_editor_auto_enable`; eligibility from PG registry + PG hold/Отлёжка; `/auto_enable_plan`, `/auto_enable_run`; B2 patches `Включено`/`Комментарий включения` in PostgreSQL |
 | **Add Wallet** | Excel `card`+`phone` → `detect_excel_routing()` → `add_wallet_engine.run()`; **no** registry append |
 | **HOLD enforcement** | `integrations/wallet_editor_hold.py`; reads from PG (after manual sync) or Dropbox fallback when `MANUAL_READERS_SOURCE=dropbox` |
@@ -351,3 +352,4 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 | 2026-06-21 | WalletEditor Add Wallet Phase 1 / 1.1 / 2 complete — routing, contract, engine, KYC fix; real UI verified; E-WE-16…E-WE-19 |
 | 2026-06-23 | WalletEditor registry Postgres source of truth — Excel becomes projection; ops CLIs + `/registry_export` (E-WE-21, E-WE-22) |
 | 2026-07-01 | WalletEditor Registry v2 complete — ManualSync, PG readers, TG-only export, projection removed (E-WE-23…E-WE-27); KB finalized TASK-2026-07-01-06 |
+| 2026-08-28 | WalletEditor targeted history cleanup — **5998** cards; PG + durable scrub; **CLEANUP VERIFIED**; OPS-WE-HISTORY-CLEANUP-20260828 complete; no blacklist |
