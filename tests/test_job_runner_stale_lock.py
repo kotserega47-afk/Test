@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +15,6 @@ from core import job_runner
 from core.job_runner import Actor, request_job
 from core.rules_provider import RulesWorkbookSnapshot
 from core.rules_v2.models import MetaInfo, RulesSnapshotV2
-from datetime import datetime
 
 
 @pytest.fixture
@@ -21,7 +22,12 @@ def lock_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(root))
     job_runner._RUNNING.clear()
-    return root
+    for jt in list(job_runner._HOLDERS):
+        job_runner._unlock(jt)
+    yield root
+    for jt in list(job_runner._HOLDERS):
+        job_runner._unlock(jt)
+    job_runner._RUNNING.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +85,10 @@ def test_stale_lock_dead_pid_allows_acquire(lock_root: Path) -> None:
     lock_file.write_text("999999", encoding="utf-8")
 
     assert job_runner._try_lock("wallet") is True
-    assert lock_file.read_text(encoding="utf-8") == str(os.getpid())
+    meta = lock_root / "locks" / "wallet.lock.meta"
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    assert payload["pid"] == os.getpid()
+    job_runner._unlock("wallet")
 
 
 def test_stale_lock_by_age_allows_acquire(lock_root: Path) -> None:

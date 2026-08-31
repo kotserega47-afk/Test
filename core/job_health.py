@@ -145,8 +145,6 @@ def _is_ghost_lock(job_type: str, lock_pid: SnapshotValue, lock_age: SnapshotVal
         return True
     if pid == os.getpid():
         return True
-    if isinstance(lock_age, (int, float)) and float(lock_age) > _lock_stale_max_age_sec():
-        return True
     return False
 
 

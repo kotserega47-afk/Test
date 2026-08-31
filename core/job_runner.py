@@ -1,13 +1,15 @@
 # core/job_runner.py
 from __future__ import annotations
 
+import inspect
+import json
 import logging
 import os
-import inspect
+import threading
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
@@ -43,6 +45,29 @@ _RUNNING: Dict[str, Tuple[str, float, Dict[str, Any]]] = {}
 # =============================================================================
 # Locks (NO /tmp) — stored in STATE_DIR/locks
 # =============================================================================
+#
+# Mutual exclusion is local to this machine (or replicas that share STATE_DIR
+# on the same filesystem). It is not a distributed lock across independent
+# replicas with separate disks.
+#
+# Acquire is atomic for threads (per-job threading.Lock) and OS processes
+# (fcntl.flock / msvcrt.locking on an open FD). Liveness is the OS lock, not
+# file mtime: a live holder is never stolen because JOB_LOCK_STALE_SEC elapsed.
+# Crash / PID-1 container restart releases the OS lock with the process.
+# Unlock only releases a lock this process currently holds.
+
+
+@dataclass
+class _LockHolder:
+    fd: int
+    token: str
+    thread_lock: threading.Lock
+    path: Path
+
+
+_HOLDERS: Dict[str, _LockHolder] = {}
+_THREAD_LOCKS: Dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
 
 
 def _state_dir() -> Path:
@@ -63,15 +88,12 @@ def _lock_path(job_type: str) -> Path:
     return _lock_dir() / f"{_safe_job_name(job_type)}.lock"
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except Exception:
-        return False
+def _meta_path(lock_path: Path) -> Path:
+    return lock_path.with_name(lock_path.name + ".meta")
 
 
 def _lock_stale_max_age_sec() -> float:
+    """Observability helper. Not used to steal a live OS lock."""
     raw = os.getenv("JOB_LOCK_STALE_SEC", "600").strip()
     try:
         return max(60.0, float(raw))
@@ -79,57 +101,152 @@ def _lock_stale_max_age_sec() -> float:
         return 600.0
 
 
-def _lock_held_by_live_runner(job_type: str, pid: int, lock_path: Path) -> bool:
-    """True when another live holder should block this job (not a ghost lock file)."""
+def _thread_lock_for(job_type: str) -> threading.Lock:
+    with _THREAD_LOCKS_GUARD:
+        lock = _THREAD_LOCKS.get(job_type)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[job_type] = lock
+        return lock
 
-    if pid <= 0 or not _pid_alive(pid):
-        return False
 
-    # PID-1 containers: after restart the volume may still contain wallet.lock with "1"
-    # while the new main process is also PID 1 but is not running the job.
-    if pid == os.getpid() and job_type not in _RUNNING:
-        return False
+def _open_lock_fd(path: Path) -> int:
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOINHERIT"):
+        flags |= os.O_NOINHERIT
+    fd = os.open(path, flags, 0o644)
+    if os.name != "nt":
+        try:
+            import fcntl  # type: ignore[import-untyped]
+
+            fcntl.fcntl(fd, fcntl.F_SETFD, fcntl.FD_CLOEXEC)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    return fd
+
+
+def _os_try_lock(fd: int) -> bool:
+    if os.fstat(fd).st_size < 1:
+        os.write(fd, b" ")
+    os.lseek(fd, 0, os.SEEK_SET)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl  # type: ignore[import-untyped]
 
     try:
-        age = time.time() - lock_path.stat().st_mtime
-        if age > _lock_stale_max_age_sec():
-            return False
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+        return True
+    except (BlockingIOError, OSError):
+        return False
+
+
+def _os_unlock(fd: int) -> None:
+    os.lseek(fd, 0, os.SEEK_SET)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        return
+    import fcntl  # type: ignore[import-untyped]
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
     except OSError:
         pass
 
-    return True
+
+def _write_holder_record(fd: int, path: Path, token: str) -> None:
+    payload = json.dumps(
+        {"pid": os.getpid(), "token": token, "acquired_at": time.time()},
+        separators=(",", ":"),
+    )
+    encoded = payload.encode("utf-8")
+    os.lseek(fd, 0, os.SEEK_SET)
+    try:
+        os.write(fd, encoded)
+        os.ftruncate(fd, len(encoded))
+        os.fsync(fd)
+    except OSError:
+        pass
+    _meta_path(path).write_text(payload + "\n", encoding="utf-8")
 
 
 def _try_lock(job_type: str) -> bool:
-    p = _lock_path(job_type)
+    jt = (job_type or "").strip()
+    if not jt:
+        return False
+    if jt in _HOLDERS or jt in _RUNNING:
+        return False
 
-    if p.exists():
-        try:
-            pid = int(p.read_text(encoding="utf-8").strip())
-            if _lock_held_by_live_runner(job_type, pid, p):
-                return False
-        except Exception:
-            pass
-        try:
-            p.unlink(missing_ok=True)
-        except Exception:
-            return False
+    tlock = _thread_lock_for(jt)
+    if not tlock.acquire(blocking=False):
+        return False
 
+    fd: int | None = None
     try:
-        p.write_text(str(os.getpid()), encoding="utf-8")
+        path = _lock_path(jt)
+        fd = _open_lock_fd(path)
+        if not _os_try_lock(fd):
+            os.close(fd)
+            tlock.release()
+            return False
+        token = uuid.uuid4().hex
+        _write_holder_record(fd, path, token)
+        _HOLDERS[jt] = _LockHolder(fd=fd, token=token, thread_lock=tlock, path=path)
         return True
     except Exception:
+        if fd is not None:
+            try:
+                _os_unlock(fd)
+            except Exception:
+                pass
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        try:
+            tlock.release()
+        except RuntimeError:
+            pass
         return False
 
 
 def _unlock(job_type: str) -> None:
-    p = _lock_path(job_type)
+    """Release only the lock held by this process for ``job_type``."""
+    jt = (job_type or "").strip()
+    holder = _HOLDERS.pop(jt, None)
+    if holder is None:
+        return
     try:
-        if p.exists():
-            pid = p.read_text(encoding="utf-8").strip()
-            if pid == str(os.getpid()):
-                p.unlink(missing_ok=True)
+        _os_unlock(holder.fd)
     except Exception:
+        pass
+    try:
+        os.close(holder.fd)
+    except Exception:
+        pass
+    try:
+        holder.path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        _meta_path(holder.path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        holder.thread_lock.release()
+    except RuntimeError:
         pass
 
 
@@ -139,6 +256,10 @@ def exclusive_job(job_type: str, actor: Actor) -> Iterator[str | None]:
 
     Yields ``None`` when another live run holds the lock (caller must not enqueue).
     Yields ``job_id`` when the lock was acquired.
+
+    The lock is local to ``STATE_DIR`` on this filesystem. Independent Railway
+    replicas without a shared volume do not see each other's locks. Cancelling
+    a Telegram coroutine does not unlock while the worker thread still holds it.
     """
 
     jt = (job_type or "").strip()

@@ -1,3 +1,4 @@
+from automation.engine import _partner_already_selected, _partner_matches_chip
 from integrations.wallet_editor_partner_match import (
     CHIP_ABSENT,
     CHIP_PRESENT,
@@ -6,7 +7,6 @@ from integrations.wallet_editor_partner_match import (
     partner_presence_on_chips,
 )
 from integrations.wallet_editor_partner_resolve import PartnerAliasMap
-from automation.engine import _partner_already_selected, _partner_matches_chip
 
 
 AFFOR_ALIASES = PartnerAliasMap.from_pairs(
@@ -49,6 +49,20 @@ def test_affor_other_terminal_is_distinct():
         )
         == CHIP_ABSENT
     )
+
+
+def test_br_affor_157_is_not_152_153_or_154():
+    chip = "BR Affor Тбанк ABHsber (157)"
+    for partner in (
+        "HH Affor Тбанк abhsber (152)",
+        "Affor Тбанк abhsber (152)",
+        "HH Affor Юмани abhsber (153)",
+        "Affor Юмани abhsber (153)",
+        "HH Affor ГПБ abhsber (154)",
+        "Affor ГПБ abhsber (154)",
+    ):
+        assert chip_matches_partner(chip, partner, AFFOR_ALIASES) == CHIP_ABSENT
+        assert partner_presence_on_chips([chip], partner, AFFOR_ALIASES) == CHIP_ABSENT
 
 
 def test_ambiguous_alias_fails_closed():

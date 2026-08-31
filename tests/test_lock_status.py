@@ -30,6 +30,15 @@ def test_missing_lock_returns_none(lock_root: Path) -> None:
     assert info["wallet"]["lock_pid"] == "none"
 
 
+def test_json_lock_payload_returns_pid(lock_root: Path) -> None:
+    lock_file = lock_root / "locks" / "wallet.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text('{"pid":4242,"token":"abc"}', encoding="utf-8")
+
+    info = get_lock_status_for_job_types(("wallet",))
+    assert info["wallet"]["lock_pid"] == 4242
+
+
 def test_existing_lock_returns_pid_and_age(lock_root: Path) -> None:
     lock_file = lock_root / "locks" / "wallet.lock"
     lock_file.parent.mkdir(parents=True, exist_ok=True)

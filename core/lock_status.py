@@ -2,6 +2,7 @@
 """Read-only PID lock inspection for observation-only /status (Phase 1a)."""
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -36,6 +37,23 @@ def _lock_path(job_type: str) -> Path:
     return _state_dir() / "locks" / f"{_safe_job_name(job_type)}.lock"
 
 
+def _parse_lock_pid(raw: str) -> PidField:
+    text = (raw or "").strip()
+    if not text:
+        return "unknown"
+    try:
+        pid = int(text)
+        return pid if pid > 0 else "unknown"
+    except ValueError:
+        pass
+    try:
+        data = json.loads(text)
+        pid = int(data["pid"])
+        return pid if pid > 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _read_lock_fields(job_type: str) -> Tuple[LockField, PidField]:
     try:
         path = _lock_path(job_type)
@@ -49,13 +67,19 @@ def _read_lock_fields(job_type: str) -> Tuple[LockField, PidField]:
             age = "unknown"
 
         try:
-            raw = path.read_text(encoding="utf-8").strip()
-            pid = int(raw)
-            if pid <= 0:
-                return age, "unknown"
-            return age, pid
+            raw = path.read_text(encoding="utf-8")
+            pid = _parse_lock_pid(raw)
+            if pid != "unknown":
+                return age, pid
         except Exception:
-            return age, "unknown"
+            pass
+        try:
+            meta = path.with_name(path.name + ".meta")
+            if meta.exists():
+                return age, _parse_lock_pid(meta.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return age, "unknown"
     except Exception:
         return "unknown", "unknown"
 
