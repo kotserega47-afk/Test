@@ -29,6 +29,7 @@ from automation.wallet_terminal_field import (
     TerminalFieldError,
     _wait_field_loaded,
     clear_terminal_form_session,
+    bind_terminal_form_session,
     partner_text_matches,
     resolve_terminal_field,
 )
@@ -732,6 +733,7 @@ def test_two_sequential_reads_of_ready_empty_field(browser_page):
             card="4111111111111111",
         )
     )
+    bind_terminal_form_session(browser_page, "4111111111111111")
     _schedule_loading_settle(browser_page)
     first = resolve_terminal_field(browser_page)
     assert first.loaded_empty is True
@@ -754,7 +756,10 @@ def test_auto_enable_adds_first_partner_into_empty_field(browser_page):
             card="4111111111111111",
         )
     )
-    _schedule_loading_settle(browser_page)
+    def _open(page, card):
+        bind_terminal_form_session(page, card)
+        _schedule_loading_settle(page)
+
     outcome = process_enable_candidate(
         browser_page,
         CandidateRow(
@@ -767,7 +772,7 @@ def test_auto_enable_adds_first_partner_into_empty_field(browser_page):
         ),
         settings=_auto_enable_settings(),
         cfg=RunConfig(),
-        open_card_fn=lambda *_a, **_k: None,
+        open_card_fn=_open,
         get_status_fn=lambda *_a, **_k: "Готов к работе",
         save_fn=lambda *_a, **_k: "saved",
         reset_form_fn=lambda *_a, **_k: None,
@@ -788,6 +793,7 @@ def test_remove_last_partner_reread_completes(browser_page):
             card="4111111111111111",
         )
     )
+    bind_terminal_form_session(browser_page, "4111111111111111")
     removed = ensure_partner_removed(browser_page, PARTNER_150, RunConfig())
     assert removed == "removed"
     field = resolve_terminal_field(browser_page)
@@ -804,6 +810,7 @@ def test_empty_ready_does_not_transfer_to_next_card(browser_page):
             card="4111111111111111",
         )
     )
+    bind_terminal_form_session(browser_page, "4111111111111111")
     _schedule_loading_settle(browser_page)
     first = resolve_terminal_field(browser_page)
     assert first.loaded_empty is True
@@ -816,6 +823,61 @@ def test_empty_ready_does_not_transfer_to_next_card(browser_page):
             const input = row.querySelector('input[type=text]');
             if (input) input.value = '4222222222222222';
           }
+        }"""
+    )
+    with pytest.raises(TerminalFieldError) as exc:
+        resolve_terminal_field(browser_page)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+    clear_terminal_form_session(browser_page)
+
+
+def test_unread_card_does_not_reuse_ready_session(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    bind_terminal_form_session(browser_page, "4111111111111111")
+    _schedule_loading_settle(browser_page)
+    first = resolve_terminal_field(browser_page)
+    assert first.loaded_empty is True
+    browser_page.evaluate(
+        """() => {
+          const rows = document.querySelectorAll('#wallet-add-modal___BV_modal_body_ .row');
+          for (const row of rows) {
+            const label = row.querySelector('label');
+            if (!label || (label.innerText || '').trim() !== 'Карта') continue;
+            const input = row.querySelector('input[type=text]');
+            if (input) input.value = '';
+          }
+        }"""
+    )
+    with pytest.raises(TerminalFieldError) as exc:
+        resolve_terminal_field(browser_page)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+    clear_terminal_form_session(browser_page)
+
+
+def test_missing_open_token_does_not_reuse_ready_session(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    bind_terminal_form_session(browser_page, "4111111111111111")
+    _schedule_loading_settle(browser_page)
+    first = resolve_terminal_field(browser_page)
+    assert first.loaded_empty is True
+    browser_page.evaluate(
+        """() => {
+          const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
+          if (el) delete el.dataset.weFieldSession;
         }"""
     )
     with pytest.raises(TerminalFieldError) as exc:

@@ -48,6 +48,7 @@ from automation.wallet_terminal_field import (
     SKIP_BLOCKED_BY_ADD_FAILURE,
     TerminalFieldError,
     add_terminal_option,
+    bind_terminal_form_session,
     clear_terminal_form_session,
     partner_text_matches,
     resolve_terminal_field,
@@ -1177,6 +1178,7 @@ def open_matched_card_row(page: Page, card: str, match_index: int) -> None:
         raise
 
     log.info("[Card] modal_card_verified card=%s", card)
+    bind_terminal_form_session(page, modal_card_value)
     log.info(f"✅ [Card] card modal opened card={card}")
 
 

@@ -16,9 +16,10 @@ proof of ready data.
 ``loaded_empty`` requires a confirmed settle for **this card and this form
 opening**: loading observed then cleared with no chips, or a full chip read
 (including a later local removal of the last chip). That readiness is kept
-between calls on the same opening so a second read of an already-empty field
-does not wait for a new loading transition. It is dropped on close, card
-change, and when loading starts again, and is never reused for the next card.
+between calls only when ``open_card`` has bound a confirmed card and opening
+token. Missing card digits or a missing opening token are not a valid key:
+readiness is neither stored nor reused. It is dropped on close, card change,
+and when loading starts again, and is never reused for the next card.
 
 Live DOM (LAURA / Antares wallet form) was not inspected in this change.
 Whether production uses root ``multiselect--loading`` as the ready signal is
@@ -36,7 +37,7 @@ from typing import Any
 
 from playwright.sync_api import Page
 
-from automation.audit import log
+from automation.audit import log, normalize_card_digits
 
 MODAL_BODY = "#wallet-add-modal___BV_modal_body_"
 
@@ -240,11 +241,44 @@ def _placeholder_visible(multiselect: Any) -> bool:
 class _TerminalFormSession:
     """Proven chip-field readiness for one page + form opening + card."""
 
-    key: tuple[int, str, str]
+    page_id: int
+    card_digits: str
+    open_token: str
     ready: bool = False
 
 
 _form_session: _TerminalFormSession | None = None
+
+
+def _eval_open_token(page: Page, script: str) -> str:
+    try:
+        token = page.evaluate(script)
+    except Exception:
+        return ""
+    return token if isinstance(token, str) else ""
+
+
+def _stamp_open_token(page: Page) -> str:
+    return _eval_open_token(
+        page,
+        """() => {
+          const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
+          if (!el) return '';
+          el.dataset.weFieldSession = `${Date.now()}-${Math.random()}`;
+          return el.dataset.weFieldSession;
+        }""",
+    )
+
+
+def _read_open_token(page: Page) -> str:
+    return _eval_open_token(
+        page,
+        """() => {
+          const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
+          if (!el) return '';
+          return el.dataset.weFieldSession || '';
+        }""",
+    )
 
 
 def clear_terminal_form_session(page: Page | None = None) -> None:
@@ -263,25 +297,29 @@ def clear_terminal_form_session(page: Page | None = None) -> None:
     _form_session = None
 
 
-def _modal_open_token(page: Page) -> str:
-    """Stable id for the current modal node; a new node is a new opening."""
-    try:
-        token = page.evaluate(
-            """() => {
-              const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
-              if (!el) return '';
-              if (!el.dataset.weFieldSession) {
-                el.dataset.weFieldSession = `${Date.now()}-${Math.random()}`;
-              }
-              return el.dataset.weFieldSession;
-            }"""
-        )
-    except Exception:
-        return ""
-    return token if isinstance(token, str) else ""
+def bind_terminal_form_session(page: Page, card: str) -> None:
+    """Bind readiness to the card opening already verified by ``open_card``."""
+    global _form_session
+    digits = normalize_card_digits(card)
+    if not digits:
+        log.warning("[Partners] form session unbound: card digits missing")
+        clear_terminal_form_session(page)
+        return
+    token = _stamp_open_token(page)
+    if not token:
+        log.warning("[Partners] form session unbound: open token missing")
+        clear_terminal_form_session(page)
+        return
+    _form_session = _TerminalFormSession(
+        page_id=id(page),
+        card_digits=digits,
+        open_token=token,
+        ready=False,
+    )
 
 
 def _read_open_card_digits(page: Page) -> str:
+    """Confirm the bound card is still the one shown. Not an identity source."""
     try:
         modal = page.locator(MODAL_BODY)
         rows = modal.locator("div.row")
@@ -306,7 +344,7 @@ def _read_open_card_digits(page: Page) -> str:
                 value = inputs.first.input_value()
             except Exception:
                 continue
-            digits = "".join(ch for ch in (value or "") if ch.isdigit())
+            digits = normalize_card_digits(value)
             if digits:
                 return digits
     except Exception:
@@ -314,16 +352,27 @@ def _read_open_card_digits(page: Page) -> str:
     return ""
 
 
-def _session_key(page: Page) -> tuple[int, str, str]:
-    return (id(page), _modal_open_token(page), _read_open_card_digits(page))
-
-
-def _session_for(page: Page) -> _TerminalFormSession:
+def _confirmed_session(page: Page) -> _TerminalFormSession | None:
+    """Return the bound session only while card and opening token still match."""
     global _form_session
-    key = _session_key(page)
-    if _form_session is None or _form_session.key != key:
-        _form_session = _TerminalFormSession(key=key, ready=False)
-    return _form_session
+    session = _form_session
+    if session is None or session.page_id != id(page):
+        return None
+    if not session.card_digits or not session.open_token:
+        return None
+    token = _read_open_token(page)
+    if not token:
+        return None
+    if token != session.open_token:
+        _form_session = None
+        return None
+    live_digits = _read_open_card_digits(page)
+    if not live_digits:
+        return None
+    if live_digits != session.card_digits:
+        _form_session = None
+        return None
+    return session
 
 
 def _read_all_chips(multiselect: Any) -> tuple[int, list[tuple[Any, str]] | None]:
@@ -381,13 +430,14 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
         ) from exc
 
     page = multiselect.page
-    session = _session_for(page)
+    session = _confirmed_session(page)
     field_deadline = time.monotonic() + (_FIELD_WAIT_MS / 1000.0)
     saw_root_loading = False
     while True:
         loading = _field_is_loading(multiselect)
         if loading:
-            session.ready = False
+            if session is not None:
+                session.ready = False
             saw_root_loading = True
             if time.monotonic() >= field_deadline:
                 raise TerminalFieldError(
@@ -398,22 +448,24 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
             page.wait_for_timeout(100)
             continue
 
-        session = _session_for(page)
+        session = _confirmed_session(page)
         chip_count, pairs = _read_all_chips(multiselect)
         if chip_count > 0:
             if pairs is not None:
-                session.ready = True
+                if session is not None:
+                    session.ready = True
                 return pairs
         elif saw_root_loading:
             # Loading was observed then cleared with no chips: empty is settled
             # for this opening. Placeholder is logged, not used as a load timer.
-            session.ready = True
+            if session is not None:
+                session.ready = True
             log.info(
                 "[Partners] stage=read empty_after_loading placeholder=%s",
                 _placeholder_visible(multiselect),
             )
             return []
-        elif session.ready:
+        elif session is not None and session.ready:
             # Same card/form already proven; empty re-read or last chip removed.
             return []
 
