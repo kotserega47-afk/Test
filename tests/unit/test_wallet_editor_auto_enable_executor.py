@@ -5,6 +5,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from automation.runtime import RunConfig
+from automation.wallet_terminal_field import (
+    FAIL_SAVE_NOT_CONFIRMED,
+    FAIL_TERMINAL_FIELD_NOT_FOUND,
+    FAIL_TERMINAL_FIELD_NOT_LOADED,
+    TerminalFieldError,
+)
 from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
 from integrations.wallet_editor_auto_enable_executor import (
     ERROR_ALREADY_ADDED,
@@ -181,10 +187,11 @@ def test_add_partner_success_uses_status_before_in_comment(page):
     assert not outcome.registry_comment.endswith("статус карты:")
 
 
-def test_add_partner_success_empty_status_after_falls_back_to_status_before(page):
+def test_add_partner_success_empty_status_after_is_not_registry_ok(page):
     outcome = _add_and_save_ok(page, status_before="Активный вход", status_after="")
-    assert outcome.registry_comment == "Партнёр добавлен; статус карты: Активный вход"
-    assert outcome.status_after == "Активный вход"
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == FAIL_SAVE_NOT_CONFIRMED
+    assert outcome.saved is False
 
 
 def test_add_partner_success_both_statuses_empty_writes_undefined_comment():
@@ -443,13 +450,28 @@ def test_build_batch_execution_report_contains_registry_warning():
 
 def test_auto_return_partner_missing_sets_status_adds_partner_saves(page):
     chips: list[str] = []
+    sequence: list[str] = []
 
     def set_status(_page, status, _cfg):
+        sequence.append("set_status")
         return f"set: {status}"
 
     def add_partner(_page, partner, _cfg):
+        sequence.append("add")
         chips.append(partner)
         return f"added {partner}"
+
+    def save(_page, _cfg):
+        sequence.append("save")
+        return "saved"
+
+    reads = {"count": 0}
+
+    def get_status(_page):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return "Не готов. Плановый прозвон"
+        return "Готов к работе"
 
     outcome = process_enable_candidate(
         page,
@@ -457,13 +479,16 @@ def test_auto_return_partner_missing_sets_status_adds_partner_saves(page):
         settings=_settings(),
         cfg=_cfg(),
         open_card_fn=lambda _p, _c: None,
-        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_status_fn=get_status,
         get_chips_fn=lambda _p: list(chips),
         set_status_fn=set_status,
         add_partner_fn=add_partner,
-        save_fn=lambda _p, _c: "saved",
+        save_fn=save,
     )
 
+    assert sequence[0] == "add"
+    assert sequence.index("add") < sequence.index("set_status")
+    assert sequence.index("set_status") < sequence.index("save")
     assert outcome.registry_value == REGISTRY_OK
     assert outcome.mutated is True
     assert outcome.saved is True
@@ -473,13 +498,21 @@ def test_auto_return_partner_missing_sets_status_adds_partner_saves(page):
 
 
 def test_auto_return_partner_already_sets_status_and_saves(page):
+    reads = {"count": 0}
+
+    def get_status(_page):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return "Не готов. Плановый прозвон"
+        return "Готов к работе"
+
     outcome = process_enable_candidate(
         page,
         _candidate(),
         settings=_settings(),
         cfg=_cfg(),
         open_card_fn=lambda _p, _c: None,
-        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_status_fn=get_status,
         get_chips_fn=lambda _p: ["Ostin"],
         set_status_fn=lambda _p, status, _c: f"set: {status}",
         add_partner_fn=lambda *_a, **_k: pytest.fail("add_partner should not run"),
@@ -493,7 +526,7 @@ def test_auto_return_partner_already_sets_status_and_saves(page):
 
 
 def test_working_status_comment_does_not_mention_status_changed(page):
-    outcome = _add_and_save_ok(page, status_before="Активный вход", status_after="")
+    outcome = _add_and_save_ok(page, status_before="Активный вход", status_after="Активный вход")
     assert "статус изменён" not in outcome.registry_comment
     assert "статус карты:" in outcome.registry_comment
 
@@ -514,6 +547,12 @@ def test_empty_status_skip(page):
 
 
 def test_status_set_failure_fail(page):
+    chips: list[str] = []
+
+    def add_partner(_page, partner, _cfg):
+        chips.append(partner)
+        return f"added {partner}"
+
     def set_status_raises(_page, _status, _cfg):
         raise RuntimeError("status select missing")
 
@@ -524,8 +563,9 @@ def test_status_set_failure_fail(page):
         cfg=_cfg(),
         open_card_fn=lambda _p, _c: None,
         get_status_fn=lambda _p: "Не готов. Плановый прозвон",
-        get_chips_fn=lambda _p: [],
+        get_chips_fn=lambda _p: list(chips),
         set_status_fn=set_status_raises,
+        add_partner_fn=add_partner,
         save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
     )
 
@@ -537,13 +577,21 @@ def test_save_failure_after_auto_return_status_set_fail(page):
     def save_raises(_page, _cfg):
         raise RuntimeError("save failed")
 
+    reads = {"count": 0}
+
+    def get_status(_page):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return "Не готов. Плановый прозвон"
+        return "Готов к работе"
+
     outcome = process_enable_candidate(
         page,
         _candidate(),
         settings=_settings(),
         cfg=_cfg(),
         open_card_fn=lambda _p, _c: None,
-        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_status_fn=get_status,
         get_chips_fn=lambda _p: ["Ostin"],
         set_status_fn=lambda _p, status, _c: f"set: {status}",
         add_partner_fn=lambda *_a, **_k: pytest.fail("no add"),
@@ -580,3 +628,128 @@ def test_deprecated_allowed_does_not_make_planovoy_auto_return(page):
     assert outcome.registry_value == REGISTRY_OK
     assert "статус изменён" not in outcome.registry_comment
     assert "Партнёр добавлен; статус карты:" in outcome.registry_comment
+
+
+def test_chip_read_error_is_not_treated_as_partner_absent(page):
+    def get_chips(_page):
+        raise TerminalFieldError(FAIL_TERMINAL_FIELD_NOT_LOADED, "unread chips")
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=get_chips,
+        add_partner_fn=lambda *_a, **_k: pytest.fail("add should not run"),
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+    )
+
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == FAIL_TERMINAL_FIELD_NOT_LOADED
+    assert outcome.partner_present_after is False
+    assert outcome.saved is False
+
+
+def test_working_path_reopen_failure_is_not_registry_ok(page):
+    opens: list[str] = []
+    chips: list[str] = []
+
+    def open_card(_page, card):
+        opens.append(card)
+        if len(opens) > 1:
+            raise RuntimeError("verify reopen failed")
+
+    def add_partner(_page, partner, _cfg):
+        chips.append(partner)
+        return f"added {partner}"
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=open_card,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=lambda _p: list(chips),
+        add_partner_fn=add_partner,
+        save_fn=lambda _p, _c: "saved",
+    )
+
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == FAIL_SAVE_NOT_CONFIRMED
+    assert outcome.saved is False
+    assert len(opens) >= 2
+
+
+def test_working_path_partner_missing_after_save_is_not_registry_ok(page):
+    chips: list[str] = []
+    reads = {"count": 0}
+
+    def add_partner(_page, partner, _cfg):
+        chips.append(partner)
+        return f"added {partner}"
+
+    def get_chips(_page):
+        reads["count"] += 1
+        if reads["count"] <= 2:
+            return list(chips)
+        return []
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=get_chips,
+        add_partner_fn=add_partner,
+        save_fn=lambda _p, _c: "saved",
+    )
+
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == FAIL_SAVE_NOT_CONFIRMED
+    assert outcome.partner_present_after is False
+
+
+def test_auto_return_add_failure_does_not_change_status(page):
+    statuses: list[str] = []
+
+    outcome = process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Не готов. Плановый прозвон",
+        get_chips_fn=lambda _p: [],
+        add_partner_fn=lambda *_a, **_k: FAIL_TERMINAL_FIELD_NOT_FOUND,
+        set_status_fn=lambda *_a, **_k: statuses.append("ran") or "set",
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+    )
+
+    assert statuses == []
+    assert outcome.registry_value == REGISTRY_FAIL
+    assert outcome.error_code == FAIL_TERMINAL_FIELD_NOT_FOUND
+    assert outcome.saved is False
+
+
+def test_unsaved_form_is_reset_after_add_failure(page):
+    resets: list[str] = []
+
+    process_enable_candidate(
+        page,
+        _candidate(),
+        settings=_settings(),
+        cfg=_cfg(),
+        open_card_fn=lambda _p, _c: None,
+        get_status_fn=lambda _p: "Готов к работе",
+        get_chips_fn=lambda _p: [],
+        add_partner_fn=lambda *_a, **_k: FAIL_TERMINAL_FIELD_NOT_FOUND,
+        save_fn=lambda *_a, **_k: pytest.fail("save should not run"),
+        reset_form_fn=lambda _p: resets.append("reset"),
+    )
+
+    assert resets == ["reset"]

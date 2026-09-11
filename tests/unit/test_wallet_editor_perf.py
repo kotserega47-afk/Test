@@ -270,7 +270,7 @@ def test_auto_enable_outcomes_unchanged():
         cfg=RunConfig(login="u", password="p"),
         open_card_fn=lambda _p, _c: None,
         get_status_fn=lambda _p: "Готов к работе",
-        get_chips_fn=lambda _p: ["Ostin / P1"],
+        get_chips_fn=lambda _p: ["P1"],
         working_statuses=frozenset({"готов к работе"}),
         auto_return_statuses=frozenset(),
     )

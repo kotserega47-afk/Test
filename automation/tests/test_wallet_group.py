@@ -110,9 +110,14 @@ def test_find_multiselect_by_label_accepts_group_labels_tuple():
     assert result is found
 
 
-def test_partner_multiselect_still_uses_partners_placeholder():
-    source = inspect.getsource(get_partner_chips)
-    assert "placeholder='Партнеры'" in source
+def test_partner_field_uses_terminal_names():
+    from automation.wallet_terminal_field import TERMINAL_FIELD_NAMES
+    from automation import engine as engine_mod
+
+    source = inspect.getsource(engine_mod.get_partner_chips)
+    assert "resolve_terminal_field" in source
+    assert "Привязан к терминалу" in TERMINAL_FIELD_NAMES
+    assert "Партнеры" in TERMINAL_FIELD_NAMES
 
 
 @patch("automation.engine._get_group_multiselect")
