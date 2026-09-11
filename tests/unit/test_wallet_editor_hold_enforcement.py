@@ -500,7 +500,7 @@ def test_auto_enable_non_held_candidate_unchanged(page):
     )
 
     assert outcome.registry_value == REGISTRY_OK
-    assert open_calls == ["4111"]
+    assert open_calls == ["4111", "4111"]
     assert outcome.mutated is True
     assert outcome.saved is True
 

@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from automation.engine import (
+    RESULT_STOP_BEFORE_SAVE,
     _order_card_actions,
     _status_from_action_result,
     ensure_partner_added,
@@ -24,6 +25,8 @@ from automation.wallet_terminal_field import (
     FAIL_TERMINAL_FIELD_NOT_LOADED,
     SKIP_BLOCKED_BY_ADD_FAILURE,
     TERMINAL_FIELD_NAMES,
+    TerminalFieldError,
+    _wait_field_loaded,
     partner_text_matches,
     resolve_terminal_field,
 )
@@ -51,7 +54,7 @@ def _hold_ok(monkeypatch) -> None:
     )
 
 
-def _playwright_stack(monkeypatch) -> MagicMock:
+def _playwright_stack(monkeypatch, *, patch_verify: bool = True) -> MagicMock:
     page = MagicMock()
     context = MagicMock()
     browser = MagicMock()
@@ -76,10 +79,11 @@ def _playwright_stack(monkeypatch) -> MagicMock:
     monkeypatch.setattr("automation.engine.close_playwright_stack", MagicMock())
     monkeypatch.setattr("automation.engine.ensure_wallet_search_ready", MagicMock(return_value=True))
     monkeypatch.setattr("automation.engine._close_stale_modal", MagicMock())
-    monkeypatch.setattr(
-        "automation.engine._verify_card_enable_after_save",
-        MagicMock(return_value=None),
-    )
+    if patch_verify:
+        monkeypatch.setattr(
+            "automation.engine._verify_card_enable_after_save",
+            MagicMock(return_value=None),
+        )
     return page
 
 
@@ -93,11 +97,13 @@ def _multiselect_html(
     extra_group: bool = True,
 ) -> str:
     chip_html = "".join(
-        f'<span class="multiselect__tag">{name}<i class="multiselect__tag-icon"></i></span>'
+        f'<span class="multiselect__tag">{name}'
+        f'<i class="multiselect__tag-icon" onclick="this.closest(\'.multiselect__tag\').remove(); event.stopPropagation();"></i>'
+        f"</span>"
         for name in chips
     )
     option_html = "".join(
-        f'<li onclick="window.__weAddChip && window.__weAddChip(this)">{name}</li>'
+        f'<li onclick="window.__weAddChip && window.__weAddChip(this); event.stopPropagation();">{name}</li>'
         for name in options
     )
     tags = (
@@ -141,23 +147,32 @@ def _multiselect_html(
         if (!root || !li) return;
         const text = (li.innerText || "").trim();
         const tags = root.querySelector(".multiselect__tags");
-        if (tags && text) {{
-          const span = document.createElement("span");
-          span.className = "multiselect__tag";
-          span.textContent = text;
-          const icon = document.createElement("i");
-          icon.className = "multiselect__tag-icon";
-          span.appendChild(icon);
-          tags.prepend(span);
-        }}
+        if (!tags || !text) return;
+        const already = Array.from(tags.querySelectorAll(".multiselect__tag"))
+          .some((el) => (el.innerText || "").trim() === text);
+        if (already) return;
+        const span = document.createElement("span");
+        span.className = "multiselect__tag";
+        span.appendChild(document.createTextNode(text));
+        const icon = document.createElement("i");
+        icon.className = "multiselect__tag-icon";
+        icon.addEventListener("click", (ev) => {{
+          span.remove();
+          ev.preventDefault();
+          ev.stopPropagation();
+        }});
+        span.appendChild(icon);
+        tags.prepend(span);
       }};
       const root = document.getElementById("terminal-field");
       if (root) {{
         root.addEventListener("click", (ev) => {{
-          const li = ev.target.closest("li");
-          if (li) {{
-            window.__weAddChip(li);
-            return;
+          const icon = ev.target.closest(".multiselect__tag-icon");
+          if (icon) {{
+            const tag = icon.closest(".multiselect__tag");
+            if (tag) tag.remove();
+            ev.preventDefault();
+            ev.stopPropagation();
           }}
         }});
       }}
@@ -332,7 +347,7 @@ def test_add_and_remove_partner_150(browser_page):
     browser_page.set_content(
         _multiselect_html(
             label="Привязан к терминалу",
-            chips=(),
+            chips=(PARTNER_157,),
             options=(PARTNER_150, PARTNER_157),
             extra_group=True,
         )
@@ -341,9 +356,12 @@ def test_add_and_remove_partner_150(browser_page):
     assert added == "added"
     chips = [text for _, text in get_partner_chips(browser_page)]
     assert PARTNER_150 in chips
-    assert PARTNER_157 not in chips
+    assert PARTNER_157 in chips
     removed = ensure_partner_removed(browser_page, PARTNER_150, RunConfig())
     assert removed == "removed"
+    chips = [text for _, text in get_partner_chips(browser_page)]
+    assert PARTNER_150 not in chips
+    assert PARTNER_157 in chips
 
 
 def test_add_does_not_pick_157_for_150(browser_page):
@@ -497,3 +515,267 @@ def test_already_added_allows_set_status(tmp_path, monkeypatch):
     df = pd.read_excel(out)
     assert list(df["status"]) == ["SKIP", "OK"]
     set_status.assert_called_once()
+
+
+def _mock_terminal_multiselect(
+    *,
+    spinner_error: Exception | None = None,
+    chip_texts: tuple[str, ...] = (),
+    unread_index: int | None = None,
+    placeholder_visible: bool = True,
+):
+    tags = MagicMock()
+    tags.first.wait_for = MagicMock()
+    spinner = MagicMock()
+    if spinner_error is not None:
+        spinner.count.side_effect = spinner_error
+    else:
+        spinner.count.return_value = 0
+        spinner.first.is_visible.return_value = False
+    chips = MagicMock()
+    chips.count.return_value = len(chip_texts)
+    chip_locators = []
+    for i, text in enumerate(chip_texts):
+        chip = MagicMock()
+        chip.is_visible.return_value = True
+        if unread_index is not None and i == unread_index:
+            chip.inner_text.side_effect = RuntimeError("chip detached")
+        else:
+            chip.inner_text.return_value = text
+        chip_locators.append(chip)
+    chips.nth.side_effect = lambda i: chip_locators[i]
+    placeholder = MagicMock()
+    placeholder.count.return_value = 1 if placeholder_visible else 0
+    placeholder.first.is_visible.return_value = placeholder_visible
+    page = MagicMock()
+    page.wait_for_timeout = MagicMock()
+    multi = MagicMock()
+    multi.page = page
+
+    def locator(selector: str):
+        if selector == ".multiselect__tags":
+            return tags
+        if "spinner" in selector or "loading" in selector:
+            return spinner
+        if selector == ".multiselect__tag":
+            return chips
+        if "placeholder" in selector:
+            return placeholder
+        return MagicMock()
+
+    multi.locator.side_effect = locator
+    return multi
+
+
+def test_shell_visible_chips_appear_later(browser_page):
+    browser_page.set_content(
+        """
+        <div id="wallet-add-modal___BV_modal_body_">
+          <div class="row">
+            <label>Привязан к терминалу</label>
+            <div class="multiselect" id="delayed">
+              <div class="multiselect__tags">
+                <span class="multiselect__placeholder">Выбрать</span>
+                <input class="multiselect__input" />
+              </div>
+            </div>
+          </div>
+        </div>
+        """
+    )
+    browser_page.evaluate(
+        f"""
+        () => setTimeout(() => {{
+          const tags = document.querySelector("#delayed .multiselect__tags");
+          const span = document.createElement("span");
+          span.className = "multiselect__tag";
+          span.textContent = {PARTNER_150!r};
+          tags.prepend(span);
+        }}, 500)
+        """
+    )
+    field = resolve_terminal_field(browser_page)
+    assert field.loaded_empty is False
+    assert [text for _, text in field.chip_pairs] == [PARTNER_150]
+
+
+def test_unread_chip_is_technical_fail_not_partial():
+    multi = _mock_terminal_multiselect(
+        chip_texts=(PARTNER_150, PARTNER_157),
+        unread_index=1,
+    )
+    with pytest.raises(TerminalFieldError) as exc:
+        _wait_field_loaded(multi)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+
+
+def test_loading_state_check_failure_is_not_empty():
+    multi = _mock_terminal_multiselect(spinner_error=RuntimeError("cannot query spinner"))
+    with pytest.raises(TerminalFieldError) as exc:
+        _wait_field_loaded(multi)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+
+
+def test_genuinely_loaded_empty_field(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            extra_group=False,
+        )
+    )
+    field = resolve_terminal_field(browser_page)
+    assert field.loaded_empty is True
+    assert field.chip_pairs == []
+
+
+def test_second_add_failure_does_not_leave_first_ok(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch)
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(side_effect=["added", FAIL_PARTNER_OPTION_NOT_FOUND]),
+    )
+    saves = MagicMock(return_value="saved")
+    monkeypatch.setattr("automation.engine.save", saves)
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["add_partner", "add_partner"],
+            "value": [PARTNER_150, PARTNER_157],
+        }
+    ).to_excel(path, index=False)
+    out, stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert df.iloc[0]["status"] == RESULT_STOP_BEFORE_SAVE
+    assert df.iloc[1]["status"] == FAIL_PARTNER_OPTION_NOT_FOUND
+    assert "OK" not in [str(value) for value in df["status"]]
+    saves.assert_not_called()
+    assert stats.ok == 0
+
+
+def test_verify_reopen_failure_downgrades_ok(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch, patch_verify=False)
+    opens: list[str] = []
+
+    def open_card(_page, card):
+        opens.append(card)
+        if len(opens) > 1:
+            raise RuntimeError("verify reopen failed")
+
+    monkeypatch.setattr("automation.engine.open_card", open_card)
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(return_value="added"),
+    )
+    monkeypatch.setattr("automation.engine.save", MagicMock(return_value="saved"))
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111"],
+            "action": ["add_partner"],
+            "value": [PARTNER_150],
+        }
+    ).to_excel(path, index=False)
+    out, stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert df.iloc[0]["status"] == FAIL_SAVE_NOT_CONFIRMED
+    assert stats.ok == 0
+    assert len(opens) >= 2
+
+
+def test_verify_status_unreadable_after_save(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch, patch_verify=False)
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(return_value="added"),
+    )
+    monkeypatch.setattr(
+        "automation.engine.ensure_status_set",
+        MagicMock(return_value="set: Готов к работе"),
+    )
+    monkeypatch.setattr("automation.engine.save", MagicMock(return_value="saved"))
+    field = MagicMock()
+    field.chip_pairs = [(MagicMock(), PARTNER_150)]
+    monkeypatch.setattr("automation.engine.resolve_terminal_field", lambda _p: field)
+    monkeypatch.setattr("automation.engine._get_current_card_status", lambda _p: "")
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["add_partner", "set_status"],
+            "value": [PARTNER_150, "Готов к работе"],
+        }
+    ).to_excel(path, index=False)
+    out, stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert list(df["status"]) == [FAIL_SAVE_NOT_CONFIRMED, FAIL_SAVE_NOT_CONFIRMED]
+    assert stats.ok == 0
+
+
+def test_verify_partner_missing_after_save(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch, patch_verify=False)
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(return_value="added"),
+    )
+    monkeypatch.setattr("automation.engine.save", MagicMock(return_value="saved"))
+    field = MagicMock()
+    field.chip_pairs = []
+    monkeypatch.setattr("automation.engine.resolve_terminal_field", lambda _p: field)
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111"],
+            "action": ["add_partner"],
+            "value": [PARTNER_150],
+        }
+    ).to_excel(path, index=False)
+    out, stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert df.iloc[0]["status"] == FAIL_SAVE_NOT_CONFIRMED
+    assert stats.ok == 0
+
+
+def test_foreign_dropdown_is_not_clicked(browser_page):
+    browser_page.set_content(
+        f"""
+        <div id="wallet-add-modal___BV_modal_body_">
+          <div class="row">
+            <label>Группа</label>
+            <div class="multiselect" id="group-field">
+              <div class="multiselect__tags">
+                <input class="multiselect__input" placeholder="Группа" />
+              </div>
+              <div class="multiselect__content-wrapper" style="display:block">
+                <ul><li>{PARTNER_150}</li></ul>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <label>Привязан к терминалу</label>
+            <div class="multiselect" id="terminal-field">
+              <div class="multiselect__tags">
+                <span class="multiselect__placeholder">Выбрать</span>
+                <input class="multiselect__input" />
+              </div>
+              <div class="multiselect__content-wrapper" style="display:none">
+                <ul></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+        """
+    )
+    result = ensure_partner_added(browser_page, PARTNER_150, RunConfig())
+    assert result == FAIL_TERMINAL_FIELD_NOT_LOADED
+    chips = [text for _, text in get_partner_chips(browser_page)]
+    assert PARTNER_150 not in chips
+

@@ -1423,6 +1423,82 @@ def _reset_wallet_form_for_next_card(page: Page) -> None:
         pass
 
 
+def _stats_reclassify_ok_to_skip(stats: Stats) -> None:
+    if stats.ok > 0:
+        stats.ok -= 1
+    stats.skip += 1
+
+
+def _stats_reclassify_ok_to_fail(stats: Stats) -> None:
+    if stats.ok > 0:
+        stats.ok -= 1
+    stats.fail += 1
+
+
+def _downgrade_unsaved_ok_rows(
+    df: pd.DataFrame,
+    stats: Stats,
+    *,
+    mutated_indices: list[int],
+    set_agg_pending: tuple | None,
+    processed_at,
+    reason: str,
+) -> None:
+    """Convert unsaved successful mutations to STOP_BEFORE_SAVE and align Stats."""
+    pending_idx = set_agg_pending[0] if set_agg_pending is not None else None
+    if set_agg_pending is not None:
+        df.at[pending_idx, "status"] = RESULT_STOP_BEFORE_SAVE
+        df.at[pending_idx, "comment"] = RESULT_STOP_BEFORE_SAVE
+        _apply_result_row_dates(
+            df,
+            pending_idx,
+            action="set_aggregate",
+            status=RESULT_STOP_BEFORE_SAVE,
+            processed_at=processed_at,
+        )
+        stats.inc(RESULT_STOP_BEFORE_SAVE)
+    for idx in mutated_indices:
+        if pending_idx is not None and idx == pending_idx:
+            continue
+        if str(df.at[idx, "status"]).strip() != "OK":
+            continue
+        prev = str(df.at[idx, "comment"] or "")
+        df.at[idx, "status"] = RESULT_STOP_BEFORE_SAVE
+        df.at[idx, "comment"] = f"{prev} | {reason}" if prev else RESULT_STOP_BEFORE_SAVE
+        _apply_result_row_dates(
+            df,
+            idx,
+            action=str(df.at[idx, "action"]),
+            status=RESULT_STOP_BEFORE_SAVE,
+            processed_at=processed_at,
+        )
+        _stats_reclassify_ok_to_skip(stats)
+
+
+def _downgrade_ok_rows_unconfirmed(
+    df: pd.DataFrame,
+    stats: Stats,
+    *,
+    mutated_indices: list[int],
+    processed_at,
+    code: str,
+) -> None:
+    for idx in mutated_indices:
+        if str(df.at[idx, "status"]).strip() != "OK":
+            continue
+        prev = str(df.at[idx, "comment"] or "")
+        df.at[idx, "status"] = code
+        df.at[idx, "comment"] = f"{prev} | {code}" if prev else code
+        _apply_result_row_dates(
+            df,
+            idx,
+            action=str(df.at[idx, "action"]),
+            status=code,
+            processed_at=processed_at,
+        )
+        _stats_reclassify_ok_to_fail(stats)
+
+
 def _verify_card_enable_after_save(
     page: Page,
     cfg: RunConfig,
@@ -1432,13 +1508,13 @@ def _verify_card_enable_after_save(
 ) -> str | None:
     """Re-open the card and confirm partner/status survived Save."""
     log.info("[Partners] stage=verify_save card=%s", mask_card(card))
-    retry(
-        lambda: open_card(page, card),
-        cfg.retries,
-        cfg.delay,
-        step_name=f"verify_open:{card}",
-    )
     try:
+        retry(
+            lambda: open_card(page, card),
+            cfg.retries,
+            cfg.delay,
+            step_name=f"verify_open:{card}",
+        )
         field = resolve_terminal_field(page)
         chip_texts = [text for _, text in field.chip_pairs]
         for partner in expected_partners:
@@ -1450,7 +1526,21 @@ def _verify_card_enable_after_save(
                 )
                 return FAIL_SAVE_NOT_CONFIRMED
         if expected_status:
-            current = _get_current_card_status(page)
+            try:
+                current = _get_current_card_status(page)
+            except Exception as exc:
+                log.error(
+                    "[Partners] stage=verify_save code=%s status_read_error=%s",
+                    FAIL_SAVE_NOT_CONFIRMED,
+                    exc,
+                )
+                return FAIL_SAVE_NOT_CONFIRMED
+            if not _normalize_status(current):
+                log.error(
+                    "[Partners] stage=verify_save code=%s status unread",
+                    FAIL_SAVE_NOT_CONFIRMED,
+                )
+                return FAIL_SAVE_NOT_CONFIRMED
             if _normalize_status(current) != _normalize_status(expected_status):
                 log.error(
                     "[Partners] stage=verify_save code=%s status=%r expected=%r",
@@ -1460,12 +1550,20 @@ def _verify_card_enable_after_save(
                 )
                 return FAIL_SAVE_NOT_CONFIRMED
         return None
-    except TerminalFieldError as exc:
-        log.error("[Partners] stage=verify_save code=%s", exc.code)
+    except Exception as exc:
+        log.error(
+            "[Partners] stage=verify_save code=%s err=%s",
+            FAIL_SAVE_NOT_CONFIRMED,
+            exc,
+        )
         return FAIL_SAVE_NOT_CONFIRMED
     finally:
         try:
             _close_stale_modal(page)
+        except Exception:
+            pass
+        try:
+            ensure_wallet_search_ready(page, allow_goto=True)
         except Exception:
             pass
 
@@ -2824,6 +2922,21 @@ def run(file_path: str, cfg: RunConfig):
                                     abort_remaining,
                                     add_partner_failed,
                                 )
+                                processed_at = now_msk()
+                                reason = (
+                                    "save skipped (add_partner failed)"
+                                    if add_partner_failed
+                                    else "save skipped (set_aggregate aborted)"
+                                )
+                                _downgrade_unsaved_ok_rows(
+                                    df,
+                                    stats,
+                                    mutated_indices=mutated_indices,
+                                    set_agg_pending=set_agg_pending,
+                                    processed_at=processed_at,
+                                    reason=reason,
+                                )
+                                set_agg_pending = None
                                 _reset_wallet_form_for_next_card(page)
                                 log.info(f"✅ [Card] finished card={card}")
                                 continue
@@ -2845,30 +2958,15 @@ def run(file_path: str, cfg: RunConfig):
                                 )
                                 _pause_stop_before_save(page, cfg)
                                 processed_at = now_msk()
-                                if set_agg_pending is not None:
-                                    idx, _intent, _top, _pat = set_agg_pending
-                                    df.at[idx, "status"] = RESULT_STOP_BEFORE_SAVE
-                                    df.at[idx, "comment"] = RESULT_STOP_BEFORE_SAVE
-                                    _apply_result_row_dates(
-                                        df,
-                                        idx,
-                                        action="set_aggregate",
-                                        status=RESULT_STOP_BEFORE_SAVE,
-                                        processed_at=processed_at,
-                                    )
-                                    stats.inc(RESULT_STOP_BEFORE_SAVE)
-                                for idx in mutated_indices:
-                                    if set_agg_pending and idx == set_agg_pending[0]:
-                                        continue
-                                    if str(df.at[idx, "status"]).strip() == "OK":
-                                        # Downgrade provisional OK — Save never happened.
-                                        prev = str(df.at[idx, "comment"] or "")
-                                        df.at[idx, "status"] = RESULT_STOP_BEFORE_SAVE
-                                        df.at[idx, "comment"] = (
-                                            f"{prev} | save skipped (stop_before_save)"
-                                            if prev
-                                            else RESULT_STOP_BEFORE_SAVE
-                                        )
+                                _downgrade_unsaved_ok_rows(
+                                    df,
+                                    stats,
+                                    mutated_indices=mutated_indices,
+                                    set_agg_pending=set_agg_pending,
+                                    processed_at=processed_at,
+                                    reason="save skipped (stop_before_save)",
+                                )
+                                set_agg_pending = None
                                 card_timing.outcome = "skip"
                                 log.info(f"✅ [Card] finished card={card}")
                                 continue
@@ -2922,25 +3020,28 @@ def run(file_path: str, cfg: RunConfig):
                                             )
                                             if verify_err:
                                                 processed_at = now_msk()
-                                                for midx in mutated_indices:
-                                                    if str(df.at[midx, "status"]).strip() != "OK":
-                                                        continue
-                                                    prev = str(df.at[midx, "comment"] or "")
-                                                    df.at[midx, "status"] = verify_err
-                                                    df.at[midx, "comment"] = (
-                                                        f"{prev} | {verify_err}"
-                                                        if prev
-                                                        else verify_err
+                                                _downgrade_ok_rows_unconfirmed(
+                                                    df,
+                                                    stats,
+                                                    mutated_indices=mutated_indices,
+                                                    processed_at=processed_at,
+                                                    code=verify_err,
+                                                )
+                                                if set_agg_pending is not None:
+                                                    idx, _intent, _top, _pat = (
+                                                        set_agg_pending
                                                     )
+                                                    df.at[idx, "status"] = verify_err
+                                                    df.at[idx, "comment"] = verify_err
                                                     _apply_result_row_dates(
                                                         df,
-                                                        midx,
-                                                        action=str(
-                                                            df.at[midx, "action"]
-                                                        ),
+                                                        idx,
+                                                        action="set_aggregate",
                                                         status=verify_err,
                                                         processed_at=processed_at,
                                                     )
+                                                    stats.inc(verify_err)
+                                                    set_agg_pending = None
                             else:
                                 log.info(
                                     f"ℹ️ [Card] skip save card={card} — no mutations"

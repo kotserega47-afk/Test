@@ -16,6 +16,7 @@ from automation.engine import (
     _ensure_logged_in,
     _get_current_card_status,
     _partner_already_selected,
+    _reset_wallet_form_for_next_card,
     ensure_partner_added,
     ensure_status_set,
     get_partner_chips,
@@ -23,7 +24,9 @@ from automation.engine import (
     save,
 )
 from automation.wallet_terminal_field import (
+    FAIL_ADD_NOT_CONFIRMED,
     FAIL_PARTNER_OPTION_NOT_FOUND,
+    FAIL_SAVE_NOT_CONFIRMED,
     FAIL_TERMINAL_FIELD_AMBIGUOUS,
     FAIL_TERMINAL_FIELD_NOT_FOUND,
     FAIL_TERMINAL_FIELD_NOT_LOADED,
@@ -97,6 +100,8 @@ _TECHNICAL_OUTCOME_CODES = frozenset(
         FAIL_TERMINAL_FIELD_NOT_FOUND,
         FAIL_TERMINAL_FIELD_NOT_LOADED,
         FAIL_TERMINAL_FIELD_AMBIGUOUS,
+        FAIL_ADD_NOT_CONFIRMED,
+        FAIL_SAVE_NOT_CONFIRMED,
     }
 )
 
@@ -288,11 +293,56 @@ def _unknown_status_comment(status: str) -> str:
     return "UNKNOWN_STATUS: статус карты не определён; ручной разбор"
 
 
-def _partner_present(get_chips_fn: Callable[[Page], list[str]], page: Page, partner: str) -> bool:
+@dataclass(frozen=True, slots=True)
+class _PartnerPresence:
+    present: bool
+    unread: bool = False
+    error: str = ""
+
+
+def _read_partner_presence(
+    get_chips_fn: Callable[[Page], list[str]],
+    page: Page,
+    partner: str,
+) -> _PartnerPresence:
     try:
-        return _partner_already_selected(get_chips_fn(page), partner)
-    except TerminalFieldError:
-        return False
+        chips = get_chips_fn(page)
+    except TerminalFieldError as exc:
+        return _PartnerPresence(present=False, unread=True, error=exc.code)
+    except Exception as exc:
+        return _PartnerPresence(
+            present=False,
+            unread=True,
+            error=str(exc) or ERROR_TECHNICAL,
+        )
+    return _PartnerPresence(present=_partner_already_selected(chips, partner))
+
+
+def _unread_chip_fail(
+    candidate: CandidateRow,
+    presence: _PartnerPresence,
+    *,
+    status_before: str,
+    status_after: str,
+    partner_present_before: bool,
+    mutated: bool = False,
+) -> EnableOutcome:
+    classification = RetryClassification(
+        error_code=presence.error or FAIL_TERMINAL_FIELD_NOT_LOADED,
+        retryable=True,
+        message=presence.error or "не удалось прочитать выбранные терминалы",
+    )
+    return _technical_fail_outcome(
+        candidate,
+        classification,
+        status_before=status_before,
+        status_after=status_after,
+        partner_present_before=partner_present_before,
+        partner_present_after=False,
+        mutated=mutated,
+        saved=False,
+        raw_error=presence.error,
+    )
 
 
 def _add_partner_or_outcome(
@@ -310,18 +360,36 @@ def _add_partner_or_outcome(
         add_result = add_partner_fn(page, candidate.partner, cfg)
     except Exception as exc:
         classification = classify_enable_exception(exc)
+        presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+        if presence.unread:
+            return False, _unread_chip_fail(
+                candidate,
+                presence,
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+            )
         return False, _technical_fail_outcome(
             candidate,
             classification,
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            partner_present_after=presence.present,
             raw_error=str(exc),
         )
 
     if (add_result or "").upper().startswith("FAIL"):
         if add_result == FAIL_PARTNER_OPTION_NOT_FOUND:
+            presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+            if presence.unread:
+                return False, _unread_chip_fail(
+                    candidate,
+                    presence,
+                    status_before=status_before,
+                    status_after=get_status_fn(page),
+                    partner_present_before=partner_present_before,
+                )
             return False, _outcome(
                 candidate,
                 registry_value=REGISTRY_SKIP,
@@ -331,9 +399,7 @@ def _add_partner_or_outcome(
                 status_before=status_before,
                 status_after=get_status_fn(page),
                 partner_present_before=partner_present_before,
-                partner_present_after=_partner_present(
-                    get_chips_fn, page, candidate.partner
-                ),
+                partner_present_after=presence.present,
                 error_code=ERROR_PARTNER_NOT_AVAILABLE,
                 raw_error=add_result,
             )
@@ -343,6 +409,7 @@ def _add_partner_or_outcome(
             in {
                 FAIL_TERMINAL_FIELD_NOT_FOUND,
                 FAIL_TERMINAL_FIELD_NOT_LOADED,
+                FAIL_ADD_NOT_CONFIRMED,
             },
             message=add_result,
         )
@@ -357,6 +424,15 @@ def _add_partner_or_outcome(
         )
 
     if add_result.startswith("skip"):
+        presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+        if presence.unread:
+            return False, _unread_chip_fail(
+                candidate,
+                presence,
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+            )
         if "option not found" in add_result:
             return False, _outcome(
                 candidate,
@@ -367,7 +443,7 @@ def _add_partner_or_outcome(
                 status_before=status_before,
                 status_after=get_status_fn(page),
                 partner_present_before=partner_present_before,
-                partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+                partner_present_after=presence.present,
                 error_code=ERROR_PARTNER_NOT_AVAILABLE,
                 raw_error=add_result,
             )
@@ -381,11 +457,21 @@ def _add_partner_or_outcome(
             status_before=status_before,
             status_after=get_status_fn(page),
             partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
+            partner_present_after=presence.present,
             raw_error=add_result,
         )
 
-    if not _partner_present(get_chips_fn, page, candidate.partner):
+    presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+    if presence.unread:
+        return False, _unread_chip_fail(
+            candidate,
+            presence,
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            mutated=True,
+        )
+    if not presence.present:
         return False, _technical_fail_outcome(
             candidate,
             RetryClassification(
@@ -432,6 +518,110 @@ def _save_or_outcome(
     return True, None
 
 
+def _save_not_confirmed_outcome(
+    candidate: CandidateRow,
+    *,
+    status_before: str,
+    partner_present_before: bool,
+    status_after: str = "",
+    partner_present_after: bool = False,
+    message: str = FAIL_SAVE_NOT_CONFIRMED,
+) -> EnableOutcome:
+    return _technical_fail_outcome(
+        candidate,
+        RetryClassification(
+            error_code=FAIL_SAVE_NOT_CONFIRMED,
+            retryable=True,
+            message=message,
+        ),
+        status_before=status_before,
+        status_after=status_after or status_before,
+        partner_present_before=partner_present_before,
+        partner_present_after=partner_present_after,
+        mutated=True,
+        saved=False,
+        raw_error=message,
+    )
+
+
+def _verify_saved_enable(
+    page: Page,
+    candidate: CandidateRow,
+    *,
+    status_before: str,
+    partner_present_before: bool,
+    expected_status: str,
+    open_card_fn: Callable[[Page, str], None],
+    get_status_fn: Callable[[Page], str],
+    get_chips_fn: Callable[[Page], list[str]],
+    comment_fn: Callable[[str], str],
+) -> EnableOutcome:
+    try:
+        open_card_fn(page, candidate.card)
+        presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+        if presence.unread:
+            return _save_not_confirmed_outcome(
+                candidate,
+                status_before=status_before,
+                partner_present_before=partner_present_before,
+                message=presence.error or FAIL_SAVE_NOT_CONFIRMED,
+            )
+        if not presence.present:
+            return _save_not_confirmed_outcome(
+                candidate,
+                status_before=status_before,
+                partner_present_before=partner_present_before,
+                message="partner missing after save",
+            )
+        try:
+            status_after = get_status_fn(page)
+        except Exception as exc:
+            return _save_not_confirmed_outcome(
+                candidate,
+                status_before=status_before,
+                partner_present_before=partner_present_before,
+                partner_present_after=presence.present,
+                message=str(exc) or FAIL_SAVE_NOT_CONFIRMED,
+            )
+        if not _status_text(status_after):
+            return _save_not_confirmed_outcome(
+                candidate,
+                status_before=status_before,
+                partner_present_before=partner_present_before,
+                partner_present_after=presence.present,
+                message="status unread after save",
+            )
+        if normalize_status_text(status_after) != normalize_status_text(expected_status):
+            return _save_not_confirmed_outcome(
+                candidate,
+                status_before=status_before,
+                partner_present_before=partner_present_before,
+                status_after=status_after,
+                partner_present_after=presence.present,
+                message=(
+                    f"status after save {status_after!r} != {expected_status!r}"
+                ),
+            )
+        return _outcome(
+            candidate,
+            registry_value=REGISTRY_OK,
+            registry_comment=comment_fn(status_after),
+            status_before=status_before,
+            status_after=status_after,
+            partner_present_before=partner_present_before,
+            partner_present_after=True,
+            mutated=True,
+            saved=True,
+        )
+    except Exception as exc:
+        return _save_not_confirmed_outcome(
+            candidate,
+            status_before=status_before,
+            partner_present_before=partner_present_before,
+            message=str(exc) or FAIL_SAVE_NOT_CONFIRMED,
+        )
+
+
 def process_enable_candidate(
     page: Page,
     candidate: CandidateRow,
@@ -447,8 +637,48 @@ def process_enable_candidate(
     add_partner_fn: Callable[[Page, str, RunConfig], str] = ensure_partner_added,
     set_status_fn: Callable[[Page, str, RunConfig], str] = ensure_status_set,
     save_fn: Callable[[Page, RunConfig], str] = save,
+    reset_form_fn: Callable[[Page], None] = _reset_wallet_form_for_next_card,
 ) -> EnableOutcome:
-    """Single-card enable pass: one open_card, read status/partners, decide, act, save."""
+    """Single-card enable pass: open, mutate, save, then re-open to confirm."""
+    try:
+        return _process_enable_candidate(
+            page,
+            candidate,
+            settings=settings,
+            cfg=cfg,
+            working_statuses=working_statuses,
+            auto_return_statuses=auto_return_statuses,
+            hold_snapshot=hold_snapshot,
+            open_card_fn=open_card_fn,
+            get_status_fn=get_status_fn,
+            get_chips_fn=get_chips_fn,
+            add_partner_fn=add_partner_fn,
+            set_status_fn=set_status_fn,
+            save_fn=save_fn,
+        )
+    finally:
+        try:
+            reset_form_fn(page)
+        except Exception:
+            pass
+
+
+def _process_enable_candidate(
+    page: Page,
+    candidate: CandidateRow,
+    *,
+    settings: AutoEnableSettings,
+    cfg: RunConfig,
+    working_statuses: frozenset[str] | None,
+    auto_return_statuses: frozenset[str] | None,
+    hold_snapshot: HoldPairsSnapshot | None,
+    open_card_fn: Callable[[Page, str], None],
+    get_status_fn: Callable[[Page], str],
+    get_chips_fn: Callable[[Page], list[str]],
+    add_partner_fn: Callable[[Page, str, RunConfig], str],
+    set_status_fn: Callable[[Page, str, RunConfig], str],
+    save_fn: Callable[[Page, RunConfig], str],
+) -> EnableOutcome:
     working_statuses = working_statuses or build_status_set(settings.working_statuses)
     auto_return_statuses = auto_return_statuses or build_status_set(
         settings.auto_return_statuses
@@ -569,13 +799,12 @@ def process_enable_candidate(
         if not ok:
             return outcome
 
-        partner_present_after = True
         saved_ok, outcome = _save_or_outcome(
             page,
             candidate,
             status_before=status_before,
             partner_present_before=partner_present_before,
-            partner_present_after=partner_present_after,
+            partner_present_after=True,
             cfg=cfg,
             get_status_fn=get_status_fn,
             save_fn=save_fn,
@@ -583,36 +812,20 @@ def process_enable_candidate(
         if not saved_ok:
             return outcome
 
-        status_after = get_status_fn(page)
-        return _outcome(
+        return _verify_saved_enable(
+            page,
             candidate,
-            registry_value=REGISTRY_OK,
-            registry_comment=_build_partner_added_comment(status_after, status_before),
             status_before=status_before,
-            status_after=status_after or status_before,
             partner_present_before=partner_present_before,
-            partner_present_after=partner_present_after,
-            mutated=True,
-            saved=True,
+            expected_status=status_before,
+            open_card_fn=open_card_fn,
+            get_status_fn=get_status_fn,
+            get_chips_fn=get_chips_fn,
+            comment_fn=lambda status_after: _build_partner_added_comment(
+                status_after, status_before
+            ),
         )
 
-    try:
-        set_status_fn(page, target_status, cfg)
-    except Exception as exc:
-        classification = classify_enable_exception(exc)
-        return _technical_fail_outcome(
-            candidate,
-            classification,
-            status_before=status_before,
-            status_after=get_status_fn(page),
-            partner_present_before=partner_present_before,
-            partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
-            mutated=True,
-            saved=False,
-            raw_error=str(exc),
-        )
-
-    partner_present_after = partner_present_before
     if not partner_present_before:
         ok, outcome = _add_partner_or_outcome(
             page,
@@ -626,14 +839,39 @@ def process_enable_candidate(
         )
         if not ok:
             return outcome
-        partner_present_after = True
+
+    try:
+        set_status_fn(page, target_status, cfg)
+    except Exception as exc:
+        classification = classify_enable_exception(exc)
+        presence = _read_partner_presence(get_chips_fn, page, candidate.partner)
+        if presence.unread:
+            return _unread_chip_fail(
+                candidate,
+                presence,
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+                mutated=True,
+            )
+        return _technical_fail_outcome(
+            candidate,
+            classification,
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=presence.present,
+            mutated=True,
+            saved=False,
+            raw_error=str(exc),
+        )
 
     saved_ok, outcome = _save_or_outcome(
         page,
         candidate,
         status_before=status_before,
         partner_present_before=partner_present_before,
-        partner_present_after=partner_present_after,
+        partner_present_after=True,
         cfg=cfg,
         get_status_fn=get_status_fn,
         save_fn=save_fn,
@@ -641,21 +879,20 @@ def process_enable_candidate(
     if not saved_ok:
         return outcome
 
-    status_after = get_status_fn(page) or target_status
-    return _outcome(
+    return _verify_saved_enable(
+        page,
         candidate,
-        registry_value=REGISTRY_OK,
-        registry_comment=_build_status_changed_comment(
+        status_before=status_before,
+        partner_present_before=partner_present_before,
+        expected_status=target_status,
+        open_card_fn=open_card_fn,
+        get_status_fn=get_status_fn,
+        get_chips_fn=get_chips_fn,
+        comment_fn=lambda status_after: _build_status_changed_comment(
             status_before,
-            target_status,
+            status_after,
             partner_already=partner_present_before,
         ),
-        status_before=status_before,
-        status_after=status_after,
-        partner_present_before=partner_present_before,
-        partner_present_after=partner_present_after,
-        mutated=True,
-        saved=True,
     )
 
 

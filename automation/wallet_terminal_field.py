@@ -35,6 +35,7 @@ FAIL_SAVE_NOT_CONFIRMED = "FAIL_SAVE_NOT_CONFIRMED"
 SKIP_BLOCKED_BY_ADD_FAILURE = "skip: blocked by add_partner failure"
 
 _FIELD_WAIT_MS = 4000
+_EMPTY_CONFIRM_MS = 1200
 _DROPDOWN_WAIT_MS = 5000
 _OUTER_MULTISELECT_XPATH = (
     "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' multiselect ')][1]"
@@ -149,6 +150,96 @@ def _collect_by_placeholder(modal: Any, names: tuple[str, ...]) -> list[tuple[An
     return found
 
 
+def _observe(fn, message: str):
+    try:
+        return fn()
+    except TerminalFieldError:
+        raise
+    except Exception as exc:
+        raise TerminalFieldError(
+            FAIL_TERMINAL_FIELD_NOT_LOADED,
+            message,
+            retryable=True,
+        ) from exc
+
+
+def _observe_bool(fn, message: str) -> bool:
+    return bool(_observe(fn, message))
+
+
+def _field_is_loading(multiselect: Any) -> bool:
+    spinner = multiselect.locator(
+        ".multiselect__spinner, .multiselect--loading, .multiselect__loading"
+    )
+    count = _observe_bool(
+        lambda: spinner.count() > 0,
+        "не удалось проверить состояние загрузки поля терминалов",
+    )
+    if not count:
+        return False
+    return _observe_bool(
+        lambda: spinner.first.is_visible(),
+        "не удалось проверить состояние загрузки поля терминалов",
+    )
+
+
+def _placeholder_visible(multiselect: Any) -> bool:
+    placeholder = multiselect.locator(".multiselect__placeholder")
+    count = _observe_bool(
+        lambda: placeholder.count() > 0,
+        "не удалось проверить признак пустого поля терминалов",
+    )
+    if not count:
+        return False
+    return _observe_bool(
+        lambda: placeholder.first.is_visible(),
+        "не удалось проверить признак пустого поля терминалов",
+    )
+
+
+def _read_all_chips(multiselect: Any) -> tuple[int, list[tuple[Any, str]] | None]:
+    """Return (dom_count, pairs). pairs is None when chips exist but are not ready.
+
+    A readable subset is never returned: either every chip is read, or this
+    raises a technical FAIL.
+    """
+    chips = multiselect.locator(".multiselect__tag")
+    count = int(
+        _observe(
+            lambda: chips.count(),
+            "не удалось прочитать выбранные терминалы",
+        )
+        or 0
+    )
+    if count == 0:
+        return 0, []
+
+    pairs: list[tuple[Any, str]] = []
+    for i in range(count):
+        chip = chips.nth(i)
+        visible = _observe_bool(
+            lambda chip=chip: chip.is_visible(),
+            "не удалось прочитать выбранные терминалы",
+        )
+        if not visible:
+            return count, None
+        text = str(
+            _observe(
+                lambda chip=chip: (chip.inner_text() or "").strip(),
+                "не удалось прочитать выбранный терминал",
+            )
+            or ""
+        )
+        if not text:
+            raise TerminalFieldError(
+                FAIL_TERMINAL_FIELD_NOT_LOADED,
+                "не удалось прочитать выбранный терминал",
+                retryable=True,
+            )
+        pairs.append((chip, text))
+    return count, pairs
+
+
 def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
     tags = multiselect.locator(".multiselect__tags")
     try:
@@ -160,44 +251,43 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
             retryable=True,
         ) from exc
 
-    spinner = multiselect.locator(
-        ".multiselect__spinner, .multiselect--loading, .multiselect__loading"
-    )
     page = multiselect.page
-    deadline = time.monotonic() + (_FIELD_WAIT_MS / 1000.0)
+    field_deadline = time.monotonic() + (_FIELD_WAIT_MS / 1000.0)
+    empty_deadline: float | None = None
     while True:
-        loading = False
-        try:
-            if spinner.count() > 0 and spinner.first.is_visible():
-                loading = True
-        except Exception:
-            loading = False
-        if not loading:
-            break
-        if time.monotonic() >= deadline:
+        loading = _field_is_loading(multiselect)
+        if loading:
+            empty_deadline = None
+            if time.monotonic() >= field_deadline:
+                raise TerminalFieldError(
+                    FAIL_TERMINAL_FIELD_NOT_LOADED,
+                    "поле терминалов не вышло из состояния загрузки",
+                    retryable=True,
+                )
+            page.wait_for_timeout(100)
+            continue
+
+        chip_count, pairs = _read_all_chips(multiselect)
+        if chip_count > 0:
+            empty_deadline = None
+            if pairs is not None:
+                return pairs
+        else:
+            if _placeholder_visible(multiselect):
+                if empty_deadline is None:
+                    empty_deadline = time.monotonic() + (_EMPTY_CONFIRM_MS / 1000.0)
+                if time.monotonic() >= empty_deadline:
+                    return []
+            else:
+                empty_deadline = None
+
+        if time.monotonic() >= field_deadline:
             raise TerminalFieldError(
                 FAIL_TERMINAL_FIELD_NOT_LOADED,
-                "поле терминалов не вышло из состояния загрузки",
+                "поле терминалов найдено, но готовность не подтверждена",
                 retryable=True,
             )
         page.wait_for_timeout(100)
-
-    chips = multiselect.locator(".multiselect__tag")
-    try:
-        chips.first.wait_for(state="visible", timeout=800)
-    except Exception:
-        pass
-
-    pairs: list[tuple[Any, str]] = []
-    for i in range(chips.count()):
-        chip = chips.nth(i)
-        try:
-            text = chip.inner_text().strip()
-        except Exception:
-            continue
-        if text:
-            pairs.append((chip, text))
-    return pairs
 
 
 def resolve_terminal_field(page: Page) -> TerminalField:
@@ -256,6 +346,59 @@ def resolve_terminal_field(page: Page) -> TerminalField:
     )
 
 
+def _wrapper_owned_by(wrap: Any, root_handle: Any) -> bool:
+    if root_handle is None:
+        raise TerminalFieldError(
+            FAIL_TERMINAL_FIELD_NOT_LOADED,
+            "не удалось подтвердить принадлежность списка терминалов",
+            retryable=True,
+        )
+    try:
+        return bool(wrap.evaluate("(el, root) => root.contains(el)", root_handle))
+    except Exception as exc:
+        raise TerminalFieldError(
+            FAIL_TERMINAL_FIELD_NOT_LOADED,
+            "не удалось подтвердить принадлежность списка терминалов",
+            retryable=True,
+        ) from exc
+
+
+def _visible_owned_wrappers(multiselect: Any, page: Page, root_handle: Any) -> list[Any]:
+    owned: list[Any] = []
+    inner = multiselect.locator(".multiselect__content-wrapper")
+    inner_count = int(
+        _observe(
+            lambda: inner.count(),
+            "не удалось подтвердить принадлежность списка терминалов",
+        )
+        or 0
+    )
+    for i in range(inner_count):
+        wrap = inner.nth(i)
+        visible = _observe_bool(
+            lambda wrap=wrap: wrap.is_visible(),
+            "не удалось подтвердить принадлежность списка терминалов",
+        )
+        if visible:
+            owned.append(wrap)
+    if owned:
+        return owned
+
+    visible = page.locator(".multiselect__content-wrapper:visible")
+    visible_count = int(
+        _observe(
+            lambda: visible.count(),
+            "не удалось подтвердить принадлежность списка терминалов",
+        )
+        or 0
+    )
+    for i in range(visible_count):
+        wrap = visible.nth(i)
+        if _wrapper_owned_by(wrap, root_handle):
+            owned.append(wrap)
+    return owned
+
+
 def _open_dropdown(page: Page, multiselect: Any) -> Any:
     try:
         multiselect.scroll_into_view_if_needed(timeout=5000)
@@ -271,45 +414,40 @@ def _open_dropdown(page: Page, multiselect: Any) -> Any:
         log.warning("[Partners] stage=dropdown click failed → force")
         multiselect.click(force=True, timeout=3000)
 
-    inner = multiselect.locator(".multiselect__content-wrapper")
+    handle = None
     try:
-        if inner.count() > 0:
-            inner.first.wait_for(state="visible", timeout=_DROPDOWN_WAIT_MS)
-            return inner.first
-    except Exception:
-        pass
-
-    visible = page.locator(".multiselect__content-wrapper:visible")
-    try:
-        visible.first.wait_for(state="visible", timeout=_DROPDOWN_WAIT_MS)
+        handle = multiselect.element_handle()
     except Exception as exc:
         raise TerminalFieldError(
             FAIL_TERMINAL_FIELD_NOT_LOADED,
-            "список терминалов не открылся",
+            "не удалось подтвердить принадлежность списка терминалов",
             retryable=True,
         ) from exc
+    if handle is None:
+        raise TerminalFieldError(
+            FAIL_TERMINAL_FIELD_NOT_LOADED,
+            "не удалось подтвердить принадлежность списка терминалов",
+            retryable=True,
+        )
 
-    count = visible.count()
-    if count == 1:
-        return visible.first
-    handle = multiselect.element_handle()
-    owned: list[Any] = []
-    for i in range(count):
-        wrap = visible.nth(i)
-        try:
-            if handle is not None and wrap.evaluate(
-                "(el, root) => root.contains(el)", handle
-            ):
-                owned.append(wrap)
-        except Exception:
-            continue
-    if len(owned) == 1:
-        return owned[0]
-    raise TerminalFieldError(
-        FAIL_TERMINAL_FIELD_AMBIGUOUS,
-        "неоднозначный выпадающий список терминалов",
-        retryable=False,
-    )
+    deadline = time.monotonic() + (_DROPDOWN_WAIT_MS / 1000.0)
+    while True:
+        owned = _visible_owned_wrappers(multiselect, page, handle)
+        if len(owned) == 1:
+            return owned[0]
+        if len(owned) > 1:
+            raise TerminalFieldError(
+                FAIL_TERMINAL_FIELD_AMBIGUOUS,
+                "неоднозначный выпадающий список терминалов",
+                retryable=False,
+            )
+        if time.monotonic() >= deadline:
+            raise TerminalFieldError(
+                FAIL_TERMINAL_FIELD_NOT_LOADED,
+                "список терминалов не открылся или не принадлежит полю",
+                retryable=True,
+            )
+        page.wait_for_timeout(100)
 
 
 def add_terminal_option(page: Page, field: TerminalField, partner: str) -> str:
