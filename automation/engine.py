@@ -2993,55 +2993,46 @@ def run(file_path: str, cfg: RunConfig):
                                                 processed_at=processed_at,
                                             )
                                             stats.inc(save_err)
-                                            for midx in mutated_indices:
-                                                if midx == idx:
-                                                    continue
-                                                if str(df.at[midx, "status"]).strip() == "OK":
-                                                    df.at[midx, "status"] = save_err
-                                                    df.at[midx, "comment"] = (
-                                                        f"save failed: {save_err}"
-                                                    )
-                                            set_agg_pending = None
-                                            raise RuntimeError(save_err)
-                                    else:
-                                        retry(
-                                            lambda: save(page, cfg),
-                                            cfg.retries,
-                                            cfg.delay,
-                                            step_name=f"save:{card}",
-                                        )
-                                        if expected_partners:
-                                            verify_err = _verify_card_enable_after_save(
-                                                page,
-                                                cfg,
-                                                card,
-                                                expected_partners,
-                                                expected_status,
+                                            _downgrade_ok_rows_unconfirmed(
+                                                df,
+                                                stats,
+                                                mutated_indices=mutated_indices,
+                                                processed_at=processed_at,
+                                                code=save_err,
                                             )
-                                            if verify_err:
-                                                processed_at = now_msk()
-                                                _downgrade_ok_rows_unconfirmed(
-                                                    df,
-                                                    stats,
-                                                    mutated_indices=mutated_indices,
-                                                    processed_at=processed_at,
-                                                    code=verify_err,
-                                                )
-                                                if set_agg_pending is not None:
-                                                    idx, _intent, _top, _pat = (
-                                                        set_agg_pending
-                                                    )
-                                                    df.at[idx, "status"] = verify_err
-                                                    df.at[idx, "comment"] = verify_err
-                                                    _apply_result_row_dates(
-                                                        df,
-                                                        idx,
-                                                        action="set_aggregate",
-                                                        status=verify_err,
-                                                        processed_at=processed_at,
-                                                    )
-                                                    stats.inc(verify_err)
-                                                    set_agg_pending = None
+                                            set_agg_pending = None
+                                            save_click_failed = True
+                                        else:
+                                            save_click_failed = False
+                                    else:
+                                        save_click_failed = False
+                                        try:
+                                            retry(
+                                                lambda: save(page, cfg),
+                                                cfg.retries,
+                                                cfg.delay,
+                                                step_name=f"save:{card}",
+                                            )
+                                        except Exception as exc:
+                                            log.error(
+                                                "[Card] save exception card=%s code=%s err=%s",
+                                                mask_card(card),
+                                                FAIL_SAVE_NOT_CONFIRMED,
+                                                exc,
+                                            )
+                                            processed_at = now_msk()
+                                            _downgrade_ok_rows_unconfirmed(
+                                                df,
+                                                stats,
+                                                mutated_indices=mutated_indices,
+                                                processed_at=processed_at,
+                                                code=FAIL_SAVE_NOT_CONFIRMED,
+                                            )
+                                            save_click_failed = True
+                                if save_click_failed:
+                                    _reset_wallet_form_for_next_card(page)
+                                    log.info(f"✅ [Card] finished card={card}")
+                                    continue
                             else:
                                 log.info(
                                     f"ℹ️ [Card] skip save card={card} — no mutations"
@@ -3075,11 +3066,30 @@ def run(file_path: str, cfg: RunConfig):
                                 )
                                 stats.inc(result)
                                 card_timing.outcome = timing_outcome_from_result(result)
+                                set_agg_pending = None
                                 log.info(
                                     "✅ [Card] set_aggregate verified row=%s result=%s",
                                     idx,
                                     result,
                                 )
+
+                            if card_mutated and (expected_partners or expected_status):
+                                verify_err = _verify_card_enable_after_save(
+                                    page,
+                                    cfg,
+                                    card,
+                                    expected_partners,
+                                    expected_status,
+                                )
+                                if verify_err:
+                                    processed_at = now_msk()
+                                    _downgrade_ok_rows_unconfirmed(
+                                        df,
+                                        stats,
+                                        mutated_indices=mutated_indices,
+                                        processed_at=processed_at,
+                                        code=verify_err,
+                                    )
                             else:
                                 try:
                                     ensure_wallet_search_ready(page, allow_goto=True)

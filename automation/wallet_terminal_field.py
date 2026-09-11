@@ -2,9 +2,16 @@
 
 The Antares control was historically found via
 ``input[placeholder='Партнеры']``. Operators confirmed the visible name is now
-«Привязан к терминалу». Live DOM (label vs placeholder vs both) was not
-inspected in this change; the helper matches the confirmed name on label and
-placeholder, and keeps the old name as compatibility.
+«Привязан к терминалу». Live DOM (label vs placeholder vs both, and the
+card-data ready signal) was not inspected in this change. The helper matches
+the confirmed name on label and placeholder, and keeps the old name as
+compatibility.
+
+Empty vs still-loading chips cannot be proven from placeholder alone. Vue
+multiselect marks in-flight data on the **root** with ``multiselect--loading``.
+``loaded_empty`` is returned only after that root flag is observed and then
+clears with no chips. If loading is never observed, unread/empty stays
+``FAIL_TERMINAL_FIELD_NOT_LOADED`` — not a timed placeholder guess.
 
 Action names, registry fields, and partner identifiers are unchanged.
 """
@@ -35,7 +42,6 @@ FAIL_SAVE_NOT_CONFIRMED = "FAIL_SAVE_NOT_CONFIRMED"
 SKIP_BLOCKED_BY_ADD_FAILURE = "skip: blocked by add_partner failure"
 
 _FIELD_WAIT_MS = 4000
-_EMPTY_CONFIRM_MS = 1200
 _DROPDOWN_WAIT_MS = 5000
 _OUTER_MULTISELECT_XPATH = (
     "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' multiselect ')][1]"
@@ -168,9 +174,31 @@ def _observe_bool(fn, message: str) -> bool:
 
 
 def _field_is_loading(multiselect: Any) -> bool:
-    spinner = multiselect.locator(
-        ".multiselect__spinner, .multiselect--loading, .multiselect__loading"
+    """True when the root control or its spinner still shows in-flight data.
+
+    Vue-multiselect puts ``multiselect--loading`` on the root ``.multiselect``,
+    not on a descendant. A descendant-only query would miss that state and
+    treat a visible placeholder as already loaded.
+    """
+    class_name = str(
+        _observe(
+            lambda: (multiselect.get_attribute("class") or ""),
+            "не удалось проверить состояние загрузки поля терминалов",
+        )
+        or ""
     )
+    if " multiselect--loading " in f" {class_name} ":
+        return True
+    aria_busy = str(
+        _observe(
+            lambda: (multiselect.get_attribute("aria-busy") or ""),
+            "не удалось проверить состояние загрузки поля терминалов",
+        )
+        or ""
+    )
+    if aria_busy.strip().casefold() == "true":
+        return True
+    spinner = multiselect.locator(".multiselect__spinner, .multiselect__loading")
     count = _observe_bool(
         lambda: spinner.count() > 0,
         "не удалось проверить состояние загрузки поля терминалов",
@@ -253,11 +281,11 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
 
     page = multiselect.page
     field_deadline = time.monotonic() + (_FIELD_WAIT_MS / 1000.0)
-    empty_deadline: float | None = None
+    saw_root_loading = False
     while True:
         loading = _field_is_loading(multiselect)
         if loading:
-            empty_deadline = None
+            saw_root_loading = True
             if time.monotonic() >= field_deadline:
                 raise TerminalFieldError(
                     FAIL_TERMINAL_FIELD_NOT_LOADED,
@@ -269,22 +297,16 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
 
         chip_count, pairs = _read_all_chips(multiselect)
         if chip_count > 0:
-            empty_deadline = None
             if pairs is not None:
                 return pairs
-        else:
-            if _placeholder_visible(multiselect):
-                if empty_deadline is None:
-                    empty_deadline = time.monotonic() + (_EMPTY_CONFIRM_MS / 1000.0)
-                if time.monotonic() >= empty_deadline:
-                    return []
-            else:
-                empty_deadline = None
+        elif saw_root_loading and _placeholder_visible(multiselect):
+            # Root left multiselect--loading with no chips: empty is the settled value.
+            return []
 
         if time.monotonic() >= field_deadline:
             raise TerminalFieldError(
                 FAIL_TERMINAL_FIELD_NOT_LOADED,
-                "поле терминалов найдено, но готовность не подтверждена",
+                "поле терминалов найдено, но готовность данных не подтверждена",
                 retryable=True,
             )
         page.wait_for_timeout(100)

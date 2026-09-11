@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from automation.engine import (
+    RESULT_OK_SET_AGGREGATE,
     RESULT_STOP_BEFORE_SAVE,
     _order_card_actions,
     _status_from_action_result,
@@ -85,6 +86,18 @@ def _playwright_stack(monkeypatch, *, patch_verify: bool = True) -> MagicMock:
             MagicMock(return_value=None),
         )
     return page
+
+
+def _schedule_loading_settle(page, selector: str = "#terminal-field", hold_ms: int = 200) -> None:
+    page.evaluate(
+        """([sel, ms]) => {
+          const el = document.querySelector(sel);
+          if (!el) return;
+          el.classList.add("multiselect--loading");
+          setTimeout(() => el.classList.remove("multiselect--loading"), ms);
+        }""",
+        [selector, hold_ms],
+    )
 
 
 def _multiselect_html(
@@ -243,6 +256,7 @@ def test_old_placeholder_markup(browser_page):
         extra_group=False,
     ).replace("<label>Другое</label>", "")
     browser_page.set_content(html)
+    _schedule_loading_settle(browser_page)
     field = resolve_terminal_field(browser_page)
     assert field.matched_name == "Партнеры"
     assert field.source == "placeholder"
@@ -313,15 +327,19 @@ def test_delayed_then_empty_field(browser_page):
     )
     browser_page.evaluate(
         """
-        () => setTimeout(() => {
+        () => {
           const el = document.getElementById("delayed");
-          el.innerHTML = '<div class="multiselect__tags">'
-            + '<span class="multiselect__placeholder">Выбрать</span>'
-            + '<input class="multiselect__input" />'
-            + '</div>';
-        }, 400)
+          el.classList.add("multiselect--loading");
+          setTimeout(() => {
+            el.innerHTML = '<div class="multiselect__tags">'
+              + '<span class="multiselect__placeholder">Выбрать</span>'
+              + '<input class="multiselect__input" />'
+              + '</div>';
+          }, 400);
+        }
         """
     )
+    _schedule_loading_settle(browser_page, "#delayed", hold_ms=1500)
     field = resolve_terminal_field(browser_page)
     assert field.loaded_empty is True
     assert field.chip_pairs == []
@@ -372,6 +390,7 @@ def test_add_does_not_pick_157_for_150(browser_page):
             options=(PARTNER_157,),
         )
     )
+    _schedule_loading_settle(browser_page)
     result = ensure_partner_added(browser_page, PARTNER_150, RunConfig())
     assert result == FAIL_PARTNER_OPTION_NOT_FOUND
 
@@ -551,6 +570,7 @@ def _mock_terminal_multiselect(
     page.wait_for_timeout = MagicMock()
     multi = MagicMock()
     multi.page = page
+    multi.get_attribute.return_value = ""
 
     def locator(selector: str):
         if selector == ".multiselect__tags":
@@ -567,7 +587,7 @@ def _mock_terminal_multiselect(
     return multi
 
 
-def test_shell_visible_chips_appear_later(browser_page):
+def test_shell_visible_chips_appear_later_than_empty_confirm_window(browser_page):
     browser_page.set_content(
         """
         <div id="wallet-add-modal___BV_modal_body_">
@@ -591,7 +611,7 @@ def test_shell_visible_chips_appear_later(browser_page):
           span.className = "multiselect__tag";
           span.textContent = {PARTNER_150!r};
           tags.prepend(span);
-        }}, 500)
+        }}, 2000)
         """
     )
     field = resolve_terminal_field(browser_page)
@@ -610,7 +630,8 @@ def test_unread_chip_is_technical_fail_not_partial():
 
 
 def test_loading_state_check_failure_is_not_empty():
-    multi = _mock_terminal_multiselect(spinner_error=RuntimeError("cannot query spinner"))
+    multi = _mock_terminal_multiselect()
+    multi.get_attribute.side_effect = RuntimeError("cannot read class")
     with pytest.raises(TerminalFieldError) as exc:
         _wait_field_loaded(multi)
     assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
@@ -624,6 +645,7 @@ def test_genuinely_loaded_empty_field(browser_page):
             extra_group=False,
         )
     )
+    _schedule_loading_settle(browser_page)
     field = resolve_terminal_field(browser_page)
     assert field.loaded_empty is True
     assert field.chip_pairs == []
@@ -774,8 +796,83 @@ def test_foreign_dropdown_is_not_clicked(browser_page):
         </div>
         """
     )
+    _schedule_loading_settle(browser_page)
     result = ensure_partner_added(browser_page, PARTNER_150, RunConfig())
     assert result == FAIL_TERMINAL_FIELD_NOT_LOADED
-    chips = [text for _, text in get_partner_chips(browser_page)]
-    assert PARTNER_150 not in chips
+    texts = browser_page.locator("#terminal-field .multiselect__tag").all_inner_texts()
+    assert PARTNER_150 not in [text.strip() for text in texts]
+
+
+def test_save_exception_downgrades_unconfirmed_ok(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch)
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(return_value="added"),
+    )
+    monkeypatch.setattr(
+        "automation.engine.ensure_status_set",
+        MagicMock(return_value="set: Готов к работе"),
+    )
+    monkeypatch.setattr(
+        "automation.engine.save",
+        MagicMock(side_effect=RuntimeError("save crashed")),
+    )
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["add_partner", "set_status"],
+            "value": [PARTNER_150, "Готов к работе"],
+        }
+    ).to_excel(path, index=False)
+    out, stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert list(df["status"]) == [FAIL_SAVE_NOT_CONFIRMED, FAIL_SAVE_NOT_CONFIRMED]
+    assert stats.ok == 0
+
+
+def test_aggregate_ok_but_partner_missing_after_save(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch, patch_verify=False)
+    monkeypatch.setattr(
+        "automation.engine.find_and_open_card_for_delete",
+        MagicMock(return_value=0),
+    )
+    monkeypatch.setattr(
+        "automation.engine.apply_set_aggregate_on_open_form",
+        MagicMock(return_value=(None, "79001112233")),
+    )
+    monkeypatch.setattr(
+        "automation.engine.save_shared_wallet_form",
+        MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "automation.engine.verify_set_aggregate_after_save",
+        MagicMock(return_value=RESULT_OK_SET_AGGREGATE),
+    )
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_partner_added",
+        MagicMock(return_value="added"),
+    )
+    field = MagicMock()
+    field.chip_pairs = []
+    monkeypatch.setattr("automation.engine.resolve_terminal_field", lambda _p: field)
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111", "4111111111111111"],
+            "action": ["set_aggregate", "add_partner"],
+            "value": ["Sim A (1)", PARTNER_150],
+        }
+    ).to_excel(path, index=False)
+    out, _stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    agg_row = df[df["action"] == "set_aggregate"].iloc[0]
+    add_row = df[df["action"] == "add_partner"].iloc[0]
+    assert agg_row["status"] == RESULT_OK_SET_AGGREGATE
+    assert add_row["status"] == FAIL_SAVE_NOT_CONFIRMED
+    assert add_row["status"] != "OK"
 
