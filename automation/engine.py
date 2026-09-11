@@ -48,6 +48,7 @@ from automation.wallet_terminal_field import (
     SKIP_BLOCKED_BY_ADD_FAILURE,
     TerminalFieldError,
     add_terminal_option,
+    clear_terminal_form_session,
     partner_text_matches,
     resolve_terminal_field,
 )
@@ -449,6 +450,7 @@ def _ensure_logged_in(page: Page, context, cfg: RunConfig) -> None:
 def _close_stale_modal(page: Page) -> None:
     modal = page.locator(MODAL_BODY)
     if not modal.is_visible():
+        clear_terminal_form_session(page)
         return
 
     log.warning("⚠️ [Card] stale modal detected")
@@ -475,6 +477,7 @@ def _close_stale_modal(page: Page) -> None:
         log.error("❌ [Card] failed to close stale modal")
         raise Exception("Не удалось закрыть модалку предыдущей карты")
 
+    clear_terminal_form_session(page)
     log.info("✅ [Card] stale modal closed")
 
 
@@ -1506,7 +1509,12 @@ def _verify_card_enable_after_save(
     expected_partners: list[str],
     expected_status: str | None,
 ) -> str | None:
-    """Re-open the card and confirm partner/status survived Save."""
+    """Re-open the card and confirm partner/status survived Save.
+
+    Partner chips are read only when ``expected_partners`` is non-empty.
+    A standalone ``set_status`` confirms status and does not resolve the
+    terminal field.
+    """
     log.info("[Partners] stage=verify_save card=%s", mask_card(card))
     try:
         retry(
@@ -1515,16 +1523,17 @@ def _verify_card_enable_after_save(
             cfg.delay,
             step_name=f"verify_open:{card}",
         )
-        field = resolve_terminal_field(page)
-        chip_texts = [text for _, text in field.chip_pairs]
-        for partner in expected_partners:
-            if not _partner_already_selected(chip_texts, partner):
-                log.error(
-                    "[Partners] stage=verify_save code=%s missing partner=%s",
-                    FAIL_SAVE_NOT_CONFIRMED,
-                    partner,
-                )
-                return FAIL_SAVE_NOT_CONFIRMED
+        if expected_partners:
+            field = resolve_terminal_field(page)
+            chip_texts = [text for _, text in field.chip_pairs]
+            for partner in expected_partners:
+                if not _partner_already_selected(chip_texts, partner):
+                    log.error(
+                        "[Partners] stage=verify_save code=%s missing partner=%s",
+                        FAIL_SAVE_NOT_CONFIRMED,
+                        partner,
+                    )
+                    return FAIL_SAVE_NOT_CONFIRMED
         if expected_status:
             try:
                 current = _get_current_card_status(page)

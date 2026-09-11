@@ -28,9 +28,16 @@ from automation.wallet_terminal_field import (
     TERMINAL_FIELD_NAMES,
     TerminalFieldError,
     _wait_field_loaded,
+    clear_terminal_form_session,
     partner_text_matches,
     resolve_terminal_field,
 )
+from integrations.wallet_editor_auto_enable_eligibility import CandidateRow
+from integrations.wallet_editor_auto_enable_executor import (
+    REGISTRY_OK,
+    process_enable_candidate,
+)
+from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
 from integrations.wallet_editor_hold import HoldPairsSnapshot
 
 PARTNER_150 = "ESB Юмани с2с (150)"
@@ -100,6 +107,26 @@ def _schedule_loading_settle(page, selector: str = "#terminal-field", hold_ms: i
     )
 
 
+def _auto_enable_settings() -> AutoEnableSettings:
+    return AutoEnableSettings(
+        enabled=True,
+        dry_run=False,
+        approval_required=False,
+        max_rows_per_batch=200,
+        max_rows_per_run=0,
+        seconds_per_card_timeout=10,
+        batch_timeout_buffer_seconds=300,
+        working_statuses=("готов к работе", "активный вход", "активный выход"),
+        auto_return_statuses=("не готов. плановый прозвон",),
+        auto_return_target_status="Готов к работе",
+        allowed_statuses_for_enable=(),
+        deprecated_working_statuses_fallback=False,
+        include_overdue=True,
+        telegram_route_report="wallet_editor_auto_enable",
+        telegram_route_alert="wallet_editor_auto_enable_alert",
+    )
+
+
 def _multiselect_html(
     *,
     label: str,
@@ -108,6 +135,7 @@ def _multiselect_html(
     options: tuple[str, ...] = (),
     include_tags: bool = True,
     extra_group: bool = True,
+    card: str = "",
 ) -> str:
     chip_html = "".join(
         f'<span class="multiselect__tag">{name}'
@@ -140,9 +168,18 @@ def _multiselect_html(
           </div>
         </div>
         """
+    card_row = ""
+    if card:
+        card_row = f"""
+        <div class="row">
+          <label>Карта</label>
+          <input type="text" value="{card}" />
+        </div>
+        """
     return f"""
     <style>.multiselect__tag-icon {{ display:inline-block; width:12px; height:12px; }}</style>
     <div id="wallet-add-modal___BV_modal_body_">
+      {card_row}
       {group}
       <div class="row">
         <label>{label}</label>
@@ -458,6 +495,41 @@ def test_standalone_set_status_still_runs(tmp_path, monkeypatch):
     set_status.assert_called_once()
 
 
+def test_standalone_set_status_verify_skips_terminal_field(tmp_path, monkeypatch):
+    _hold_ok(monkeypatch)
+    _playwright_stack(monkeypatch, patch_verify=False)
+    monkeypatch.setattr("automation.engine.open_card", MagicMock())
+    monkeypatch.setattr(
+        "automation.engine.ensure_status_set",
+        MagicMock(return_value="set: Готов к работе"),
+    )
+    monkeypatch.setattr("automation.engine.save", MagicMock(return_value="saved"))
+    monkeypatch.setattr(
+        "automation.engine._get_current_card_status",
+        lambda _p: "Готов к работе",
+    )
+    resolve = MagicMock(
+        side_effect=TerminalFieldError(
+            FAIL_TERMINAL_FIELD_NOT_FOUND,
+            "поле терминалов отсутствует",
+        )
+    )
+    monkeypatch.setattr("automation.engine.resolve_terminal_field", resolve)
+    path = tmp_path / "in.xlsx"
+    pd.DataFrame(
+        {
+            "card": ["4111111111111111"],
+            "action": ["set_status"],
+            "value": ["Готов к работе"],
+        }
+    ).to_excel(path, index=False)
+    out, _stats = run(str(path), _cfg(str(tmp_path / "out.xlsx")))
+    df = pd.read_excel(out)
+    assert list(df["status"]) == ["OK"]
+    assert FAIL_SAVE_NOT_CONFIRMED not in [str(v) for v in df["status"]]
+    resolve.assert_not_called()
+
+
 def test_next_card_opens_after_add_failure(tmp_path, monkeypatch):
     _hold_ok(monkeypatch)
     _playwright_stack(monkeypatch)
@@ -649,6 +721,107 @@ def test_genuinely_loaded_empty_field(browser_page):
     field = resolve_terminal_field(browser_page)
     assert field.loaded_empty is True
     assert field.chip_pairs == []
+
+
+def test_two_sequential_reads_of_ready_empty_field(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    _schedule_loading_settle(browser_page)
+    first = resolve_terminal_field(browser_page)
+    assert first.loaded_empty is True
+    second = resolve_terminal_field(browser_page)
+    assert second.loaded_empty is True
+    assert second.chip_pairs == []
+    clear_terminal_form_session(browser_page)
+    with pytest.raises(TerminalFieldError) as exc:
+        resolve_terminal_field(browser_page)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+
+
+def test_auto_enable_adds_first_partner_into_empty_field(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            options=(PARTNER_150,),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    _schedule_loading_settle(browser_page)
+    outcome = process_enable_candidate(
+        browser_page,
+        CandidateRow(
+            card="4111111111111111",
+            partner=PARTNER_150,
+            disable_at="01.06.2026 10:00:00",
+            enable_status="К ВКЛЮЧЕНИЮ",
+            vklyucheno="",
+            source_row_index=0,
+        ),
+        settings=_auto_enable_settings(),
+        cfg=RunConfig(),
+        open_card_fn=lambda *_a, **_k: None,
+        get_status_fn=lambda *_a, **_k: "Готов к работе",
+        save_fn=lambda *_a, **_k: "saved",
+        reset_form_fn=lambda *_a, **_k: None,
+    )
+    assert outcome.registry_value == REGISTRY_OK
+    assert outcome.partner_present_before is False
+    assert outcome.partner_present_after is True
+    chips = [text for _, text in get_partner_chips(browser_page)]
+    assert PARTNER_150 in chips
+
+
+def test_remove_last_partner_reread_completes(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(PARTNER_150,),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    removed = ensure_partner_removed(browser_page, PARTNER_150, RunConfig())
+    assert removed == "removed"
+    field = resolve_terminal_field(browser_page)
+    assert field.loaded_empty is True
+    assert field.chip_pairs == []
+
+
+def test_empty_ready_does_not_transfer_to_next_card(browser_page):
+    browser_page.set_content(
+        _multiselect_html(
+            label="Привязан к терминалу",
+            chips=(),
+            extra_group=False,
+            card="4111111111111111",
+        )
+    )
+    _schedule_loading_settle(browser_page)
+    first = resolve_terminal_field(browser_page)
+    assert first.loaded_empty is True
+    browser_page.evaluate(
+        """() => {
+          const rows = document.querySelectorAll('#wallet-add-modal___BV_modal_body_ .row');
+          for (const row of rows) {
+            const label = row.querySelector('label');
+            if (!label || (label.innerText || '').trim() !== 'Карта') continue;
+            const input = row.querySelector('input[type=text]');
+            if (input) input.value = '4222222222222222';
+          }
+        }"""
+    )
+    with pytest.raises(TerminalFieldError) as exc:
+        resolve_terminal_field(browser_page)
+    assert exc.value.code == FAIL_TERMINAL_FIELD_NOT_LOADED
+    clear_terminal_form_session(browser_page)
 
 
 def test_second_add_failure_does_not_leave_first_ok(tmp_path, monkeypatch):

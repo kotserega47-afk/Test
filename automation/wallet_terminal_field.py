@@ -7,11 +7,22 @@ card-data ready signal) was not inspected in this change. The helper matches
 the confirmed name on label and placeholder, and keeps the old name as
 compatibility.
 
-Empty vs still-loading chips cannot be proven from placeholder alone. Vue
-multiselect marks in-flight data on the **root** with ``multiselect--loading``.
-``loaded_empty`` is returned only after that root flag is observed and then
-clears with no chips. If loading is never observed, unread/empty stays
-``FAIL_TERMINAL_FIELD_NOT_LOADED`` — not a timed placeholder guess.
+Chips are never read while the root still shows in-flight data
+(``multiselect--loading``, ``aria-busy``, or a visible spinner):
+``_wait_field_loaded()`` continues until that state clears, then reads chips
+or a proven empty. A visible placeholder is not a load timer and is not
+proof of ready data.
+
+``loaded_empty`` requires a confirmed settle for **this card and this form
+opening**: loading observed then cleared with no chips, or a full chip read
+(including a later local removal of the last chip). That readiness is kept
+between calls on the same opening so a second read of an already-empty field
+does not wait for a new loading transition. It is dropped on close, card
+change, and when loading starts again, and is never reused for the next card.
+
+Live DOM (LAURA / Antares wallet form) was not inspected in this change.
+Whether production uses root ``multiselect--loading`` as the ready signal is
+unconfirmed.
 
 Action names, registry fields, and partner identifiers are unchanged.
 """
@@ -225,6 +236,96 @@ def _placeholder_visible(multiselect: Any) -> bool:
     )
 
 
+@dataclass
+class _TerminalFormSession:
+    """Proven chip-field readiness for one page + form opening + card."""
+
+    key: tuple[int, str, str]
+    ready: bool = False
+
+
+_form_session: _TerminalFormSession | None = None
+
+
+def clear_terminal_form_session(page: Page | None = None) -> None:
+    """Drop confirmed field readiness. Call when the wallet form closes."""
+    global _form_session
+    if page is not None:
+        try:
+            page.evaluate(
+                """() => {
+                  const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
+                  if (el) delete el.dataset.weFieldSession;
+                }"""
+            )
+        except Exception:
+            pass
+    _form_session = None
+
+
+def _modal_open_token(page: Page) -> str:
+    """Stable id for the current modal node; a new node is a new opening."""
+    try:
+        token = page.evaluate(
+            """() => {
+              const el = document.querySelector('#wallet-add-modal___BV_modal_body_');
+              if (!el) return '';
+              if (!el.dataset.weFieldSession) {
+                el.dataset.weFieldSession = `${Date.now()}-${Math.random()}`;
+              }
+              return el.dataset.weFieldSession;
+            }"""
+        )
+    except Exception:
+        return ""
+    return token if isinstance(token, str) else ""
+
+
+def _read_open_card_digits(page: Page) -> str:
+    try:
+        modal = page.locator(MODAL_BODY)
+        rows = modal.locator("div.row")
+        n = rows.count()
+        if not isinstance(n, int):
+            return ""
+        for i in range(n):
+            row = rows.nth(i)
+            labels = row.locator("label")
+            if labels.count() == 0:
+                continue
+            try:
+                label = labels.first.inner_text(timeout=500).strip()
+            except Exception:
+                continue
+            if not labels_match(label, "Карта"):
+                continue
+            inputs = row.locator("input[type='text']")
+            if inputs.count() == 0:
+                continue
+            try:
+                value = inputs.first.input_value()
+            except Exception:
+                continue
+            digits = "".join(ch for ch in (value or "") if ch.isdigit())
+            if digits:
+                return digits
+    except Exception:
+        return ""
+    return ""
+
+
+def _session_key(page: Page) -> tuple[int, str, str]:
+    return (id(page), _modal_open_token(page), _read_open_card_digits(page))
+
+
+def _session_for(page: Page) -> _TerminalFormSession:
+    global _form_session
+    key = _session_key(page)
+    if _form_session is None or _form_session.key != key:
+        _form_session = _TerminalFormSession(key=key, ready=False)
+    return _form_session
+
+
 def _read_all_chips(multiselect: Any) -> tuple[int, list[tuple[Any, str]] | None]:
     """Return (dom_count, pairs). pairs is None when chips exist but are not ready.
 
@@ -280,11 +381,13 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
         ) from exc
 
     page = multiselect.page
+    session = _session_for(page)
     field_deadline = time.monotonic() + (_FIELD_WAIT_MS / 1000.0)
     saw_root_loading = False
     while True:
         loading = _field_is_loading(multiselect)
         if loading:
+            session.ready = False
             saw_root_loading = True
             if time.monotonic() >= field_deadline:
                 raise TerminalFieldError(
@@ -295,12 +398,23 @@ def _wait_field_loaded(multiselect: Any) -> list[tuple[Any, str]]:
             page.wait_for_timeout(100)
             continue
 
+        session = _session_for(page)
         chip_count, pairs = _read_all_chips(multiselect)
         if chip_count > 0:
             if pairs is not None:
+                session.ready = True
                 return pairs
-        elif saw_root_loading and _placeholder_visible(multiselect):
-            # Root left multiselect--loading with no chips: empty is the settled value.
+        elif saw_root_loading:
+            # Loading was observed then cleared with no chips: empty is settled
+            # for this opening. Placeholder is logged, not used as a load timer.
+            session.ready = True
+            log.info(
+                "[Partners] stage=read empty_after_loading placeholder=%s",
+                _placeholder_visible(multiselect),
+            )
+            return []
+        elif session.ready:
+            # Same card/form already proven; empty re-read or last chip removed.
             return []
 
         if time.monotonic() >= field_deadline:
