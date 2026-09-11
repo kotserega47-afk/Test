@@ -43,6 +43,14 @@ from integrations.wallet_editor_registry_lifecycle import (
     OPERATION_DATE_COLUMN,
     result_row_dates,
 )
+from automation.wallet_terminal_field import (
+    FAIL_SAVE_NOT_CONFIRMED,
+    SKIP_BLOCKED_BY_ADD_FAILURE,
+    TerminalFieldError,
+    add_terminal_option,
+    partner_text_matches,
+    resolve_terminal_field,
+)
 from automation.set_aggregate_engine import (
     RESULT_DRY_RUN_WOULD_SET_AGGREGATE,
     RESULT_FAIL_AGGREGATE_FIELDS,
@@ -369,7 +377,14 @@ def _apply_auto_no_partners_status_after_actions(
     cfg: RunConfig,
     explicit_status_action_seen: bool,
 ) -> bool:
-    chip_pairs = get_partner_chips(page)
+    try:
+        chip_pairs = get_partner_chips(page)
+    except TerminalFieldError as exc:
+        log.error(
+            "[Card] auto status skipped: terminal field unread code=%s",
+            exc.code,
+        )
+        return False
     final_count = len(chip_pairs)
     log.info(f"🏷️ [Card] final partners count after card actions={final_count}")
 
@@ -1347,8 +1362,20 @@ def _status_from_set_aggregate_result(result: str) -> str:
     return RESULT_FAIL_TECHNICAL
 
 
+def _status_from_action_result(result: str) -> str:
+    """Map add/remove/status results so FAIL_* never becomes Excel OK."""
+    text = (result or "").strip()
+    upper = text.upper()
+    if upper.startswith("FAIL_"):
+        return upper
+    if upper == "FAIL" or text.lower().startswith("fail"):
+        return "FAIL"
+    if text.lower().startswith("skip"):
+        return "SKIP"
+    return "OK"
+
+
 def timing_outcome_from_result(result: str) -> str:
-    """Map Wallet Editor / delete result codes to WE/timing outcome."""
     code = (result or "").strip()
     upper = code.upper()
     lower = code.lower()
@@ -1383,6 +1410,64 @@ def timing_outcome_from_result(result: str) -> str:
     if lower.startswith("skip"):
         return "skip"
     return "fail"
+
+
+def _reset_wallet_form_for_next_card(page: Page) -> None:
+    try:
+        _close_stale_modal(page)
+    except Exception:
+        pass
+    try:
+        ensure_wallet_search_ready(page, allow_goto=True)
+    except Exception:
+        pass
+
+
+def _verify_card_enable_after_save(
+    page: Page,
+    cfg: RunConfig,
+    card: str,
+    expected_partners: list[str],
+    expected_status: str | None,
+) -> str | None:
+    """Re-open the card and confirm partner/status survived Save."""
+    log.info("[Partners] stage=verify_save card=%s", mask_card(card))
+    retry(
+        lambda: open_card(page, card),
+        cfg.retries,
+        cfg.delay,
+        step_name=f"verify_open:{card}",
+    )
+    try:
+        field = resolve_terminal_field(page)
+        chip_texts = [text for _, text in field.chip_pairs]
+        for partner in expected_partners:
+            if not _partner_already_selected(chip_texts, partner):
+                log.error(
+                    "[Partners] stage=verify_save code=%s missing partner=%s",
+                    FAIL_SAVE_NOT_CONFIRMED,
+                    partner,
+                )
+                return FAIL_SAVE_NOT_CONFIRMED
+        if expected_status:
+            current = _get_current_card_status(page)
+            if _normalize_status(current) != _normalize_status(expected_status):
+                log.error(
+                    "[Partners] stage=verify_save code=%s status=%r expected=%r",
+                    FAIL_SAVE_NOT_CONFIRMED,
+                    current,
+                    expected_status,
+                )
+                return FAIL_SAVE_NOT_CONFIRMED
+        return None
+    except TerminalFieldError as exc:
+        log.error("[Partners] stage=verify_save code=%s", exc.code)
+        return FAIL_SAVE_NOT_CONFIRMED
+    finally:
+        try:
+            _close_stale_modal(page)
+        except Exception:
+            pass
 
 
 def _wallet_form_visible(page: Page) -> bool:
@@ -1663,11 +1748,7 @@ def ensure_wallet_deleted(page: Page, card: str, cfg: RunConfig) -> str:
 
 
 def _partner_matches_chip(chip_text: str, partner: str) -> bool:
-    partner_norm = (partner or "").strip()
-    if not partner_norm:
-        return False
-    chip_norm = (chip_text or "").strip()
-    return partner_norm.lower() in chip_norm.lower()
+    return partner_text_matches(chip_text, partner)
 
 
 def _partner_already_selected(chips: list[str], partner: str) -> bool:
@@ -1801,38 +1882,24 @@ def _get_group_multiselect(page: Page):
 
 
 def get_partner_chips(page: Page):
-    modal = page.locator(MODAL_BODY)
-    input_el = modal.locator("input[placeholder='Партнеры']")
-    multiselect = input_el.locator("xpath=ancestor::div[contains(@class,'multiselect')]")
-    chips = multiselect.locator(".multiselect__tag")
-
-    # 🔥 ЖДЁМ, ПОКА ОНИ ПОЯВЯТСЯ
-    try:
-        chips.first.wait_for(timeout=3000)
-    except:
-        log.warning("⚠️ [Partners] chips not loaded yet")
-
-    result = []
-    for i in range(chips.count()):
-        chip = chips.nth(i)
-        text = chip.inner_text().strip()
-        result.append((chip, text))
-
-    log.info(f"🏷️ [Partners] selected chips={[text for _, text in result]}")
-    return result
+    """Return selected terminal chips. Raises TerminalFieldError if unread."""
+    field = resolve_terminal_field(page)
+    return field.chip_pairs
 
 
 def remove_partner_by_chip(page: Page, partner: str):
-    chips = get_partner_chips(page)
+    field = resolve_terminal_field(page)
     log.info(f"➖ [Partners] removing partner={partner}")
 
-    for chip, text in chips:
+    for chip, text in field.chip_pairs:
         if _partner_matches_chip(text, partner):
-            chip.locator(".multiselect__tag-icon").click()
+            chip.locator(".multiselect__tag-icon").click(force=True)
             log.info(f"✅ [Partners] removed partner chip={text}")
             return True
 
-    log.info(f"ℹ️ [Partners] partner not selected partner={partner}")
+    log.info(
+        f"ℹ️ [Partners] partner not selected partner={partner} loaded_empty={field.loaded_empty}"
+    )
     return False
 
 
@@ -1843,36 +1910,17 @@ def ensure_partner_removed(page: Page, partner: str, cfg: RunConfig):
         log.info("ℹ️ [Action] dry_run remove_partner -> skip")
         return "skip"
 
-    modal = page.locator(MODAL_BODY)
+    try:
+        removed = remove_partner_by_chip(page, partner)
+        field = resolve_terminal_field(page)
+    except TerminalFieldError as exc:
+        log.error("[Partners] stage=remove code=%s partner=%s", exc.code, partner)
+        return exc.code
 
-    removed = remove_partner_by_chip(page, partner)
-
+    remaining = len(field.chip_pairs)
+    log.info(f"🧩 [Partners] remaining={remaining}")
     if not removed:
-        log.info("ℹ️ [Partners] partner not selected, checking remaining")
-
-        input_el = modal.locator("input[placeholder='Партнеры']")
-        multiselect = input_el.locator(
-            "xpath=ancestor::div[contains(@class,'multiselect')]"
-        )
-
-        chips = multiselect.locator(".multiselect__tag")
-        remaining = chips.count()
-
-        log.info(f"🧩 [Partners] remaining={remaining}")
-
         return "skip: not selected"
-
-    # 🔥 проверяем сколько осталось партнёров
-    input_el = modal.locator("input[placeholder='Партнеры']")
-    multiselect = input_el.locator(
-        "xpath=ancestor::div[contains(@class,'multiselect')]"
-    )
-
-    chips = multiselect.locator(".multiselect__tag")
-    remaining = chips.count()
-
-    log.info(f"🧩 [Partners] remaining after removal={remaining}")
-
     return "removed"
 
 
@@ -1883,10 +1931,13 @@ def ensure_partner_added(page: Page, partner: str, cfg: RunConfig):
         log.info("ℹ️ [Action] dry_run add_partner -> skip")
         return "skip"
 
-    modal = page.locator(MODAL_BODY)
+    try:
+        field = resolve_terminal_field(page)
+    except TerminalFieldError as exc:
+        log.error("[Partners] stage=add code=%s partner=%s", exc.code, partner)
+        return exc.code
 
-    chip_pairs = get_partner_chips(page)
-    chip_texts = [text for _, text in chip_pairs]
+    chip_texts = [text for _, text in field.chip_pairs]
     log.info(f"🏷️ [Partners] current chips count={len(chip_texts)}")
 
     if _partner_already_selected(chip_texts, partner):
@@ -1894,79 +1945,11 @@ def ensure_partner_added(page: Page, partner: str, cfg: RunConfig):
         return f"skip: partner already added: {partner}"
 
     log.info(f"➕ [Partners] partner not attached → adding partner={partner}")
-
-    # 🔥 ИЩЕМ ИМЕННО ПОЛЕ "Партнеры"
-    input_el = modal.locator("input[placeholder='Партнеры']")
-
-    multiselect = input_el.locator(
-        "xpath=ancestor::div[contains(@class,'multiselect') and not(contains(@class,'multiselect__tags'))]"
-    ).first
-
-    log.info("🎯 [Partner] using multiselect 'Партнеры'")
-
-    # 🔓 ОТКРЫТЬ DROPDOWN
-    multiselect.scroll_into_view_if_needed()
-    multiselect.wait_for(state="visible", timeout=3000)
-
     try:
-        multiselect.click()
-    except:
-        log.warning("⚠️ click failed → force")
-        multiselect.click(force=True)
-
-    # 🔥 ВАЖНО: dropdown берём ГЛОБАЛЬНО (Vue рисует вне блока)
-    dropdown = page.locator(".multiselect__content-wrapper:visible")
-    dropdown.wait_for(state="visible", timeout=5000)
-
-    options = dropdown.locator("li")
-
-    log.info("📜 [Partner] start scrolling search")
-
-    found = None
-    last_count = -1
-
-    # 🔥 SCROLL ПО СПИСКУ
-    for _ in range(25):
-        visible_count = options.count()
-        log.info(f"📂 [Partner] visible options={visible_count}")
-
-        for i in range(visible_count):
-            option = options.nth(i)
-            text = option.inner_text().strip()
-
-            if partner.lower() in text.lower():
-                found = option
-                log.info(f"🎯 [Partner] found option={text}")
-                break
-
-        if found:
-            break
-
-        if visible_count == last_count:
-            log.info("⛔ [Partner] reached end of list")
-            break
-
-        last_count = visible_count
-
-        dropdown.evaluate("el => el.scrollTop = el.scrollHeight")
-        page.wait_for_timeout(300)
-
-    if not found:
-        log.warning(f"⚠️ [Partner] not found after scroll partner={partner}")
-        return "skip: option not found"
-
-    # 🔥 КЛИК ПО ПАРТНЕРУ
-    found.scroll_into_view_if_needed()
-    found.wait_for(state="visible", timeout=3000)
-
-    try:
-        found.click()
-    except:
-        log.warning("⚠️ option click failed → force")
-        found.click(force=True)
-
-    log.info(f"✅ [Partner] partner added={partner}")
-    return "added"
+        return add_terminal_option(page, field, partner)
+    except TerminalFieldError as exc:
+        log.error("[Partners] stage=add code=%s partner=%s", exc.code, partner)
+        return exc.code
 
 
 def ensure_group_added(page: Page, group: str, cfg: RunConfig):
@@ -2345,9 +2328,15 @@ def _validate_set_aggregate_conflicts(df: pd.DataFrame) -> int:
 def _order_card_actions(
     actions: list[tuple],
 ) -> list[tuple]:
-    """Run set_aggregate first (excel-relative order), then other actions in excel order."""
+    """set_aggregate first, then add_partner before set_status when both exist."""
     set_aggs = [item for item in actions if item[1] == "set_aggregate"]
     others = [item for item in actions if item[1] != "set_aggregate"]
+    has_add = any(item[1] == "add_partner" for item in others)
+    has_status = any(item[1] == "set_status" for item in others)
+    if has_add and has_status:
+        adds = [item for item in others if item[1] == "add_partner"]
+        rest = [item for item in others if item[1] != "add_partner"]
+        others = adds + rest
     return set_aggs + others
 
 
@@ -2640,6 +2629,9 @@ def run(file_path: str, cfg: RunConfig):
                             set_agg_pending: tuple | None = None
                             # (idx, intent, top_phone, processed_at)
                             abort_remaining = False
+                            add_partner_failed = False
+                            expected_partners: list[str] = []
+                            expected_status: str | None = None
                             mutated_indices: list[int] = []
 
                             for idx, action, value in ordered_actions:
@@ -2662,6 +2654,24 @@ def run(file_path: str, cfg: RunConfig):
                                         processed_at=processed_at,
                                     )
                                     stats.fail += 1
+                                    continue
+
+                                if add_partner_failed:
+                                    df.at[idx, "status"] = "SKIP"
+                                    df.at[idx, "comment"] = SKIP_BLOCKED_BY_ADD_FAILURE
+                                    _apply_result_row_dates(
+                                        df,
+                                        idx,
+                                        action=action,
+                                        status="SKIP",
+                                        processed_at=processed_at,
+                                    )
+                                    stats.inc(SKIP_BLOCKED_BY_ADD_FAILURE)
+                                    log.warning(
+                                        "⚠️ [Card] skipped %s after add_partner failure card=%s",
+                                        action,
+                                        mask_card(card),
+                                    )
                                     continue
 
                                 try:
@@ -2760,11 +2770,16 @@ def run(file_path: str, cfg: RunConfig):
                                     if action == "delete":
                                         status = _status_from_delete_result(result)
                                     else:
-                                        status = (
-                                            "OK"
-                                            if not result.startswith("skip")
-                                            else "SKIP"
-                                        )
+                                        status = _status_from_action_result(result)
+                                    if action == "add_partner" and status.startswith("FAIL"):
+                                        add_partner_failed = True
+                                    if action == "add_partner" and (
+                                        status == "OK"
+                                        or str(result).startswith("skip: partner already added")
+                                    ):
+                                        expected_partners.append(str(value))
+                                    if action == "set_status" and status == "OK":
+                                        expected_status = str(value)
                                     if status == "OK":
                                         card_mutated = True
                                         mutated_indices.append(idx)
@@ -2799,20 +2814,17 @@ def run(file_path: str, cfg: RunConfig):
                                     )
                                     if action == "set_aggregate":
                                         abort_remaining = True
+                                    if action == "add_partner":
+                                        add_partner_failed = True
 
-                            if abort_remaining:
+                            if abort_remaining or add_partner_failed:
                                 log.warning(
-                                    "⚠️ [Card] abort save after set_aggregate failure card=%s",
+                                    "⚠️ [Card] abort save card=%s abort_aggregate=%s add_failed=%s",
                                     mask_card(card),
+                                    abort_remaining,
+                                    add_partner_failed,
                                 )
-                                try:
-                                    _close_stale_modal(page)
-                                except Exception:
-                                    pass
-                                try:
-                                    ensure_wallet_search_ready(page, allow_goto=True)
-                                except Exception:
-                                    pass
+                                _reset_wallet_form_for_next_card(page)
                                 log.info(f"✅ [Card] finished card={card}")
                                 continue
 
@@ -2900,6 +2912,35 @@ def run(file_path: str, cfg: RunConfig):
                                             cfg.delay,
                                             step_name=f"save:{card}",
                                         )
+                                        if expected_partners:
+                                            verify_err = _verify_card_enable_after_save(
+                                                page,
+                                                cfg,
+                                                card,
+                                                expected_partners,
+                                                expected_status,
+                                            )
+                                            if verify_err:
+                                                processed_at = now_msk()
+                                                for midx in mutated_indices:
+                                                    if str(df.at[midx, "status"]).strip() != "OK":
+                                                        continue
+                                                    prev = str(df.at[midx, "comment"] or "")
+                                                    df.at[midx, "status"] = verify_err
+                                                    df.at[midx, "comment"] = (
+                                                        f"{prev} | {verify_err}"
+                                                        if prev
+                                                        else verify_err
+                                                    )
+                                                    _apply_result_row_dates(
+                                                        df,
+                                                        midx,
+                                                        action=str(
+                                                            df.at[midx, "action"]
+                                                        ),
+                                                        status=verify_err,
+                                                        processed_at=processed_at,
+                                                    )
                             else:
                                 log.info(
                                     f"ℹ️ [Card] skip save card={card} — no mutations"

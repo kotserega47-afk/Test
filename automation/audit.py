@@ -150,6 +150,14 @@ def classify_enable_exception(exc: Exception) -> RetryClassification:
             message=message,
         )
 
+    fail_code = str(getattr(exc, "code", "") or "")
+    if fail_code.startswith("FAIL_"):
+        return RetryClassification(
+            error_code=fail_code,
+            retryable=bool(getattr(exc, "retryable", True)),
+            message=message,
+        )
+
     exc_name = type(exc).__name__
     if exc_name in {"TimeoutError", "PlaywrightTimeoutError"}:
         return RetryClassification(

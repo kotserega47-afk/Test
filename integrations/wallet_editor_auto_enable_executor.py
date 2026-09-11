@@ -22,6 +22,13 @@ from automation.engine import (
     open_card,
     save,
 )
+from automation.wallet_terminal_field import (
+    FAIL_PARTNER_OPTION_NOT_FOUND,
+    FAIL_TERMINAL_FIELD_AMBIGUOUS,
+    FAIL_TERMINAL_FIELD_NOT_FOUND,
+    FAIL_TERMINAL_FIELD_NOT_LOADED,
+    TerminalFieldError,
+)
 from automation.audit import (
     ERROR_CARD_NOT_FOUND,
     ERROR_MODAL_CARD_MISMATCH,
@@ -87,6 +94,9 @@ _TECHNICAL_OUTCOME_CODES = frozenset(
         ERROR_MODAL_CONTAINER_TIMEOUT,
         ERROR_ROW_MATCH_TIMEOUT,
         ERROR_PLAYWRIGHT_TIMEOUT,
+        FAIL_TERMINAL_FIELD_NOT_FOUND,
+        FAIL_TERMINAL_FIELD_NOT_LOADED,
+        FAIL_TERMINAL_FIELD_AMBIGUOUS,
     }
 )
 
@@ -279,7 +289,10 @@ def _unknown_status_comment(status: str) -> str:
 
 
 def _partner_present(get_chips_fn: Callable[[Page], list[str]], page: Page, partner: str) -> bool:
-    return _partner_already_selected(get_chips_fn(page), partner)
+    try:
+        return _partner_already_selected(get_chips_fn(page), partner)
+    except TerminalFieldError:
+        return False
 
 
 def _add_partner_or_outcome(
@@ -297,7 +310,7 @@ def _add_partner_or_outcome(
         add_result = add_partner_fn(page, candidate.partner, cfg)
     except Exception as exc:
         classification = classify_enable_exception(exc)
-        return _technical_fail_outcome(
+        return False, _technical_fail_outcome(
             candidate,
             classification,
             status_before=status_before,
@@ -305,6 +318,42 @@ def _add_partner_or_outcome(
             partner_present_before=partner_present_before,
             partner_present_after=_partner_present(get_chips_fn, page, candidate.partner),
             raw_error=str(exc),
+        )
+
+    if (add_result or "").upper().startswith("FAIL"):
+        if add_result == FAIL_PARTNER_OPTION_NOT_FOUND:
+            return False, _outcome(
+                candidate,
+                registry_value=REGISTRY_SKIP,
+                registry_comment=(
+                    f"PARTNER_NOT_AVAILABLE: {candidate.partner}; ручной разбор"
+                ),
+                status_before=status_before,
+                status_after=get_status_fn(page),
+                partner_present_before=partner_present_before,
+                partner_present_after=_partner_present(
+                    get_chips_fn, page, candidate.partner
+                ),
+                error_code=ERROR_PARTNER_NOT_AVAILABLE,
+                raw_error=add_result,
+            )
+        classification = RetryClassification(
+            error_code=add_result,
+            retryable=add_result
+            in {
+                FAIL_TERMINAL_FIELD_NOT_FOUND,
+                FAIL_TERMINAL_FIELD_NOT_LOADED,
+            },
+            message=add_result,
+        )
+        return False, _technical_fail_outcome(
+            candidate,
+            classification,
+            status_before=status_before,
+            status_after=get_status_fn(page),
+            partner_present_before=partner_present_before,
+            partner_present_after=False,
+            raw_error=add_result,
         )
 
     if add_result.startswith("skip"):
@@ -464,7 +513,17 @@ def process_enable_candidate(
             error_code=ERROR_UNKNOWN_STATUS,
         )
 
-    chips_before = get_chips_fn(page)
+    try:
+        chips_before = get_chips_fn(page)
+    except TerminalFieldError as exc:
+        classification = classify_enable_exception(exc)
+        return _technical_fail_outcome(
+            candidate,
+            classification,
+            status_before=status_before,
+            status_after=status_before,
+            raw_error=str(exc),
+        )
     partner_present_before = _partner_already_selected(chips_before, candidate.partner)
 
     is_working = is_status_in_set(status_before, working_statuses)

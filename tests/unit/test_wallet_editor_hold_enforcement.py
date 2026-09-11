@@ -122,6 +122,10 @@ def mock_wallet_editor_playwright(monkeypatch):
         MagicMock(return_value=False),
     )
     monkeypatch.setattr("automation.engine.save", MagicMock(return_value="saved"))
+    monkeypatch.setattr(
+        "automation.engine._verify_card_enable_after_save",
+        MagicMock(return_value=None),
+    )
     return open_card
 
 

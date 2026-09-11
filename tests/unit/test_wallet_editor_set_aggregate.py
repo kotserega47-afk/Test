@@ -306,12 +306,13 @@ def test_order_card_actions_set_aggregate_first():
     ordered = _order_card_actions(actions)
     assert [a for _, a, _ in ordered] == [
         "set_aggregate",
-        "set_status",
         "add_partner",
+        "set_status",
     ]
     # Original row indices preserved for result writing
     assert ordered[0][0] == 1
-    assert ordered[1][0] == 0
+    assert ordered[1][0] == 2
+    assert ordered[2][0] == 0
 
 
 def test_intent_optional_columns_absent_vs_present():
@@ -1736,6 +1737,10 @@ def _run_wallet_editor_with_patches(
                     order.append("classic_save") or "saved"
                 )
             },
+        ),
+        (
+            "automation.engine._verify_card_enable_after_save",
+            {"return_value": None},
         ),
         ("automation.engine.retry", {"new": lambda fn, *a, **k: fn()}),
         ("automation.engine._close_stale_modal", {}),
