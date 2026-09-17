@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01..05** Draft PR #4–#8 (не слиты; 02–05 review пройден) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01..05** Draft PR #4–#8 (не слиты; 02–05 review пройден); **TASK-2026-09-17-06** план TG handlers (`in_progress`) |
 | **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 | **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
@@ -280,6 +280,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-03** | **review** | Early profile gate; review passed (HEAD `48a2a82`); **not merged** | Draft PR #6 |
 | **TASK-2026-09-17-04** | **review** | Freeze current behavior; review passed (HEAD `443ba70e`); **not merged** | Draft PR #7 |
 | **TASK-2026-09-17-05** | **review** | Six Antares JOB_REGISTRY keys in `modules.antares.jobs.register_jobs`; review passed (HEAD `a6d7ebcf`); **not merged** | Draft PR #8 |
+| **TASK-2026-09-17-06** | **in_progress** | Design split of Telegram handlers for future isolated Antares entry | Draft docs PR, base PR #8 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

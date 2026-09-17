@@ -15,15 +15,16 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-02 парсер | реализован, review пройден (Draft PR #5) | **нет** |
 | TASK-03 early gate | реализован, review пройден (Draft PR #6, HEAD `48a2a82…`) | **нет** |
 | TASK-04 эталон | подготовлен, review пройден (Draft PR #7, HEAD `443ba70e…`; docs `2bc0ee0…`) | **нет** |
-| TASK-05 Antares jobs | первый ограниченный шаг этапа 3: регистрация шести keys | **нет** |
-| Модули проектов | пакеты `modules/*`; Antares **только** `register_jobs`, не isolated entry | — |
+| TASK-05 Antares jobs | реализован, review пройден (Draft PR #8, HEAD кода `a6d7ebcf…`; docs `0ce4d53…`) | **нет** |
+| TASK-06 TG handlers | план отделения handlers; код не менялся | **нет** |
+| Модули проектов | пакеты `modules/*`; Antares jobs `register_jobs`; handlers ещё в `tg_commands` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — регистрация Antares jobs, **без** isolated entry | — |
+| Следующая | [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md) — план TG handlers; код не в этой задаче | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
@@ -128,7 +129,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас:** [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — первый ограниченный шаг: `modules.antares.jobs.register_jobs` для шести существующих keys. Не isolated entry, не перенос аналитики/downloaders/WE.
+**Сейчас (после TASK-05):** jobs регистрирует `modules.antares.jobs.register_jobs`. Handlers всё ещё в mixed `tg_commands`. План отделения: [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md), артефакт [MODULAR_REORG_HANDLER_SPLIT.md](MODULAR_REORG_HANDLER_SPLIT.md). Следующий **code** PR — только четыре Antares `run_*` commands, не isolated entry.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
@@ -350,7 +351,7 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4/#5/#6/#7)
+## Следующие задачи (не merge #4–#8)
 
-1. [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — регистрация шести Antares jobs (этот шаг).
-2. Дальнейший перенос модулей и isolated entry — отдельными задачами после review 05.
+1. [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md) — план handlers (этот шаг, docs).
+2. Code: четыре Antares `run_*` handlers по плану § 4 — отдельная задача после review 06.

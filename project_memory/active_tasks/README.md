@@ -34,6 +34,7 @@
 | [TASK-2026-09-17-03](TASK-2026-09-17-03_early_profile_gate.md) | Early gate: реализован, review пройден, merge нет (PR #6) |
 | [TASK-2026-09-17-04](TASK-2026-09-17-04_behavior_baseline.md) | Эталон поведения: подготовлен, review пройден, merge нет (PR #7) |
 | [TASK-2026-09-17-05](TASK-2026-09-17-05_antares_job_registration.md) | Регистрация Antares jobs: review пройден, merge нет (PR #8) |
+| [TASK-2026-09-17-06](TASK-2026-09-17-06_telegram_handler_split.md) | План отделения Telegram handlers (`in_progress`, docs) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
