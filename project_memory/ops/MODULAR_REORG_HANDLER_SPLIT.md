@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | DRAFT design; **не** runtime |
+| **Статус** | review пройден (HEAD `380a4bb…`); **не** runtime; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
 | **Обследованный SHA** | `0ce4d5340fdbe5ea890c1a31a5cec6dfbbcff66f` (код handlers = `a6d7ebcf…` / jobs `6db95d76…`; последующие коммиты TASK-05 — документация) |
 | **Источник handlers** | `integrations/tg_commands.py` `get_handlers()` |

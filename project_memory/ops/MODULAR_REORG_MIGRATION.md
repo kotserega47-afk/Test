@@ -16,15 +16,15 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-03 early gate | реализован, review пройден (Draft PR #6, HEAD `48a2a82…`) | **нет** |
 | TASK-04 эталон | подготовлен, review пройден (Draft PR #7, HEAD `443ba70e…`; docs `2bc0ee0…`) | **нет** |
 | TASK-05 Antares jobs | реализован, review пройден (Draft PR #8, HEAD кода `a6d7ebcf…`; docs `0ce4d53…`) | **нет** |
-| TASK-06 TG handlers | план отделения handlers; код не менялся | **нет** |
+| TASK-06 TG handlers | план подготовлен, review пройден (Draft PR #9, HEAD `380a4bb…`); код handlers не менялся | **нет** |
 | Модули проектов | пакеты `modules/*`; Antares jobs `register_jobs`; handlers ещё в `tg_commands` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md) — план TG handlers; код не в этой задаче | — |
+| Следующая | четыре Antares `run_*` + три helper (`bind_rules` / `bind_logger`); TASK-07 **не** начат, отдельное задание | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
@@ -129,7 +129,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-05):** jobs регистрирует `modules.antares.jobs.register_jobs`. Handlers всё ещё в mixed `tg_commands`. План отделения: [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md), артефакт [MODULAR_REORG_HANDLER_SPLIT.md](MODULAR_REORG_HANDLER_SPLIT.md). Следующий **code** PR (после review 06) — только четыре Antares `run_*` и три core helpers; `bind_rules(RULES)`; не isolated entry.
+**Сейчас (после TASK-06):** план handlers review пройден (PR #9, HEAD `380a4bb…`). Jobs — `modules.antares.jobs.register_jobs`. Handlers всё ещё в mixed `tg_commands`. Следующий **code** PR — отдельное задание TASK-07 (не начато): четыре Antares `run_*` и три core helpers; не isolated entry.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
@@ -351,7 +351,6 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4–#8)
+## Следующие задачи (не merge #4–#9)
 
-1. [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md) — план handlers (этот шаг, docs).
-2. Code: четыре Antares `run_*` handlers по плану § 4 — отдельная задача после review 06.
+1. Code: четыре Antares `run_*` и три общих helper по [HANDLER_SPLIT § 4](MODULAR_REORG_HANDLER_SPLIT.md) — TASK-07, отдельное задание (не начато).
