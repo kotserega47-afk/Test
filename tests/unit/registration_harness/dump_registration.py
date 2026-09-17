@@ -14,6 +14,8 @@ from integrations.tg_commands import get_handlers
 from integrations.wallet_editor_registry import run_registry_outbox_replay_job
 from integrations.wallet_editor_registry_refresh import run_wallet_editor_registry_refresh_job
 from modules.antares.jobs import run_download_job, run_hourly_job
+from modules.antares import handlers as antares_handlers
+from integrations import tg_commands as tg_commands_mod
 from telegram.ext import CommandHandler, MessageHandler, filters
 
 out = Path(os.environ["REGISTRATION_DUMP_PATH"])
@@ -21,9 +23,12 @@ out = Path(os.environ["REGISTRATION_DUMP_PATH"])
 commands: list[str] = []
 document_handlers = 0
 document_is_all = False
+callback_by_command: dict[str, object] = {}
 for handler in get_handlers():
     if isinstance(handler, CommandHandler):
         commands.extend(sorted(handler.commands))
+        for name in handler.commands:
+            callback_by_command[name] = handler.callback
     elif isinstance(handler, MessageHandler):
         document_handlers += 1
         document_is_all = handler.filters is filters.Document.ALL
@@ -53,6 +58,25 @@ payload = {
     is run_registry_outbox_replay_job,
     "stub_executors_pairwise_distinct": len({id(fn) for fn in stub_executors})
     == len(stub_executors),
+    "run_wallet_callback_is_antares": callback_by_command.get("run_wallet") is antares_handlers.cmd_run_wallet,
+    "run_hourly_callback_is_antares": callback_by_command.get("run_hourly") is antares_handlers.cmd_run_hourly,
+    "run_download_callback_is_antares": callback_by_command.get("run_download")
+    is antares_handlers.cmd_run_download,
+    "run_rate_callback_is_antares": callback_by_command.get("run_rate") is antares_handlers.cmd_run_rate,
+    "run_wallet_reexport_is_antares": tg_commands_mod.cmd_run_wallet is antares_handlers.cmd_run_wallet,
+    "run_hourly_reexport_is_antares": tg_commands_mod.cmd_run_hourly is antares_handlers.cmd_run_hourly,
+    "run_download_reexport_is_antares": tg_commands_mod.cmd_run_download is antares_handlers.cmd_run_download,
+    "run_rate_reexport_is_antares": tg_commands_mod.cmd_run_rate is antares_handlers.cmd_run_rate,
+    "run_raccoon_callback_is_tg": callback_by_command.get("run_raccoon") is tg_commands_mod.cmd_run_raccoon,
+    "antares_run_callbacks_pairwise_distinct": len(
+        {
+            id(antares_handlers.cmd_run_wallet),
+            id(antares_handlers.cmd_run_hourly),
+            id(antares_handlers.cmd_run_download),
+            id(antares_handlers.cmd_run_rate),
+        }
+    )
+    == 4,
 }
 out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 print("registration_dump_ok")

@@ -43,7 +43,7 @@ def test_raccoon_command_uses_dispatch_job_async(handler, guard_command: str, jo
         dispatch = AsyncMock(return_value="job-abc")
 
         with patch("integrations.tg_commands._guard_or_deny", new_callable=AsyncMock, return_value=True) as guard:
-            with patch("integrations.tg_commands.dispatch_job_async", dispatch):
+            with patch("core.tg_command_dispatch.dispatch_job_async", dispatch):
                 with patch("core.job_runner.request_job") as request_job:
                     await handler(update, context)
 

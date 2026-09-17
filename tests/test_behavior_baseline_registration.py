@@ -68,6 +68,16 @@ def test_assembled_job_registry_and_handlers_match_frozen_inventory() -> None:
     assert payload["refresh_is_lifecycle_job"] is True
     assert payload["replay_is_outbox_job"] is True
     assert payload["stub_executors_pairwise_distinct"] is True
+    assert payload["run_wallet_callback_is_antares"] is True
+    assert payload["run_hourly_callback_is_antares"] is True
+    assert payload["run_download_callback_is_antares"] is True
+    assert payload["run_rate_callback_is_antares"] is True
+    assert payload["run_wallet_reexport_is_antares"] is True
+    assert payload["run_hourly_reexport_is_antares"] is True
+    assert payload["run_download_reexport_is_antares"] is True
+    assert payload["run_rate_reexport_is_antares"] is True
+    assert payload["run_raccoon_callback_is_tg"] is True
+    assert payload["antares_run_callbacks_pairwise_distinct"] is True
 
 
 def test_assembled_registry_detects_missing_raccoon_jobs_import() -> None:

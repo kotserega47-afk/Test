@@ -393,7 +393,7 @@ def test_cmd_wallet_editor_refresh_acl_deny():
         "integrations.tg_commands._guard_or_deny",
         new=AsyncMock(return_value=False),
     ) as guard:
-        with patch("integrations.tg_commands.dispatch_job_async") as dispatch_fn:
+        with patch("core.tg_command_dispatch.dispatch_job_async") as dispatch_fn:
             asyncio.run(cmd_wallet_editor_refresh(update, MagicMock()))
             guard.assert_awaited_once_with(update, "wallet_editor_refresh")
             dispatch_fn.assert_not_called()
@@ -412,7 +412,7 @@ def test_cmd_wallet_editor_refresh_acl_allow():
         new=AsyncMock(return_value=True),
     ):
         with patch(
-            "integrations.tg_commands.dispatch_job_async",
+            "core.tg_command_dispatch.dispatch_job_async",
             new=AsyncMock(return_value="job-42"),
         ) as dispatch_fn:
             asyncio.run(cmd_wallet_editor_refresh(update, MagicMock()))

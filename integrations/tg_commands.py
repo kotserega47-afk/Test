@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 import os
-import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -13,9 +12,8 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
 from core.access_rules import AccessRules
-from core.access_guard import AccessContext, check_access, deny_message
-from core.job_dispatch import dispatch_job_async
 from core.job_runner import get_status, Actor, JOB_REGISTRY
+from core.tg_command_dispatch import build_access_context, guard_or_deny, run_job_async
 from integrations.wallet_editor_auto_enable import run_auto_enable, run_auto_enable_plan
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
@@ -26,6 +24,14 @@ from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job ty
 from integrations import script_jobs  # noqa: F401 — registers script_job:* handlers
 from modules.antares.jobs import register_jobs
 from modules.antares.jobs import run_download_job, run_hourly_job  # noqa: F401 — compatible exports
+from modules.antares.handlers import (
+    bind_logger,
+    bind_rules,
+    cmd_run_download,
+    cmd_run_hourly,
+    cmd_run_rate,
+    cmd_run_wallet,
+)
 
 from integrations.wallet_editor_tg import handle_wallet_editor_document
 from integrations.wallet_editor_registry import (
@@ -55,6 +61,8 @@ log = _mk("MAIN")
 MSK = ZoneInfo("Europe/Moscow")
 
 RULES = AccessRules(os.getenv("RULES_XLSX_PATH", "").strip())
+bind_logger(log)
+bind_rules(RULES)
 
 
 def _observation_enabled() -> bool:
@@ -198,19 +206,12 @@ register_jobs(JOB_REGISTRY)
 # Access helpers
 # =============================================================================
 
-def _ctx(update: Update) -> AccessContext:
-    chat = update.effective_chat
-    user = update.effective_user
-    return AccessContext(chat_type=chat.type, chat_id=int(chat.id), user_id=int(user.id))
+def _ctx(update: Update):
+    return build_access_context(update)
 
 
 async def _guard_or_deny(update: Update, command: str) -> bool:
-    ctx = _ctx(update)
-    ok, reason, details = check_access(RULES, ctx, command)
-    if not ok:
-        await update.message.reply_text(deny_message(reason, details))
-        return False
-    return True
+    return await guard_or_deny(update, command, RULES)
 
 
 def _help_text() -> str:
@@ -239,17 +240,7 @@ def _help_text() -> str:
 
 
 async def _run_job_async(update: Update, job_type: str) -> None:
-    actor = Actor(kind="tg", chat_id=int(update.effective_chat.id), user_id=int(update.effective_user.id))
-    await update.message.reply_text(f"🚀 Запускаю: {job_type}")
-
-    try:
-        job_id = await dispatch_job_async(job_type, actor)
-        await update.message.reply_text(f"✅ Принято: {job_type}\njob_id={job_id}")
-    except Exception:
-        err = traceback.format_exc()
-        log.exception("❌ TG job error: %s", job_type)
-        await update.message.reply_text("❌ Ошибка при выполнении.\nХвост трейса:")
-        await update.message.reply_text(err[-3500:])
+    return await run_job_async(update, job_type, log)
 
 
 # =============================================================================
@@ -356,28 +347,6 @@ async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
     except Exception as e:
         await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
-
-
-async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "run_wallet"):
-        return
-    await _run_job_async(update, "wallet")
-
-
-async def cmd_run_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "run_hourly"):
-        return
-    await _run_job_async(update, "hourly")
-
-async def cmd_run_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "run_download"):
-        return
-    await _run_job_async(update, "download")
-
-async def cmd_run_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "run_rate"):
-        return
-    await _run_job_async(update, "rate")
 
 
 async def cmd_run_raccoon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
