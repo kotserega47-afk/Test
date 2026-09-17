@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS_DIR = Path(__file__).resolve().parent / "legacy_scheduler_harness"
+REGISTRATION_HARNESS_DIR = Path(__file__).resolve().parent / "registration_harness"
 
 _SYSTEM_ALLOWLIST = (
     "PATH",
@@ -27,6 +28,8 @@ def isolated_child_env(
     sandbox: Path,
     *,
     with_harness: bool = False,
+    with_registration_harness: bool = False,
+    pythonpath: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Build env from a system allowlist plus explicit test values only."""
@@ -58,10 +61,14 @@ def isolated_child_env(
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    pythonpath = str(ROOT)
-    if with_harness:
-        pythonpath = str(HARNESS_DIR) + os.pathsep + pythonpath
-    env["PYTHONPATH"] = pythonpath
+    if pythonpath is not None:
+        env["PYTHONPATH"] = pythonpath
+    elif with_registration_harness:
+        env["PYTHONPATH"] = str(REGISTRATION_HARNESS_DIR) + os.pathsep + str(ROOT)
+    elif with_harness:
+        env["PYTHONPATH"] = str(HARNESS_DIR) + os.pathsep + str(ROOT)
+    else:
+        env["PYTHONPATH"] = str(ROOT)
     env["LEGACY_SCHEDULER_SANDBOX"] = str(sandbox)
     env["STATE_DIR"] = str(state)
     env["RULES_XLSX_PATH"] = str(sandbox / "rules.xlsx")

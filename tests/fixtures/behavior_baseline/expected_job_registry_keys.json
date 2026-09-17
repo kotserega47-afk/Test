@@ -1,5 +1,5 @@
 {
-  "note": "JOB_REGISTRY keys registered in Test code on this SHA. Not a production schedule.",
+  "note": "Declared JOB_REGISTRY.update keys plus SCRIPT_REGISTRY keys in source. Not the assembled runtime dict and not a production schedule.",
   "keys": [
     "download",
     "hourly",

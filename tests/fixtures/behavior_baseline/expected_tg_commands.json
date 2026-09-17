@@ -1,5 +1,5 @@
 {
-  "note": "Telegram command names from get_handlers() in integrations/tg_commands.py. Registration in code, not proof a schedule is enabled.",
+  "note": "CommandHandler names and MessageHandler from get_handlers() in integrations/tg_commands.py (source). Registration in code, not proof a schedule is enabled.",
   "commands": [
     "start",
     "help",

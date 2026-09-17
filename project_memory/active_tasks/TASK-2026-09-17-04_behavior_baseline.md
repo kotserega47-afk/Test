@@ -81,3 +81,4 @@ Runtime jobs/handlers/WE/Railway: **не менять**.
 |------|---------|
 | 2026-09-17 | Создана после review TASK-02/03: этап 2 миграции, без move |
 | 2026-09-17 | Артефакт `ops/MODULAR_REORG_BEHAVIOR_BASELINE.md`; payin golden; inventory freeze |
+| 2026-09-17 | PR #7: Platform compare via `--platform-checkout`; AST vs assembled JOB_REGISTRY |
