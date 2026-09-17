@@ -50,7 +50,7 @@
 |----|---------|------|----------|-----------------|
 | P-R1 | `aggregate_payin_by_method` + `format_report` **из указанного checkout** | те же три строки, что T-R1 | `tests/fixtures/raccoon/golden/expected_payin_by_method.txt` | `py -3.12 -m pytest tests/compare_platform_raccoon_payin.py --platform-checkout <PATH>` |
 
-Перед сравнением проверка: `git rev-parse HEAD` = SHA из `tests/fixtures/behavior_baseline/expected_platform_head.txt`; `git status --porcelain` пуст; `analyzers.raccoon_hourly_report.__file__` лежит внутри PATH. Несовпадение SHA, грязное дерево, отсутствие модуля или зависимость — **fail**, не skip. Модули Platform в Test **не** копируются. `aggregate_payin_by_method` / `format_report` не подменяются.
+Перед сравнением проверка: `git rev-parse HEAD` = SHA из `tests/fixtures/behavior_baseline/expected_platform_head.txt`; `git status --porcelain` пуст; `analyzers.raccoon_hourly_report.__file__` лежит внутри PATH. Несовпадение SHA, грязное дерево, отсутствие модуля или зависимость — **fail**, не skip. Модули Platform в Test **не** копируются. `aggregate_payin_by_method` / `format_report` / `normalize_partner_name` не подменяются. До импорта отчёта subprocess ставит заглушки `integrations.telegram_bot` и `core.rules_provider`, блокирует потоки/сеть, не читает `.env` и не импортирует настоящий sender/Dropbox.
 
 Import-time на Platform: нужны фиктивные `TELEGRAM_CHAT_ID_HOURLY_RACCOON` и `TELEGRAM_CHAT_ID_RACCOON_WALLET` (иначе `RuntimeError`). Это отличие от Test (lazy chat id).
 
