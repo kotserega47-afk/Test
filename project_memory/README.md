@@ -77,6 +77,7 @@ project_memory/
 |-----------|-----------------|--------|
 | Hourly / Wallet / Download / Rate jobs | `scheduler.py`, `JOB_REGISTRY` | P1–P4 |
 | **WalletEditor** | Telegram Excel ingest → Antares card editing → per-operator execution | **P-WE** in `architecture_map.md` |
+| Modular reorg (proposed) | Antares / Raccoon / WR isolation | `ops/MODULAR_REORG_SURVEY.md` |
 
 **WalletEditor** capabilities:
 

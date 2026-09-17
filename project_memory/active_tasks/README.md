@@ -25,6 +25,15 @@
 
 См. [workflow.md](../workflow.md) § 3.
 
+## Активные (2026-09-17)
+
+| ID | Тема |
+|----|------|
+| [TASK-2026-09-17-01](TASK-2026-09-17-01_modular_reorg_survey.md) | Обследование и проект миграции Antares/Raccoon/WR (docs) |
+| [TASK-2026-09-17-02](TASK-2026-09-17-02_project_profile_skeleton.md) | Первый code PR: `PROJECT_PROFILE` skeleton (`draft`) |
+
+Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
+
 ## Старт без Task
 
 Если задачи ещё нет — **Stage 0** в [NEW_CHAT_BOOTSTRAP.md](../NEW_CHAT_BOOTSTRAP.md).

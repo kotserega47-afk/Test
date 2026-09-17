@@ -12,7 +12,7 @@
 | Поле | Значение |
 |------|----------|
 | **Документ** | draft — G1 + G2 + G5 data invariants |
-| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-27**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; E3, E5, E6, E8 — UNKNOWN |
+| **Explicit decisions (E#)** | E1, E2, E4, E7, E9, **E-WE-01…E-WE-27**, **E-SEC-01**, **E-CONV-01…E-CONV-08**, **E-CONFIG-01…E-CONFIG-15**, **E-OPS-01…E-OPS-05**, **E-HOURLY-01** — CONFIRMED; **E-MOD-01** — PROPOSED (docs); E3, E5, E6, E8 — UNKNOWN |
 | **Implicit invariants (I#)** | I1–I17 — см. таблицы |
 
 ---
@@ -80,6 +80,7 @@
 | E7 | 2026-05-31 | Scheduler loop: job errors logged, process continues (not crash) | CONFIRMED | `scheduler.py` L218–220, L247–248 |
 | E8 | | Process restart policy on Railway | UNKNOWN | |
 | E9 | 2026-05-31 | Dropbox analyze pipeline lock at `/tmp/dropbox_pipeline.lock`, stale 600s | CONFIRMED | `run_once_guard.py` L6, L10 |
+| E-MOD-01 | 2026-09-17 | Модульные профили Antares/Raccoon/WR: ядро без import проектов; отдельный процесс/хранилище на профиль; WR не считать Antares | **PROPOSED** (docs) | `ops/MODULAR_REORG_ADR.md` |
 
 ### WalletEditor decisions (E-WE-*)
 
@@ -238,3 +239,4 @@
 | 2026-06-21 | WalletEditor Add Wallet — E-WE-16…E-WE-19; invariants I16–I17 |
 | 2026-06-22 | Registry outbox Phase 1 — E-WE-20; durable STATE_DIR outbox + replay + health |
 | 2026-07-01 | WalletEditor Registry v2 finalized — E-WE-23…E-WE-27; ManualSync, PG-only runtime, TG-only export, projection removed |
+| 2026-09-17 | E-MOD-01 proposed — modular Antares/Raccoon/WR (`ops/MODULAR_REORG_ADR.md`); not production |
