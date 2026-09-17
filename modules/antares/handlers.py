@@ -74,3 +74,46 @@ async def cmd_operator_wallets_ready(update: Update, context: ContextTypes.DEFAU
 
 async def cmd_wallet_editor_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_antares_command(update, "wallet_editor_refresh", "wallet_editor_registry_refresh")
+
+
+async def cmd_registry_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    rules, logger = _require_bound()
+    if not await guard_or_deny(update, "registry_health", rules):
+        return
+    from integrations.wallet_editor_registry import (
+        build_registry_health_report,
+        format_registry_health_report,
+    )
+
+    try:
+        report = build_registry_health_report()
+        await update.message.reply_text(format_registry_health_report(report))
+    except Exception as e:
+        logger.exception("cmd_registry_health failed")
+        await update.message.reply_text(f"❌ /registry_health failed: {type(e).__name__}: {e}")
+
+
+async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    rules, logger = _require_bound()
+    if not await guard_or_deny(update, "registry_replay", rules):
+        return
+    from integrations.wallet_editor_registry import replay_pending_outbox_records
+
+    await update.message.reply_text("🔄 Replaying pending/failed registry outbox...")
+    try:
+        result = replay_pending_outbox_records()
+        lines = [
+            "Registry outbox replay",
+            f"attempted: {result.attempted}",
+            f"synced: {result.synced}",
+            f"failed: {result.failed}",
+            f"skipped: {result.skipped}",
+        ]
+        if result.errors:
+            lines.append("")
+            lines.append("errors:")
+            lines.extend(f"- {err}" for err in result.errors[:10])
+        await update.message.reply_text("\n".join(lines))
+    except Exception as e:
+        logger.exception("cmd_registry_replay failed")
+        await update.message.reply_text(f"❌ /registry_replay failed: {type(e).__name__}: {e}")

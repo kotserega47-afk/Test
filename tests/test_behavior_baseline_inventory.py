@@ -154,6 +154,8 @@ def test_source_inventory_antares_run_cmds_not_defined_in_tg_commands() -> None:
             "cmd_run_rate",
             "cmd_operator_wallets_ready",
             "cmd_wallet_editor_refresh",
+            "cmd_registry_health",
+            "cmd_registry_replay",
         }
     )
 

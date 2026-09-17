@@ -28,6 +28,8 @@ from modules.antares.handlers import (
     bind_logger,
     bind_rules,
     cmd_operator_wallets_ready,
+    cmd_registry_health,
+    cmd_registry_replay,
     cmd_run_download,
     cmd_run_hourly,
     cmd_run_rate,
@@ -36,11 +38,6 @@ from modules.antares.handlers import (
 )
 
 from integrations.wallet_editor_tg import handle_wallet_editor_document
-from integrations.wallet_editor_registry import (
-    build_registry_health_report,
-    format_registry_health_report,
-    replay_pending_outbox_records,
-)
 from integrations.wallet_editor_registry_db.registry_export_builder import (
     RegistryExportArtifact,
     RegistryExportBuilder,
@@ -431,40 +428,6 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         log.exception("cmd_auto_enable_run failed")
         await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
-
-
-async def cmd_registry_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "registry_health"):
-        return
-    try:
-        report = build_registry_health_report()
-        await update.message.reply_text(format_registry_health_report(report))
-    except Exception as e:
-        log.exception("cmd_registry_health failed")
-        await update.message.reply_text(f"❌ /registry_health failed: {type(e).__name__}: {e}")
-
-
-async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "registry_replay"):
-        return
-    await update.message.reply_text("🔄 Replaying pending/failed registry outbox...")
-    try:
-        result = replay_pending_outbox_records()
-        lines = [
-            "Registry outbox replay",
-            f"attempted: {result.attempted}",
-            f"synced: {result.synced}",
-            f"failed: {result.failed}",
-            f"skipped: {result.skipped}",
-        ]
-        if result.errors:
-            lines.append("")
-            lines.append("errors:")
-            lines.extend(f"- {err}" for err in result.errors[:10])
-        await update.message.reply_text("\n".join(lines))
-    except Exception as e:
-        log.exception("cmd_registry_replay failed")
-        await update.message.reply_text(f"❌ /registry_replay failed: {type(e).__name__}: {e}")
 
 
 async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

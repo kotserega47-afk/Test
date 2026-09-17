@@ -75,9 +75,17 @@ payload = {
     is antares_handlers.cmd_operator_wallets_ready,
     "wallet_editor_refresh_reexport_is_antares": tg_commands_mod.cmd_wallet_editor_refresh
     is antares_handlers.cmd_wallet_editor_refresh,
+    "registry_health_callback_is_antares": callback_by_command.get("registry_health")
+    is antares_handlers.cmd_registry_health,
+    "registry_replay_callback_is_antares": callback_by_command.get("registry_replay")
+    is antares_handlers.cmd_registry_replay,
+    "registry_health_reexport_is_antares": tg_commands_mod.cmd_registry_health
+    is antares_handlers.cmd_registry_health,
+    "registry_replay_reexport_is_antares": tg_commands_mod.cmd_registry_replay
+    is antares_handlers.cmd_registry_replay,
     "run_raccoon_callback_is_tg": callback_by_command.get("run_raccoon") is tg_commands_mod.cmd_run_raccoon,
-    "registry_replay_callback_is_tg": callback_by_command.get("registry_replay")
-    is tg_commands_mod.cmd_registry_replay,
+    "registry_export_callback_is_tg": callback_by_command.get("registry_export")
+    is tg_commands_mod.cmd_registry_export,
     "antares_run_callbacks_pairwise_distinct": len(
         {
             id(antares_handlers.cmd_run_wallet),
@@ -86,9 +94,11 @@ payload = {
             id(antares_handlers.cmd_run_rate),
             id(antares_handlers.cmd_operator_wallets_ready),
             id(antares_handlers.cmd_wallet_editor_refresh),
+            id(antares_handlers.cmd_registry_health),
+            id(antares_handlers.cmd_registry_replay),
         }
     )
-    == 6,
+    == 8,
 }
 out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 print("registration_dump_ok")

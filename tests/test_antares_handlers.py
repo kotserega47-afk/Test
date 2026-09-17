@@ -60,11 +60,19 @@ _ANTARES_CALLBACK_IDS = {
     id(handlers.cmd_run_rate),
     id(handlers.cmd_operator_wallets_ready),
     id(handlers.cmd_wallet_editor_refresh),
+    id(handlers.cmd_registry_health),
+    id(handlers.cmd_registry_replay),
 }
+
+_REGISTRY_CMDS = (
+    (handlers.cmd_registry_health, "registry_health"),
+    (handlers.cmd_registry_replay, "registry_replay"),
+)
 
 _FORBIDDEN_ON_HANDLERS_IMPORT = (
     "integrations.tg_commands",
     "integrations.telegram_bot",
+    "integrations.wallet_editor_registry",
     "playwright",
     "playwright.sync_api",
     "psycopg2",
@@ -223,6 +231,8 @@ def test_expected_tg_commands_json_unchanged() -> None:
     ]
     assert expected["commands"][12] == "operator_wallets_ready"
     assert expected["commands"][16] == "wallet_editor_refresh"
+    assert expected["commands"][17] == "registry_health"
+    assert expected["commands"][18] == "registry_replay"
     assert expected.get("also_registers_document_handler") is True
 
 
@@ -427,6 +437,8 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert tg_commands.cmd_run_rate is handlers.cmd_run_rate
     assert tg_commands.cmd_operator_wallets_ready is handlers.cmd_operator_wallets_ready
     assert tg_commands.cmd_wallet_editor_refresh is handlers.cmd_wallet_editor_refresh
+    assert tg_commands.cmd_registry_health is handlers.cmd_registry_health
+    assert tg_commands.cmd_registry_replay is handlers.cmd_registry_replay
     assert handlers._rules is tg_commands.RULES
     assert handlers._logger is tg_commands.log
 
@@ -441,9 +453,213 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert assembled["run_rate"] is handlers.cmd_run_rate
     assert assembled["operator_wallets_ready"] is handlers.cmd_operator_wallets_ready
     assert assembled["wallet_editor_refresh"] is handlers.cmd_wallet_editor_refresh
+    assert assembled["registry_health"] is handlers.cmd_registry_health
+    assert assembled["registry_replay"] is handlers.cmd_registry_replay
     assert assembled["run_raccoon"] is tg_commands.cmd_run_raccoon
     assert assembled["run_raccoon"] is not handlers.cmd_run_hourly
     assert assembled["run_hourly_raccoon"] is tg_commands.cmd_run_hourly_raccoon
-    assert assembled["registry_replay"] is tg_commands.cmd_registry_replay
-    assert assembled["registry_replay"] is not handlers.cmd_wallet_editor_refresh
-    assert len(_ANTARES_CALLBACK_IDS) == 6
+    assert assembled["registry_export"] is tg_commands.cmd_registry_export
+    assert assembled["registry_export"] is not handlers.cmd_registry_replay
+    assert len(_ANTARES_CALLBACK_IDS) == 8
+
+
+@pytest.mark.parametrize("callback,command", _REGISTRY_CMDS)
+def test_registry_cmds_unbound_do_not_touch_registry(unbound, callback, command) -> None:
+    update = _update()
+
+    async def _run() -> None:
+        with patch("integrations.wallet_editor_registry.build_registry_health_report") as health:
+            with patch("integrations.wallet_editor_registry.format_registry_health_report") as fmt:
+                with patch("integrations.wallet_editor_registry.replay_pending_outbox_records") as replay:
+                    with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                        with pytest.raises(unbound.HandlerNotBoundError):
+                            await callback(update, MagicMock())
+                        unbound.bind_rules(object())
+                        with pytest.raises(unbound.HandlerNotBoundError):
+                            await callback(update, MagicMock())
+                        unbound._rules = None
+                        unbound.bind_logger(MagicMock())
+                        with pytest.raises(unbound.HandlerNotBoundError):
+                            await callback(update, MagicMock())
+                        health.assert_not_called()
+                        fmt.assert_not_called()
+                        replay.assert_not_called()
+                        dispatch.assert_not_called()
+
+    asyncio.run(_run())
+    assert update._replies == []
+
+
+@pytest.mark.parametrize("callback,command", _REGISTRY_CMDS)
+def test_registry_cmds_deny_skips_registry(unbound, callback, command) -> None:
+    rules = _MutableRules()
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+
+    async def _run() -> None:
+        with patch("integrations.wallet_editor_registry.build_registry_health_report") as health:
+            with patch("integrations.wallet_editor_registry.format_registry_health_report") as fmt:
+                with patch("integrations.wallet_editor_registry.replay_pending_outbox_records") as replay:
+                    with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                        await callback(update, MagicMock())
+                        health.assert_not_called()
+                        fmt.assert_not_called()
+                        replay.assert_not_called()
+                        dispatch.assert_not_called()
+
+    asyncio.run(_run())
+    assert update._replies == [deny_message("unknown_command", {})]
+    logger.exception.assert_not_called()
+
+
+def test_registry_health_allow_passes_builder_to_formatter(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_health")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+    report = {"ok": True, "tag": "health-report"}
+
+    async def _run() -> None:
+        from core.access_guard import check_access as real_check
+
+        with patch("integrations.wallet_editor_registry.build_registry_health_report", return_value=report) as builder:
+            with patch(
+                "integrations.wallet_editor_registry.format_registry_health_report",
+                return_value="formatted-health",
+            ) as formatter:
+                with patch("core.tg_command_dispatch.check_access", wraps=real_check) as check:
+                    with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                        await handlers.cmd_registry_health(update, MagicMock())
+                        check.assert_called_once()
+                        assert check.call_args.args[2] == "registry_health"
+                        builder.assert_called_once_with()
+                        formatter.assert_called_once_with(report)
+                        dispatch.assert_not_called()
+
+    asyncio.run(_run())
+    assert update._replies == ["formatted-health"]
+
+
+def test_registry_health_formatter_error_uses_same_handler(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_health")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+
+    async def _run() -> None:
+        with patch("integrations.wallet_editor_registry.build_registry_health_report", return_value={"x": 1}):
+            with patch(
+                "integrations.wallet_editor_registry.format_registry_health_report",
+                side_effect=RuntimeError("format-boom"),
+            ):
+                await handlers.cmd_registry_health(update, MagicMock())
+
+    asyncio.run(_run())
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "cmd_registry_health failed"
+    assert update._replies == ["❌ /registry_health failed: RuntimeError: format-boom"]
+
+
+def test_registry_replay_order_and_summary_text(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_replay")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+    result = SimpleNamespace(attempted=4, synced=2, failed=1, skipped=1, errors=("e1", "e2"))
+    seen: list[str] = []
+
+    def _replay() -> SimpleNamespace:
+        seen.append("replay")
+        assert update._replies == ["🔄 Replaying pending/failed registry outbox..."]
+        return result
+
+    async def _run() -> None:
+        from core.access_guard import check_access as real_check
+
+        with patch("integrations.wallet_editor_registry.replay_pending_outbox_records", side_effect=_replay) as replay:
+            with patch("core.tg_command_dispatch.check_access", wraps=real_check) as check:
+                with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                    await handlers.cmd_registry_replay(update, MagicMock())
+                    check.assert_called_once()
+                    assert check.call_args.args[2] == "registry_replay"
+                    replay.assert_called_once_with()
+                    dispatch.assert_not_called()
+
+    asyncio.run(_run())
+    assert seen == ["replay"]
+    assert update._replies == [
+        "🔄 Replaying pending/failed registry outbox...",
+        "Registry outbox replay\nattempted: 4\nsynced: 2\nfailed: 1\nskipped: 1\n\nerrors:\n- e1\n- e2",
+    ]
+
+
+def test_registry_replay_empty_errors_omits_section(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_replay")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+    result = SimpleNamespace(attempted=1, synced=1, failed=0, skipped=0, errors=())
+
+    async def _run() -> None:
+        with patch("integrations.wallet_editor_registry.replay_pending_outbox_records", return_value=result):
+            await handlers.cmd_registry_replay(update, MagicMock())
+
+    asyncio.run(_run())
+    assert update._replies[1] == "Registry outbox replay\nattempted: 1\nsynced: 1\nfailed: 0\nskipped: 0"
+    assert "errors:" not in update._replies[1]
+
+
+def test_registry_replay_truncates_errors_to_ten(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_replay")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+    errors = tuple(f"err-{i}" for i in range(12))
+    result = SimpleNamespace(attempted=12, synced=0, failed=12, skipped=0, errors=errors)
+
+    async def _run() -> None:
+        with patch("integrations.wallet_editor_registry.replay_pending_outbox_records", return_value=result):
+            await handlers.cmd_registry_replay(update, MagicMock())
+
+    asyncio.run(_run())
+    body = update._replies[1]
+    assert "- err-0" in body
+    assert "- err-9" in body
+    assert "- err-10" not in body
+    assert body.count("- err-") == 10
+
+
+def test_registry_replay_exception_keeps_initial_reply(unbound) -> None:
+    rules = _MutableRules()
+    _allow(rules, "registry_replay")
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    update = _update()
+
+    async def _run() -> None:
+        with patch(
+            "integrations.wallet_editor_registry.replay_pending_outbox_records",
+            side_effect=RuntimeError("replay-boom"),
+        ):
+            await handlers.cmd_registry_replay(update, MagicMock())
+
+    asyncio.run(_run())
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "cmd_registry_replay failed"
+    assert update._replies == [
+        "🔄 Replaying pending/failed registry outbox...",
+        "❌ /registry_replay failed: RuntimeError: replay-boom",
+    ]
