@@ -129,7 +129,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-05):** jobs регистрирует `modules.antares.jobs.register_jobs`. Handlers всё ещё в mixed `tg_commands`. План отделения: [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md), артефакт [MODULAR_REORG_HANDLER_SPLIT.md](MODULAR_REORG_HANDLER_SPLIT.md). Следующий **code** PR — только четыре Antares `run_*` commands, не isolated entry.
+**Сейчас (после TASK-05):** jobs регистрирует `modules.antares.jobs.register_jobs`. Handlers всё ещё в mixed `tg_commands`. План отделения: [TASK-2026-09-17-06](../active_tasks/TASK-2026-09-17-06_telegram_handler_split.md), артефакт [MODULAR_REORG_HANDLER_SPLIT.md](MODULAR_REORG_HANDLER_SPLIT.md). Следующий **code** PR (после review 06) — только четыре Antares `run_*` и три core helpers; `bind_rules(RULES)`; не isolated entry.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 

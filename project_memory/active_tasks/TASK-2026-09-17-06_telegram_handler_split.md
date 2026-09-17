@@ -6,7 +6,7 @@
 | **Статус** | in_progress (docs; на review после Draft PR) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-05 (PR #8), `ops/MODULAR_REORG_HANDLER_SPLIT.md`, ADR E-MOD-01, MIGRATION этап 3 |
-| **PR** | Draft, base `feat/task-2026-09-17-05-antares-jobs` |
+| **PR** | Draft **#9**, base `feat/task-2026-09-17-05-antares-jobs` |
 | **Обследованный SHA** | `0ce4d5340fdbe5ea890c1a31a5cec6dfbbcff66f` |
 | **Риск** | low: только документы |
 
@@ -37,13 +37,14 @@
 - [x] Script jobs по содержимому (`hello_world` vs `operator_wallets_ready`)
 - [x] Минимальный code PR без scheduler/cutover/полного переноса
 - [x] Mixed `expected_tg_commands.json` не предлагается менять
+- [x] Контракт `bind_rules` / logger / слои проверок AST vs registration зафиксированы в решении
 - [ ] merge/deploy (намеренно открыто)
 
 ---
 
 ## Out Of Scope
 
-Реализация handlers; isolated entry; изменение тестов/runtime; merge PR #4–#8; Railway; живые сервисы.
+Реализация handlers; isolated entry; изменение тестов/runtime; merge PR #4–#9; Railway; живые сервисы; TASK-07.
 
 ---
 
@@ -52,3 +53,4 @@
 | Дата | Событие |
 |------|---------|
 | 2026-09-17 | Документ `ops/MODULAR_REORG_HANDLER_SPLIT.md`; следующий code — четыре Antares run-команды |
+| 2026-09-17 | Review PR #9: единственный `bind_rules(RULES)`; logger параметром `run_job_async`; уточнены AST vs registration |

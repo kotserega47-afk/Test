@@ -45,7 +45,7 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | 20 | `registry_export` | `cmd_registry_export` | `registry_export` | PG export + `reply_document` | `InputFile`, postgres builder | **Antares WE** | `tests/unit/test_tg_registry_export.py` |
 | 21 | `filters.Document.ALL` | `handle_wallet_editor_document` | chat allowlist, не `check_access` | очередь WE xlsx | `integrations/wallet_editor_tg.py`, worker | **Antares WE** | `tests/unit/test_wallet_editor_tg_integration.py` |
 
-Инвентаризация имён/порядка: `tests/test_behavior_baseline_inventory.py`. Сборка handlers: `tests/test_behavior_baseline_registration.py`. Wiring scheduler: `tests/unit/test_project_profile_boot.py`.
+Инвентаризация имён/порядка `CommandHandler`: `tests/test_behavior_baseline_inventory.py` (AST). AST также фиксирует наличие `MessageHandler`, **не** `filters.Document.ALL`. Конкретный `Document.ALL`: `tests/test_behavior_baseline_registration.py`. Wiring scheduler: `tests/unit/test_project_profile_boot.py`.
 
 ### Группы (не путать имя с изоляцией)
 
@@ -68,11 +68,39 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | Слой | Содержимое |
 |------|------------|
 | `modules/antares/handlers.py` (будущий) | callbacks тонкого dispatch: `cmd_run_wallet|hourly|download|rate`; позже WE cmds и `operator_wallets_ready` |
-| mixed `integrations/tg_commands.py` | `get_handlers()` как **сборка** mixed; help/status/start; raccoon cmds; `hello_world`; `RULES` процесса; вызов `register_jobs` + raccoon/script imports |
-| `core/tg_command_dispatch.py` (будущий, узкий) | `_ctx` / `guard_or_deny(update, command, rules)` / `run_job_async(update, job_type)` — без имён Antares/Raccoon jobs, без help-текста. Не «framework»: три функции из уже общего пути |
+| mixed `integrations/tg_commands.py` | `get_handlers()` как **сборка** mixed; help/status/start; raccoon cmds; `hello_world`; создание `RULES` и `log`; `bind_rules(RULES)` и передача `log`; вызов `register_jobs` + raccoon/script imports |
+| `core/tg_command_dispatch.py` (TASK-07, узкий) | три helpers: `build_access_context` (сейчас `_ctx`), `guard_or_deny(update, command, rules)`, `run_job_async(update, job_type, logger)` — без имён Antares/Raccoon jobs, без help/status-текста. Не framework. Help/status **остаются** в `tg_commands` |
 | `integrations/wallet_editor_tg.py` | document ingest остаётся; mixed только регистрирует `MessageHandler` |
 
-**Явная передача:** `AccessRules` экземпляр (mixed: тот же `RULES`), не второй конструктор. Mixed entry вызывает `modules.antares.handlers.configure(rules=RULES)` **или** handlers импортируют `guard_or_deny`/`run_job_async` из `core` и получают `rules` аргументом через замыкание только если это понадобится isolated. Для mixed достаточно: handlers импортируют core helpers и **тот же** `RULES` инжектится из `tg_commands.configure` один раз при сборке, без импорта `tg_commands` из `modules.antares`.
+### 2.1 `bind_rules(RULES)` — единственный способ передачи правил в TASK-07
+
+Других вариантов (`configure`, замыкание на `RULES` из `tg_commands`, второй `AccessRules(...)`) **нет**.
+
+Контракт (один runtime-контур на процесс; **не** несколько приложений с разными правилами в одном процессе):
+
+- импорт `modules.antares.handlers` **не** создаёт `AccessRules` и **не** читает workbook;
+- mixed создаёт `RULES = AccessRules(...)` как сейчас и сразу вызывает `bind_rules(RULES)` — передаётся существующий экземпляр;
+- до `bind_rules` любой из четырёх Antares callbacks завершается **явной ошибкой конфигурации**: без `dispatch_job_async`, без reply «Запускаю»;
+- повторный `bind_rules` **того же объекта** допустим;
+- попытка подменить другим объектом `AccessRules` — отказ;
+- `reload_rules` по-прежнему делает `invalidate` / `get_snapshot` **внутри того же** экземпляра; повторный bind после reload **не** нужен;
+- handlers **не** хранят отдельную копию snapshot; ACL читает живой `AccessRules` при каждом вызове.
+
+### 2.2 Logger и core `run_job_async`
+
+`run_job_async(update, job_type, logger)` получает logger **параметром**. `core` и `modules.antares.handlers` **не** импортируют `integrations.tg_commands`.
+
+Четыре Antares callbacks берут logger так же, как RULES: mixed создаёт существующий `log = get_logger(...)` (`_mk("MAIN")`) и вызывает `bind_logger(log)`. Callbacks передают этот объект в `run_job_async(..., logger=...)`. Handlers **не** вызывают `get_logger` сами (второй MAIN-logger не создаётся). Повторный bind того же объекта допустим; другой объект — отказ. До bind — та же явная ошибка конфигурации, без dispatch и без «Запускаю».
+
+Для mixed сохранить текущее поведение `_run_job_async` (`integrations/tg_commands.py` на SHA обследования):
+
+- `Actor(kind="tg", chat_id, user_id)` из `effective_chat` / `effective_user`;
+- reply `🚀 Запускаю: {job_type}` **до** `dispatch_job_async`;
+- при успехе reply `✅ Принято: {job_type}\njob_id={job_id}` **после** результата dispatch;
+- в `except Exception`: `logger.exception("❌ TG job error: %s", job_type)`, reply «❌ Ошибка при выполнении.\nХвост трейса:», затем `err[-3500:]` (`traceback.format_exc()`);
+- те же границы try/except: Actor и «Запускаю» снаружи try; dispatch и «Принято» внутри.
+
+Остальные Raccoon / script / WE callers, которым нужны `_guard_or_deny` / `_run_job_async`, остаются на тонких совместимых именах в `tg_commands` (в т.ч. `patch("integrations.tg_commands._guard_or_deny")`). Тела — делегирование в core с `RULES` и `log` процесса. **Вычисление** общего поведения одно: в `core/tg_command_dispatch.py`.
 
 **Где создаётся сегодня (SHA обследования):**
 
@@ -82,8 +110,6 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 - Jobs — `register_jobs(JOB_REGISTRY)` в `tg_commands` (TASK-05)
 
 **Запрет:** `modules.antares.*` → `integrations.tg_commands`. Re-export: `from modules.antares.handlers import cmd_run_hourly` в `tg_commands`.
-
-Helpers в core — только после выноса текстов help/status **не** вместе с первым code PR, если первый PR ограничить четырьмя run-командами: тогда `guard_or_deny`/`run_job_async` в core оправданы (уже используются raccoon/scripts той же парой функций).
 
 ---
 
@@ -115,23 +141,32 @@ Jobs: шесть ключей TASK-05 + `script_job:operator_wallets_ready` (+ �
 
 | Файл | Что |
 |------|-----|
-| `core/tg_command_dispatch.py` | `build_access_context`, `guard_or_deny`, `run_job_async` — поведение как `_ctx` / `_guard_or_deny` / `_run_job_async` сейчас |
-| `modules/antares/handlers.py` | `cmd_run_wallet`, `cmd_run_hourly`, `cmd_run_download`, `cmd_run_rate`; import **не** регистрирует handlers; **не** импортирует `tg_commands` |
-| `integrations/tg_commands.py` | удалить тела четырёх cmd; `from modules.antares.handlers import …`; `get_handlers()` без смены порядка; `_guard_or_deny` оставить как тонкие обёртки над core **или** заменить вызовы, сохраняя имена для `patch("integrations.tg_commands._guard_or_deny")` у raccoon/scripts |
+| `core/tg_command_dispatch.py` | `build_access_context`, `guard_or_deny`, `run_job_async(..., logger)` — единственная реализация путей `_ctx` / `_guard_or_deny` / `_run_job_async` |
+| `modules/antares/handlers.py` | `bind_rules`, `bind_logger`, четыре `cmd_run_*`; import **не** регистрирует handlers, **не** читает workbook, **не** импортирует `tg_commands` |
+| `integrations/tg_commands.py` | `RULES` и `log` как сейчас; сразу `bind_rules(RULES)` и `bind_logger(log)`; тела четырёх cmd удалить; `from modules.antares.handlers import cmd_run_wallet, …`; `get_handlers()` без смены порядка; `_ctx` / `_guard_or_deny` / `_run_job_async` — тонкие обёртки над core (имена для Raccoon/script/WE и существующих `patch`) |
+
+В TASK-07 три helpers **выделяются вместе** с четырьмя run-командами. Тексты `help`/`status`/`start` **не** переносятся.
 
 **Не в этом PR:** help/status/start тексты; raccoon cmds; WE cmds; document handler; scheduler; isolated entry; `JOB_ACCEPT`; перенос downloaders/аналитики.
 
-**Старые пути:** `integrations.tg_commands.cmd_run_hourly` (и wallet/download/rate) = те же function objects.
+**Старые пути:** `integrations.tg_commands.cmd_run_hourly` (и wallet/download/rate) = те же function objects, что в `modules.antares.handlers`.
 
 **Подключение mixed:** import callbacks в `get_handlers()` как сейчас по именам.
 
-**Проверки (добавлять только риски шага):**
+**Проверки (добавлять в code PR TASK-07; этот docs PR тесты не расширяет):**
 
-1. AST `get_handlers`: порядок имён + `MessageHandler` + `Document.ALL` (уже inventory).
-2. Registration dump: `handler.callback is cmd_run_hourly` (и три остальных) — неверный callback.
-3. Существующие: `test_raccoon_tg_commands` (чужой job не подменили), `test_script_jobs_tg_command` (ACL patch на `_guard_or_deny`), `test_tg_concurrent_handlers`.
-4. Узкий тест: deny ACL → `dispatch_job_async` не вызывается; allow → job_type `wallet`/`hourly`/`download`/`rate` точно.
-5. Document filter не трогать; inventory падает, если `filters.Document.ALL` исчез.
+Текущее (не путать слои):
+
+- AST (`tests/test_behavior_baseline_inventory.py`): имена и **порядок** `CommandHandler`; факт наличия `MessageHandler` в `get_handlers`. **Не** проверяет `filters.Document.ALL`.
+- subprocess registration (`tests/test_behavior_baseline_registration.py` + dump): `document_handlers == 1` и `handler.filters is filters.Document.ALL`.
+
+Будущее (риски шага):
+
+1. Identity callbacks: каждая из четырёх команд в собранном `get_handlers()` указывает на **ожидаемый function object** (`modules.antares.handlers.cmd_run_hourly` **is** `integrations.tg_commands.cmd_run_hourly`, и то же для wallet/download/rate).
+2. `bind_rules` / `bind_logger`: unbound → ошибка конфигурации, без dispatch и без «Запускаю»; same-object bind OK; different-object bind отказ; после `invalidate`/`reload` на том же `AccessRules` callbacks используют обновлённые правила без повторного bind.
+3. Существующие: `test_raccoon_tg_commands` (чужой job), `test_script_jobs_tg_command` (patch `_guard_or_deny`), `test_tg_concurrent_handlers`.
+4. Deny ACL → `dispatch_job_async` не вызывается; allow → `job_type` `wallet`/`hourly`/`download`/`rate` точно.
+5. Document filter не менять; падает **registration** dump (`document_filter_is_all`), не AST inventory.
 
 **Этот шаг ещё не устраняет:** isolated Antares без импорта всего `tg_commands.py` (останутся help/raccoon/WE на том же модуле); mixed help/status; два script-job; WE ingest.
 
@@ -142,6 +177,5 @@ Jobs: шесть ключей TASK-05 + `script_job:operator_wallets_ready` (+ �
 1. Isolated `help`/`status`: отдельные callbacks vs параметр profile — решать **после** четырёх run-команд.
 2. Держать ли `hello_world` на isolated Antares (удобство ops vs чистота профиля).
 3. `cmd_registry_replay` vs job `wallet_editor_registry_replay` — разные пути; не смешивать в одном «тонком dispatch».
-4. Нужен ли `configure(rules=)` или core helpers + единый `RULES` в mixed `tg_commands` достаточно для шага § 4 (достаточно: handlers вызывают core с `from integrations.tg_commands import RULES` **запрещено**; значит core `guard_or_deny` + `rules` из `modules.antares.handlers` через bind при import `tg_commands`). Для § 4 bind из `tg_commands` после создания `RULES` обязателен.
 
-Вопрос 4 не мешает выбрать § 4: в code PR зафиксировать `handlers.bind_rules(RULES)` сразу после `RULES = AccessRules(...)`.
+Передача `RULES` для TASK-07 закрыта: только `bind_rules(RULES)` (§ 2.1).
