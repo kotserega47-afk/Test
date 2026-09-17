@@ -35,7 +35,7 @@
 | [TASK-2026-09-17-04](TASK-2026-09-17-04_behavior_baseline.md) | Эталон поведения: подготовлен, review пройден, merge нет (PR #7) |
 | [TASK-2026-09-17-05](TASK-2026-09-17-05_antares_job_registration.md) | Регистрация Antares jobs: review пройден, merge нет (PR #8) |
 | [TASK-2026-09-17-06](TASK-2026-09-17-06_telegram_handler_split.md) | План TG handlers: review пройден, merge нет (PR #9) |
-| [TASK-2026-09-17-07](TASK-2026-09-17-07_antares_run_handlers.md) | Четыре Antares run-команды (`in_progress`, Draft PR) |
+| [TASK-2026-09-17-07](TASK-2026-09-17-07_antares_run_handlers.md) | Четыре Antares run-команды: review пройден, merge нет (PR #10) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
