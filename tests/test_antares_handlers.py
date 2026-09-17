@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,8 +17,16 @@ import pytest
 from telegram.ext import CommandHandler
 
 from core.access_guard import deny_message
-from core.access_rules import CommandRule
+from core.access_rules import AccessRules, CommandRule
 from core.job_runner import Actor
+from core.rules_v2.models import (
+    AccessRule,
+    CommandDef,
+    CommandPolicy,
+    MetaInfo,
+    RoleDef,
+    RulesSnapshotV2,
+)
 from core.tg_command_dispatch import build_access_context, guard_or_deny
 from modules.antares import handlers
 from tests.unit.isolated_child_env import isolated_child_env, missing_dependency_hint
@@ -85,6 +94,41 @@ def _allow(rules: _MutableRules, command: str, *, chat_id: int = 11, user_id: in
     )
     rules.access_map[("private", user_id)] = 1
     rules.access_map[(chat_id, user_id)] = 1
+
+
+def _run_wallet_snapshot_v2(*, allow: bool, version: str, updated_at: datetime) -> RulesSnapshotV2:
+    roles = {"level_1": RoleDef(role_key="level_1", role_level=1, display_name="L1")}
+    commands = {}
+    policies = {}
+    access = [
+        AccessRule(chat_id="private", user_id="22", role_key="level_1", enabled=True),
+    ]
+    if allow:
+        commands["run_wallet"] = CommandDef(
+            command_key="run_wallet",
+            command_text="run_wallet",
+            job_key=None,
+            display_name="run_wallet",
+            enabled=True,
+        )
+        policies["run_wallet"] = CommandPolicy(
+            command_key="run_wallet",
+            min_role_key="level_1",
+            allow_private=True,
+            allow_groups=True,
+            enabled=True,
+        )
+    return RulesSnapshotV2(
+        meta=MetaInfo(
+            ruleset_version=version,
+            updated_at=updated_at,
+            updated_by="test",
+        ),
+        roles=roles,
+        commands=commands,
+        command_policies=policies,
+        access_rules=access,
+    )
 
 
 @pytest.fixture
@@ -259,24 +303,54 @@ def test_allow_dispatches_named_job_and_actor(unbound, callback, command, job_ty
     ]
 
 
-def test_same_rules_instance_reload_without_rebind(unbound) -> None:
-    rules = _MutableRules()
+def test_reload_replaces_snapshot_without_rebind(unbound) -> None:
+    deny_v2 = _run_wallet_snapshot_v2(
+        allow=False,
+        version="deny",
+        updated_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    allow_v2 = _run_wallet_snapshot_v2(
+        allow=True,
+        version="allow",
+        updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
+    )
+    source = {"current": deny_v2}
+
+    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+        return source["current"]
+
+    rules = AccessRules()
     logger = MagicMock()
     unbound.bind_rules(rules)
     unbound.bind_logger(logger)
     update = _update()
 
     async def _run() -> None:
-        with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
-            await handlers.cmd_run_wallet(update, MagicMock())
-            dispatch.assert_not_called()
-            _allow(rules, "run_wallet")
-            dispatch.return_value = "jid-after-reload"
-            await handlers.cmd_run_wallet(update, MagicMock())
-            dispatch.assert_awaited_once()
-            assert dispatch.await_args.args[0] == "wallet"
+        with patch("core.access_rules.get_snapshot_v2", side_effect=_load_v2):
+            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                await handlers.cmd_run_wallet(update, MagicMock())
+                dispatch.assert_not_called()
+                snap_deny = rules.get_snapshot()
+                assert "run_wallet" not in snap_deny.commands_map
+
+                rules.invalidate()
+                source["current"] = allow_v2
+                dispatch.return_value = "jid-after-reload"
+                await handlers.cmd_run_wallet(update, MagicMock())
+                dispatch.assert_awaited_once()
+                assert dispatch.await_args.args[0] == "wallet"
+
+                snap_allow = rules.get_snapshot()
+                assert snap_allow is not snap_deny
+                assert snap_allow.commands_map is not snap_deny.commands_map
+                assert snap_allow.access_map is not snap_deny.access_map
+                assert "run_wallet" in snap_allow.commands_map
+                assert unbound._rules is rules
+                assert snap_allow is rules.get_snapshot()
 
     asyncio.run(_run())
+    assert any(text.startswith("🚀 Запускаю: wallet") for text in update._replies)
+    assert handlers._rules is rules
 
 
 def test_dispatch_error_logs_and_sends_traceback_tail(unbound) -> None:

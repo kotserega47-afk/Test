@@ -141,7 +141,11 @@ def test_source_inventory_get_handlers_commands_and_document() -> None:
 def test_source_inventory_antares_run_cmds_not_defined_in_tg_commands() -> None:
     path = ROOT / "integrations" / "tg_commands.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    defined = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     assert not defined.intersection(
         {"cmd_run_wallet", "cmd_run_hourly", "cmd_run_download", "cmd_run_rate"}
     )
