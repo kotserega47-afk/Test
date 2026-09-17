@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-04 |
-| **Статус** | ready |
+| **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-2026-09-17-01 survey, TASK-02/03 (parser+gate, не слиты), `ops/MODULAR_REORG_SURVEY.md` § 4, `ops/MODULAR_REORG_MIGRATION.md` этап 2 |
 | **Риск** | low, если только docs/golden на обезличенных входах; **не** менять runtime, Railway, профили |
@@ -53,11 +53,11 @@ Runtime jobs/handlers/WE/Railway: **не менять**.
 
 ## Success Criteria
 
-- [ ] Таблица команд + job_type + триггер для текущего Test mixed
-- [ ] Указатель существующих golden/characterization и список отчётов без эталона
-- [ ] Явный diff-конспект Raccoon T vs P (не «считать одинаковым»)
-- [ ] Чеклист регрессии для будущего move (что должно остаться зелёным)
-- [ ] Нет переноса файлов в `modules/*`, нет isolated entry, нет merge #4/#5/#6 в рамках этой задачи
+- [x] Таблица команд + job_type + триггер для текущего Test mixed
+- [x] Указатель существующих golden/characterization и список отчётов без эталона
+- [x] Явный diff-конспект Raccoon T vs P (не «считать одинаковым»)
+- [x] Чеклист регрессии для будущего move (что должно остаться зелёным)
+- [x] Нет переноса файлов в `modules/*`, нет isolated entry, нет merge #4/#5/#6 в рамках этой задачи
 
 ---
 
@@ -80,3 +80,4 @@ Runtime jobs/handlers/WE/Railway: **не менять**.
 | Дата | Событие |
 |------|---------|
 | 2026-09-17 | Создана после review TASK-02/03: этап 2 миграции, без move |
+| 2026-09-17 | Артефакт `ops/MODULAR_REORG_BEHAVIOR_BASELINE.md`; payin golden; inventory freeze |

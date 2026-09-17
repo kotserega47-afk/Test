@@ -55,8 +55,9 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | `python -m pytest tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py` → **41 passed** на **Python 3.13.14** |
-| GPT | Проверил код и diff PR #6 (HEAD `48a2a82…`). **Этот набор тестов повторно не запускал.** |
+| Cursor | `python -m pytest tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py` → **41 passed** на **Python 3.13.14** (HEAD после gate+harness, не только parser) |
+| GPT (parser PR #5) | **18** тестов на HEAD `acfb9958…` в изолированной директории; полный набор проекта не запускался |
+| GPT (gate PR #6) | Проверил код и diff HEAD `48a2a82…`. Набор 41 passed **повторно не запускал.** |
 
 Stubs доказывают wiring (handlers → Application, `ensure_worker_started`, `schedule_loop`, `run_polling`), не реальные отчёты/jobs.
 

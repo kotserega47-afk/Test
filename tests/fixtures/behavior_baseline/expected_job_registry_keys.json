@@ -1,0 +1,16 @@
+{
+  "note": "JOB_REGISTRY keys registered in Test code on this SHA. Not a production schedule.",
+  "keys": [
+    "download",
+    "hourly",
+    "rate",
+    "raccoon_daily_conversion",
+    "raccoon_hourly",
+    "raccoon_wallet",
+    "script_job:hello_world",
+    "script_job:operator_wallets_ready",
+    "wallet",
+    "wallet_editor_registry_refresh",
+    "wallet_editor_registry_replay"
+  ]
+}

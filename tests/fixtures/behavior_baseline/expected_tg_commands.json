@@ -1,0 +1,26 @@
+{
+  "note": "Telegram command names from get_handlers() in integrations/tg_commands.py. Registration in code, not proof a schedule is enabled.",
+  "commands": [
+    "start",
+    "help",
+    "status",
+    "whoami",
+    "reload_rules",
+    "run_wallet",
+    "run_hourly",
+    "run_download",
+    "run_rate",
+    "run_raccoon",
+    "run_hourly_raccoon",
+    "run_script_hello",
+    "operator_wallets_ready",
+    "rules_validate",
+    "auto_enable_plan",
+    "auto_enable_run",
+    "wallet_editor_refresh",
+    "registry_health",
+    "registry_replay",
+    "registry_export"
+  ],
+  "also_registers_document_handler": true
+}
