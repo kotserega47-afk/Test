@@ -36,7 +36,7 @@
 | [TASK-2026-09-17-05](TASK-2026-09-17-05_antares_job_registration.md) | Регистрация Antares jobs: review пройден, merge нет (PR #8) |
 | [TASK-2026-09-17-06](TASK-2026-09-17-06_telegram_handler_split.md) | План TG handlers: review пройден, merge нет (PR #9) |
 | [TASK-2026-09-17-07](TASK-2026-09-17-07_antares_run_handlers.md) | Четыре Antares run-команды: review пройден, merge нет (PR #10) |
-| [TASK-2026-09-17-08](TASK-2026-09-17-08_antares_dispatch_commands.md) | Две Antares dispatch-команды (`in_progress`, Draft PR) |
+| [TASK-2026-09-17-08](TASK-2026-09-17-08_antares_dispatch_commands.md) | Две Antares dispatch-команды: review пройден, merge нет (PR #11) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
