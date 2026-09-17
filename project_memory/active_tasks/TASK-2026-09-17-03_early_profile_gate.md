@@ -3,12 +3,14 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-03 |
-| **Статус** | in_progress |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-2026-09-17-02 (парсер), `ops/MODULAR_REORG_MIGRATION.md` |
-| **Риск** | medium: трогает порядок импорта `scheduler.py` |
+| **PR** | Draft [#6](https://github.com/deniskotdavydov1991-wq/Test/pull/6) `feat/task-2026-09-17-03-profile-gate` |
+| **HEAD (проверен GPT)** | `48a2a825ce3d04d27501d1a387bb5c4b8b5dd9c9` |
+| **Риск** | medium: трогает порядок импорта `scheduler.py`; непустое `PROJECT_PROFILE` на сервисе Test **откажет запуск** |
 
-Реализация: gate в `core/project_profile_boot.py`, вызов в `scheduler.py` **до** Telegram/jobs. Unset `PROJECT_PROFILE` = documented **legacy mixed**, не isolated Antares.
+Реализация: gate в `core/project_profile_boot.py`, вызов в `scheduler.py` **до** Telegram/jobs. Unset / пустая / пробельная `PROJECT_PROFILE` = documented **legacy mixed**, не isolated Antares. Явные `antares` / `raccoon` / `wr` отклоняются, пока нет isolated entry.
 
 ---
 
@@ -18,9 +20,12 @@
 
 ---
 
-## Current Behavior
+## Current Behavior (после реализации, до merge)
 
-`scheduler.py` сразу импортирует `integrations.tg_commands` (и дальше downloader / raccoon_jobs / script_jobs). Побочные эффекты импорта происходят **до** любой будущей проверки профиля. Legacy scheduler всегда собирает **смешанный** набор jobs.
+- Legacy mixed — **текущий рабочий режим** при отсутствии непустого `PROJECT_PROFILE`.
+- Явные профили **пока отклоняются** (`SystemExit` 2).
+- Модули проектов **ещё не выделены**; jobs/handlers не переносились.
+- Merge/deploy **не выполнены**.
 
 ---
 
@@ -29,28 +34,45 @@
 1. Прочитать env профиля (без импорта downloaders).
 2. Вызвать парсер из TASK-2026-09-17-02.
 3. Неизвестное значение → выход с понятной ошибкой, **без** чужих jobs.
-4. Известный профиль **без** isolated entry (`raccoon`, `wr`, и явный `antares` пока нет отдельного register) → **отклонить** запуск: «profile X is not wired; refusing mixed JOB_REGISTRY».
-5. Legacy mixed — **только** отдельный compat path (например documented unset / отдельный entry), **не** `PROJECT_PROFILE=antares`.
-
-Нельзя подключать `PROJECT_PROFILE=antares|raccoon|wr` к текущему mixed `scheduler.py`.
+4. Известный профиль **без** isolated entry → **отклонить**: «refusing mixed JOB_REGISTRY».
+5. Legacy mixed — только compat path (unset / `""` / whitespace), **не** `PROJECT_PROFILE=antares`.
 
 ---
 
-## Success Criteria (когда задача будет in_progress)
+## Success Criteria
 
 - [x] До `import integrations.tg_commands` профиль уже отвергнут или выбран
-- [x] `PROJECT_PROFILE=antares` на mixed legacy entry → exit (не silent mixed)
-- [x] `PROJECT_PROFILE=raccoon` на legacy entry → exit
-- [x] `PROJECT_PROFILE=wr` → exit, пока WR не wired
+- [x] Явные `antares` / `raccoon` / `wr` на mixed entry → exit
 - [x] Нет silent fallback на другой проект
-- [x] Mixed-compat path остаётся отдельно от явного `antares`
-- [x] `python scheduler.py` без/`""`/`"   "` PROJECT_PROFILE: gate pass + main wiring через заглушки (не бизнес-результат jobs)
+- [x] Mixed-compat отдельно от явного `antares`
+- [x] `python scheduler.py` без/`""`/`"   "` PROJECT_PROFILE: wiring `main` через заглушки (не бизнес-результат jobs)
+- [x] GPT review HEAD `48a2a82…`: блокирующих замечаний нет
+- [ ] merge/deploy (намеренно открыто)
+
+---
+
+## Происхождение проверки
+
+| Кто | Что |
+|-----|-----|
+| Cursor | `python -m pytest tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py` → **41 passed** на **Python 3.13.14** |
+| GPT | Проверил код и diff PR #6 (HEAD `48a2a82…`). **Этот набор тестов повторно не запускал.** |
+
+Stubs доказывают wiring (handlers → Application, `ensure_worker_started`, `schedule_loop`, `run_polling`), не реальные отчёты/jobs.
 
 ---
 
 ## Out Of Scope
 
-Парсер (02); полный вынос Antares/Raccoon модулей; cutover `JOB_ACCEPT`; Railway.
+Парсер (02); полный вынос Antares/Raccoon модулей; cutover `JOB_ACCEPT`; Railway; merge.
+
+---
+
+## Перед выпуском (не эта задача)
+
+Отдельно проверить: автодеплой Test на `test_main`; активные задания; **отсутствие непустого `PROJECT_PROFILE`** у текущего сервиса Test. После выката TASK-03 непустое значение → отказ запуска.
+
+Порядок после согласования выпуска: слить **#4** → переназначить base **#5** и проверить diff → слить **#5** → переназначить base **#6** и проверить diff. Review до переназначения **не** считать автоматически действующим, если код изменился.
 
 ---
 
@@ -59,4 +81,5 @@
 | Дата | Событие |
 |------|---------|
 | 2026-09-17 | Заведена по review PR #4: process gate ≠ parser |
-| 2026-09-17 | PR #6: subprocess `scheduler.py` + stubs; reload убран из parser tests |
+| 2026-09-17 | PR #6: subprocess `scheduler.py` + stubs; reload убран |
+| 2026-09-17 | Изоляция harness на `sys.executable`; GPT review без блокирующих |

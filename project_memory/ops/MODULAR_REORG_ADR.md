@@ -8,7 +8,9 @@
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **Миграция** | [MODULAR_REORG_MIGRATION.md](MODULAR_REORG_MIGRATION.md) |
 
-Этот ADR **не** меняет production-настройки. Merge связанных PR в `test_main` **может** перезапустить сервис Test (автодеплой). Нормативные runtime-факты в `current_state.md` до code merge не считать «уже модульными».
+Этот ADR **не** меняет production-настройки. Parser (TASK-02) и early gate (TASK-03) есть в Draft PR #5/#6; **merge/deploy не выполнены.** До выката runtime Test остаётся текущий mixed `scheduler.py` без gate. Merge в `test_main` **может** перезапустить сервис Test (автодеплой). Нормативные runtime-факты в `current_state.md` до code merge не считать «уже модульными».
+
+Модули проектов ещё не выделены. Legacy mixed — текущий рабочий режим. Явные профили на mixed entry отклоняются **после** выката TASK-03; непустое `PROJECT_PROFILE` на сервисе Test тогда сломает старт.
 
 ---
 

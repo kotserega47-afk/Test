@@ -3,9 +3,10 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-02 |
-| **Статус** | in_progress |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-2026-09-17-01, TASK-2026-09-17-03, `ops/MODULAR_REORG_MIGRATION.md` этап 1 |
+| **PR** | Draft [#5](https://github.com/deniskotdavydov1991-wq/Test/pull/5) `feat/task-2026-09-17-02-project-profile` |
 | **Риск** | low для diff; merge в `test_main` может **рестартовать** сервис Test (автодеплой) |
 
 ---
@@ -32,7 +33,7 @@ Frozen `ProjectProfileSelection`: `name: Literal["antares", "raccoon", "wr"]`, `
 
 `implicit_default` — только разбор входа, не изоляция процесса. Принятие `"wr"` не означает готовность WR.
 
-Process gate = TASK-2026-09-17-03 (не этот PR).
+Process gate = TASK-2026-09-17-03.
 
 ---
 
@@ -43,7 +44,7 @@ Process gate = TASK-2026-09-17-03 (не этот PR).
 | `core/project_profile.py` | создать |
 | `tests/unit/test_project_profile.py` | создать |
 | `modules/**/__init__.py` | создать пустые |
-| `scheduler.py` | **не трогать** |
+| `scheduler.py` | **не трогать** (в этом PR) |
 
 ---
 
@@ -52,14 +53,23 @@ Process gate = TASK-2026-09-17-03 (не этот PR).
 - [x] pytest `tests/unit/test_project_profile.py`
 - [x] неизвестная строка / wrong case → ошибка
 - [x] None / empty / whitespace → implicit antares
-- [x] diff без hooks в entrypoints
+- [x] diff без hooks в entrypoints (PR #5)
 - [x] import пакетов без production env
+- [x] review пройден; **merge/deploy не выполнены**
+
+---
+
+## Review
+
+Реализация принята. Модули проектов **не** выделены. Это парсер, не рабочий режим сервиса.
+
+Происхождение проверки парсера — в TASK-03 (общий прогон двух тестовых файлов на PR #6). Отдельный повторный прогон только PR #5 GPT не делал.
 
 ---
 
 ## Out Of Scope
 
-TASK-03; `JOB_ACCEPT`; inbox/drain; Wallet Editor; Railway; JOB_REGISTRY.
+TASK-03; `JOB_ACCEPT`; inbox/drain; Wallet Editor; Railway; JOB_REGISTRY; физический перенос модулей.
 
 ---
 
@@ -69,3 +79,4 @@ TASK-03; `JOB_ACCEPT`; inbox/drain; Wallet Editor; Railway; JOB_REGISTRY.
 |------|---------|
 | 2026-09-17 | Создан; сужен без scheduler |
 | 2026-09-17 | Реализация парсера по контракту `ProjectProfileSelection` |
+| 2026-09-17 | Review пройден; Draft PR #5 не слит |

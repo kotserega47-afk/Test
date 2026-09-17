@@ -2,12 +2,30 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | PROPOSED |
+| **Статус** | PROPOSED (этап 0–1 в Draft PR; runtime Test ещё не выкатывался) |
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **ADR** | [MODULAR_REORG_ADR.md](MODULAR_REORG_ADR.md) |
-| **Этот PR** | документация (этап 0). Runtime-код не меняется |
 
-Merge/deploy **намеренно** не входят в TASK-2026-09-17-01. Это **не** значит, что merge в подключённую ветку безопасен для процессов: см. § Автодеплой.
+Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/03. Это **не** значит, что merge в подключённую ветку безопасен: см. § Автодеплой.
+
+### Состояние программы (2026-09-17)
+
+| Task | Что сделано | Merge/deploy |
+|------|-------------|--------------|
+| TASK-02 парсер | реализован, review пройден (Draft PR #5) | **нет** |
+| TASK-03 early gate | реализован, review пройден (Draft PR #6, HEAD `48a2a82…`) | **нет** |
+| Модули проектов | пустые пакеты `modules/*`; **физически не выделены** | — |
+| Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
+| Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
+| Следующая | [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — эталон поведения, **без** переноса файлов | — |
+
+Проверка тестов TASK-02/03: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT проверил код и diff PR #6; этот набор **повторно не запускал**.
+
+Draft PR #4 / #5 / #6 **пока не сливать**.
+
+Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
+
+После согласования выпуска: слить **#4** → переназначить base **#5** и проверить diff → слить **#5** → переназначить base **#6** и проверить diff. Если после переназначения код изменился, прежний review **не** считать автоматически действующим.
 
 Предлагаемые флаги **`JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде отсутствуют.** Ниже они — требования будущих PR, не текущий runtime.
 
@@ -71,7 +89,7 @@ Production-настройки Railway в этой задаче **не менят
 
 ## Этап 1 — каркас без переключения поведения jobs
 
-**Task:** [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md)
+**Task:** [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md) — **реализован, review пройден, не слит.**
 
 Только: чистый парсер + пустые пакеты + unit-тесты. **Нет** импорта из `scheduler.py` / `tg_commands.py`.
 
@@ -87,11 +105,13 @@ Production-настройки Railway в этой задаче **не менят
 | Стоп | любой hook в entrypoints; любой diff `JOB_REGISTRY` / handlers |
 | Откат | revert; данных нет |
 
-Ранняя проверка профиля в процессе — **не** этап 1: [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md).
+Ранняя проверка профиля в процессе: [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **реализована, review пройден, не слита.**
 
 ---
 
 ## Этап 2 — характеристика и фиксация поведения
+
+**Task:** [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) (`ready`). Не начинать физический перенос и не переключать профили.
 
 | | |
 |--|--|
@@ -128,12 +148,12 @@ Production-настройки Railway в этой задаче **не менят
 
 ---
 
-## Предлагаемые (ещё не существующие) рычаги
+## Рычаги
 
 | Рычаг | Статус | Зачем | Где появиться |
 |-------|--------|-------|----------------|
-| `parse_project_profile` | этап 1 | разбор строки | TASK-2026-09-17-02 |
-| Early profile gate | нет | проверка **до** import с env/I/O/JOB_REGISTRY | TASK-2026-09-17-03 |
+| `parse_project_profile` | код в Draft PR #5 | разбор строки | TASK-2026-09-17-02 (review; не merged) |
+| Early profile gate | код в Draft PR #6 | проверка **до** import с env/I/O/JOB_REGISTRY | TASK-2026-09-17-03 (review; не merged) |
 | `JOB_ACCEPT` | нет | прекратить приём новых jobs, не убивая процесс | до cutover (этап 3/4) |
 | Durable queue + schedule cursor | нет / частично | TG updates и cron не только in-memory | до cutover |
 | `EXTERNAL_SIDE_EFFECTS=0` | нет | shadow-сравнение | этап 2/4 сравнение |
@@ -326,7 +346,7 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие code-задачи (не этот PR)
+## Следующие задачи (не merge #4/#5/#6)
 
-1. [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md) — парсер + пустые пакеты + тесты.
-2. [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — ранняя проверка профиля до побочных эффектов.
+1. [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — эталон отчётов, команд/расписаний, Raccoon T vs P, чеклист для будущего move.
+2. Физический перенос модулей и isolated entry — **после** 04, отдельными задачами.

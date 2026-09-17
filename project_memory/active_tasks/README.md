@@ -29,9 +29,10 @@
 
 | ID | Тема |
 |----|------|
-| [TASK-2026-09-17-01](TASK-2026-09-17-01_modular_reorg_survey.md) | Обследование и проект миграции Antares/Raccoon/WR (docs) |
-| [TASK-2026-09-17-02](TASK-2026-09-17-02_project_profile_skeleton.md) | Первый code PR: парсер профиля only (`draft`) |
-| [TASK-2026-09-17-03](TASK-2026-09-17-03_early_profile_gate.md) | Early profile gate до побочных эффектов (`draft`) |
+| [TASK-2026-09-17-01](TASK-2026-09-17-01_modular_reorg_survey.md) | Обследование и проект миграции (Draft PR #4, не слит) |
+| [TASK-2026-09-17-02](TASK-2026-09-17-02_project_profile_skeleton.md) | Парсер профиля: реализован, review пройден, merge нет (PR #5) |
+| [TASK-2026-09-17-03](TASK-2026-09-17-03_early_profile_gate.md) | Early gate: реализован, review пройден, merge нет (PR #6) |
+| [TASK-2026-09-17-04](TASK-2026-09-17-04_behavior_baseline.md) | Эталон текущего поведения до переноса модулей (`ready`) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

@@ -98,3 +98,4 @@ Runtime `.py`: **не** в diff. Merge в `test_main` всё равно може
 |------|---------|
 | 2026-09-17 | Обследование; docs в worktree `docs/modular-reorg-antares-raccoon-wr` |
 | 2026-09-17 | Review PR #4: автодеплой, cutover, locks, Railway SHA, сужение TASK-02, TASK-03 |
+| 2026-09-17 | TASK-02/03 реализованы и прошли review; merge/deploy нет; следующая — TASK-04 эталон поведения |

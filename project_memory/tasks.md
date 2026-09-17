@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **KB версия** | v1.10 |
-| **Последнее обновление** | 2026-08-28 |
+| **Последнее обновление** | 2026-09-17 |
 
 ---
 
@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01** docs PR #4; **TASK-2026-09-17-02** parser (draft, not started); **TASK-2026-09-17-03** early profile gate (draft) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01** docs PR #4 (не слит); **TASK-2026-09-17-02/03** parser+gate review пройден, merge нет; **TASK-2026-09-17-04** эталон поведения (`ready`) |
 | **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 | **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
@@ -276,8 +276,9 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | Task ID | Status | Goal (1 line) | Prerequisite |
 |---------|--------|---------------|--------------|
 | **TASK-2026-09-17-01** | **in_progress** | Docs: survey + ADR + migration for Antares/Raccoon/WR modular reorg | — |
-| **TASK-2026-09-17-02** | **draft** | Parser + empty packages + unit tests; **no** entrypoint hook | review TASK-2026-09-17-01 |
-| **TASK-2026-09-17-03** | **draft** | Early profile gate before import side effects; refuse unwired profiles (no mixed fallback) | TASK-2026-09-17-02 |
+| **TASK-2026-09-17-02** | **review** | Parser + empty packages + unit tests; review passed; **not merged** | Draft PR #5 |
+| **TASK-2026-09-17-03** | **review** | Early profile gate; review passed (HEAD `48a2a82`); **not merged** | Draft PR #6 |
+| **TASK-2026-09-17-04** | **ready** | Freeze current behavior: report goldens, commands/schedules, Raccoon T vs P, move-regression checks | TASK-02/03 review; no file move |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
