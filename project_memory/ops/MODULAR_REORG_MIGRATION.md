@@ -14,14 +14,16 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 |------|-------------|--------------|
 | TASK-02 парсер | реализован, review пройден (Draft PR #5) | **нет** |
 | TASK-03 early gate | реализован, review пройден (Draft PR #6, HEAD `48a2a82…`) | **нет** |
-| Модули проектов | пустые пакеты `modules/*`; **физически не выделены** | — |
+| TASK-04 эталон | подготовлен, review пройден (Draft PR #7, HEAD `443ba70e…`; docs `2bc0ee0…`) | **нет** |
+| TASK-05 Antares jobs | первый ограниченный шаг этапа 3: регистрация шести keys | **нет** |
+| Модули проектов | пакеты `modules/*`; Antares **только** `register_jobs`, не isolated entry | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — эталон поведения, **без** переноса файлов | — |
+| Следующая | [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — регистрация Antares jobs, **без** isolated entry | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
@@ -111,7 +113,7 @@ Production-настройки Railway в этой задаче **не менят
 
 ## Этап 2 — характеристика и фиксация поведения
 
-**Task:** [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md). Артефакт: [MODULAR_REORG_BEHAVIOR_BASELINE.md](MODULAR_REORG_BEHAVIOR_BASELINE.md). Не начинать физический перенос и не переключать профили.
+**Task:** [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — **review пройден**, Draft PR #7, merge нет. Артефакт: [MODULAR_REORG_BEHAVIOR_BASELINE.md](MODULAR_REORG_BEHAVIOR_BASELINE.md).
 
 | | |
 |--|--|
@@ -125,6 +127,8 @@ Production-настройки Railway в этой задаче **не менят
 
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
+
+**Сейчас:** [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — первый ограниченный шаг: `modules.antares.jobs.register_jobs` для шести существующих keys. Не isolated entry, не перенос аналитики/downloaders/WE.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
@@ -346,7 +350,7 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4/#5/#6)
+## Следующие задачи (не merge #4/#5/#6/#7)
 
-1. [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — эталон отчётов, команд/расписаний, Raccoon T vs P, чеклист для будущего move.
-2. Физический перенос модулей и isolated entry — **после** 04, отдельными задачами.
+1. [TASK-2026-09-17-05](../active_tasks/TASK-2026-09-17-05_antares_job_registration.md) — регистрация шести Antares jobs (этот шаг).
+2. Дальнейший перенос модулей и isolated entry — отдельными задачами после review 05.

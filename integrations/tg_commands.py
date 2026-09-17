@@ -1,6 +1,5 @@
 # integrations/tg_commands.py
 from __future__ import annotations
-import time
 import asyncio
 import os
 import traceback
@@ -23,21 +22,16 @@ from core.scheduler_health import get_scheduler_health_snapshot
 
 from integrations.telegram_bot import get_telegram_sender_health_snapshot
 
-from integrations.downloader_wallets import run_wallet_cycle
-from integrations.bakai_monitor_playwright import run_rate_monitor_safe
-from integrations.downloader import run_download
 from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job types
 from integrations import script_jobs  # noqa: F401 — registers script_job:* handlers
+from modules.antares.jobs import register_jobs
+from modules.antares.jobs import run_download_job, run_hourly_job  # noqa: F401 — compatible exports
 
-from analyzers.hourly_report import run_hourly_report
-from integrations.telegram_routes import ROUTE_PLATFORM_HOURLY_REPORT, send_message_to_route
 from integrations.wallet_editor_tg import handle_wallet_editor_document
-from integrations.wallet_editor_registry_refresh import run_wallet_editor_registry_refresh_job
 from integrations.wallet_editor_registry import (
     build_registry_health_report,
     format_registry_health_report,
     replay_pending_outbox_records,
-    run_registry_outbox_replay_job,
 )
 from integrations.wallet_editor_registry_db.registry_export_builder import (
     RegistryExportArtifact,
@@ -45,7 +39,7 @@ from integrations.wallet_editor_registry_db.registry_export_builder import (
     build_registry_export_from_postgres,
     format_registry_export_summary,
 )
-from core.state_store import state_get, state_update
+from core.state_store import state_get
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
 from core.rules_v2.rules_validate_audit import try_append_manual_validate_audit_from_payload
@@ -195,43 +189,10 @@ def _format_observation_status() -> str:
 
 
 # =============================================================================
-# Jobs (wrappers)
+# Jobs (Antares bindings live in modules.antares.jobs)
 # =============================================================================
 
-def run_hourly_job() -> None:
-    """
-    Contract:
-      - run_hourly_report() does: download + fp compare + DTO + render (NO TG, NO fp commit)
-      - wrapper does: send + fp commit ONLY after successful send
-      - skip/no-changes -> only event_log (handled inside hourly_report)
-    """
-    res = run_hourly_report(job="hourly")
-    if res.skipped_no_changes or not res.text:
-        return
-
-    if not send_message_to_route(ROUTE_PLATFORM_HOURLY_REPORT, res.text):
-        return
-
-    if res.fingerprint:
-        state_update("hourly", {
-            "last_fingerprint": res.fingerprint,
-            "last_sent_ts": int(time.time())
-        })
-
-def run_download_job() -> None:
-    run_download()
-
-# Единственная точка привязки job_type -> runnable
-JOB_REGISTRY.update(
-    {
-        "wallet": run_wallet_cycle,
-        "hourly": run_hourly_job,
-        "rate": run_rate_monitor_safe,
-        "download": run_download_job,
-        "wallet_editor_registry_refresh": run_wallet_editor_registry_refresh_job,
-        "wallet_editor_registry_replay": run_registry_outbox_replay_job,
-    }
-)
+register_jobs(JOB_REGISTRY)
 
 # =============================================================================
 # Access helpers

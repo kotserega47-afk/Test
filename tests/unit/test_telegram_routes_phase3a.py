@@ -86,8 +86,8 @@ def test_flag_off_missing_routes_sheet_ok(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_flag_off_hourly_job_uses_legacy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_PLATFORM_HOURLY_LEGACY, "-legacy-hourly")
-    with patch("integrations.tg_commands.run_hourly_report", return_value=_FakeHourlyResult()):
-        with patch("integrations.tg_commands.state_update"):
+    with patch("analyzers.hourly_report.run_hourly_report", return_value=_FakeHourlyResult()):
+        with patch("core.state_store.state_update"):
             with patch("integrations.telegram_bot.send_message_sync") as send_sync:
                 tg_commands.run_hourly_job()
     send_sync.assert_called_once_with("hourly report body", chat_id="-legacy-hourly")
@@ -95,8 +95,8 @@ def test_flag_off_hourly_job_uses_legacy_env(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_flag_off_missing_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_PLATFORM_HOURLY_LEGACY, raising=False)
-    with patch("integrations.tg_commands.run_hourly_report", return_value=_FakeHourlyResult()):
-        with patch("integrations.tg_commands.state_update"):
+    with patch("analyzers.hourly_report.run_hourly_report", return_value=_FakeHourlyResult()):
+        with patch("core.state_store.state_update"):
             with pytest.raises(RuntimeError, match=ENV_PLATFORM_HOURLY_LEGACY):
                 tg_commands.run_hourly_job()
 
@@ -134,10 +134,10 @@ def test_flag_on_missing_route_skips_send(monkeypatch: pytest.MonkeyPatch) -> No
 def test_flag_on_hourly_job_skips_when_route_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_TELEGRAM_ROUTES_FROM_RULES_V2, "1")
     snap = RulesSnapshotV2(meta=_meta(), telegram_routes={})
-    with patch("integrations.tg_commands.run_hourly_report", return_value=_FakeHourlyResult()):
+    with patch("analyzers.hourly_report.run_hourly_report", return_value=_FakeHourlyResult()):
         with patch("core.rules_provider.get_snapshot_v2", return_value=snap):
             with patch("integrations.telegram_bot.send_message_sync") as send_sync:
-                with patch("integrations.tg_commands.state_update") as state_up:
+                with patch("core.state_store.state_update") as state_up:
                     tg_commands.run_hourly_job()
     send_sync.assert_not_called()
     state_up.assert_not_called()

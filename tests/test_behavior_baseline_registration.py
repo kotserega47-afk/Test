@@ -59,6 +59,14 @@ def test_assembled_job_registry_and_handlers_match_frozen_inventory() -> None:
     assert payload["document_filter_is_all"] is True
     raccoon_file = payload["raccoon_jobs_file"] or ""
     assert raccoon_file.replace("\\", "/").endswith("integrations/raccoon_jobs.py")
+    antares_file = payload["antares_jobs_file"] or ""
+    assert antares_file.replace("\\", "/").endswith("modules/antares/jobs.py")
+    assert payload["hourly_is_run_hourly_job"] is True
+    assert payload["download_is_run_download_job"] is True
+    assert payload["wallet_is_run_wallet_cycle"] is True
+    assert payload["rate_is_run_rate_monitor_safe"] is True
+    assert payload["refresh_is_lifecycle_job"] is True
+    assert payload["replay_is_outbox_job"] is True
 
 
 def test_assembled_registry_detects_missing_raccoon_jobs_import() -> None:
@@ -67,3 +75,4 @@ def test_assembled_registry_detects_missing_raccoon_jobs_import() -> None:
     assert _RACCOON_KEYS.isdisjoint(keys)
     expected_keys = json.loads((_FIXTURE / "expected_job_registry_keys.json").read_text(encoding="utf-8"))
     assert set(expected_keys["keys"]) - _RACCOON_KEYS <= keys
+    assert payload["hourly_is_run_hourly_job"] is True
