@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **Статус** | DRAFT characterization; **не** production |
-| **Test worktree SHA** | см. PR этой задачи (ветка `feat/task-2026-09-17-04-behavior-baseline`) |
+| **Test worktree SHA** | `455eb180df4d31e353595b314377abce5801c4ad` (ветка `feat/task-2026-09-17-04-behavior-baseline`) |
 | **Не выпущенный parser** | PR #5 `acfb9958df644679b85feecaf4e6a9acf65b884b` |
 | **Не выпущенный gate** | PR #6 code `48a2a825ce3d04d27501d1a387bb5c4b8b5dd9c9` (docs `ae0aeda…`) |
 | **Prod Test (survey F25)** | `test_main` `535994c…` — **не** эта ветка |
