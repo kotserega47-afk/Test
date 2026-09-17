@@ -30,6 +30,12 @@ for handler in get_handlers():
 
 antares_mod = sys.modules.get("modules.antares.jobs")
 raccoon_mod = sys.modules.get("integrations.raccoon_jobs")
+stub_executors = (
+    run_wallet_cycle,
+    run_rate_monitor_safe,
+    run_wallet_editor_registry_refresh_job,
+    run_registry_outbox_replay_job,
+)
 payload = {
     "keys": sorted(JOB_REGISTRY.keys()),
     "commands": commands,
@@ -45,6 +51,8 @@ payload = {
     is run_wallet_editor_registry_refresh_job,
     "replay_is_outbox_job": JOB_REGISTRY.get("wallet_editor_registry_replay")
     is run_registry_outbox_replay_job,
+    "stub_executors_pairwise_distinct": len({id(fn) for fn in stub_executors})
+    == len(stub_executors),
 }
 out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 print("registration_dump_ok")

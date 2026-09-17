@@ -37,6 +37,17 @@ def _blocked_internal(*args, **kwargs):  # noqa: ANN002, ANN003
     raise RuntimeError("external boundary stubbed in registration test")
 
 
+def _refuse(name: str):
+    """Each call returns a distinct refusing callable."""
+
+    def _fn(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError(f"{name} stubbed in registration test")
+
+    _fn.__name__ = name
+    _fn.__qualname__ = name
+    return _fn
+
+
 def _empty(*args, **kwargs):  # noqa: ANN002, ANN003
     return None
 
@@ -94,8 +105,10 @@ _INTERNAL_STUB_ATTRS: dict[str, dict] = {
         "run_auto_enable": _blocked_internal,
         "run_auto_enable_plan": _blocked_internal,
     },
-    "integrations.downloader_wallets": {"run_wallet_cycle": _blocked_internal},
-    "integrations.bakai_monitor_playwright": {"run_rate_monitor_safe": _blocked_internal},
+    "integrations.downloader_wallets": {"run_wallet_cycle": _refuse("run_wallet_cycle")},
+    "integrations.bakai_monitor_playwright": {
+        "run_rate_monitor_safe": _refuse("run_rate_monitor_safe"),
+    },
     "integrations.downloader": {"run_download": _blocked_internal},
     "analyzers.hourly_report": {"run_hourly_report": _blocked_internal},
     "analyzers.raccoon_daily_conversion": {"run_daily_conversion_report": _blocked_internal},
@@ -109,13 +122,15 @@ _INTERNAL_STUB_ATTRS: dict[str, dict] = {
     },
     "integrations.wallet_editor_tg": {"handle_wallet_editor_document": _blocked_internal},
     "integrations.wallet_editor_registry_refresh": {
-        "run_wallet_editor_registry_refresh_job": _blocked_internal,
+        "run_wallet_editor_registry_refresh_job": _refuse(
+            "run_wallet_editor_registry_refresh_job"
+        ),
     },
     "integrations.wallet_editor_registry": {
         "build_registry_health_report": lambda *a, **k: {},
         "format_registry_health_report": lambda *a, **k: "",
         "replay_pending_outbox_records": _blocked_internal,
-        "run_registry_outbox_replay_job": _blocked_internal,
+        "run_registry_outbox_replay_job": _refuse("run_registry_outbox_replay_job"),
     },
     "integrations.wallet_editor_registry_db": {},
     "integrations.wallet_editor_registry_db.registry_export_builder": {

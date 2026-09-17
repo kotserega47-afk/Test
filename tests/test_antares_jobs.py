@@ -8,12 +8,19 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock, call
 
-from modules.antares.jobs import ANTARES_JOB_KEYS, register_jobs, run_hourly_job
+import pytest
+
+from integrations.telegram_routes import ROUTE_PLATFORM_HOURLY_REPORT
+from modules.antares.jobs import (
+    ANTARES_JOB_KEYS,
+    register_jobs,
+    run_download_job,
+    run_hourly_job,
+)
 from tests.unit.isolated_child_env import isolated_child_env, missing_dependency_hint
 
-ROOT = Path(__file__).resolve().parents[1]
 _FORBIDDEN_ON_IMPORT = (
     "integrations.telegram_bot",
     "core.rules_provider",
@@ -68,31 +75,42 @@ def test_register_jobs_adds_six_keys_keeps_foreign_and_does_not_run(monkeypatch)
 
         return _fn
 
-    monkeypatch.setattr(
-        "integrations.downloader_wallets.run_wallet_cycle",
-        _mark("wallet"),
-    )
-    monkeypatch.setattr(
-        "integrations.bakai_monitor_playwright.run_rate_monitor_safe",
-        _mark("rate"),
-    )
+    wallet = _mark("wallet")
+    rate = _mark("rate")
+    refresh = _mark("refresh")
+    replay = _mark("replay")
+    monkeypatch.setattr("integrations.downloader_wallets.run_wallet_cycle", wallet)
+    monkeypatch.setattr("integrations.bakai_monitor_playwright.run_rate_monitor_safe", rate)
     monkeypatch.setattr(
         "integrations.wallet_editor_registry_refresh.run_wallet_editor_registry_refresh_job",
-        _mark("refresh"),
+        refresh,
     )
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.run_registry_outbox_replay_job",
-        _mark("replay"),
+        replay,
     )
     foreign = object()
+    expected = {
+        "keep": foreign,
+        "wallet": wallet,
+        "hourly": run_hourly_job,
+        "rate": rate,
+        "download": run_download_job,
+        "wallet_editor_registry_refresh": refresh,
+        "wallet_editor_registry_replay": replay,
+    }
+    stub_executors = (wallet, rate, refresh, replay)
+    assert len({id(fn) for fn in stub_executors}) == 4
     registry = {"keep": foreign}
     register_jobs(registry)
-    assert set(ANTARES_JOB_KEYS) <= set(registry)
-    assert registry["keep"] is foreign
-    assert registry["hourly"] is run_hourly_job
+    assert set(registry) == ANTARES_JOB_KEYS | {"keep"}
+    for key, fn in expected.items():
+        assert registry[key] is fn
     assert ran == []
     register_jobs(registry)
-    assert registry["keep"] is foreign
+    assert set(registry) == ANTARES_JOB_KEYS | {"keep"}
+    for key, fn in expected.items():
+        assert registry[key] is fn
     assert ran == []
 
 
@@ -144,6 +162,23 @@ def test_hourly_does_not_commit_fingerprint_when_send_fails(monkeypatch) -> None
     state.assert_not_called()
 
 
+def test_hourly_does_not_commit_fingerprint_when_send_raises(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "analyzers.hourly_report.run_hourly_report",
+        lambda job="hourly": SimpleNamespace(
+            skipped_no_changes=False, text="body", fingerprint="fp"
+        ),
+    )
+    send = MagicMock(side_effect=RuntimeError("send failed"))
+    state = MagicMock()
+    monkeypatch.setattr("integrations.telegram_routes.send_message_to_route", send)
+    monkeypatch.setattr("core.state_store.state_update", state)
+    with pytest.raises(RuntimeError, match="send failed"):
+        run_hourly_job()
+    send.assert_called_once()
+    state.assert_not_called()
+
+
 def test_hourly_commits_fingerprint_only_after_successful_send(monkeypatch) -> None:
     monkeypatch.setattr(
         "analyzers.hourly_report.run_hourly_report",
@@ -151,14 +186,24 @@ def test_hourly_commits_fingerprint_only_after_successful_send(monkeypatch) -> N
             skipped_no_changes=False, text="body", fingerprint="fp-ok"
         ),
     )
-    send = MagicMock(return_value=True)
-    state = MagicMock()
+    parent = Mock()
+    send = Mock(return_value=True)
+    state = Mock()
+    parent.attach_mock(send, "send")
+    parent.attach_mock(state, "state")
     monkeypatch.setattr("integrations.telegram_routes.send_message_to_route", send)
     monkeypatch.setattr("core.state_store.state_update", state)
     monkeypatch.setattr("modules.antares.jobs.time.time", lambda: 1_700_000_000)
     run_hourly_job()
-    send.assert_called_once()
+    send.assert_called_once_with(ROUTE_PLATFORM_HOURLY_REPORT, "body")
     state.assert_called_once_with(
         "hourly",
         {"last_fingerprint": "fp-ok", "last_sent_ts": 1_700_000_000},
     )
+    assert parent.mock_calls == [
+        call.send(ROUTE_PLATFORM_HOURLY_REPORT, "body"),
+        call.state(
+            "hourly",
+            {"last_fingerprint": "fp-ok", "last_sent_ts": 1_700_000_000},
+        ),
+    ]

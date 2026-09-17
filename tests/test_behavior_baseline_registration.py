@@ -67,6 +67,7 @@ def test_assembled_job_registry_and_handlers_match_frozen_inventory() -> None:
     assert payload["rate_is_run_rate_monitor_safe"] is True
     assert payload["refresh_is_lifecycle_job"] is True
     assert payload["replay_is_outbox_job"] is True
+    assert payload["stub_executors_pairwise_distinct"] is True
 
 
 def test_assembled_registry_detects_missing_raccoon_jobs_import() -> None:
