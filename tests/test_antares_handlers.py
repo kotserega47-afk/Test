@@ -1,4 +1,4 @@
-"""Risks of moving four Antares Telegram run-commands out of tg_commands."""
+"""Risks of moving Antares Telegram dispatch commands out of tg_commands."""
 
 from __future__ import annotations
 
@@ -34,12 +34,33 @@ from tests.unit.isolated_child_env import isolated_child_env, missing_dependency
 ROOT = Path(__file__).resolve().parents[1]
 _FIXTURE = ROOT / "tests" / "fixtures" / "behavior_baseline"
 
-_RUN_CMDS = (
+_ANTARES_CMDS = (
     (handlers.cmd_run_wallet, "run_wallet", "wallet", "jid-wallet"),
     (handlers.cmd_run_hourly, "run_hourly", "hourly", "jid-hourly"),
     (handlers.cmd_run_download, "run_download", "download", "jid-download"),
     (handlers.cmd_run_rate, "run_rate", "rate", "jid-rate"),
+    (
+        handlers.cmd_operator_wallets_ready,
+        "operator_wallets_ready",
+        "script_job:operator_wallets_ready",
+        "jid-operator-wallets-ready",
+    ),
+    (
+        handlers.cmd_wallet_editor_refresh,
+        "wallet_editor_refresh",
+        "wallet_editor_registry_refresh",
+        "jid-wallet-editor-refresh",
+    ),
 )
+
+_ANTARES_CALLBACK_IDS = {
+    id(handlers.cmd_run_wallet),
+    id(handlers.cmd_run_hourly),
+    id(handlers.cmd_run_download),
+    id(handlers.cmd_run_rate),
+    id(handlers.cmd_operator_wallets_ready),
+    id(handlers.cmd_wallet_editor_refresh),
+}
 
 _FORBIDDEN_ON_HANDLERS_IMPORT = (
     "integrations.tg_commands",
@@ -200,6 +221,8 @@ def test_expected_tg_commands_json_unchanged() -> None:
         "run_download",
         "run_rate",
     ]
+    assert expected["commands"][12] == "operator_wallets_ready"
+    assert expected["commands"][16] == "wallet_editor_refresh"
     assert expected.get("also_registers_document_handler") is True
 
 
@@ -225,7 +248,7 @@ def test_bind_same_object_ok_different_object_rejected(unbound) -> None:
     assert unbound._logger is log_a
 
 
-@pytest.mark.parametrize("callback,command,job_type,_jid", _RUN_CMDS)
+@pytest.mark.parametrize("callback,command,job_type,_jid", _ANTARES_CMDS)
 def test_unbound_and_partial_bind_do_not_dispatch(unbound, callback, command, job_type, _jid) -> None:
     update = _update()
 
@@ -246,7 +269,7 @@ def test_unbound_and_partial_bind_do_not_dispatch(unbound, callback, command, jo
     assert update._replies == []
 
 
-@pytest.mark.parametrize("callback,command,job_type,job_id", _RUN_CMDS)
+@pytest.mark.parametrize("callback,command,job_type,job_id", _ANTARES_CMDS)
 def test_deny_does_not_dispatch(unbound, callback, command, job_type, job_id) -> None:
     rules = _MutableRules()
     logger = MagicMock()
@@ -265,7 +288,7 @@ def test_deny_does_not_dispatch(unbound, callback, command, job_type, job_id) ->
     logger.exception.assert_not_called()
 
 
-@pytest.mark.parametrize("callback,command,job_type,job_id", _RUN_CMDS)
+@pytest.mark.parametrize("callback,command,job_type,job_id", _ANTARES_CMDS)
 def test_allow_dispatches_named_job_and_actor(unbound, callback, command, job_type, job_id) -> None:
     rules = _MutableRules()
     _allow(rules, command)
@@ -402,6 +425,8 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert tg_commands.cmd_run_hourly is handlers.cmd_run_hourly
     assert tg_commands.cmd_run_download is handlers.cmd_run_download
     assert tg_commands.cmd_run_rate is handlers.cmd_run_rate
+    assert tg_commands.cmd_operator_wallets_ready is handlers.cmd_operator_wallets_ready
+    assert tg_commands.cmd_wallet_editor_refresh is handlers.cmd_wallet_editor_refresh
     assert handlers._rules is tg_commands.RULES
     assert handlers._logger is tg_commands.log
 
@@ -414,17 +439,11 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert assembled["run_hourly"] is handlers.cmd_run_hourly
     assert assembled["run_download"] is handlers.cmd_run_download
     assert assembled["run_rate"] is handlers.cmd_run_rate
+    assert assembled["operator_wallets_ready"] is handlers.cmd_operator_wallets_ready
+    assert assembled["wallet_editor_refresh"] is handlers.cmd_wallet_editor_refresh
     assert assembled["run_raccoon"] is tg_commands.cmd_run_raccoon
     assert assembled["run_raccoon"] is not handlers.cmd_run_hourly
     assert assembled["run_hourly_raccoon"] is tg_commands.cmd_run_hourly_raccoon
-    assert (
-        len(
-            {
-                id(handlers.cmd_run_wallet),
-                id(handlers.cmd_run_hourly),
-                id(handlers.cmd_run_download),
-                id(handlers.cmd_run_rate),
-            }
-        )
-        == 4
-    )
+    assert assembled["registry_replay"] is tg_commands.cmd_registry_replay
+    assert assembled["registry_replay"] is not handlers.cmd_wallet_editor_refresh
+    assert len(_ANTARES_CALLBACK_IDS) == 6

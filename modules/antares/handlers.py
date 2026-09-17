@@ -66,3 +66,11 @@ async def cmd_run_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def cmd_run_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_antares_command(update, "run_rate", "rate")
+
+
+async def cmd_operator_wallets_ready(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_antares_command(update, "operator_wallets_ready", "script_job:operator_wallets_ready")
+
+
+async def cmd_wallet_editor_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_antares_command(update, "wallet_editor_refresh", "wallet_editor_registry_refresh")

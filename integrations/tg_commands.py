@@ -27,10 +27,12 @@ from modules.antares.jobs import run_download_job, run_hourly_job  # noqa: F401 
 from modules.antares.handlers import (
     bind_logger,
     bind_rules,
+    cmd_operator_wallets_ready,
     cmd_run_download,
     cmd_run_hourly,
     cmd_run_rate,
     cmd_run_wallet,
+    cmd_wallet_editor_refresh,
 )
 
 from integrations.wallet_editor_tg import handle_wallet_editor_document
@@ -367,12 +369,6 @@ async def cmd_run_script_hello(update: Update, context: ContextTypes.DEFAULT_TYP
     await _run_job_async(update, "script_job:hello_world")
 
 
-async def cmd_operator_wallets_ready(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "operator_wallets_ready"):
-        return
-    await _run_job_async(update, "script_job:operator_wallets_ready")
-
-
 async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard_or_deny(update, "auto_enable_plan"):
         return
@@ -435,12 +431,6 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         log.exception("cmd_auto_enable_run failed")
         await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
-
-
-async def cmd_wallet_editor_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "wallet_editor_refresh"):
-        return
-    await _run_job_async(update, "wallet_editor_registry_refresh")
 
 
 async def cmd_registry_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

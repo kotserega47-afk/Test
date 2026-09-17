@@ -67,16 +67,28 @@ payload = {
     "run_hourly_reexport_is_antares": tg_commands_mod.cmd_run_hourly is antares_handlers.cmd_run_hourly,
     "run_download_reexport_is_antares": tg_commands_mod.cmd_run_download is antares_handlers.cmd_run_download,
     "run_rate_reexport_is_antares": tg_commands_mod.cmd_run_rate is antares_handlers.cmd_run_rate,
+    "operator_wallets_ready_callback_is_antares": callback_by_command.get("operator_wallets_ready")
+    is antares_handlers.cmd_operator_wallets_ready,
+    "wallet_editor_refresh_callback_is_antares": callback_by_command.get("wallet_editor_refresh")
+    is antares_handlers.cmd_wallet_editor_refresh,
+    "operator_wallets_ready_reexport_is_antares": tg_commands_mod.cmd_operator_wallets_ready
+    is antares_handlers.cmd_operator_wallets_ready,
+    "wallet_editor_refresh_reexport_is_antares": tg_commands_mod.cmd_wallet_editor_refresh
+    is antares_handlers.cmd_wallet_editor_refresh,
     "run_raccoon_callback_is_tg": callback_by_command.get("run_raccoon") is tg_commands_mod.cmd_run_raccoon,
+    "registry_replay_callback_is_tg": callback_by_command.get("registry_replay")
+    is tg_commands_mod.cmd_registry_replay,
     "antares_run_callbacks_pairwise_distinct": len(
         {
             id(antares_handlers.cmd_run_wallet),
             id(antares_handlers.cmd_run_hourly),
             id(antares_handlers.cmd_run_download),
             id(antares_handlers.cmd_run_rate),
+            id(antares_handlers.cmd_operator_wallets_ready),
+            id(antares_handlers.cmd_wallet_editor_refresh),
         }
     )
-    == 4,
+    == 6,
 }
 out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 print("registration_dump_ok")

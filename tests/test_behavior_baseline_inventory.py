@@ -147,6 +147,13 @@ def test_source_inventory_antares_run_cmds_not_defined_in_tg_commands() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert not defined.intersection(
-        {"cmd_run_wallet", "cmd_run_hourly", "cmd_run_download", "cmd_run_rate"}
+        {
+            "cmd_run_wallet",
+            "cmd_run_hourly",
+            "cmd_run_download",
+            "cmd_run_rate",
+            "cmd_operator_wallets_ready",
+            "cmd_wallet_editor_refresh",
+        }
     )
 

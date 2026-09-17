@@ -154,10 +154,12 @@ def test_operator_wallets_ready_command_is_guarded():
     context = AsyncMock()
 
     async def run() -> None:
-        with patch("integrations.tg_commands._guard_or_deny", new_callable=AsyncMock) as guard:
+        with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
             guard.return_value = False
             await cmd_operator_wallets_ready(update, context)
-            guard.assert_awaited_once_with(update, "operator_wallets_ready")
+            guard.assert_awaited_once()
+            assert guard.await_args.args[0] is update
+            assert guard.await_args.args[1] == "operator_wallets_ready"
 
     asyncio.run(run())
 
@@ -169,11 +171,13 @@ def test_operator_wallets_ready_dispatches_script_job():
     context = AsyncMock()
 
     async def run() -> None:
-        with patch("integrations.tg_commands._guard_or_deny", new_callable=AsyncMock) as guard:
-            with patch("integrations.tg_commands._run_job_async", new_callable=AsyncMock) as run_job:
+        with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
+            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
                 guard.return_value = True
+                dispatch.return_value = "jid-operator"
                 await cmd_operator_wallets_ready(update, context)
-                run_job.assert_awaited_once_with(update, "script_job:operator_wallets_ready")
+                dispatch.assert_awaited_once()
+                assert dispatch.await_args.args[0] == "script_job:operator_wallets_ready"
 
     asyncio.run(run())
 
