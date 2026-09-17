@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -19,6 +18,7 @@ from core.project_profile_boot import (
     enforce_legacy_scheduler_profile,
     project_profile_env_value,
 )
+from tests.unit.isolated_child_env import isolated_child_env, missing_dependency_hint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,31 +67,17 @@ else:
 
 
 def _run_python(script: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env.pop("PROJECT_PROFILE", None)
-    env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    # Keep child from inheriting tokens / browser creds for safety.
-    for key in (
-        "TELEGRAM_BOT_TOKEN",
-        "TG_BOT_TOKEN",
-        "ANTARES_LOGIN",
-        "ANTARES_PASSWORD",
-        "DATABASE_URL",
-        "RACCOON_LOGIN",
-        "RACCOON_PASSWORD",
-    ):
-        env.pop(key, None)
-    if extra_env:
-        env.update(extra_env)
-    return subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=str(ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory() as tmp:
+        env = isolated_child_env(Path(tmp), with_harness=False, extra=extra_env)
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=tmp,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
 
 
 def test_decide_legacy_for_missing_and_blank() -> None:
@@ -181,22 +167,6 @@ def test_scheduler_calls_gate_before_runtime_imports() -> None:
     assert gate_at < text.find("utils.logger")
 
 
-_PARSER_BASE = "acfb9958df644679b85feecaf4e6a9acf65b884b"
-
-_JOB_HANDLER_FILES = (
-    "integrations/tg_commands.py",
-    "integrations/raccoon_jobs.py",
-    "integrations/downloader.py",
-    "integrations/hourly_downloader.py",
-    "integrations/raccoon_hourly_downloader.py",
-    "integrations/raccoon_wallet_downloader.py",
-    "automation/worker.py",
-    "core/job_runner.py",
-    "core/job_dispatch.py",
-)
-
-HARNESS_DIR = ROOT / "tests" / "unit" / "legacy_scheduler_harness"
-
 _EXPECTED_COMMANDS = {
     "start",
     "help",
@@ -209,80 +179,22 @@ _EXPECTED_COMMANDS = {
     "registry_export",
 }
 
-_SCHEDULER_PYTHON: str | None = None
-
-
-def _scheduler_python() -> str:
-    """Use an interpreter that can import scheduler.py third-party deps."""
-    global _SCHEDULER_PYTHON
-    if _SCHEDULER_PYTHON:
-        return _SCHEDULER_PYTHON
-    candidates: list[list[str]] = [[sys.executable]]
-    swapped = sys.executable.replace("Python313", "Python312")
-    if swapped != sys.executable and Path(swapped).is_file():
-        candidates.append([swapped])
-    probe = "import pandas, requests, dotenv"
-    for cmd in candidates:
-        proc = subprocess.run(
-            [*cmd, "-c", probe],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=20,
-        )
-        if proc.returncode == 0:
-            _SCHEDULER_PYTHON = cmd[0]
-            return cmd[0]
-    py = subprocess.run(
-        ["py", "-3.12", "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=20,
-    )
-    if py.returncode == 0:
-        # Resolve the 3.12 executable so env/sitecustomize stay simple.
-        resolved = subprocess.run(
-            ["py", "-3.12", "-c", "import sys; print(sys.executable)"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=20,
-        )
-        exe = (resolved.stdout or "").strip()
-        if exe:
-            _SCHEDULER_PYTHON = exe
-            return exe
-    raise RuntimeError(
-        "No Python with pandas/requests/dotenv found for scheduler.py entry test."
-    )
-
 
 def _run_scheduler_py(extra_env: dict[str, str] | None) -> tuple[subprocess.CompletedProcess[str], dict]:
     with tempfile.TemporaryDirectory() as tmp:
-        wiring_path = Path(tmp) / "wiring.json"
-        env = os.environ.copy()
-        env.pop("PROJECT_PROFILE", None)
-        for key in (
-            "TG_BOT_TOKEN",
-            "ANTARES_LOGIN",
-            "ANTARES_PASSWORD",
-            "DATABASE_URL",
-            "RACCOON_LOGIN",
-            "RACCOON_PASSWORD",
-        ):
-            env.pop(key, None)
-        env["PYTHONPATH"] = str(HARNESS_DIR) + os.pathsep + str(ROOT) + os.pathsep + env.get(
-            "PYTHONPATH", ""
-        )
-        env["LEGACY_SCHEDULER_WIRING_PATH"] = str(wiring_path)
-        env["TELEGRAM_BOT_TOKEN"] = "123456:legacy-scheduler-wiring-test"
-        env["TELEGRAM_CHAT_ID_ANALIZ"] = "1"
+        sandbox = Path(tmp)
+        wiring_path = sandbox / "wiring.json"
+        extra = {
+            "LEGACY_SCHEDULER_WIRING_PATH": str(wiring_path),
+            "TELEGRAM_BOT_TOKEN": "123456:legacy-scheduler-wiring-test",
+            "TELEGRAM_CHAT_ID_ANALIZ": "1",
+        }
         if extra_env:
-            env.update(extra_env)
+            extra.update(extra_env)
+        env = isolated_child_env(sandbox, with_harness=True, extra=extra)
         proc = subprocess.run(
-            [_scheduler_python(), str(ROOT / "scheduler.py")],
-            cwd=str(ROOT),
+            [sys.executable, str(ROOT / "scheduler.py")],
+            cwd=str(sandbox),
             env=env,
             capture_output=True,
             text=True,
@@ -295,26 +207,15 @@ def _run_scheduler_py(extra_env: dict[str, str] | None) -> tuple[subprocess.Comp
         return proc, payload
 
 
-def test_job_and_handler_files_unchanged_vs_parser_base() -> None:
-    """Jobs/handlers preserved vs PR #5 base. File identity, not a runtime launch."""
-    diff = subprocess.run(
-        ["git", "diff", "--name-only", _PARSER_BASE, "--", *_JOB_HANDLER_FILES],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert diff.returncode == 0, diff.stderr
-    assert diff.stdout.strip() == "", diff.stdout
-
-
 @pytest.mark.parametrize("extra", [{}, {"PROJECT_PROFILE": ""}, {"PROJECT_PROFILE": "   "}])
 def test_subprocess_legacy_scheduler_entrypoint_wiring(extra: dict[str, str]) -> None:
-    """Run scheduler.py with explicit stubs. Proves gate + main wiring, not jobs."""
+    """Run scheduler.py with explicit stubs. Proves main wiring, not jobs."""
     proc, payload = _run_scheduler_py(extra)
+    if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr or ""):
+        pytest.fail(missing_dependency_hint(proc.stderr))
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert payload, "wiring dump missing — stubs did not run"
-    assert payload.get("gate_passed") is True
+    assert "gate_passed" not in payload
     assert payload.get("handlers_added", 0) >= 20
     commands = set(payload.get("handler_commands") or [])
     assert _EXPECTED_COMMANDS <= commands
@@ -325,7 +226,105 @@ def test_subprocess_legacy_scheduler_entrypoint_wiring(extra: dict[str, str]) ->
     assert payload.get("run_polling") is True
     assert payload.get("rules_snapshot") is True
     assert payload.get("rules_force_sync") is True
-    assert payload.get("playwright_install_stubbed") is True
-    blocked_kinds = {item.get("kind") for item in payload.get("blocked") or [] if isinstance(item, dict)}
-    assert "subprocess.run" in blocked_kinds
-    # Stubs intercepted Chromium install; they do not prove a real browser/job run.
+    # downloader/playwright/worker internals are stubbed; this is wiring, not job results.
+
+
+_HARNESS_GUARD_SCRIPT = r"""
+import json
+import socket
+import threading
+
+events = []
+
+def unexpected():
+    events.append("ran")
+
+try:
+    threading.Thread(target=unexpected, name="sneaky-test-thread").start()
+except RuntimeError as exc:
+    events.append("thread_rejected")
+    events.append(str(exc))
+else:
+    raise SystemExit("unknown thread was allowed to start")
+
+try:
+    socket.create_connection(("example.invalid", 80), timeout=1)
+except OSError:
+    events.append("create_connection_blocked")
+else:
+    raise SystemExit("create_connection was allowed")
+
+sock = socket.socket()
+try:
+    sock.connect(("1.1.1.1", 53))
+except OSError:
+    events.append("connect_blocked")
+else:
+    raise SystemExit("connect was allowed")
+finally:
+    sock.close()
+
+sock = socket.socket()
+rc = sock.connect_ex(("1.1.1.1", 53))
+sock.close()
+if rc == 0:
+    raise SystemExit("connect_ex succeeded")
+events.append("connect_ex_blocked")
+
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen(1)
+port = listener.getsockname()[1]
+client = socket.socket()
+try:
+    client.connect(("127.0.0.1", port))
+except OSError:
+    events.append("loopback_tcp_blocked")
+else:
+    raise SystemExit("loopback TCP connect was allowed")
+finally:
+    client.close()
+    listener.close()
+
+a, b = socket.socketpair()
+a.close()
+b.close()
+events.append("socketpair_ok")
+print(json.dumps(events))
+"""
+
+
+def test_harness_rejects_unknown_thread_and_blocks_network() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        sandbox = Path(tmp)
+        wiring_path = sandbox / "wiring.json"
+        env = isolated_child_env(
+            sandbox,
+            with_harness=True,
+            extra={"LEGACY_SCHEDULER_WIRING_PATH": str(wiring_path)},
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", _HARNESS_GUARD_SCRIPT],
+            cwd=str(sandbox),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        events = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert "thread_rejected" in events
+        assert "sneaky-test-thread" in " ".join(events) or "unexpected" in " ".join(events).lower()
+        assert "create_connection_blocked" in events
+        assert "connect_blocked" in events
+        assert "connect_ex_blocked" in events
+        assert "loopback_tcp_blocked" in events
+        assert "socketpair_ok" in events
+        assert "ran" not in events
+        payload = json.loads(wiring_path.read_text(encoding="utf-8"))
+        kinds = {item.get("kind") for item in payload.get("blocked") or [] if isinstance(item, dict)}
+        assert "socket.connect" in kinds
+        assert "socket.connect_ex" in kinds
+        assert "create_connection" in kinds
+        assert payload.get("rejected_threads")

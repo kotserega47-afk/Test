@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
+
+from tests.unit.isolated_child_env import isolated_child_env
 
 from core.project_profile import (
     InvalidProjectProfileError,
@@ -100,18 +102,16 @@ print("clean_import_ok")
 
 
 def test_import_parser_and_empty_packages_without_production_env() -> None:
-    root = Path(__file__).resolve().parents[2]
-    env = os.environ.copy()
-    env.pop("PROJECT_PROFILE", None)
-    env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
-    proc = subprocess.run(
-        [sys.executable, "-c", _CLEAN_IMPORT],
-        cwd=str(root),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory() as tmp:
+        env = isolated_child_env(Path(tmp), with_harness=False)
+        proc = subprocess.run(
+            [sys.executable, "-c", _CLEAN_IMPORT],
+            cwd=tmp,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
     assert proc.returncode == 0, proc.stderr
     assert "clean_import_ok" in proc.stdout
