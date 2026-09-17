@@ -44,6 +44,7 @@
 - [x] `PROJECT_PROFILE=wr` → exit, пока WR не wired
 - [x] Нет silent fallback на другой проект
 - [x] Mixed-compat path остаётся отдельно от явного `antares`
+- [x] `python scheduler.py` без/`""`/`"   "` PROJECT_PROFILE: gate pass + main wiring через заглушки (не бизнес-результат jobs)
 
 ---
 
@@ -58,3 +59,4 @@
 | Дата | Событие |
 |------|---------|
 | 2026-09-17 | Заведена по review PR #4: process gate ≠ parser |
+| 2026-09-17 | PR #6: subprocess `scheduler.py` + stubs; reload убран из parser tests |

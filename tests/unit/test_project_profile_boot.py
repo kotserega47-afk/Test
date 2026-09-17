@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from core.project_profile import InvalidProjectProfileError
 from core.project_profile_boot import (
     LEGACY_MIXED,
     UnwiredProjectProfileError,
@@ -105,7 +107,7 @@ def test_decide_rejects_explicit_unwired_profiles(name: str) -> None:
 
 
 def test_decide_rejects_unknown_via_parser() -> None:
-    with pytest.raises(Exception, match="Invalid project profile"):
+    with pytest.raises(InvalidProjectProfileError, match="Invalid project profile"):
         decide_legacy_scheduler_boot("Antares")
 
 
@@ -179,23 +181,151 @@ def test_scheduler_calls_gate_before_runtime_imports() -> None:
     assert gate_at < text.find("utils.logger")
 
 
-def test_legacy_mixed_sources_still_register_known_jobs_and_commands() -> None:
-    """Gate does not edit job/handler tables; mixed registration stays in tg_commands."""
-    tg = (ROOT / "integrations/tg_commands.py").read_text(encoding="utf-8")
-    raccoon = (ROOT / "integrations/raccoon_jobs.py").read_text(encoding="utf-8")
-    for job in ("wallet", "hourly", "rate", "download"):
-        assert f'"{job}"' in tg
-    for job in ("raccoon_wallet", "raccoon_hourly", "raccoon_daily_conversion"):
-        assert f'"{job}"' in raccoon
-    for command in (
-        "run_wallet",
-        "run_hourly",
-        "run_raccoon",
-        "run_hourly_raccoon",
-        "auto_enable_run",
-        "registry_export",
-    ):
-        assert f'"{command}"' in tg
-    sched = (ROOT / "scheduler.py").read_text(encoding="utf-8")
-    assert "get_handlers" in sched
-    assert "from integrations.tg_commands import get_handlers, RULES" in sched
+_PARSER_BASE = "acfb9958df644679b85feecaf4e6a9acf65b884b"
+
+_JOB_HANDLER_FILES = (
+    "integrations/tg_commands.py",
+    "integrations/raccoon_jobs.py",
+    "integrations/downloader.py",
+    "integrations/hourly_downloader.py",
+    "integrations/raccoon_hourly_downloader.py",
+    "integrations/raccoon_wallet_downloader.py",
+    "automation/worker.py",
+    "core/job_runner.py",
+    "core/job_dispatch.py",
+)
+
+HARNESS_DIR = ROOT / "tests" / "unit" / "legacy_scheduler_harness"
+
+_EXPECTED_COMMANDS = {
+    "start",
+    "help",
+    "status",
+    "run_wallet",
+    "run_hourly",
+    "run_raccoon",
+    "run_hourly_raccoon",
+    "auto_enable_run",
+    "registry_export",
+}
+
+_SCHEDULER_PYTHON: str | None = None
+
+
+def _scheduler_python() -> str:
+    """Use an interpreter that can import scheduler.py third-party deps."""
+    global _SCHEDULER_PYTHON
+    if _SCHEDULER_PYTHON:
+        return _SCHEDULER_PYTHON
+    candidates: list[list[str]] = [[sys.executable]]
+    swapped = sys.executable.replace("Python313", "Python312")
+    if swapped != sys.executable and Path(swapped).is_file():
+        candidates.append([swapped])
+    probe = "import pandas, requests, dotenv"
+    for cmd in candidates:
+        proc = subprocess.run(
+            [*cmd, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        if proc.returncode == 0:
+            _SCHEDULER_PYTHON = cmd[0]
+            return cmd[0]
+    py = subprocess.run(
+        ["py", "-3.12", "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    if py.returncode == 0:
+        # Resolve the 3.12 executable so env/sitecustomize stay simple.
+        resolved = subprocess.run(
+            ["py", "-3.12", "-c", "import sys; print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        exe = (resolved.stdout or "").strip()
+        if exe:
+            _SCHEDULER_PYTHON = exe
+            return exe
+    raise RuntimeError(
+        "No Python with pandas/requests/dotenv found for scheduler.py entry test."
+    )
+
+
+def _run_scheduler_py(extra_env: dict[str, str] | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+    with tempfile.TemporaryDirectory() as tmp:
+        wiring_path = Path(tmp) / "wiring.json"
+        env = os.environ.copy()
+        env.pop("PROJECT_PROFILE", None)
+        for key in (
+            "TG_BOT_TOKEN",
+            "ANTARES_LOGIN",
+            "ANTARES_PASSWORD",
+            "DATABASE_URL",
+            "RACCOON_LOGIN",
+            "RACCOON_PASSWORD",
+        ):
+            env.pop(key, None)
+        env["PYTHONPATH"] = str(HARNESS_DIR) + os.pathsep + str(ROOT) + os.pathsep + env.get(
+            "PYTHONPATH", ""
+        )
+        env["LEGACY_SCHEDULER_WIRING_PATH"] = str(wiring_path)
+        env["TELEGRAM_BOT_TOKEN"] = "123456:legacy-scheduler-wiring-test"
+        env["TELEGRAM_CHAT_ID_ANALIZ"] = "1"
+        if extra_env:
+            env.update(extra_env)
+        proc = subprocess.run(
+            [_scheduler_python(), str(ROOT / "scheduler.py")],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        payload: dict = {}
+        if wiring_path.is_file():
+            payload = json.loads(wiring_path.read_text(encoding="utf-8"))
+        return proc, payload
+
+
+def test_job_and_handler_files_unchanged_vs_parser_base() -> None:
+    """Jobs/handlers preserved vs PR #5 base. File identity, not a runtime launch."""
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", _PARSER_BASE, "--", *_JOB_HANDLER_FILES],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert diff.returncode == 0, diff.stderr
+    assert diff.stdout.strip() == "", diff.stdout
+
+
+@pytest.mark.parametrize("extra", [{}, {"PROJECT_PROFILE": ""}, {"PROJECT_PROFILE": "   "}])
+def test_subprocess_legacy_scheduler_entrypoint_wiring(extra: dict[str, str]) -> None:
+    """Run scheduler.py with explicit stubs. Proves gate + main wiring, not jobs."""
+    proc, payload = _run_scheduler_py(extra)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert payload, "wiring dump missing — stubs did not run"
+    assert payload.get("gate_passed") is True
+    assert payload.get("handlers_added", 0) >= 20
+    commands = set(payload.get("handler_commands") or [])
+    assert _EXPECTED_COMMANDS <= commands
+    assert "MessageHandler" in (payload.get("handler_types") or [])
+    assert payload.get("ensure_worker_started") is True
+    assert "schedule_loop" in (payload.get("thread_targets") or [])
+    assert payload.get("schedule_loop_start_skipped") is True
+    assert payload.get("run_polling") is True
+    assert payload.get("rules_snapshot") is True
+    assert payload.get("rules_force_sync") is True
+    assert payload.get("playwright_install_stubbed") is True
+    blocked_kinds = {item.get("kind") for item in payload.get("blocked") or [] if isinstance(item, dict)}
+    assert "subprocess.run" in blocked_kinds
+    # Stubs intercepted Chromium install; they do not prove a real browser/job run.

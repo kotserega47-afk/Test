@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import importlib
+import os
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
-import modules
-import modules.antares
-import modules.raccoon
-import modules.wr
 from core.project_profile import (
     InvalidProjectProfileError,
     ProjectProfileSelection,
@@ -78,24 +76,42 @@ def test_parser_source_has_no_env_jobs_or_exit() -> None:
     assert "JOB_REGISTRY" not in file_source
 
 
-def test_import_parser_and_empty_packages_without_production_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for env_key in (
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_CHAT_ID_ANALIZ",
-        "ANTARES_LOGIN",
-        "PROJECT_PROFILE",
-        "DATABASE_URL",
-    ):
-        monkeypatch.delenv(env_key, raising=False)
+_CLEAN_IMPORT = r"""
+import os
+for env_key in (
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID_ANALIZ",
+    "ANTARES_LOGIN",
+    "PROJECT_PROFILE",
+    "DATABASE_URL",
+):
+    os.environ.pop(env_key, None)
+import modules
+import modules.antares
+import modules.raccoon
+import modules.wr
+from core.project_profile import parse_project_profile
+assert parse_project_profile("antares").name == "antares"
+assert modules.antares.__doc__
+assert modules.raccoon.__doc__
+assert modules.wr.__doc__
+print("clean_import_ok")
+"""
 
-    importlib.reload(modules)
-    importlib.reload(modules.antares)
-    importlib.reload(modules.raccoon)
-    importlib.reload(modules.wr)
-    importlib.reload(project_profile_mod)
-    assert project_profile_mod.parse_project_profile("antares").name == "antares"
-    assert modules.antares.__doc__
-    assert modules.raccoon.__doc__
-    assert modules.wr.__doc__
+
+def test_import_parser_and_empty_packages_without_production_env() -> None:
+    root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env.pop("PROJECT_PROFILE", None)
+    env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.run(
+        [sys.executable, "-c", _CLEAN_IMPORT],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "clean_import_ok" in proc.stdout
