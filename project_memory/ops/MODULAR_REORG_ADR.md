@@ -43,30 +43,35 @@ apps/                         # тонкие entry: выбирают профи�
 
 ### Профили запуска
 
-| Профиль | Env | Что регистрируется |
-|---------|-----|-------------------|
-| `antares` | `PROJECT_PROFILE=antares` | Antares jobs, Wallet Editor, Bakai, script_jobs Antares; **не** Raccoon jobs |
-| `raccoon` | `PROJECT_PROFILE=raccoon` | только Raccoon jobs/commands |
-| `wr` | `PROJECT_PROFILE=wr` | только WR, когда модуль появится |
+| Профиль | Когда process gate (TASK-03) может грузить jobs |
+|---------|--------------------------------------------------|
+| *(unset / whitespace)* | только **явный mixed-compat entry** (отдельный start / флаг совместимости), пока cutover Test; **не** ярлык `antares` |
+| `antares` | только если есть **isolated** Antares entry (нет Raccoon jobs). Иначе **отказ**, без тихого mixed |
+| `raccoon` | только isolated Raccoon entry |
+| `wr` | только когда WR entry реализован; иначе **отказ** |
+
+Парсер (TASK-02) может вернуть `name="wr"` или `implicit_default` для пустого входа. Это **не** разрешение запускать WR и **не** доказательство изоляции Antares.
 
 Правила:
 
 1. **Ядро не импортирует** `modules.antares` / `modules.raccoon` / `modules.wr`.
-2. Точка входа (`apps/<profile>` или `scheduler.py` после флага) импортирует **один** модуль.
-3. Парсер: неизвестное **значение** → ошибка (TASK-2026-09-17-02). Процесс: проверка профиля **до** побочных эффектов (TASK-2026-09-17-03) — иначе неизвестный/неподключённый профиль всё равно загрузит mixed jobs.
-4. Неподдерживаемая операция → **явный отказ**, без silent fallback на другой проект.
-5. Профили `raccoon` / `wr` **не** подключать к legacy `scheduler.py`, пока он регистрирует общий набор jobs. Известный, но не реализованный профиль → выход без чужих заданий (03).
-6. Import модуля **без** side effects: нет browser, polling, schedule loop, `request_job`, `playwright install`, обязательных chat_id raise на import.
-7. Объединять одноимённый код **только** после characterization одинакового поведения.
+2. Точка входа импортирует **один** модуль **после** gate.
+3. Парсер: неизвестное **значение** → `InvalidProjectProfileError` (TASK-2026-09-17-02). Не вызывает `SystemExit`, не читает env.
+4. Process gate (TASK-03): до побочных эффектов. Явно заданный профиль **без** готового isolated entry → выход с ошибкой, **без** mixed `JOB_REGISTRY`.
+5. Legacy mixed — **только** отдельный путь совместимости (не `PROJECT_PROFILE=antares`).
+6. Неподдерживаемая операция → отказ, без fallback на другой проект.
+7. Import модуля **без** side effects.
+8. Одноимённый код объединять только после characterization.
 
 ### Совместимость существующего Antares
 
 | Режим | Поведение |
 |-------|-----------|
-| Исторический сервис Test, env **без** `PROJECT_PROFILE` | пока cutover: **mixed** scheduler (не ярлык `antares-only`); Raccoon jobs в коде не вырезать тем же PR, что парсер |
-| `PROJECT_PROFILE=antares` на legacy entry до isolated register | **не** считать изоляцией; gate (03) должен отказать или явно выбрать documented mixed path |
-| Новые сервисы | isolated entry + обязательный профиль; не legacy mixed |
-| Целевое состояние | unset запрещён; Raccoon jobs сняты с процесса Test отдельным PR |
+| Исторический сервис Test, env **без** `PROJECT_PROFILE` | **mixed-compat path** (документированный, отдельный от `antares`); не вырезать Raccoon jobs тем же PR, что парсер |
+| `PROJECT_PROFILE=antares` до isolated Antares entry | **отклонить** (TASK-03); не выбирать mixed незаметно |
+| `PROJECT_PROFILE=raccoon` / `wr` до isolated entry | **отклонить**; не legacy scheduler |
+| Новые сервисы | только isolated entry + обязательный явный профиль |
+| Целевое состояние | mixed-compat снят; unset запрещён |
 
 Смешанный процесс Test — **долг**. Риск двойных выгрузок Raccoon (U2/U10/U12) **не закрыт** SUCCESS-деплоем.
 

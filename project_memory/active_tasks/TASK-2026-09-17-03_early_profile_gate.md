@@ -29,19 +29,21 @@
 1. Прочитать env профиля (без импорта downloaders).
 2. Вызвать парсер из TASK-2026-09-17-02.
 3. Неизвестное значение → выход с понятной ошибкой, **без** чужих jobs.
-4. Известный профиль, для которого **ещё нет** isolated entry (`raccoon`, `wr`, и `antares` пока нет отдельного register): **завершить запуск** с ошибкой вида «profile X is not wired; refusing mixed JOB_REGISTRY» — **не** падать в legacy mixed scheduler.
-5. Legacy mixed режим — только явный отдельный путь (например прежний unset на текущем Test **до** cutover), задокументированный как mixed, **не** как `antares`.
+4. Известный профиль **без** isolated entry (`raccoon`, `wr`, и явный `antares` пока нет отдельного register) → **отклонить** запуск: «profile X is not wired; refusing mixed JOB_REGISTRY».
+5. Legacy mixed — **только** отдельный compat path (например documented unset / отдельный entry), **не** `PROJECT_PROFILE=antares`.
 
-Нельзя подключать `PROJECT_PROFILE=raccoon` или `wr` к текущему `scheduler.py`, пока он регистрирует общий набор.
+Нельзя подключать `PROJECT_PROFILE=antares|raccoon|wr` к текущему mixed `scheduler.py`.
 
 ---
 
 ## Success Criteria (когда задача будет in_progress)
 
 - [ ] До `import integrations.tg_commands` профиль уже отвергнут или выбран
-- [ ] `PROJECT_PROFILE=raccoon` на legacy entry → exit, в `JOB_REGISTRY` пусто / процесс не живёт
-- [ ] `PROJECT_PROFILE=wr` → то же, пока WR не реализован
+- [ ] `PROJECT_PROFILE=antares` на mixed legacy entry → exit (не silent mixed)
+- [ ] `PROJECT_PROFILE=raccoon` на legacy entry → exit
+- [ ] `PROJECT_PROFILE=wr` → exit, пока WR не wired
 - [ ] Нет silent fallback на другой проект
+- [ ] Mixed-compat path остаётся отдельно от явного `antares`
 
 ---
 
