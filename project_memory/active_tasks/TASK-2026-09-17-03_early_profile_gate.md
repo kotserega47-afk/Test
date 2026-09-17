@@ -3,12 +3,12 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-03 |
-| **Статус** | draft |
+| **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-2026-09-17-02 (парсер), `ops/MODULAR_REORG_MIGRATION.md` |
 | **Риск** | medium: трогает порядок импорта `scheduler.py` |
 
-**Не реализовывать в PR #4 и не смешивать с TASK-2026-09-17-02.**
+Реализация: gate в `core/project_profile_boot.py`, вызов в `scheduler.py` **до** Telegram/jobs. Unset `PROJECT_PROFILE` = documented **legacy mixed**, не isolated Antares.
 
 ---
 
@@ -38,12 +38,12 @@
 
 ## Success Criteria (когда задача будет in_progress)
 
-- [ ] До `import integrations.tg_commands` профиль уже отвергнут или выбран
-- [ ] `PROJECT_PROFILE=antares` на mixed legacy entry → exit (не silent mixed)
-- [ ] `PROJECT_PROFILE=raccoon` на legacy entry → exit
-- [ ] `PROJECT_PROFILE=wr` → exit, пока WR не wired
-- [ ] Нет silent fallback на другой проект
-- [ ] Mixed-compat path остаётся отдельно от явного `antares`
+- [x] До `import integrations.tg_commands` профиль уже отвергнут или выбран
+- [x] `PROJECT_PROFILE=antares` на mixed legacy entry → exit (не silent mixed)
+- [x] `PROJECT_PROFILE=raccoon` на legacy entry → exit
+- [x] `PROJECT_PROFILE=wr` → exit, пока WR не wired
+- [x] Нет silent fallback на другой проект
+- [x] Mixed-compat path остаётся отдельно от явного `antares`
 
 ---
 

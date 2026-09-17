@@ -1,6 +1,12 @@
 # scheduler.py
 from __future__ import annotations
 
+from core.project_profile_boot import enforce_legacy_scheduler_profile
+
+# Before Telegram / jobs / Playwright import chain. Unset PROJECT_PROFILE
+# keeps the documented legacy mixed scheduler (not isolated Antares).
+enforce_legacy_scheduler_profile()
+
 import os
 import threading
 import time
