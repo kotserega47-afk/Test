@@ -3,56 +3,36 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-02 |
-| **Статус** | draft |
+| **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-2026-09-17-01, TASK-2026-09-17-03, `ops/MODULAR_REORG_MIGRATION.md` этап 1 |
 | **Риск** | low для diff; merge в `test_main` может **рестартовать** сервис Test (автодеплой) |
-
-К реализации **не переходить**, пока не закрыт review docs PR #4.
 
 ---
 
 ## Goal
 
-Добавить **чистый парсер** `PROJECT_PROFILE`, пустые пакеты модулей и unit-тесты. Рабочие entrypoints **не** подключаются.
+Добавить **чистый парсер** профиля, пустые пакеты `modules/` и unit-тесты. Рабочие entrypoints **не** подключаются.
 
 ---
 
-## Business Context
+## Desired Behavior (parser contract)
 
-Первый code PR программы модульности. Не меняет набор jobs. Текущий Railway Test остаётся смешанным процессом (Antares + код Raccoon jobs). Это **не** изоляция профиля `antares`.
+`parse_project_profile(value: str | None) -> ProjectProfileSelection`
 
----
+Frozen `ProjectProfileSelection`: `name: Literal["antares", "raccoon", "wr"]`, `implicit_default: bool`.
 
-## Current Behavior
+| Вход | Результат |
+|------|-----------|
+| `None`, `""`, только пробелы | `name="antares"`, `implicit_default=True` |
+| `antares` / `raccoon` / `wr` после `strip` | тот же `name`, `implicit_default=False` |
+| иное, включая `"Antares"` | `InvalidProjectProfileError`, без fallback |
 
-Профиля проекта нет. `scheduler.py` импортирует `tg_commands` → регистрирует общий `JOB_REGISTRY` (Antares + Raccoon + script_jobs) независимо от любой будущей строки env.
+Парсер не читает `os.environ`, не хранит mutable global state, не вызывает `SystemExit`, не пишет логи/файлы, не импортирует scheduler/Telegram/Playwright/jobs.
 
----
+`implicit_default` — только разбор входа, не изоляция процесса. Принятие `"wr"` не означает готовность WR.
 
-## Desired Behavior
-
-Различать два уровня (в этом PR только первый):
-
-| Уровень | Что делает | Этот PR |
-|---------|------------|---------|
-| Парсер | Разбирает строку; неизвестное значение → ошибка с перечислением допустимых; **не** запускает процесс, **не** импортирует jobs | **да** |
-| Процесс | До побочных эффектов решает, какой модуль грузить; известный, но не реализованный профиль → выход **без** чужих jobs | **нет** (TASK-2026-09-17-03) |
-
-Парсер:
-
-- `parse_project_profile(value: str | None) -> Literal["antares","raccoon","wr"]` **или** typed error
-- неизвестное значение (включая другой регистр, если не выбран явный lower-канон) → ошибка, **без** fallback на другой проект
-- `None` / empty: вернуть `antares` + `implicit_default=True` **как разбор строки**, не как «процесс уже antares-only»
-- пустые `modules/antares/__init__.py`, `modules/raccoon/__init__.py`, `modules/wr/__init__.py`: без I/O, без env, без регистрации jobs
-- пакеты **не** импортируются из `scheduler.py`, `tg_commands.py`, `railway.toml`
-
-**Запрещено в этом PR:**
-
-- правки `scheduler.py`, `integrations/tg_commands.py`, `JOB_REGISTRY`, handlers, WE engine
-- optional log / «интеграция одной строкой»
-- подключение профилей `raccoon` / `wr` к legacy scheduler
-- утверждение, что после merge процесс изолирован
+Process gate = TASK-2026-09-17-03 (не этот PR).
 
 ---
 
@@ -62,38 +42,24 @@
 |--------|----------|
 | `core/project_profile.py` | создать |
 | `tests/unit/test_project_profile.py` | создать |
-| `modules/*/__init__.py` | создать пустые |
+| `modules/**/__init__.py` | создать пустые |
 | `scheduler.py` | **не трогать** |
 
 ---
 
 ## Success Criteria
 
-- [ ] pytest `tests/unit/test_project_profile.py` зелёный
-- [ ] неизвестная строка → ошибка парсера (тест)
-- [ ] empty/None → implicit default `antares` (тест), без вызова scheduler
-- [ ] `git diff` **не** содержит `scheduler.py`, `tg_commands.py`, `JOB_REGISTRY`, `railway.toml`, `automation/engine.py`
-- [ ] `import modules.wr` в тесте не требует env и не ходит в сеть
-
-**Не** критерий этого PR: «неизвестный профиль не стартует jobs» — это поведение **процесса** (TASK-2026-09-17-03). Парсер в unit-тесте не стартует scheduler.
+- [x] pytest `tests/unit/test_project_profile.py`
+- [x] неизвестная строка / wrong case → ошибка
+- [x] None / empty / whitespace → implicit antares
+- [x] diff без hooks в entrypoints
+- [x] import пакетов без production env
 
 ---
 
 ## Out Of Scope
 
-Early profile gate; `JOB_ACCEPT`; вырезание Raccoon из Test-процесса; порт Platform; WR adapter; DB; изменение Railway.
-
----
-
-## Stop conditions
-
-Любой import парсера/пакетов из prod entry → закрыть PR и убрать hook.
-
----
-
-## Rollback
-
-Revert commit. Если PR уже влит в `test_main`, revert тоже может вызвать restart Test.
+TASK-03; `JOB_ACCEPT`; inbox/drain; Wallet Editor; Railway; JOB_REGISTRY.
 
 ---
 
@@ -101,5 +67,5 @@ Revert commit. Если PR уже влит в `test_main`, revert тоже мо�
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-17 | Создан как следующая реализация после review docs |
-| 2026-09-17 | Сужен: без scheduler log; парсер ≠ process gate |
+| 2026-09-17 | Создан; сужен без scheduler |
+| 2026-09-17 | Реализация парсера по контракту `ProjectProfileSelection` |
