@@ -5,54 +5,51 @@
 | **ID** | IMPACT-2026-09-17-01 |
 | **Связанная задача** | TASK-2026-09-17-01 |
 | **KB версия** | v1.10 |
-| **Триггер** | I1/I2/I3 для **программы**; для **этого PR** — только docs |
-| **Вердикт** | **proceed** для документации; runtime **defer** |
+| **Триггер** | I1/I2/I3 для **программы**; этот PR — документация |
+| **Вердикт** | **proceed** для публикации docs; runtime-код **не** меняется; merge в `test_main` **может** затронуть сервис Test |
 
 ---
 
 ## Current Runtime Behavior
 
-Entry: `railway.toml` → `scheduler.py` (E1, E2).  
-Test capabilities R1–R6 + встроенный Raccoon (факт survey, шире чем KB S2).  
-Platform develop: Raccoon-only threads.  
-Этот PR **не** меняет runtime.
+Entry: `railway.toml` → `scheduler.py`.  
+Test service (F25): branch `test_main`, SHA `535994c…`, deploy SUCCESS — **не** job health. Код процесса **смешанный** (регистрация Antares + Raccoon jobs); исполнение raccoon jobs в этом контейнере — U12.  
+Raccoon service (F26): Platform `develop` `ebbcd6c…`.
 
 ---
 
 ## Runtime Paths
 
-| Путь | Entry | Изменяется этим PR? |
-|------|-------|---------------------|
-| Test scheduler + polling | `scheduler.py` | нет |
-| Platform scheduler | `scheduler.py` | нет |
-| WalletEditor workers | `automation/worker.py` | нет |
+| Путь | Entry | Diff этого PR | Эффект merge в connected branch |
+|------|-------|---------------|----------------------------------|
+| Test scheduler | `scheduler.py` | файлы `.py` **не** меняются | **возможен rebuild/restart** сервиса `542c84d6-…` |
+| Raccoon scheduler | Platform `scheduler.py` | не в этом репо | merge Test **не** должен сдвигать SHA `ebbcd6c…` (проверить после выката) |
+| WalletEditor workers | `automation/worker.py` | нет в diff | рестарт Test оборвёт in-memory очереди/cron cursors |
 
 ---
 
 ## Pipeline Impact
 
-| Pipeline | Impact |
-|----------|--------|
-| P1–P4, P-WE | none (docs) |
-| Будущие этапы 3–6 | high — отдельный Impact на каждый code PR |
+| Pipeline | Impact кода | Impact merge/deploy |
+|----------|-------------|---------------------|
+| P1–P4, P-WE | none в diff | restart Test = краткий разрыв polling и in-memory schedules |
+| Будущие этапы | high | отдельный Impact |
+
+**Не утверждается:** production blast radius = 0; docs-only merge гарантированно не трогает сервисы; совместимость 100%.
 
 ---
 
 ## Contracts Impact
 
-Нет изменений env/DB/files в этом PR. Предлагаемые будущие env: `PROJECT_PROFILE`, `JOB_ACCEPT`, profile-scoped `STATE_DIR` — только в ADR.
+Нет изменений runtime env/DB в diff. Предлагаемые будущие рычаги (`JOB_ACCEPT`, `EXTERNAL_SIDE_EFFECTS`, early profile gate) — **отсутствуют в коде**; см. migration.
 
----
-
-## DORMANT / DOCS_ONLY
-
-Не активировать DORMANT Antares в Platform. Не реализовывать WR.
+Railway production-настройки **не** меняются этой задачей.
 
 ---
 
 ## Blast Radius
 
-Docs readers / onboarding. Production blast radius = **0**.
+Читатели docs. Операционно: **если** PR влить в `test_main` при включённом auto-deploy — сервис Test может пересобраться и перезапуститься на том же runtime-коде. Raccoon при корректной независимости веток — нет. Независимый выпуск: `ops/MODULAR_REORG_MIGRATION.md` § Автодеплой.
 
 ---
 
@@ -60,12 +57,13 @@ Docs readers / onboarding. Production blast radius = **0**.
 
 | ID | Риск | Mitigation |
 |----|------|------------|
-| R1 | Ops примет ADR как уже внедрённый | статус PROPOSED; current_state не переписан как migrated |
-| R2 | Copy-paste Raccoon из Test | явно запрещено в ADR |
+| R1 | Ops примет ADR как внедрённый | PROPOSED; mixed ≠ antares-only |
+| R2 | Copy-paste Raccoon из Test | запрет в ADR |
+| R3 | Merge docs рестартит Test | не merge без окна; либо принять restart |
+| R4 | Dual Raccoon | U2/U10/U12; SUCCESS деплоя не закрывает |
 
 ---
 
 ## Verdict
 
-**proceed** — публикация обследования.  
-Code/deploy: **не в этой задаче**.
+**proceed** с docs. Не merge/deploy в рамках этой задачи без явного решения об автодеплое Test.

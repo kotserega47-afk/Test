@@ -8,16 +8,16 @@
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **Миграция** | [MODULAR_REORG_MIGRATION.md](MODULAR_REORG_MIGRATION.md) |
 
-Этот ADR **не** меняет production. Нормативные runtime-факты остаются в `current_state.md` / `architecture_map.md` до отдельных code PR.
+Этот ADR **не** меняет production-настройки. Merge связанных PR в `test_main` **может** перезапустить сервис Test (автодеплой). Нормативные runtime-факты в `current_state.md` до code merge не считать «уже модульными».
 
 ---
 
 ## Контекст
 
-Сейчас два git-репозитория и (ориентир) два Railway-процесса:
+Сейчас два git-репозитория и два Railway-сервиса (F25/F26):
 
-- Test `test_main`: один процесс = Antares аналитика + **встроенный Raccoon** + Wallet Editor + Telegram polling.
-- Platform `develop`: один процесс = **только Raccoon** (другие ветки расписания, locks, YAML, другое имя Telegram token).
+- Test `test_main` @ `535994c…`: процесс из **смешанного** `scheduler.py` (Antares + регистрация Raccoon jobs + WE). Не называть это изолированным Antares. Факт исполнения raccoon **jobs** в этом контейнере — U12.
+- Platform `develop` @ `ebbcd6c…`: Raccoon-only scheduler.
 
 Одноимённые файлы **не** эквивалентны. WR в коде нет.
 
@@ -53,20 +53,22 @@ apps/                         # тонкие entry: выбирают профи�
 
 1. **Ядро не импортирует** `modules.antares` / `modules.raccoon` / `modules.wr`.
 2. Точка входа (`apps/<profile>` или `scheduler.py` после флага) импортирует **один** модуль.
-3. Неизвестный профиль → **exit 2** с текстом: допустимые значения, что задано.
-4. Неподдерживаемая операция (например `/run_raccoon` на профиле `antares`) → **явный отказ**, без silent fallback на другой проект.
-5. Import модуля **без** side effects: нет browser, polling, schedule loop, `request_job`, `playwright install`, обязательных chat_id raise на import.
-6. Объединять одноимённый код **только** после characterization (golden / snapshot) одинакового поведения.
+3. Парсер: неизвестное **значение** → ошибка (TASK-2026-09-17-02). Процесс: проверка профиля **до** побочных эффектов (TASK-2026-09-17-03) — иначе неизвестный/неподключённый профиль всё равно загрузит mixed jobs.
+4. Неподдерживаемая операция → **явный отказ**, без silent fallback на другой проект.
+5. Профили `raccoon` / `wr` **не** подключать к legacy `scheduler.py`, пока он регистрирует общий набор jobs. Известный, но не реализованный профиль → выход без чужих заданий (03).
+6. Import модуля **без** side effects: нет browser, polling, schedule loop, `request_job`, `playwright install`, обязательных chat_id raise на import.
+7. Объединять одноимённый код **только** после characterization одинакового поведения.
 
 ### Совместимость существующего Antares
 
 | Режим | Поведение |
 |-------|-----------|
-| Исторический сервис Test, env **без** `PROJECT_PROFILE` | трактовать как `antares` + **warning** в лог (один релиз); jobs Raccoon **не** отключать в том же PR, что вводит профиль — см. этапы |
-| Новые сервисы / новые start command | `PROJECT_PROFILE` **обязателен** |
-| Целевое состояние | unset на новых деплоях **запрещён**; Raccoon jobs сняты с процесса Antares отдельным PR |
+| Исторический сервис Test, env **без** `PROJECT_PROFILE` | пока cutover: **mixed** scheduler (не ярлык `antares-only`); Raccoon jobs в коде не вырезать тем же PR, что парсер |
+| `PROJECT_PROFILE=antares` на legacy entry до isolated register | **не** считать изоляцией; gate (03) должен отказать или явно выбрать documented mixed path |
+| Новые сервисы | isolated entry + обязательный профиль; не legacy mixed |
+| Целевое состояние | unset запрещён; Raccoon jobs сняты с процесса Test отдельным PR |
 
-Смешанный процесс Test сегодня — **долг**, не целевая модель. Пока оба Railway крутят Raccoon, риск двойных выгрузок (A3/U2/U10).
+Смешанный процесс Test — **долг**. Риск двойных выгрузок Raccoon (U2/U10/U12) **не закрыт** SUCCESS-деплоем.
 
 ### Wallet Editor
 
@@ -89,7 +91,7 @@ Raccoon **не** получает WE, пока нет подтверждённо
 
 | Ресурс | Способ | Почему |
 |--------|--------|--------|
-| Процесс / Railway service | 1 сервис = 1 `PROJECT_PROFILE` | независимый pin SHA; нет dual polling |
+| Процесс / Railway service | 1 сервис = 1 `PROJECT_PROFILE` | независимый выпуск: сегодня разные репо/ветки (F25/F26); pin SHA **не** считать уже включённым |
 | Telegram token | отдельный бот на профиль | E-WE-01 уже: один polling на token |
 | Browser `storage_state` | каталог `{STATE_DIR}/{profile}/auth/…` | сейчас `/tmp/auth_state_raccoon.json` совпадает в T и P |
 | Job locks | `{STATE_DIR}/{profile}/locks/{job_type}.lock` | PID lock Test; при переносе Raccoon — тот же паттерн, **другие** пути |
@@ -116,9 +118,9 @@ Raccoon **не** получает WE, пока нет подтверждённо
 
 ## Последствия
 
-- Три сервиса **не** обязаны обновляться одним SHA: Railway pin commit/image independently (`MIGRATION` § pin).
-- Перенос Raccoon из Platform в Test — **портирование поведения**, не copy-paste из Test `integrations/raccoon_*`.
-- Удаление Platform репозитория — только после этапа 6 и наблюдения.
+- Три сервиса не обязаны обновляться одним merge: сегодня Test следит за `test_main`, Raccoon — за Platform `develop`. Способ после monorepo — `MIGRATION` § Автодеплой (проверяемые варианты, не предполагаемый pin SHA).
+- PID locks не координируют контейнеры (`MIGRATION` § Блокировки).
+- Перенос Raccoon — портирование Platform develop, не copy-paste Test `integrations/raccoon_*`.
 
 ---
 

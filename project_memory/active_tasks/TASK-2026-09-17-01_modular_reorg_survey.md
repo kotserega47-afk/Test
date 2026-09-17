@@ -6,7 +6,7 @@
 | **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | `TASK-2026-09-17-01_modular_reorg_survey_impact.md`, `CP-dev_task-TASK-2026-09-17-01-20260917.md`, `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md` |
-| **Риск** | low для этого PR (docs only); программа в целом high |
+| **Риск** | docs; merge в `test_main` может рестартовать Test (автодеплой) |
 
 ---
 
@@ -27,7 +27,7 @@
 ## Current Behavior
 
 Ссылки KB: P1–P4, P-WE; `current_state.md` R1–R6 (Test).  
-Уточнение обследования (2026-09-17): Test `test_main` **уже содержит** Raccoon jobs; KB S2 устарело. Platform `develop` — Raccoon-only scheduler. Live Railway SHA — UNKNOWN.
+Уточнение 2026-09-17: Test **код** содержит Raccoon jobs (SHA задеплоен F25); **исполнение** этих jobs в prod Test = U12. Platform `develop` задеплоен как Raccoon (F26). PR #2 Draft/OPEN `7aadf49`. Live job health — UNKNOWN.
 
 ---
 
@@ -39,8 +39,8 @@
 
 ## Affected Pipelines / Modules
 
-Документация: `project_memory/ops/*`, `active_tasks/*`, указатели в `tasks.md` / `decisions.md`.  
-Runtime pipelines: **не изменяются**.
+Документация: `project_memory/ops/*`, `active_tasks/*`, указатели KB.  
+Runtime `.py`: **не** в diff. Merge в `test_main` всё равно может перезапустить сервис Test.
 
 ---
 
@@ -50,8 +50,8 @@ Runtime pipelines: **не изменяются**.
 - [x] Таблица функций и blob-diff одноимённых файлов
 - [x] ADR изоляции и границ модулей
 - [x] Этапы PR, cutover, rollback, QA
-- [x] TASK-2026-09-17-02 на первый код
-- [ ] Draft PR открыт на GitHub (зависит от `gh` auth)
+- [x] TASK-2026-09-17-02 сужен (парсер only); TASK-2026-09-17-03 — early gate
+- [x] Draft PR #4 https://github.com/deniskotdavydov1991-wq/Test/pull/4
 
 ---
 
@@ -65,8 +65,9 @@ Runtime pipelines: **не изменяются**.
 
 | Риск | Уровень | Комментарий |
 |------|---------|-------------|
-| Неверные live SHA | med | U1; стоп этапа 0 = поправка docs |
-| Dual Raccoon уже в prod | high | A3/U2; не чинится docs PR |
+| Неверные live SHA | med | частично закрыто F25/F26; health остаётся U1 |
+| Dual Raccoon | high | U2/U10/U12; не закрывается SUCCESS деплоя |
+| Автодеплой docs | med | merge `test_main` может рестартовать Test |
 | Platform develop tracked `.env` | high (security) | отдельный PR на Platform; секреты не копировать |
 
 ---
@@ -96,3 +97,4 @@ Runtime pipelines: **не изменяются**.
 | Дата | Событие |
 |------|---------|
 | 2026-09-17 | Обследование; docs в worktree `docs/modular-reorg-antares-raccoon-wr` |
+| 2026-09-17 | Review PR #4: автодеплой, cutover, locks, Railway SHA, сужение TASK-02, TASK-03 |

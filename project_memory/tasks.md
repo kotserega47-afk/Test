@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY, not started); **TASK-2026-09-17-01** modular reorg survey (docs); **TASK-2026-09-17-02** profile skeleton (draft, code later) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01** docs PR #4; **TASK-2026-09-17-02** parser (draft, not started); **TASK-2026-09-17-03** early profile gate (draft) |
 | **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 | **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
@@ -62,7 +62,7 @@
 | ID | Расхождение | Где | Severity | Action |
 |----|-------------|-----|----------|--------|
 | S1 | Two lock systems | `run_once_guard.py` vs `job_runner.py` | med | Impact before unification |
-| S2 | Raccoon in docs, absent in code | `EXPERT_REVIEW.md` / `architecture_map` Unknowns | low | **STALE vs Test `test_main` 2026-09-17:** Raccoon jobs **присутствуют** (`integrations/raccoon_jobs.py`). Prod-поведение Raccoon-only — Platform `develop`. См. `ops/MODULAR_REORG_SURVEY.md` |
+| S2 | Raccoon in docs vs code | `EXPERT_REVIEW.md` / `architecture_map` | low | Код Test **содержит** `raccoon_*`. Это не доказательство prod execution на сервисе Test (U12). Prod Raccoon-only = Platform `develop` (F26). `ops/MODULAR_REORG_SURVEY.md` |
 | S3 | Partner column spelling in conversion mapping | resolved — single source `main.py` `CONVERSION_COLUMNS` (`Партнёр`) | low | closed (E-CONFIG-03) |
 | S4 | Dual validation path: legacy `config_manager` whitelist vs Rules V2 validator — different strictness can reject valid `job_params` rows and silently break consumers (`get_job_params` → `{}`, hourly `no_gate_config`) | `core/config_manager.py` vs `core/rules_v2` | **high** | Keep `ALLOWED_JOB_PARAMS` synced with Rules V2 job registry (E-CONFIG-14, E-CONFIG-15); regression `tests/test_job_params_legacy_whitelist.py` |
 
@@ -276,7 +276,8 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | Task ID | Status | Goal (1 line) | Prerequisite |
 |---------|--------|---------------|--------------|
 | **TASK-2026-09-17-01** | **in_progress** | Docs: survey + ADR + migration for Antares/Raccoon/WR modular reorg | — |
-| **TASK-2026-09-17-02** | **draft** | Code: `PROJECT_PROFILE` resolver + empty module packages; no JOB_REGISTRY change | review TASK-2026-09-17-01 |
+| **TASK-2026-09-17-02** | **draft** | Parser + empty packages + unit tests; **no** entrypoint hook | review TASK-2026-09-17-01 |
+| **TASK-2026-09-17-03** | **draft** | Early profile gate before import side effects; refuse unwired profiles (no mixed fallback) | TASK-2026-09-17-02 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

@@ -3,8 +3,8 @@
 | Мета | Значение |
 |------|----------|
 | **Task** | [TASK-2026-09-17-01](../active_tasks/TASK-2026-09-17-01_modular_reorg_survey.md) |
-| **Снимок** | 2026-09-17 |
-| **Метод** | git ls-remote + clone/worktree read-only; код; KB `project_memory/` |
+| **Снимок** | 2026-09-17 (git + код); Railway connector **2026-09-17** (GPT review) |
+| **Метод** | git ls-remote + clone/worktree read-only; код; KB; Railway `list_deployments` (пересказ review, не повторный вызов) |
 | **Не смешивать** | `telegram_task_registry` / приложенный PROJECT_CONTEXT.md другого проекта |
 | **AGENTS.md** | в репозитории Test **отсутствует** (поиск 2026-09-17) |
 
@@ -29,26 +29,29 @@
 | F9 | Оба репозитория: prod entry в deploy-конфиге = `python scheduler.py` (пути venv различаются) | `railway.toml` |
 | F10 | Test Telegram: `TELEGRAM_BOT_TOKEN` + `app.run_polling()` в `scheduler.py` | Test `scheduler.py` |
 | F11 | Platform Telegram: `TG_BOT_TOKEN` + `app.run_polling()` в `scheduler.py` | Platform `scheduler.py` |
-| F12 | Test — **смешанный** процесс: Antares jobs + Raccoon jobs + WalletEditor + script_jobs в одном `scheduler.py` | `integrations/tg_commands.py`, `integrations/raccoon_jobs.py` |
+| F12 | Код Test `scheduler.py` (тот же SHA, что задеплоен F25): смешанная **регистрация** Antares + Raccoon jobs + WalletEditor + script_jobs. Это не доказательство, что raccoon jobs **срабатывают** по расписанию в prod (U12) | `tg_commands.py`, `raccoon_jobs.py` |
 | F13 | Platform `develop` — **Raccoon-only** runtime: Antares downloaders **не** импортируются из `scheduler.py`; `/run_wallet` — stub | Platform `scheduler.py` L188–214, `tg_commands.py` `cmd_run_wallet` |
 | F14 | Wallet Editor (Playwright card edit, Auto-Enable, PG registry) есть **только в Test**; в Platform `develop` каталога `automation/` **нет** | file tree compare |
 | F15 | Одноимённые Raccoon-файлы Test vs Platform **не эквивалентны** (blob SHA различаются для всех проверенных `.py`, кроме `run_once_guard.py`) | § 5 |
 | F16 | Hardcoded site URLs: Antares `https://antares.plus/lkcard/#/…`; Raccoon `https://raccoon.it.com/partner/#/…`; Bakai `https://bakai.kg/ru/` | code |
 | F17 | В Test **нет** `.github/workflows`; в Platform `develop` **нет** `.github/` | glob |
-| F18 | Test PR heads: `#1` `396b02f` (otlezka alias, **merged** in `test_main` via `f709919`); `#3` `cf48534` (**merged** as `535994c`); `#2` `7aadf49` `fix(wallet-editor): hold AutoEnable lock with OS flock` — **merge-ref exists** (`refs/pull/2/merge`) → PR **ещё открыт** (состояние GitHub UI: UNKNOWN без API) | `git ls-remote refs/pull/*` |
-| F19 | Platform: `refs/pull/*/head` **пусто** на момент съёмки | ls-remote |
+| F18 | Test PR **#2**: GitHub **Draft / OPEN**, HEAD **`7aadf49af2b4abc5bc24c93e07d284343f79a5d2`** (`fix(wallet-editor): hold AutoEnable lock with OS flock`). `#1` и `#3` влиты в `test_main` | GitHub 2026-09-17; `git ls-remote` |
+| F19 | Platform: `refs/pull/*/head` **пусто** на момент съёмки git | ls-remote |
 | F20 | Platform `develop` **содержит tracked `.env`** (`git ls-tree HEAD .env`). Platform `test_main` этот файл удалил. Содержимое не читалось и не цитируется. | git |
 | F21 | Import Test `integrations/downloader.py`: `raise` без `TELEGRAM_CHAT_ID_ANALIZ`; `playwright install chromium`; `os.makedirs(/tmp/downloads)`; `TZ=Europe/Moscow` | L31–66 |
 | F22 | Import Platform `analyzers/raccoon_hourly_report.py`: `raise` без `TELEGRAM_CHAT_ID_HOURLY_RACCOON` и `TELEGRAM_CHAT_ID_RACCOON_WALLET` | L44–51 |
 | F23 | Import Test `raccoon_hourly_downloader.py` / `hourly_downloader.py`: `os.makedirs` рабочих каталогов | code |
 | F24 | Локальный checkout Test (не этот PR): ветка `fix/wallet-editor-terminal-field` + **незакоммиченные** файлы; работа велась в **отдельном worktree** | `git status` исходного клона |
+| F25 | Railway project `c20968a7-00b1-49d2-952b-2ca52bd5a626`. Test service `542c84d6-7e99-4657-bdf7-1da52f696946`, deployment `f5ecea80-e046-4cf7-a308-e3f75b05fb41`, status **SUCCESS**, branch **`test_main`**, SHA **`535994c91a9829724204727f1346a387755755df`** | Railway connector `list_deployments`, GPT 2026-09-17 |
+| F26 | Raccoon service `0060b136-4c66-4ca6-8f2e-3471d456b70a`, deployment `468d3c96-0dd4-4210-a9b9-f07ba86f04ba`, status **SUCCESS**, branch **`develop`**, SHA **`ebbcd6c11b0c2418575f807edd40feb1c4fed468`** (репозиторий Platform_2.0 — по постановке и совпадению SHA с `origin/develop`) | то же |
+| F27 | SUCCESS деплоя **не** подтверждает job health и **не** опровергает двойной Raccoon | ограничение источника F25/F26 |
 
 ### ASSUMPTIONS (не доказано продом)
 
 | ID | Предположение | Зачем |
 |----|---------------|-------|
-| A1 | Railway-сервис «Test / Antares» собран из `deniskotdavydov1991-wq/Test`, ветка `test_main` | ориентир постановки; live Railway не опрошен |
-| A2 | Railway-сервис «Raccoon» собран из `deniskotdavydov1991-wq/Platform_2.0`, ветка `develop` | то же |
+| A1 | *(закрыто F25)* connected branch Test = `test_main`, SHA = `535994c…` | — |
+| A2 | *(закрыто F26)* connected branch Raccoon = `develop`, SHA = `ebbcd6c…` | имя git-репо на коннекторе не цитировалось в пересказе; SHA совпадает с Platform `origin/develop` |
 | A3 | Сервисы используют **разные** Telegram-токены (иначе два `run_polling` конфликтуют) | нужно подтвердить ops |
 | A4 | На Railway volume `/data/state` задан только у Test (WalletEditor outbox / job locks) | `STATE_DIR` default `/data/state` в Test `core/job_runner.py`; Platform locks — in-process `threading.Lock` |
 | A5 | Будущий WR — отдельный кабинет, **не** fork Antares UI без проверки | требование постановки |
@@ -57,17 +60,18 @@
 
 | ID | Что неизвестно |
 |----|----------------|
-| U1 | Live Railway: имена сервисов, connected repo/branch, **deploy SHA**, health, restart policy |
+| U1 | Job health / uptime процессов; restart policy; включён ли auto-deploy на каждый push в ветку (типично да, **не** проверено в UI) |
 | U2 | Совпадают ли `TELEGRAM_BOT_TOKEN` (Test) и `TG_BOT_TOKEN` (Platform) |
 | U3 | Prod rows `rules.xlsx` (schedules, access, telegram_routes) на каждом сервисе |
 | U4 | Адрес, auth, DOM, функции **WR**; есть ли Wallet Editor / Auto-Enable / те же отчёты |
-| U5 | Открыт ли GitHub PR #2 в UI (есть pull refs; `gh` без auth) |
+| U5 | *(закрыто F18)* PR #2 Draft/OPEN HEAD `7aadf49…` |
 | U6 | CI на GitHub Actions (workflows отсутствуют в дереве; внешние checks UNKNOWN) |
 | U7 | Staging |
 | U8 | Использует ли prod Test `TELEGRAM_ROUTES_FROM_RULES_V2=1` |
-| U9 | Имена Railway service vs `railway.toml` `file-analyzer` (одинаковое имя в **обоих** репо) |
+| U9 | Display name в Railway UI vs `railway.toml` `file-analyzer`; точный connected **git repo URL** в коннекторе (в пересказе были service id / branch / SHA) |
 | U10 | Расходятся ли `RACCOON_LOGIN` / browser sessions между двумя сервисами |
 | U11 | Состояние локального `.env` в clone Platform (файл есть в working tree develop) — не читался |
+| U12 | **Выполняет ли процесс Test в prod jobs `raccoon_*`** (enabled rows в rules, фактический `job_started`). Наличие модулей в репозитории Test **не** доказательство |
 
 ---
 
@@ -77,17 +81,17 @@
 
 | Ref | SHA | Заметка |
 |-----|-----|---------|
-| `origin/test_main` | `535994c91a9829724204727f1346a387755755df` | **кандидат prod Antares**; содержит Wallet Editor PR #3 |
+| `origin/test_main` | `535994c91a9829724204727f1346a387755755df` | **deployed** на Test service (F25); Wallet Editor PR #3 |
 | `origin/develop` | `5fc9304c4552dca34ccf52a5b3ad53688185636c` | не использовать как prod-источник этой программы |
-| `refs/pull/2/head` | `7aadf49af2b4abc5bc24c93e07d284343f79a5d2` | Auto-Enable flock; **пересечение** с Wallet Editor / изоляцией locks |
+| PR **#2** | `7aadf49af2b4abc5bc24c93e07d284343f79a5d2` | Draft/OPEN; Auto-Enable flock; пересечение с WE / locks |
 
-Пересечение: любой перенос Wallet Editor / Auto-Enable должен учесть **открытый** PR #2 (не смешивать в одном merge без review).
+Пересечение: не смешивать PR #2 в одном merge с модульностью без review.
 
 ### Platform_2.0
 
 | Ref | SHA | Заметка |
 |-----|-----|---------|
-| `origin/develop` | `ebbcd6c11b0c2418575f807edd40feb1c4fed468` | **кандидат prod Raccoon** (ориентир постановки) |
+| `origin/develop` | `ebbcd6c11b0c2418575f807edd40feb1c4fed468` | **deployed** на Raccoon service (F26) |
 | `origin/test_main` | `636aee6ebe8b4a0e249f84caa8f7322e1a05f31d` | удаление `.env` из git; **не** вершина develop |
 | `origin/main` | `ea466780a44b3b110a7e392e71386df0296bd474` | сильно расходится с develop |
 | `feature/bd_for_card` | `3a2c65f04dab5bc05d0790dc96a2ebbf79d3509e` | не WR; смысл ветки **не** разбирался построчно |
@@ -102,7 +106,8 @@
 | Service name in toml | `file-analyzer` | `file-analyzer` (**то же имя файла конфигурации**) |
 | `nixpacks.toml` | venv + playwright chromium + **tini** | есть, отличается blob |
 | `Procfile` | playwright apt + chromium | аналогичный postinstall |
-| Live deploy SHA | **UNKNOWN** U1 | **UNKNOWN** U1 |
+| Live deploy SHA (2026-09-17) | **`535994c…`** (F25); health **UNKNOWN** | **`ebbcd6c…`** (F26); health **UNKNOWN** |
+| Auto-deploy on merge to connected branch | предполагается включённым; UI не менять в этой задаче | то же для `develop` |
 | Telegram mode | long polling | long polling |
 | Webhook | не найден в entry | не найден в entry |
 | Workers | daemon `schedule_loop` + WalletEditor per-profile threads (`ensure_worker_started`) | 4 daemon threads: WalletReporter interval, HourlyReporter :00, daily conversion, `restart_worker` |
@@ -125,9 +130,9 @@
 | Antares wallet cycle | `integrations/downloader_wallets.py` | Test | schedule `wallet`; `/run_wallet` | stub `/run_wallet` | `ANTARES_*`, `auth_state_wallets.json` | Antares, TG wallet route | P не запускает |
 | Antares download+conversion+payout | `integrations/downloader.py`, `conversion_pipeline`, `analyzers/payout.py` | Test | schedule `download`; `/run_download` | файлы есть, scheduler не импортирует | Dropbox input, `TELEGRAM_CHAT_ID_ANALIZ` **required at import T** | Antares, Dropbox, TG, conversion WE hook | P DORMANT in process |
 | Bakai rate | `integrations/bakai_monitor_playwright.py` | Test schedule `rate`; оба — `/run_rate` | schedule + TG | **только** `/run_rate` | bakai.kg, chat env/routes | Playwright, TG | разный wiring |
-| Raccoon HourlyReporter (wallet analysis) | T: `raccoon_wallet_downloader` + `raccoon_wallet` job; P: `run_raccoon_wallet_cycle` thread :00 | **оба сервиса, если оба живы** | schedule `raccoon_wallet` **если** row в rules; `/run_raccoon` | hardcoded hourly thread + `/run_raccoon` | Raccoon site, `RACCOON_*`, `/tmp/raccoon_wallet`, `auth_state_raccoon.json` | Raccoon UI, TG raccoon wallet chats | **разный registry/имена jobs**; T Rules V2 wallet config; P YAML `config/raccoon_wallet_config.yaml` |
-| Raccoon WalletReporter (10-min payin) | T: `raccoon_hourly` job = download + `raccoon_hourly_report`; P: `raccoon_wallet_report_pipeline` | оба | schedule `raccoon_hourly` если enabled в rules | env `RACCOON_REPORTER_EVERY_MIN` default 10 | `/tmp/hourly_raccoon/`, fingerprint json | Raccoon, TG hourly raccoon | T chat id **lazy**; P **import-time raise**; log profile names differ |
-| Raccoon daily conversion | T: `raccoon_daily_conversion` job; P: `run_daily_conversion_loop` 00:00–00:02 | оба | rules schedule | hardcoded window | payin.xlsx path | TG | разный запуск |
+| Raccoon HourlyReporter (wallet analysis) | T: код `raccoon_wallet` job; P: `run_raccoon_wallet_cycle` thread :00 | **P: сервис Raccoon (F26).** T: код есть; **факт запуска в prod Test = U12** | schedule/TG **если** включено в rules (U3) | hardcoded hourly + `/run_raccoon` | Raccoon site, `RACCOON_*`, `/tmp/raccoon_wallet` | Raccoon UI, TG | разные registry; T Rules V2 vs P YAML |
+| Raccoon WalletReporter (10-min payin) | T: код `raccoon_hourly`; P: `raccoon_wallet_report_pipeline` | **P: да (код scheduler). T: U12** | rules если enabled | `RACCOON_REPORTER_EVERY_MIN` default 10 | `/tmp/hourly_raccoon/` | Raccoon, TG | T lazy chat; P import-time raise |
+| Raccoon daily conversion | T: код `raccoon_daily_conversion`; P: loop 00:00–00:02 | **P: да. T: U12** | rules schedule | hardcoded window | payin.xlsx | TG | разный запуск |
 | Job locks T | `core/job_runner.py` PID file `{STATE_DIR}/locks/{job_type}.lock` | Test | request_job | — | STATE_DIR | skip second run | P: in-memory threading locks per `job_key`, **нет** PID files |
 | Dropbox pipeline lock | `run_once_guard.py` `/tmp/dropbox_pipeline.lock` | Test download job | acquire | same file **если** кто-то вызовет downloader | /tmp | skip | blob **SAME** |
 | Process restart | нет в Test scheduler | — | — | `RESTART_TIMES` 10:30…01:30 MSK; `ENABLE_HARD_RESTART` | — | `os._exit` optional | только P |
@@ -217,7 +222,7 @@
 
 Только в Test: WalletEditor, `core/rules_v2`, `core/job_runner.py`, script_jobs, conversion modernization, telegram_routes, и др. (~130+ модулей).
 
-**Вывод:** источник истины для Antares + Wallet Editor = **Test `test_main`**. Источник истины для **текущего prod-поведения Raccoon** = **Platform `develop`**, пока не доказано иное live SHA. Копии Raccoon в Test — **другой продукт внутри того же дерева**, не drop-in.
+**Вывод:** источник истины для Antares + Wallet Editor = **Test `test_main` / deployed `535994c…`**. Источник истины для **текущего prod-поведения Raccoon** = **Platform `develop` / deployed `ebbcd6c…`**. Копии Raccoon в дереве Test — **другой код**, не доказательство, что сервис Test их исполняет (U12).
 
 ---
 
@@ -241,7 +246,7 @@
 
 ## 7. STALE_RISK относительно KB Test
 
-KB `architecture_map.md` / `tasks.md` **S2** («Raccoon в docs, отсутствует в `.py`») **устарело** для Test `test_main`: Raccoon jobs и команды **есть**. Platform-only формулировка «RACCOON_ONLY» в KB Platform ближе к Platform `develop`.
+KB `architecture_map.md` / `tasks.md` **S2** («Raccoon отсутствует в `.py`») **устарело для дерева Test `test_main`**: модули и команды **есть в коде**. Это не закрывает U12 (исполнение в production Test). Prod Raccoon-only процесс — Platform `develop` (F26).
 
 ---
 

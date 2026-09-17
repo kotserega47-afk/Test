@@ -5,25 +5,52 @@
 | **Статус** | PROPOSED |
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **ADR** | [MODULAR_REORG_ADR.md](MODULAR_REORG_ADR.md) |
-| **Этот PR** | только документация (этап 0 / этап 1 начало) |
+| **Этот PR** | документация (этап 0). Runtime-код не меняется |
 
-Merge/deploy рабочих сервисов **не** входят в TASK-2026-09-17-01.
+Merge/deploy **намеренно** не входят в TASK-2026-09-17-01. Это **не** значит, что merge в подключённую ветку безопасен для процессов: см. § Автодеплой.
+
+Предлагаемые флаги **`JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде отсутствуют.** Ниже они — требования будущих PR, не текущий runtime.
 
 ---
 
-## Pin версии на сервис
+## Автодеплой и независимый выпуск
 
-Один git-репозиторий **не** означает один деплой.
+### Что уже подтверждено (Railway connector, 2026-09-17)
 
-| Сервис | Как закреплять |
-|--------|----------------|
-| Antares (ныне Test) | Railway: Repo = Test, Branch **или** explicit commit SHA; Start = профиль `antares` |
-| Raccoon (ныне Platform) | Пока: Platform `develop` SHA. После переноса: тот же Test repo, **другой** commit pin + `PROJECT_PROFILE=raccoon` |
-| WR | отдельный сервис, не деплоить, пока WR gate открыт |
+Два **разных** сервиса, разные git-источники:
 
-Railway не должен «watch same branch» на трёх сервисах без ручного pin. Предпочтительно: **deploy по SHA**, не «latest branch».
+| Сервис | Connected branch | Deployed SHA | Следствие при merge |
+|--------|------------------|--------------|---------------------|
+| Test (`542c84d6-…`) | Test `test_main` | `535994c…` | merge в `test_main` **может** собрать и **перезапустить** этот сервис |
+| Raccoon (`0060b136-…`) | Platform `develop` | `ebbcd6c…` | merge в Test `test_main` **сам по себе** не двигает этот SHA; merge в Platform `develop` может перезапустить Raccoon |
 
-Откат сервиса = вернуть предыдущий SHA **этого** сервиса; не откатывать соседние.
+`list_deployments` status `SUCCESS` = сборка/выкат платформы. **Не** job health, **не** отсутствие двойного Raccoon.
+
+### Чего нельзя считать настроенным
+
+Произвольный «pin SHA» в Railway **не подтверждён** как включённая возможность этих сервисов. Пока дашборд не показывает явную фиксацию commit (и это не меняется в этой задаче), исходить из модели: **сервис следит за веткой** и выкатывает новый HEAD после push/merge.
+
+Production-настройки Railway в этой задаче **не менять**.
+
+### Проверяемый способ независимого выпуска (без смены текущих настроек)
+
+Сегодня независимость уже есть **на уровне разных репозиториев/веток**:
+
+1. Выпуск Antares/Test: менять только `deniskotdavydov1991-wq/Test` / `test_main`. После merge проверить, что Raccoon deployment SHA остался `ebbcd6c…` (или актуальный зафиксированный), а Test получил новый SHA.
+2. Выпуск Raccoon: менять только `Platform_2.0` / `develop`. Проверить, что Test deployment SHA не сдвинулся.
+3. Docs/code в Test, который **нельзя** рестартовать: не merge в `test_main`, пока не согласован restart (оставить Draft; либо дождаться окна). Merge документации **может** вызвать тот же Nixpacks+Playwright restart, что и code.
+
+Когда оба сервиса окажутся на одном репозитории, независимость **нужно будет заново доказать** одним из проверяемых вариантов (настройки тогда — отдельный ops-PR, не эта задача):
+
+| Вариант | Как проверить |
+|---------|----------------|
+| Две release-ветки | сервис A connected `release/antares`, сервис B `release/raccoon`; merge в одну ветку не меняет SHA другого |
+| Два репозитория как сейчас | connected repo различается |
+| Явный commit in dashboard | скрин/API: поле commit зафиксировано и auto-deploy from branch **off** |
+
+Не описывать pin SHA как уже доступный рычаг.
+
+Откат сервиса = выкат **предыдущего известного SHA той же ветки/репо этого сервиса** (revert merge или redeploy старого deployment id). Соседний сервис не откатывать «заодно».
 
 ---
 
@@ -32,168 +59,242 @@ Railway не должен «watch same branch» на трёх сервисах �
 | | |
 |--|--|
 | Файлы | `project_memory/ops/MODULAR_REORG_*.md`, Task/Impact/CP, указатели KB |
-| Сервисы | **не** затрагиваются |
-| Совместимость | 100% |
-| Приёмка | review фактов SHA; нет секретов; нет runtime diff |
-| Выпуск | merge docs only |
-| Стоп | если SHA/prod источник опровергнут ops (поправить docs, не код) |
-| Откат | revert docs commit |
+| Runtime-код | **не** меняется |
+| Сервисы | код jobs тот же; **merge в `test_main` может перезапустить Test** (автодеплой). Raccoon при merge только в Test — SHA не должен сдвинуться |
+| Совместимость поведения после рестарта | ожидается та же, **если** выкатится тот же runtime; рестарт сам по себе рвёт in-memory schedules/polling |
+| Приёмка | review фактов; нет секретов; git diff без `.py` runtime |
+| Выпуск | merge только с явным окном на возможный restart Test **или** без merge, пока Draft |
+| Стоп | несогласованный автодеплой; опровергнутые SHA |
+| Откат | revert docs commit на `test_main` (это тоже деплой) |
 
 ---
 
-## Этап 1 — каркас без переключения production
+## Этап 1 — каркас без переключения поведения jobs
 
 **Task:** [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md)
 
+Только: чистый парсер + пустые пакеты + unit-тесты. **Нет** импорта из `scheduler.py` / `tg_commands.py`.
+
+Текущий процесс Test остаётся **смешанным** (Antares + зарегистрированные Raccoon jobs в коде). Это **не** изолированный профиль `antares`.
+
+Профили `raccoon` / `wr` **нельзя** подавать в legacy `scheduler.py`: он регистрирует общий набор jobs независимо от строки профиля.
+
 | | |
 |--|--|
-| Файлы | `core/project_profile.py`, тесты; **пустые** `modules/{antares,raccoon,wr}/__init__.py` **не** импортируемые из `scheduler.py`; опционально лог профиля |
-| Сервисы | при деплое без новой env — поведение jobs **идентично** (смешанный Test процесс остаётся) |
-| Совместимость | unset `PROJECT_PROFILE` → `antares` **только как alias для логов**, без вырезания Raccoon jobs |
-| Приёмка | pytest новых тестов; `import core.project_profile` без env raise; unknown profile raise; scheduler **не** меняет JOB_REGISTRY |
-| Выпуск | pin SHA только если ops хочет; можно не деплоить |
-| Стоп | любой diff в `JOB_REGISTRY` keys или handlers |
-| Откат | revert commit; данные не менялись |
+| Файлы | `core/project_profile.py`, `tests/unit/test_project_profile.py`, пустые `modules/{antares,raccoon,wr}/__init__.py` |
+| Сервисы | при merge в `test_main` — риск **рестарта Test**; состав jobs не должен измениться |
+| Приёмка | pytest парсера; diff без `scheduler.py` |
+| Стоп | любой hook в entrypoints; любой diff `JOB_REGISTRY` / handlers |
+| Откат | revert; данных нет |
+
+Ранняя проверка профиля в процессе — **не** этап 1: [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md).
 
 ---
 
-## Этап 2 — характеристика и фиксация поведения (ещё docs + golden)
+## Этап 2 — характеристика и фиксация поведения
 
 | | |
 |--|--|
-| Файлы | golden отчётов (уже есть часть `tests/fixtures`); inventory Platform vs Test raccoon **поведенческий**; зафиксировать команды/schedule contract |
-| Сервисы | нет |
-| Приёмка | список «must-match» строк отчётов Raccoon с Platform develop; список WE инвариантов с тестами `tests/unit/test_wallet_editor_terminal_field.py` |
-| Стоп | нет golden на критичный отчёт |
-| Откат | n/a |
-
-Параллельное сравнение версий: **сохранённые xlsx** + send mocked; слово dry-run **не** доказательство. Отдельный флаг `EXTERNAL_SIDE_EFFECTS=0` должен глотать Playwright и TG **явными** stubs, иначе считать побочные эффекты возможными.
+| Файлы | golden; поведенческий diff Raccoon Platform vs Test |
+| Сравнение версий | только на сохранённых входах **или** среда без внешних изменений. Нужны **явные stubs** Playwright/TG |
+| `EXTERNAL_SIDE_EFFECTS` | **предложение, кода нет.** Пока флага нет, слово dry-run **не** доказывает отсутствие побочных эффектов |
 
 ---
 
 ## Этап 3 — выделить Antares, совместимые entry
 
-| | |
-|--|--|
-| Файлы | вынос import-side-effects из `downloader.py` / `payout.py`; регистрация jobs через `modules/antares/register.py`; `scheduler` вызывает register только для выбранного профиля **за флагом** `PROJECT_PROFILE_ENFORCE=0` default |
-| Сервисы | Antares: опционально; Raccoon Platform: **не** трогать |
-| Совместимость | default enforce off = текущий смешанный процесс |
-| Приёмка | Antares команды и schedules как сейчас при enforce off; import `analyzers.payout` без chat env (lazy) |
-| Выпуск | Antares SHA независимо |
-| Стоп | падение hourly/download/WE на staging или первый час prod |
-| Откат | предыдущий SHA Antares; WE: не replay неизвестных Save; очередь `{STATE_DIR}/wallet_editor/outbox` сохранить |
+Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
+`JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
+
+Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
+
+Выпуск: только сервис Test (`test_main`), проверить неизменность Raccoon SHA.
 
 ---
 
-## Этап 4 — перенос Raccoon (поведение Platform, код в Test repo)
+## Этап 4 — перенос Raccoon
 
-Порядок **после** Antares isolation: иначе один репо продолжит двойной Raccoon.
+Порт **поведения Platform `develop`**, не copy-paste Test `integrations/raccoon_*`.
 
-| | |
-|--|--|
-| Файлы | порт `job_runner` semantics Platform **или** адаптация PID locks с **другими** job keys; YAML vs Rules — **не** молча подменять источник; TG команды analyzer/reporter |
-| Сервисы | новый Raccoon service на Test SHA **или** смена connected repo у существующего |
-| Совместимость Platform | старый процесс остаётся, пока новый не прошёл soak |
-| Приёмка | те же интервалы (10 min / :00 / daily); fingerprint skip-send; conversion alert dedup (Platform HEAD); **нет** Antares jobs в процессе; token только Raccoon |
-| Выпуск | cutover § ниже |
-| Стоп | расхождение отчёта; dual polling; двойные выгрузки |
-| Откат | вернуть Platform `develop` SHA на Raccoon service; незавершённый download: не считать fail=need retry без сверки файла на диске/кабинете |
+**Soak до переключения** = сравнение **без** внешних эффектов (отдельный токен или stubs; **не** второй исполнитель на том же токене/тех же кабинетах).
 
-**Не** копировать Test `integrations/raccoon_*` как prod Raccoon без diff-review с Platform.
+После переключения = **один** активный исполнитель. Старый SHA **сохранён для отката**, процесс **остановлен и не принимает задания**.
 
 ---
 
-## Этап 5 — WR
+## Этап 5–6
 
-Только после WR gate (конец документа). Отдельный профиль, отдельные auth/locks/DB. Нет shared Save retry с Antares.
-
----
-
-## Этап 6 — удаление старых путей
-
-| Удалить | Условие |
-|---------|---------|
-| Raccoon jobs из процесса Antares | N дней без включения + enforce on |
-| Репозиторий Platform как deploy source | Raccoon service на Test SHA soak |
-| Legacy `/tmp/auth_state_raccoon.json` | миграция файлов в profile dir выполнена |
-| Tracked `.env` на Platform develop | не ждать этапа 6: **отдельный security PR** на Platform (не этот) |
+Без изменений смысла: WR после gate; удаление старых путей после подтверждённого перехода. Tracked `.env` на Platform develop — отдельный security PR.
 
 ---
 
-## Cutover процесса (старый → новый)
+## Предлагаемые (ещё не существующие) рычаги
+
+| Рычаг | Статус | Зачем | Где появиться |
+|-------|--------|-------|----------------|
+| `parse_project_profile` | этап 1 | разбор строки | TASK-2026-09-17-02 |
+| Early profile gate | нет | проверка **до** import с env/I/O/JOB_REGISTRY | TASK-2026-09-17-03 |
+| `JOB_ACCEPT` | нет | прекратить приём новых jobs, не убивая процесс | до cutover (этап 3/4) |
+| Durable queue + schedule cursor | нет / частично | TG updates и cron не только in-memory | до cutover |
+| `EXTERNAL_SIDE_EFFECTS=0` | нет | shadow-сравнение | этап 2/4 сравнение |
+| Isolated entry per profile | нет | `raccoon`/`wr` не на legacy mixed scheduler | после gate + register |
+
+---
+
+## Cutover (старый → новый исполнитель)
 
 Цель: нет двух исполнителей одного job и двух polling на один token.
 
-### Подготовка
+### Роли версий
 
-1. Зафиксировать SHA old/new, `PROJECT_PROFILE`, token **presence** (не значение), `STATE_DIR`.
-2. Включить на новом: приём jobs **выключен** (`JOB_ACCEPT=0` — реализовать на этапе 3/4, не раньше).
-3. Сверить часы MSK.
+| Фаза | Старый | Новый |
+|------|--------|-------|
+| До переключения | единственный исполнитель | не polling / не jobs на prod token; сравнение без внешних эффектов |
+| Переключение | drain → stop → **не** auto-restart | единственный исполнитель |
+| После | образ/SHA хранится для отката, **0 реплик**, не выполняет задания | работает |
+| Откат | сначала **стоп нового** (как ниже), затем старт старого SHA как единственного | остановлен |
 
-### Дренаж старого
+### 1. Прекращение приёма новых заданий
 
-1. Старый: `JOB_ACCEPT=0` (schedule_loop пропускает dispatch; TG run_* отвечает «drain»).
-2. Дождаться `_RUNNING` empty + WalletEditor queues empty (`/status`, registry health).
-3. **Не** повторять автоматически операции с **неизвестным** результатом Save: сверка карточки в кабинете / registry, затем ручное решение.
-4. Сохранить: outbox files, lock files (не удалять), `next_every`/`next_cron` — в Test они **in-memory**: после рестарта первый cron tick пересчитает `_next_cron_run` (возможна задержка до следующего слота, не дубль того же minute если job ещё lock). Зафиксировать в ops: **пауза до следующего cron/interval**.
-5. Остановить polling старого (scale to 0 / stop).
+Нужен будущий `JOB_ACCEPT=0` (или эквивалент) на **старом**:
 
-### Пауза (заранее)
+- schedule_loop не делает `dispatch`;
+- TG `/run_*`, document ingest, Auto-Enable, script_jobs — отказ «drain», **без** постановки в worker;
+- внутренние bridge (conversion → WE) — не enqueue.
 
-| Длительность | Оценка | Влияние | Входящие задания |
-|--------------|--------|---------|------------------|
-| Telegram polling gap | секунды–минуты между stop old и start new | команды не принимаются | Telegram retries у пользователя; WE Excel **не** копить на старом |
-| Schedule | до следующего cron/interval слота | один пропуск hourly если cutover внутри окна | не «догонять» missed download без сверки |
-| Dual poll | **0 допустимо** | 409 getUpdates | стоп-условие cutover |
+Пока рычага нет, «просто остановить контейнер» рвёт принятые, но не дописанные операции — неприемлемо как штатный cutover.
 
-### Старт нового
+Входящие Telegram **не** оставлять на «пользователь отправит ещё раз». Нужен будущий durable inbox (update_id / file_id / run_id) **до** stop polling: запись «принято, не исполнено» переживает рестарт. Точный дизайн — отдельный PR; без него cutover только в согласованное окно с объявленной потерей *новых* команд, не как основной план.
 
-1. New polling on **тот же** token только после смерти old process (подтвердить отсутствие getUpdates conflict в логах).
-2. `JOB_ACCEPT=1`.
-3. Наблюдать один полный цикл каждого job + WE smoke на **непрод** карте если политика позволяет; иначе только plan/dry с mocked adapter.
+### 2. Завершение уже принятых
 
-### Запрет dual-run
+Дождаться пустых:
 
-Locks: разные `STATE_DIR` на время параллельного soak (new в shadow) **или** один volume только после stop old. Shadow = отдельный token + `EXTERNAL_SIDE_EFFECTS=0`.
+- `_RUNNING` / job locks **этого процесса**;
+- очереди WalletEditor per-profile;
+- in-flight Auto-Enable batch.
+
+Не стартовать новые карточки. Timeout → эскалация, не silent kill посередине Save.
+
+### 3. Durable-сохранение оставшейся очереди
+
+Сохранить и **не чистить**:
+
+- `{STATE_DIR}/wallet_editor/outbox` и `results/`;
+- registry PG rows;
+- fingerprint/dedup файлы (`last_sent.json`, conversion alert state) — скопировать в согласованный каталог, если путь `/tmp` (сейчас часть состояния **не** durable).
+
+In-memory `next_every` / `next_cron` в Test **пропадут** при stop. До cutover нужен будущий **schedule cursor** (last fired slot per job_type) в `STATE_DIR`, иначе слоты только угадываются.
+
+### 4. Telegram updates и защита от повторной обработки
+
+- Зафиксировать last `update_id` (PTB getUpdates offset) в durable store **до** stop — **сейчас этого контракта нет** (предложение).
+- После старта нового: не обрабатывать тот же document/command как новый run, если `run_id` / file unique уже в outbox/registry.
+- Dual polling на один token **запрещён** на всех фазах.
+
+Отсутствие `getUpdates` conflict **не** доказывает, что старый процесс мёртв (процесс может жить без polling, или конфликт логируется не там).
+
+### 5. Слоты расписания: выполненные и пропущенные
+
+По cursor (когда появится):
+
+- слот **выполнен** → новый не дублирует;
+- слот **пропущен** во время паузы → не «догонять» download/Save без сверки кабинета/файла;
+- слот **неизвестен** → как пропущенный, не как failed-retry.
+
+Пока cursor нет: заранее объявить паузу до следующего wall-clock слота; не replay missed jobs автоматически.
+
+### 6. Неизвестный результат Save
+
+Операция, где Save мог пройти, а ответ не получен:
+
+1. не ставить в очередь как «невыполненную»;
+2. сверка карточки в кабинете + registry;
+3. ручное решение ops (закрыть / дописать статус / повтор **осознанный**).
+
+Автоповтор запрещён.
+
+### Пауза
+
+Между stop old polling и start new polling: входящие updates зависят от Telegram retry **и** от будущего inbox. Основной механизм сохранения — **durable запись до stop**, не просьба к оператору переслать Excel.
+
+Длительность: заранее в окне (минуты). Влияние: нет новых исполнений; расписание — пропуск слотов по правилам § 5.
+
+---
+
+## Блокировки, стоп, передача права, откат
+
+### Предел текущих locks
+
+PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не координируют два контейнера**. Разный `STATE_DIR` тоже не стопает чужой процесс. Это single-process single-flight, не cluster lock.
+
+### Подтверждение остановки старого исполнителя
+
+Нужны **несколько** независимых сигналов (все, что доступны):
+
+1. Railway: replicas = 0 / service stopped **этого** service id; deployment не в состоянии активного restart loop.
+2. Нет живого процесса с прежним PID на инстансе (если есть exec/logs).
+3. Нет новых `job_started` / WE worker логов с **этого** service после T_stop.
+4. Telegram: новый процесс ещё **не** запущен; отсутствие conflict — лишь вспомогательный, недостаточный признак.
+
+### Предотвращение автозапуска старого
+
+Пока сервис привязан к ветке, Railway может снова поднять контейнер после crash/redeploy.
+
+Перед передачей права:
+
+- у старого сервиса выключить автодеплой **или** остановить сервис (это изменение prod-настроек — **только в окне cutover, не в этой docs-задаче**);
+- не оставлять два сервиса с одним токеном в `ACTIVE`.
+
+Зафиксировать в чеклисте cutover: кто нажимает stop, какой service UUID.
+
+### Передача права выполнять задания
+
+Явный акт, не «оба живы, новый с JOB_ACCEPT=1»:
+
+1. Старый: drain (`JOB_ACCEPT=0`, когда появится) → idle → stop + anti-restart.
+2. Проверка стопа (§ выше).
+3. Новый: единственный ACTIVE на токене; затем `JOB_ACCEPT=1`.
+4. Запись: old deployment id, new deployment id, время передачи.
+
+Пока `JOB_ACCEPT` нет, шаг 1 заменяется согласованным stop только после idle (хуже; не штатный путь после появления флага).
+
+### Откат
+
+1. **Сначала** остановить новый (drain если успел принять работу → idle → stop + anti-restart нового).
+2. Не запускать старый, пока новый ещё ACTIVE.
+3. Сохранить очередь, outbox, dedup state **как лежат**; не чистить lock files «для порядка».
+4. Совместимость состояния со старой версией: checklist **до** cutover (какие файлы/колонки новая версия добавила). Если новая писала нечитаемый формат — откат кода без миграции данных **запрещён**, нужен отдельный rollback данных.
+5. Старт старого SHA как единственного исполнителя.
+6. Неизвестные Save, начатые новым — сверка, не auto-replay.
 
 ---
 
 ## План проверки (QA)
 
-Отделить **уже красные** тесты baseline (`pytest` на SHA `535994c` записать в этапе 2) от новых падений.
+Отделить уже красные тесты на SHA `535994c` (этап 2) от новых падений. Отсутствие CI ≠ успех.
 
 | Проверка | Как | Не является успехом |
 |----------|-----|---------------------|
-| Формат отчётов Antares | golden `tests/fixtures/hourly`, conversion | «CI зелёный» при отсутствии CI |
-| Формат Raccoon | сравнить текст/fingerprint rules с Platform develop fixtures + unit `test_raccoon_*` | совпадение имён файлов |
-| Команды | таблица handlers vs `/help` | |
-| Schedules | rules snapshot vs hardcoded P list | |
-| Изоляция auth | разные storage_state paths; нет чтения чужого файла | |
-| Нет чужих jobs | `list(JOB_REGISTRY)` при профиле | |
-| Нет дублей cutover | event_log job_started unique per window | |
-| WE защиты | `tests/unit/test_wallet_editor_terminal_field.py` и связанные | |
-| Незавершённый Save | ручной сценарий unknown → no auto retry | |
-| Import hygiene | импорт register-модуля без playwright subprocess | |
+| Формат отчётов Antares | golden | «деплой SUCCESS» |
+| Формат Raccoon | vs Platform develop | наличие `raccoon_*` в Test репо |
+| Команды / schedules | handlers vs `/help`; rules vs hardcoded P | |
+| Изоляция | разные auth paths | PID lock на одном контейнере |
+| Нет чужих jobs | `JOB_REGISTRY` **после** isolated entry (не на legacy mixed) | |
+| Нет дублей cutover | cursor + event_log | нет getUpdates conflict |
+| WE защиты | unit terminal field | |
+| Незавершённый Save | сценарий unknown → no auto retry | |
+| Независимый выпуск | после merge Test SHA сдвинулся, Raccoon SHA нет (и наоборот) | |
 
 ---
 
-## Вопросы, без которых нельзя подключать WR
+## Вопросы WR
 
-1. Какой **URL** кабинета и контура (login / wallet / payin)?
-2. Это тот же продукт, что Antares, или другой DOM?
-3. Какие **функции** нужны в v1: только отчёты, только WE, оба?
-4. Есть ли Wallet Editor / Auto-Enable / add_wallet у WR ops?
-5. Отдельные **credentials**, Telegram bot, Dropbox, PostgreSQL?
-6. Совпадают ли поля формы (терминал, chips, статусы) с Antares **на live DOM**?
-7. Какие отчёты и расписания обязательны в первый релиз?
-8. Кто pin'ит Railway service и какой start command?
-9. Политика Save unknown: кто сверяет карточку?
-10. Запрет использовать Antares `WALLET_URL` «на всякий случай» — подтверждён?
-
-Пока U4 открыт, `modules/wr` = заглушка, профиль `wr` → «not implemented».
+Без изменений списка из предыдущей ревизии (URL, DOM, функции, отдельные bot/DB, Save policy). Пока U4 открыт, профиль `wr` в **парсере** может существовать как литерал, но **процесс** не должен регистрировать jobs (TASK-03).
 
 ---
 
-## Первая задача с кодом
+## Следующие code-задачи (не этот PR)
 
-См. [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md): резолвер профиля + тесты + пустые пакеты **без** смены production JOB_REGISTRY.
+1. [TASK-2026-09-17-02](../active_tasks/TASK-2026-09-17-02_project_profile_skeleton.md) — парсер + пустые пакеты + тесты.
+2. [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — ранняя проверка профиля до побочных эффектов.

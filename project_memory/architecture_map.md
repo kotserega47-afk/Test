@@ -111,7 +111,7 @@ flowchart LR
 |-----------|----------|
 | Live prod health | Работает ли Railway deploy сейчас |
 | Schedule rows in prod rules.xlsx | Конкретные cron/interval для каждого job_type |
-| Raccoon integration | **Устарело для Test `test_main` (2026-09-17):** jobs `raccoon_*` в `integrations/raccoon_jobs.py`. Live «какой сервис крутит prod Raccoon» — UNKNOWN. Сводка: `ops/MODULAR_REORG_SURVEY.md` |
+| Raccoon integration | В коде Test `test_main` есть `raccoon_*` jobs (`integrations/raccoon_jobs.py`). Сервис Test задеплоен с этим деревом (F25). **Исполнение** raccoon jobs в prod Test — UNKNOWN (U12). Prod Raccoon-only процесс: Platform `develop` `ebbcd6c…` (F26). `ops/MODULAR_REORG_SURVEY.md` |
 | `<LEGACY_DOC_OR_PLANNED_FEATURE>` | Прочие DOCS_ONLY фичи |
 
 ---
@@ -663,4 +663,4 @@ Database: not present in active runtime chain.
 | 2026-06-21 | **WalletEditor Add Wallet** — Excel routing fork; `add_wallet_contract` + `add_wallet_engine`; Phase 1/1.1/2 complete; KYC scoped checkbox; E-WE-16…E-WE-19 |
 | 2026-06-23 | **WalletEditor registry Postgres SoT** — Excel projection; ops export/repair CLIs; `/registry_export` (E-WE-21, E-WE-22) |
 | 2026-07-01 | **WalletEditor Registry v2 finalized** — ManualSync, PG readers, TG-only export, projection removed (E-WE-23…E-WE-27); KB TASK-2026-07-01-06 |
-| 2026-09-17 | Modular reorg survey — Raccoon Unknowns updated; details in `ops/MODULAR_REORG_SURVEY.md` (runtime unchanged) |
+| 2026-09-17 | Modular reorg survey — Railway F25/F26; raccoon code ≠ prod execution (U12); `ops/MODULAR_REORG_SURVEY.md` |
