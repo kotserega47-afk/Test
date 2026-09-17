@@ -14,7 +14,7 @@
 | **Документ** | draft — G1, G2, G5 closed |
 | **Open gaps** | G3, G4 (partial) |
 | **STALE_RISK** | S1–S3 |
-| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01..09** Draft PR #4–#11 + TASK-09 (02–08 review пройден; 09 code) |
+| **Active workflow tasks** | CONV-OPTIMIZATION-PHASE-1B (READY); **TASK-2026-09-17-01..09** Draft PR #4–#12 (не слиты; 02–09 review пройден) |
 | **Telegram routes** | Phase 3A–3D **done** (+ Bakai `bakai_rate_current`/`bakai_rate_alert`); Phase 3E+ routes pending (e.g. ANALIZ family) |
 | **Job locks** | Ghost PID-1 stale lock fix **done** (2026-06-03) — `core/job_runner.py` |
 | **Wallet hang** | Patch A (PW timeouts) + Patch B (non-blocking scheduler) **done** (2026-06-04) |
@@ -283,7 +283,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-06** | **review** | Handler-split plan; review passed (HEAD `380a4bb`); **not merged** | Draft PR #9 |
 | **TASK-2026-09-17-07** | **review** | Four Antares run-commands + three helpers; review passed (HEAD `94be3127`); **not merged** | Draft PR #10 |
 | **TASK-2026-09-17-08** | **review** | operator_wallets_ready + wallet_editor_refresh; review passed (HEAD `7169cd48`); **not merged** | Draft PR #11 |
-| **TASK-2026-09-17-09** | **in_progress** | Move registry_health and registry_replay callbacks (direct ops) | Draft PR, base PR #11 |
+| **TASK-2026-09-17-09** | **review** | registry_health + registry_replay (direct ops); review passed (HEAD `b8085a28`); **not merged** | Draft PR #12 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
