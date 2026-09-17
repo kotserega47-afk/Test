@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **Статус** | DRAFT characterization; **не** production |
-| **Test worktree SHA** | `455eb180df4d31e353595b314377abce5801c4ad` (ветка `feat/task-2026-09-17-04-behavior-baseline`) |
+| **Test worktree SHA** | `e961299e8d50956a21dee7118585c88b35bcb012` (ветка `feat/task-2026-09-17-04-behavior-baseline`) |
 | **Не выпущенный parser** | PR #5 `acfb9958df644679b85feecaf4e6a9acf65b884b` |
 | **Не выпущенный gate** | PR #6 code `48a2a825ce3d04d27501d1a387bb5c4b8b5dd9c9` (docs `ae0aeda…`) |
 | **Prod Test (survey F25)** | `test_main` `535994c…` — **не** эта ветка |
@@ -75,7 +75,7 @@ Import-time на Platform: нужны `TELEGRAM_CHAT_ID_HOURLY_RACCOON` и `TELE
 | Raccoon conversion alerts | частично | `test_raccoon_hourly_conversion.py` | нет полного текста алерта как файла |
 | Raccoon jobs/commands wiring | покрыт | `test_raccoon_job_registry.py`, `test_raccoon_tg_commands.py` | не расписание |
 | Commands + JOB_REGISTRY freeze | покрыт (регистрация) | `test_behavior_baseline_inventory.py` | не live rules |
-| WE terminal / unread chips / add-block Save | покрыт (не browser) | `tests/unit/test_wallet_editor_terminal_field.py`, `test_add_wallet_engine.py`, `test_add_wallet_contract.py` | Playwright live DOM нет |
+| WE terminal / unread chips / add-block Save | покрыт (локальный Chromium + HTML-фикстуры) | `tests/unit/test_wallet_editor_terminal_field.py` (`browser_page`), `test_add_wallet_engine.py`, `test_add_wallet_contract.py` | не живой кабинет; часть тестов mock Playwright |
 | WE HOLD | покрыт unit | `test_wallet_editor_hold_enforcement.py` | — |
 | PID locks | покрыт | `tests/test_job_runner_stale_lock.py`, `tests/test_lock_status.py` | не межконтейнерная координация |
 
@@ -117,22 +117,28 @@ Import-time на Platform: нужны `TELEGRAM_CHAT_ID_HOURLY_RACCOON` и `TELE
 
 | Тема | Test | Platform `develop` |
 |------|------|--------------------|
-| Token | `TELEGRAM_BOT_TOKEN` | `TG_BOT_TOKEN` |
+| Token scheduler | `TELEGRAM_BOT_TOKEN` | `TG_BOT_TOKEN` |
+| Token send | тот же `TELEGRAM_BOT_TOKEN` | `telegram_bot.py` требует **отдельный** `TELEGRAM_BOT_TOKEN` (не scheduler) |
 | Payin chat | lazy `_hourly_chat_id()` / `TELEGRAM_CHAT_ID_HOURLY_RACCOON` | **import-time raise**, если нет `TELEGRAM_CHAT_ID_HOURLY_RACCOON` |
 | Wallet chat env | lazy | import-time raise `TELEGRAM_CHAT_ID_RACCOON_WALLET` |
 | Расписание | Rules V2 `load_schedules` | hardcoded hourly + `RACCOON_REPORTER_EVERY_MIN` (default 10) + окно daily conversion |
 | Restart | нет в Test scheduler | `RESTART_TIMES` |
-| Locks | PID files `{STATE_DIR}/locks/{job_type}.lock` | in-memory / asyncio job lock |
+| Locks | PID files `{STATE_DIR}/locks/{job_type}.lock` | in-memory `threading.Lock` per job_key + TG `asyncio.Lock` |
 | Команды | mixed Antares+WE+Raccoon | + `/run_raccoon_analyzer` `/run_raccoon_reporter`; `/run_wallet` stub; нет WE ingest |
-| Job names | `raccoon_hourly` = payin report + downloader chain | тот же файл `raccoon_hourly_report.py` в логах часто `wallet_report` |
-| Raccoon wallet analyzer | Test job = Playwright cycle | `analyzers/raccoon_wallet_analyzer.py` + YAML `config/raccoon_wallet_config.yaml` |
+| Job keys | `raccoon_wallet` / `raccoon_hourly` / `raccoon_daily_conversion` | `raccoon_wallet_report_download` / `raccoon_wallet_report` / `raccoon_wallet_report_pipeline` |
+| `/run_raccoon` | `raccoon_wallet` (Playwright wallet cycle) | `run_raccoon_wallet_cycle` (hourly wallet analysis) |
+| `/run_hourly_raccoon` | `raccoon_hourly` (payin download+report) | `raccoon_wallet_report_pipeline` |
+| Job names / logs | `raccoon_hourly` = payin report + downloader chain | тот же файл `raccoon_hourly_report.py` в логах часто `[wallet_report]` |
+| Raccoon wallet analyzer | Test job = Playwright cycle | `analyzers/raccoon_wallet_analyzer.py` + YAML; есть `_unknown_wallet_partner_blocks` (**нет** в Test) |
 | Config | Rules V2 | YAML `config/raccoon_hourly_report.yaml` / `raccoon_wallet_config.yaml` |
 
 ### Подозрение (не «исправить молча»)
 
 - **Имена jobs vs логи:** Test `raccoon_hourly` пишет `[raccoon_hourly_report]`; Platform `format_report` путь логирует `[wallet_report]`. Путаница WalletReporter vs hourly при переносе.
+- **Инверсия имён:** Platform `raccoon_wallet_report*` — это 10-мин payin pipeline, не Test `raccoon_wallet`.
 - **Два chat env** на одном модуле (payin vs conversion alerts) легко перепутать при cutover.
 - **U12:** наличие jobs в Test не значит, что они исполняются на сервисе Test.
+- **Unknown partners:** блок неизвестных партнёров есть в Platform wallet analyzer; в Test этого хелпера нет — при переносе не считать поведение одинаковым.
 
 `raccoon_wallet_analyzer` Platform **не** прогонялся тем же xlsx в этой задаче: другой контракт колонок/YAML, нет общего обезличенного входа без копирования конфига.
 
