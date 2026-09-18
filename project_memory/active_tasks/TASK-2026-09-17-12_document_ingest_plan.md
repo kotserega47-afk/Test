@@ -3,14 +3,14 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-12 |
-| **Статус** | in_progress (подготовлено к review; не «review пройден») |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-11 (PR #14), `ops/MODULAR_REORG_DOCUMENT_INGEST.md`, `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
 | **PR** | Draft [#15](https://github.com/deniskotdavydov1991-wq/Test/pull/15) `feat/task-2026-09-17-12-document-ingest-plan`, base `feat/task-2026-09-17-11-auto-enable-cmds` |
-| **HEAD** | `1bdcd9d1dd6e87847be4d4399e0a47f314a00ea6` |
+| **HEAD (проверен GPT)** | `428d50fe93c0b9c75d1fc05baf2eaf5940f03462` |
 | **Риск** | low: только документы |
 
-План выделения Wallet Editor document ingest **подготовлен**. Runtime и тесты в этой задаче не менялись. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. GPT review ещё не выполнялся.
+План выделения Wallet Editor document ingest **принят**. Runtime и тесты в TASK-12 не менялись. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #15 остаётся Draft. Реализация — TASK-13 (отдельная ветка).
 
 ---
 
@@ -22,15 +22,15 @@
 
 ## Current Behavior (исходники)
 
-Callback уже в `integrations/wallet_editor_tg.py`. Mixed `tg_commands` только импортирует и регистрирует `MessageHandler(filters.Document.ALL, ...)`. Allowlist и operator map — не command ACL. Startup warning — import-time этого модуля (через импорт `tg_commands` в scheduler). Постановка в in-memory очереди worker ≠ durable inbox.
+Callback в `integrations/wallet_editor_tg.py`. Mixed `tg_commands` только импортирует и регистрирует `MessageHandler`. Allowlist и operator map — не command ACL.
 
-Обследованный SHA: `8e57e49f2b04c919680918c3d704136032015bdc`.
+Обследованный SHA: `8e57e49f2b04c919680918c3d704136032015bdc`. Принятый план: `428d50fe…`.
 
 ---
 
 ## Desired Behavior
 
-Документ решения: карта зависимостей, контракт, единственный владелец состояния, точные patch-пути lazy import, одно место startup warning, identity-тест вне harness.
+Документ решения принят: единственный владелец состояния, lazy patch-пути, startup при импорте owner, identity вне harness.
 
 ---
 
@@ -41,15 +41,24 @@ Callback уже в `integrations/wallet_editor_tg.py`. Mixed `tg_commands` то�
 - [x] Владелец `modules.antares.document_ingest`; флаг и рабочий `TMP_DIR` только на owner
 - [x] Lazy-import: патч `automation.worker.*` / routing-модуля, не `document_ingest.add_task`
 - [x] Startup только при импорте owner; identity — отдельный тест, не harness dump
-- [ ] GPT review исправлений плана **не** ставился как пройденный
-- [ ] merge/deploy PR #4–#15 не выполнены
-- [ ] code PR ingest / TASK-13 (отдельное задание, после принятия плана)
+- [x] GPT review HEAD `428d50fe…`: блокирующих нет
+- [ ] merge/deploy PR #15 (намеренно открыто)
+- [ ] code PR ingest / TASK-13 (отдельное задание)
+
+---
+
+## Происхождение проверки
+
+| Кто | Что |
+|-----|-----|
+| Cursor | Документы; pytest **не** требовался |
+| GPT | Проверил план HEAD `428d50fe…`. Тесты **не** запускал. |
 
 ---
 
 ## Out Of Scope
 
-runtime/тесты этого PR; isolated entry; `JOB_ACCEPT`; cutover; Railway; профили; merge #4–#15; TASK-13; живые кабинеты/Telegram/БД/worker.
+runtime/тесты TASK-12; isolated entry; `JOB_ACCEPT`; cutover; Railway; профили; merge #4–#15; живые кабинеты/Telegram/БД/worker.
 
 ---
 
@@ -59,3 +68,4 @@ runtime/тесты этого PR; isolated entry; `JOB_ACCEPT`; cutover; Railway
 |------|---------|
 | 2026-09-18 | план document ingest подготовлен к review |
 | 2026-09-18 | уточнены владелец состояния, lazy patch-пути, startup и identity-тесты |
+| 2026-09-18 | GPT review HEAD `428d50fe…`: план принят; merge/deploy нет |

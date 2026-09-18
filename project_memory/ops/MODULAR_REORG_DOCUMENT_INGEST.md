@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | подготовлено к review; **не** runtime; merge нет |
+| **Статус** | review пройден (HEAD `428d50fe…`); **не** runtime; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
 | **Обследованный SHA** | `8e57e49f2b04c919680918c3d704136032015bdc` (TASK-11 docs close; код ingest = тот же, что на ветке TASK-11) |
 | **Основной источник** | `integrations/wallet_editor_tg.py` |

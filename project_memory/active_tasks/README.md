@@ -40,7 +40,7 @@
 | [TASK-2026-09-17-09](TASK-2026-09-17-09_registry_health_replay.md) | Registry health/replay: review пройден, merge нет (PR #12) |
 | [TASK-2026-09-17-10](TASK-2026-09-17-10_registry_export.md) | Registry export: review пройден, merge нет (PR #13) |
 | [TASK-2026-09-17-11](TASK-2026-09-17-11_auto_enable_cmds.md) | Auto-Enable callbacks: review пройден, merge нет (PR #14) |
-| [TASK-2026-09-17-12](TASK-2026-09-17-12_document_ingest_plan.md) | План document ingest: подготовлено к review (Draft PR #15), GPT review не ставился как пройденный |
+| [TASK-2026-09-17-12](TASK-2026-09-17-12_document_ingest_plan.md) | План document ingest: review пройден, merge нет (PR #15) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
