@@ -22,7 +22,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-09 registry cmds | реализован, review пройден (Draft PR #12, HEAD `b8085a28…`); восемь handlers; isolated entry нет | **нет** |
 | TASK-10 registry export | реализован, review пройден (Draft PR #13, HEAD `8c37766…`); девять handlers; isolated entry нет | **нет** |
 | TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
-| TASK-12 document ingest plan | подготовлено к review (ветка `feat/task-2026-09-17-12-document-ingest-plan`); runtime не менялся | **нет** |
+| TASK-12 document ingest plan | подготовлено к review (Draft PR #15, HEAD `1bdcd9d1…`); runtime не менялся | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest пока в `integrations/wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |

@@ -6,7 +6,8 @@
 | **Статус** | in_progress (подготовлено к review; не «review пройден») |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-11 (PR #14), `ops/MODULAR_REORG_DOCUMENT_INGEST.md`, `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
-| **PR** | Draft (будет заполнен после открытия) |
+| **PR** | Draft [#15](https://github.com/deniskotdavydov1991-wq/Test/pull/15) `feat/task-2026-09-17-12-document-ingest-plan`, base `feat/task-2026-09-17-11-auto-enable-cmds` |
+| **HEAD** | `1bdcd9d1dd6e87847be4d4399e0a47f314a00ea6` |
 | **Риск** | low: только документы |
 
 План выделения Wallet Editor document ingest **подготовлен**. Runtime и тесты в этой задаче не менялись. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. GPT review ещё не выполнялся.
