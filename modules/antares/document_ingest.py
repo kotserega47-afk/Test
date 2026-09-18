@@ -1,0 +1,230 @@
+"""Antares Wallet Editor Telegram document ingest. Import does not bind handlers."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from uuid import uuid4
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from automation.audit import log
+
+ALLOWED_EXTENSION = ".xlsx"
+TMP_DIR = Path("/tmp/wallet_editor")
+_WALLET_EDITOR_ALLOWED_CHAT_IDS_ENV = "WALLET_EDITOR_ALLOWED_CHAT_IDS"
+_ALLOWLIST_STARTUP_LOGGED = False
+
+
+def parse_allowed_chat_ids(env_value: str | None = None) -> frozenset[int]:
+    raw = (
+        env_value
+        if env_value is not None
+        else os.getenv(_WALLET_EDITOR_ALLOWED_CHAT_IDS_ENV, "")
+    ).strip()
+    if not raw:
+        return frozenset()
+    return frozenset(int(part.strip()) for part in raw.split(",") if part.strip())
+
+
+def log_wallet_editor_allowlist_startup_warning() -> None:
+    global _ALLOWLIST_STARTUP_LOGGED
+    if _ALLOWLIST_STARTUP_LOGGED:
+        return
+    _ALLOWLIST_STARTUP_LOGGED = True
+
+    ids = parse_allowed_chat_ids()
+    if not ids:
+        log.warning(
+            "⚠️ [WalletEditor] WALLET_EDITOR_ALLOWED_CHAT_IDS пуст или не задан — "
+            "ingest .xlsx отключён (fail-closed)"
+        )
+        return
+
+    log.info(f"🟢 [WalletEditor] allowed chats configured: {sorted(ids)}")
+
+
+def is_wallet_editor_chat_allowed(
+    chat_id: int,
+    *,
+    allowed: frozenset[int] | None = None,
+) -> bool:
+    ids = allowed if allowed is not None else parse_allowed_chat_ids()
+    if not ids:
+        return False
+    return chat_id in ids
+
+
+def is_xlsx_file_name(file_name: str | None) -> bool:
+    name = (file_name or "").strip()
+    if not name:
+        return False
+    return name.lower().endswith(".xlsx")
+
+
+def _telegram_user_id(update: Update) -> int | None:
+    user = update.effective_user
+    if user is not None:
+        return int(user.id)
+    message = update.message
+    if message is not None and message.from_user is not None:
+        return int(message.from_user.id)
+    return None
+
+
+def _ensure_tmp_dir() -> None:
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+async def handle_wallet_editor_document(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.message
+    if not message or not message.document:
+        return
+
+    chat_id = int(update.effective_chat.id)
+    document = message.document
+
+    if not is_wallet_editor_chat_allowed(chat_id):
+        log.info(f"⛔ [WalletEditor] chat denied chat_id={chat_id}")
+        await message.reply_text("⛔ Чат не разрешён для WalletEditor.")
+        return
+
+    if not is_xlsx_file_name(document.file_name):
+        log.info(
+            f"❌ [WalletEditor] rejected file_name={document.file_name!r} chat_id={chat_id}"
+        )
+        await message.reply_text("❌ Принимаются только файлы .xlsx")
+        return
+
+    from automation.runtime import MSG_OPERATOR_UNMAPPED, resolve_operator_for_user
+
+    telegram_user_id = _telegram_user_id(update)
+    if telegram_user_id is None:
+        log.warning(f"⚠️ [WalletEditor] missing sender user_id chat_id={chat_id}")
+        await message.reply_text(MSG_OPERATOR_UNMAPPED)
+        return
+
+    operator, error_message = resolve_operator_for_user(telegram_user_id)
+    if operator is None:
+        log.info(
+            f"⛔ [WalletEditor] operator denied user_id={telegram_user_id} chat_id={chat_id}"
+        )
+        await message.reply_text(error_message or MSG_OPERATOR_UNMAPPED)
+        return
+
+    from automation.edit_wallet_contract import ExcelRouting, detect_excel_routing
+    from automation.runtime import (
+        WalletEditorAddWalletTask,
+        WalletEditorEditWalletTask,
+        WalletEditorTask,
+        wallet_editor_add_wallet_dry_run_enabled,
+    )
+    from automation.worker import add_add_wallet_task, add_edit_wallet_task, add_task
+
+    try:
+        await message.reply_text("📥 Файл получен")
+        _ensure_tmp_dir()
+        local_path = TMP_DIR / f"wallet_editor_{uuid4().hex}{ALLOWED_EXTENSION}"
+
+        tg_file = await context.bot.get_file(document.file_id)
+        await tg_file.download_to_drive(custom_path=str(local_path))
+
+        routing, routing_error = detect_excel_routing(
+            str(local_path),
+            original_filename=document.file_name,
+        )
+        if routing == ExcelRouting.AMBIGUOUS:
+            log.info(
+                f"❌ [WalletEditor] ambiguous contract chat_id={chat_id} error={routing_error}"
+            )
+            try:
+                local_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            await message.reply_text(
+                f"❌ Не удалось определить тип Excel: {routing_error or 'ambiguous'}"
+            )
+            return
+
+        if routing == ExcelRouting.ADD_WALLET:
+            dry_run = wallet_editor_add_wallet_dry_run_enabled()
+            queue_size = add_add_wallet_task(
+                WalletEditorAddWalletTask(
+                    file_path=str(local_path),
+                    original_filename=document.file_name or "input.xlsx",
+                    operator_profile=operator.profile_key,
+                    chat_id=chat_id,
+                    user_id=telegram_user_id,
+                    login=operator.login,
+                    password=operator.password,
+                    auth_state_path=operator.auth_state_path,
+                    dry_run=dry_run,
+                )
+            )
+            log.info(
+                f"📌 [WalletEditorAdd] queued profile={operator.profile_key} "
+                f"user_id={telegram_user_id} chat_id={chat_id} "
+                f"queue_size={queue_size} dry_run={dry_run} file={local_path}"
+            )
+            await message.reply_text(
+                f"📌 Add Wallet: файл в очереди профиля {operator.profile_key}. "
+                f"Очередь: {queue_size}. dry_run={dry_run}"
+            )
+            return
+
+        if routing == ExcelRouting.EDIT_WALLET:
+            queue_size = add_edit_wallet_task(
+                WalletEditorEditWalletTask(
+                    file_path=str(local_path),
+                    original_filename=document.file_name or "input.xlsx",
+                    operator_profile=operator.profile_key,
+                    chat_id=chat_id,
+                    user_id=telegram_user_id,
+                    login=operator.login,
+                    password=operator.password,
+                    auth_state_path=operator.auth_state_path,
+                )
+            )
+            log.info(
+                f"📌 [WalletEditorEdit] queued profile={operator.profile_key} "
+                f"user_id={telegram_user_id} chat_id={chat_id} "
+                f"queue_size={queue_size} file={local_path}"
+            )
+            await message.reply_text(
+                f"📌 Edit Wallet: файл в очереди профиля {operator.profile_key}. "
+                f"Очередь: {queue_size}."
+            )
+            return
+
+        queue_size = add_task(
+            WalletEditorTask(
+                file_path=str(local_path),
+                chat_id=chat_id,
+                telegram_user_id=telegram_user_id,
+                operator_profile=operator.profile_key,
+                source_file_name=document.file_name or "input.xlsx",
+                login=operator.login,
+                password=operator.password,
+                auth_state_path=operator.auth_state_path,
+            )
+        )
+
+        log.info(
+            f"📌 [WalletEditor] queued profile={operator.profile_key} "
+            f"user_id={telegram_user_id} chat_id={chat_id} "
+            f"queue_size={queue_size} file={local_path}"
+        )
+        await message.reply_text(
+            f"📌 Файл добавлен в очередь профиля {operator.profile_key}. "
+            f"Текущий размер очереди: {queue_size}"
+        )
+    except Exception as e:
+        log.exception(f"❌ [WalletEditor] ingest failed chat_id={chat_id}: {e}")
+        await message.reply_text(f"❌ Ошибка при приёме файла: {e}")
+
+
+log_wallet_editor_allowlist_startup_warning()

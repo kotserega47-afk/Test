@@ -33,6 +33,13 @@ DEFAULT_USER_ID = 123456789
 DEFAULT_PROFILE = "DENIS"
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_ingest_tmp_dir(tmp_path, monkeypatch):
+    from modules.antares import document_ingest as ingest
+
+    monkeypatch.setattr(ingest, "TMP_DIR", tmp_path / "wallet_editor")
+
+
 def _write_disable_xlsx(path: str | Path) -> None:
     pd.DataFrame(
         [{"card": "4111111111111111", "action": "remove_partner", "value": "Ostin"}]
@@ -143,12 +150,12 @@ def test_empty_wallet_editor_allowlist_is_fail_closed() -> None:
 
 
 def test_startup_warning_when_allowlist_empty(caplog) -> None:
-    import integrations.wallet_editor_tg as mod
+    from modules.antares import document_ingest as ingest
 
-    mod._ALLOWLIST_STARTUP_LOGGED = False
+    ingest._ALLOWLIST_STARTUP_LOGGED = False
     with patch.dict("os.environ", {}, clear=True):
         with caplog.at_level("WARNING"):
-            mod.log_wallet_editor_allowlist_startup_warning()
+            ingest.log_wallet_editor_allowlist_startup_warning()
 
     assert "WALLET_EDITOR_ALLOWED_CHAT_IDS" in caplog.text
     assert "fail-closed" in caplog.text
@@ -159,14 +166,16 @@ def test_disallowed_chat_rejected_via_allowlist() -> None:
         update = _make_document_update(chat_id=999)
         context = MagicMock()
 
+        context.bot.get_file = AsyncMock()
         with patch.dict(
             "os.environ",
             {"WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
             clear=True,
         ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+            with patch("automation.worker.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
+        context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
         update.message.reply_text.assert_awaited_once_with(
             "⛔ Чат не разрешён для WalletEditor."
@@ -188,7 +197,7 @@ def test_allowed_chat_accepts_xlsx_via_allowlist() -> None:
             {**_operator_env(), "WALLET_EDITOR_ALLOWED_CHAT_IDS": "-5102627011"},
             clear=True,
         ):
-            with patch("integrations.wallet_editor_tg.add_task", return_value=1) as add_task:
+            with patch("automation.worker.add_task", return_value=1) as add_task:
                 await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
@@ -215,10 +224,10 @@ def test_document_without_file_path_does_not_crash() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("automation.worker.add_task") as add_task:
                     await handle_wallet_editor_document(update, context)
 
         assert not hasattr(update.message.document, "file_path")
@@ -235,10 +244,10 @@ def test_non_xlsx_rejected_before_get_file() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("automation.worker.add_task") as add_task:
                     await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
@@ -258,10 +267,10 @@ def test_empty_file_name_rejected_before_get_file() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("automation.worker.add_task") as add_task:
                     await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
@@ -283,10 +292,10 @@ def test_xlsx_calls_get_file_with_document_file_id() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task"):
+                with patch("automation.worker.add_task"):
                     await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_awaited_once_with("doc-file-abc")
@@ -305,14 +314,14 @@ def test_xlsx_document_queues_task() -> None:
         allowed = frozenset({update.effective_chat.id})
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
                 with patch(
-                    "integrations.wallet_editor_tg.parse_allowed_chat_ids",
+                    "modules.antares.document_ingest.parse_allowed_chat_ids",
                     return_value=allowed,
                 ):
-                    with patch("integrations.wallet_editor_tg.add_task", return_value=1) as add_task:
+                    with patch("automation.worker.add_task", return_value=1) as add_task:
                             await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
@@ -344,10 +353,10 @@ def test_non_xlsx_document_rejected() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("automation.worker.add_task") as add_task:
                     await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
@@ -364,13 +373,15 @@ def test_disallowed_chat_rejected() -> None:
         update = _make_document_update(chat_id=999)
         context = MagicMock()
 
+        context.bot.get_file = AsyncMock()
         with patch(
-            "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+            "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
             return_value=False,
         ):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+            with patch("automation.worker.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
+        context.bot.get_file.assert_not_called()
         add_task.assert_not_called()
         update.message.reply_text.assert_awaited_once_with(
             "⛔ Чат не разрешён для WalletEditor."
@@ -389,10 +400,10 @@ def test_handler_does_not_call_engine_run_directly() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task"):
+                with patch("automation.worker.add_task"):
                     with patch.object(engine, "run") as engine_run:
                         await handle_wallet_editor_document(update, context)
 
@@ -497,7 +508,7 @@ def test_mapped_user_queues_task_with_operator_credentials() -> None:
         }
 
         with patch.dict("os.environ", env, clear=True):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+            with patch("automation.worker.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
         task = add_task.call_args.args[0]
@@ -520,7 +531,7 @@ def test_unmapped_user_rejected_before_get_file() -> None:
         }
 
         with patch.dict("os.environ", env, clear=True):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+            with patch("automation.worker.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
@@ -541,7 +552,7 @@ def test_mapped_user_missing_credentials_rejected() -> None:
         }
 
         with patch.dict("os.environ", env, clear=True):
-            with patch("integrations.wallet_editor_tg.add_task") as add_task:
+            with patch("automation.worker.add_task") as add_task:
                 await handle_wallet_editor_document(update, context)
 
         context.bot.get_file.assert_not_called()
@@ -571,9 +582,11 @@ def test_different_users_get_different_auth_state_paths() -> None:
 
 
 def test_handler_does_not_fallback_to_wallet_editor_antares_login() -> None:
-    src = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
+    src = Path("modules/antares/document_ingest.py").read_text(encoding="utf-8")
+    compat = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
     assert "WALLET_EDITOR_ANTARES_LOGIN" not in src
     assert "wallet_editor_antares_login" not in src
+    assert "WALLET_EDITOR_ANTARES_LOGIN" not in compat
 
 
 def test_handler_uses_profile_queue_size_from_add_task() -> None:
@@ -586,10 +599,10 @@ def test_handler_uses_profile_queue_size_from_add_task() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task", return_value=3) as add_task:
+                with patch("automation.worker.add_task", return_value=3) as add_task:
                     await handle_wallet_editor_document(update, context)
 
         add_task.assert_called_once()
@@ -612,12 +625,12 @@ def test_add_wallet_xlsx_routes_to_add_wallet_task() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
+                with patch("automation.worker.add_task") as add_task:
                     with patch(
-                        "integrations.wallet_editor_tg.add_add_wallet_task",
+                        "automation.worker.add_add_wallet_task",
                         return_value=2,
                     ) as add_add_wallet_task:
                         await handle_wallet_editor_document(update, context)
@@ -647,15 +660,17 @@ def test_ambiguous_xlsx_rejected_without_queueing() -> None:
 
         with patch.dict("os.environ", _operator_env(), clear=True):
             with patch(
-                "integrations.wallet_editor_tg.is_wallet_editor_chat_allowed",
+                "modules.antares.document_ingest.is_wallet_editor_chat_allowed",
                 return_value=True,
             ):
-                with patch("integrations.wallet_editor_tg.add_task") as add_task:
-                    with patch("integrations.wallet_editor_tg.add_add_wallet_task") as add_add:
-                        await handle_wallet_editor_document(update, context)
+                with patch("automation.worker.add_task") as add_task:
+                    with patch("automation.worker.add_add_wallet_task") as add_add:
+                        with patch("automation.worker.add_edit_wallet_task") as add_edit:
+                            await handle_wallet_editor_document(update, context)
 
         add_task.assert_not_called()
         add_add.assert_not_called()
+        add_edit.assert_not_called()
         texts = [c.args[0] for c in update.message.reply_text.await_args_list]
         assert any("Не удалось определить тип Excel" in t for t in texts)
 

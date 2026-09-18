@@ -2,10 +2,10 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | review пройден (HEAD `428d50fe…`); **не** runtime; merge нет |
+| **Статус** | план review пройден (HEAD `428d50fe…`); реализация TASK-13 — review **не** пройден; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
-| **Обследованный SHA** | `8e57e49f2b04c919680918c3d704136032015bdc` (TASK-11 docs close; код ingest = тот же, что на ветке TASK-11) |
-| **Основной источник** | `integrations/wallet_editor_tg.py` |
+| **Обследованный SHA** | `8e57e49f2b04c919680918c3d704136032015bdc` |
+| **Основной источник** | `modules/antares/document_ingest.py` (compat: `integrations/wallet_editor_tg.py`) |
 | **Регистрация mixed** | `integrations/tg_commands.py` `get_handlers()` → `MessageHandler(filters.Document.ALL, handle_wallet_editor_document)` |
 | **Эталон mixed команд** | `tests/fixtures/behavior_baseline/expected_tg_commands.json` (**не** менять) |
 

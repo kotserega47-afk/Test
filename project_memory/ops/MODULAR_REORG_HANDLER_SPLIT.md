@@ -15,7 +15,7 @@
 ## 1. Карта обработчиков
 
 ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES, ctx, command)` + `deny_message`.  
-Исключение: document ingest **не** использует `_guard_or_deny`; чат-allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` в `integrations/wallet_editor_tg.py`.
+Исключение: document ingest **не** использует `_guard_or_deny`; чат-allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` в `modules.antares.document_ingest`.
 
 Глобали `tg_commands`: `RULES = AccessRules(RULES_XLSX_PATH)`, `log`, `MSK`. Импорт модуля регистрирует jobs (`register_jobs`, `raccoon_jobs`, `script_jobs`).
 
@@ -43,7 +43,7 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | 18 | `registry_health` | `cmd_registry_health` | `registry_health` | `build_registry_health_report` sync | WE registry | **Antares WE** | нет dedicated cmd |
 | 19 | `registry_replay` | `cmd_registry_replay` | `registry_replay` | `replay_pending_outbox_records()` **не** job `wallet_editor_registry_replay` | WE outbox | **Antares WE** | нет dedicated cmd |
 | 20 | `registry_export` | `cmd_registry_export` | `registry_export` | PG export + `reply_document` | `InputFile`, postgres builder | **Antares WE** (callback в `modules.antares.handlers`, mixed re-export) | `tests/unit/test_tg_registry_export.py` |
-| 21 | `filters.Document.ALL` | `handle_wallet_editor_document` | chat allowlist, не `check_access` | очередь WE xlsx | `integrations/wallet_editor_tg.py`, worker | **Antares WE** (план переноса: `ops/MODULAR_REORG_DOCUMENT_INGEST.md`) | `tests/unit/test_wallet_editor_tg_integration.py` |
+| 21 | `filters.Document.ALL` | `handle_wallet_editor_document` | chat allowlist, не `check_access` | очередь WE xlsx | `modules.antares.document_ingest`, worker | **Antares WE** (`ops/MODULAR_REORG_DOCUMENT_INGEST.md`) | `tests/unit/test_wallet_editor_tg_integration.py`; `tests/test_antares_document_ingest.py` |
 
 Инвентаризация имён/порядка `CommandHandler`: `tests/test_behavior_baseline_inventory.py` (AST). AST также фиксирует наличие `MessageHandler`, **не** `filters.Document.ALL`. Конкретный `Document.ALL`: `tests/test_behavior_baseline_registration.py`. Wiring scheduler: `tests/unit/test_project_profile_boot.py`.
 
@@ -70,7 +70,8 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | `modules/antares/handlers.py` (будущий) | callbacks тонкого dispatch: `cmd_run_wallet|hourly|download|rate`; позже WE cmds и `operator_wallets_ready` |
 | mixed `integrations/tg_commands.py` | `get_handlers()` как **сборка** mixed; help/status/start; raccoon cmds; `hello_world`; создание `RULES` и `log`; `bind_rules(RULES)` и передача `log`; вызов `register_jobs` + raccoon/script imports |
 | `core/tg_command_dispatch.py` (TASK-07, узкий) | три helpers: `build_access_context` (сейчас `_ctx`), `guard_or_deny(update, command, rules)`, `run_job_async(update, job_type, logger)` — без имён Antares/Raccoon jobs, без help/status-текста. Не framework. Help/status **остаются** в `tg_commands` |
-| `integrations/wallet_editor_tg.py` | document ingest **сейчас** здесь; план: owner `modules.antares.document_ingest`, mixed только регистрирует `MessageHandler` |
+| `integrations/wallet_editor_tg.py` | identity re-export ingest; mixed регистрирует `MessageHandler` |
+| `modules/antares/document_ingest.py` | owner callback, allowlist, TMP_DIR, startup warning |
 
 ### 2.1 `bind_rules(RULES)` — единственный способ передачи правил в TASK-07
 

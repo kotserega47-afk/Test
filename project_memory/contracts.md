@@ -118,7 +118,7 @@
 | `OBSERVATION_ENABLED` | нет | off | `tg_commands.py` L47 | extended `/status` | OPTIONAL | CONFIRMED |
 | `HOURLY_PAYIN_MAPPING_STRICT` | нет | off | `hourly_analyzer.py` L224 | strict partner mapping | OPTIONAL | CONFIRMED |
 | `TMP` | нет | `/tmp` | `payout.py` L242 | temp report path | OPTIONAL | CONFIRMED |
-| `WALLET_EDITOR_ALLOWED_CHAT_IDS` | да (ingest enabled) | `""` | `integrations/wallet_editor_tg.py` | fail-closed: пустой → все чаты отклонены | IMPORTANT | CONFIRMED |
+| `WALLET_EDITOR_ALLOWED_CHAT_IDS` | да (ingest enabled) | `""` | `modules/antares/document_ingest.py` | fail-closed: пустой → все чаты отклонены | IMPORTANT | CONFIRMED |
 | `WALLET_EDITOR_OPERATOR_MAP` | да (ingest enabled) | `""` | `automation/runtime.py` | fail-closed: unmapped user_id → отказ | CRITICAL | CONFIRMED |
 | `WALLET_EDITOR_OPERATOR_<PROFILE>_LOGIN` | да (per mapped profile) | — | `automation/runtime.py` | incomplete profile → отказ | CRITICAL | CONFIRMED |
 | `WALLET_EDITOR_OPERATOR_<PROFILE>_PASSWORD` | да (per mapped profile) | — | `automation/runtime.py` | incomplete profile → отказ | CRITICAL | CONFIRMED |
@@ -198,7 +198,7 @@ Rules:
 | Dropbox `special_cards.xlsx` | xlsx | `conversion.py` | — | нет | analysis without special rules | OPTIONAL | CONFIRMED |
 | Antares exports (`conversion_*`, `payout_*`, `card_*`, `cd_*`) | xlsx | analyzers via `main`/`download` | downloaders → Dropbox | P3 | pipeline skip/fail | IMPORTANT | CONFIRMED |
 | Output reports (`report_*.xlsx`) | xlsx | — | `conversion.py`, `payout.py` | output | — | OPTIONAL | CONFIRMED |
-| `/tmp/wallet_editor/wallet_editor_*.xlsx` | xlsx | WalletEditor worker | `wallet_editor_tg` download | P-WE input | re-download on retry | IMPORTANT | CONFIRMED |
+| `/tmp/wallet_editor/wallet_editor_*.xlsx` | xlsx | WalletEditor worker | `document_ingest` download | P-WE input | re-download on retry | IMPORTANT | CONFIRMED |
 | `/tmp/wallet_editor/wallet_editor_result_<INPUT>_<PROFILE>.xlsx` | xlsx | — | `automation/engine.py` via worker | P-WE disable output | collision → `_2` / `_<uuid8>` suffix | IMPORTANT | CONFIRMED |
 | `/tmp/wallet_editor/add_wallet_result_*.xlsx` (via `build_add_wallet_result_path`) | xlsx | — | `automation/add_wallet_engine.py` via worker | P-WE Add Wallet output | per-run TG result; **no** registry append | IMPORTANT | CONFIRMED |
 | Dropbox `{DROPBOX_WALLET_EDITOR_PATH}` (e.g. `/Ostin/platform/Tests/wallet_editor.xlsx`) | xlsx | WalletEditor registry read/write | `integrations/wallet_editor_registry.py` | P-WE cumulative history | download/upload fail → log only; per-run TG unchanged | IMPORTANT | CONFIRMED |

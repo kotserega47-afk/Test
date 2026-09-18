@@ -22,15 +22,16 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-09 registry cmds | реализован, review пройден (Draft PR #12, HEAD `b8085a28…`); восемь handlers; isolated entry нет | **нет** |
 | TASK-10 registry export | реализован, review пройден (Draft PR #13, HEAD `8c37766…`); девять handlers; isolated entry нет | **нет** |
 | TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
-| TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, HEAD `428d50fe…`); runtime не менялся | **нет** |
-| Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest пока в `integrations/wallet_editor_tg` | — |
+| TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, закрытие `66b99ab1…`); runtime плана не менялся | **нет** |
+| TASK-13 document ingest | код перенесён в `modules.antares.document_ingest`; review **не** пройден | **нет** |
+| Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | isolated entry **не** готов; mixed help/status/Raccoon/`run_script_hello` ещё в `tg_commands`; document ingest — план TASK-12, код не перенесён | — |
+| Следующая | isolated entry **не** готов; mixed help/status/Raccoon/`run_script_hello` ещё в `tg_commands`; document ingest owner перенесён (TASK-13, review не пройден) | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
@@ -135,7 +136,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-12):** план document ingest принят. Код ingest ещё в `integrations/wallet_editor_tg.py`. Isolated Antares **не** готов.
+**Сейчас (после TASK-13):** owner ingest — `modules.antares.document_ingest`; mixed `wallet_editor_tg` — identity re-export. Review TASK-13 **не** пройден. Isolated Antares **не** готов.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
@@ -357,6 +358,6 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4–#15)
+## Следующие задачи (не merge #4–#16)
 
 1. Isolated entry, `JOB_ACCEPT` и cutover **не** готовы. Help/status/Raccoon/`run_script_hello` остаются в mixed `tg_commands`. Document ingest: план в `ops/MODULAR_REORG_DOCUMENT_INGEST.md`, код не перенесён.

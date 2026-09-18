@@ -204,8 +204,9 @@ flowchart LR
 | `analyzers/raccoon_wallet_analyzer.py` | Raccoon PayIn analysis + TG | `raccoon_wallet_downloader`, `raccoon_jobs` |
 | `integrations/raccoon_wallet_downloader.py` | Raccoon Playwright PayIn download | job `raccoon_wallet` |
 | `integrations/raccoon_jobs.py` | Raccoon job registry bindings | `JOB_REGISTRY` |
-| `integrations/wallet_editor_tg.py` | WalletEditor: TG document ingest, allowlist, operator routing | `tg_commands` MessageHandler |
-| `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, `wallet_editor_tg` |
+| `modules/antares/document_ingest.py` | WalletEditor: TG document ingest, allowlist, TMP_DIR, startup warning | mixed `wallet_editor_tg` re-export |
+| `integrations/wallet_editor_tg.py` | Compatible re-export of document ingest | `tg_commands` MessageHandler |
+| `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, document ingest |
 | `automation/engine.py` | WalletEditor Playwright business logic — disable flow (Antares UI) | `automation/worker` |
 | `automation/add_wallet_contract.py` | Add Wallet Excel contract, routing, batch prep, result dataframe | `wallet_editor_tg`, `add_wallet_engine` |
 | `automation/add_wallet_engine.py` | Add Wallet Playwright UI automation (create modal) | `automation/worker` `_run_add_wallet_task` |
@@ -410,7 +411,7 @@ automation/worker.py add_task → engine.run → result xlsx → Telegram
 | | |
 |---|---|
 | **Trigger** | Telegram document (`.xlsx`) от mapped operator в allowed chat |
-| **Entry** | `integrations/wallet_editor_tg.handle_wallet_editor_document` |
+| **Entry** | `modules.antares.document_ingest.handle_wallet_editor_document` (mixed: `integrations.wallet_editor_tg`) |
 | **Production path** | `scheduler.py` → PTB `app.run_polling()` → `integrations/tg_commands.py` MessageHandler |
 | **Input** | `.xlsx` из Telegram; operator credentials из env map |
 | **Routing** | `detect_excel_routing()`: disable = `card`+`action`+`value`; Add Wallet = `card`+`phone` (no `action`/`value`); ambiguous → reject |
@@ -423,7 +424,8 @@ Telegram document (.xlsx)
         ↓
 PTB polling (основной runtime — scheduler.py)
         ↓
-integrations/wallet_editor_tg.py
+modules/antares/document_ingest.py
+        (mixed re-export: integrations/wallet_editor_tg.py)
         ↓
 chat allowlist (WALLET_EDITOR_ALLOWED_CHAT_IDS)
         ↓

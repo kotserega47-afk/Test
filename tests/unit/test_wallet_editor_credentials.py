@@ -80,9 +80,12 @@ def test_engine_no_shared_antares_constants() -> None:
 
 
 def test_handler_does_not_use_legacy_antares_env_as_fallback() -> None:
-    src = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
+    src = Path("modules/antares/document_ingest.py").read_text(encoding="utf-8")
+    compat = Path("integrations/wallet_editor_tg.py").read_text(encoding="utf-8")
     assert "WALLET_EDITOR_ANTARES_LOGIN" not in src
     assert "ANTARES_LOGIN" not in src
+    assert "WALLET_EDITOR_ANTARES_LOGIN" not in compat
+    assert "ANTARES_LOGIN" not in compat
 
 
 def test_resolve_operator_does_not_use_legacy_wallet_editor_antares_env() -> None:
