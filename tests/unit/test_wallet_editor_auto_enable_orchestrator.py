@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
 
+from core.access_rules import CommandRule
 from core.job_runner import Actor
+from modules.antares import handlers as antares_handlers
 from integrations.wallet_editor_auto_enable import (
     PLAN_ONLY_LABEL,
     build_auto_enable_plan,
@@ -179,64 +183,268 @@ def test_build_phase_a_report_notes_approval_required_skips_execution():
     assert "approval_required=1: plan only, execution skipped" in report
 
 
-def test_cmd_auto_enable_plan_uses_guard_and_runs_plan_only():
-    from integrations.tg_commands import cmd_auto_enable_plan
+_PLAN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable_plan"
+_RUN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable"
+_PLAN_START = "🧩 Строю WalletEditor Auto-Enable plan (plan-only)..."
+_RUN_START = "🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)..."
 
+
+class _MutableRules:
+    def __init__(self) -> None:
+        self.commands_map: dict = {}
+        self.access_map: dict = {}
+
+    def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(commands_map=self.commands_map, access_map=self.access_map)
+
+
+def _allow(rules: _MutableRules, command: str, *, chat_id: int = -100, user_id: int = 123) -> None:
+    rules.commands_map[command] = CommandRule(
+        required_level=1,
+        allow_private=True,
+        allow_groups=True,
+        enabled=True,
+    )
+    rules.access_map[("private", user_id)] = 1
+    rules.access_map[(chat_id, user_id)] = 1
+
+
+def _update(*, chat_id: int = -100, user_id: int = 123) -> MagicMock:
     update = MagicMock()
-    update.effective_chat.id = -100
-    update.effective_user.id = 123
+    update.effective_chat.type = "private"
+    update.effective_chat.id = chat_id
+    update.effective_user.id = user_id
     update.message.reply_text = AsyncMock()
-
-    with patch(
-        "integrations.tg_commands._guard_or_deny",
-        new=AsyncMock(return_value=False),
-    ) as guard:
-        with patch("integrations.tg_commands.run_auto_enable_plan") as plan_fn:
-            asyncio.run(cmd_auto_enable_plan(update, MagicMock()))
-            guard.assert_awaited_once_with(update, "auto_enable_plan")
-            plan_fn.assert_not_called()
-
-    with patch(
-        "integrations.tg_commands._guard_or_deny",
-        new=AsyncMock(return_value=True),
-    ):
-        with patch(
-            "integrations.tg_commands.run_auto_enable_plan",
-            return_value=MagicMock(skipped_reason=None, sent=True),
-        ) as plan_fn:
-            asyncio.run(cmd_auto_enable_plan(update, MagicMock()))
-            plan_fn.assert_called_once()
-            assert plan_fn.call_args.kwargs["manual"] is True
+    return update
 
 
-def test_cmd_auto_enable_run_uses_guard_and_runs_orchestrator():
-    from integrations.tg_commands import cmd_auto_enable_run
+@pytest.fixture
+def unbound_handlers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(antares_handlers, "_rules", None)
+    monkeypatch.setattr(antares_handlers, "_logger", None)
+    return antares_handlers
 
-    update = MagicMock()
-    update.effective_chat.id = -100
-    update.effective_user.id = 123
-    update.message.reply_text = AsyncMock()
 
-    with patch(
-        "integrations.tg_commands._guard_or_deny",
-        new=AsyncMock(return_value=False),
-    ) as guard:
-        with patch("integrations.tg_commands.run_auto_enable") as run_fn:
-            asyncio.run(cmd_auto_enable_run(update, MagicMock()))
-            guard.assert_awaited_once_with(update, "auto_enable_run")
-            run_fn.assert_not_called()
+def _bind_allow(unbound, command: str):
+    rules = _MutableRules()
+    _allow(rules, command)
+    logger = MagicMock()
+    unbound.bind_rules(rules)
+    unbound.bind_logger(logger)
+    return logger
 
-    with patch(
-        "integrations.tg_commands._guard_or_deny",
-        new=AsyncMock(return_value=True),
-    ):
-        with patch(
-            "integrations.tg_commands.run_auto_enable",
-            return_value=MagicMock(skipped_reason=None, sent=True),
-        ) as run_fn:
-            asyncio.run(cmd_auto_enable_run(update, MagicMock()))
-            run_fn.assert_called_once()
-            actor = run_fn.call_args.args[0]
-            assert actor.kind == "tg"
-            assert actor.user_id == 123
-            assert run_fn.call_args.kwargs["manual"] is True
+
+@pytest.mark.parametrize(
+    "callback,command,orch_path,other_path",
+    [
+        (antares_handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_ORCH, _RUN_ORCH),
+        (antares_handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_ORCH, _PLAN_ORCH),
+    ],
+)
+def test_cmd_auto_enable_unbound_skips_orchestrator(
+    unbound_handlers, callback, command, orch_path, other_path
+):
+    update = _update()
+
+    async def _run() -> None:
+        with patch(orch_path) as orch:
+            with patch(other_path) as other:
+                with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                    with pytest.raises(unbound_handlers.HandlerNotBoundError):
+                        await callback(update, MagicMock())
+                    unbound_handlers.bind_rules(object())
+                    with pytest.raises(unbound_handlers.HandlerNotBoundError):
+                        await callback(update, MagicMock())
+                    unbound_handlers._rules = None
+                    unbound_handlers.bind_logger(MagicMock())
+                    with pytest.raises(unbound_handlers.HandlerNotBoundError):
+                        await callback(update, MagicMock())
+                    orch.assert_not_called()
+                    other.assert_not_called()
+                    dispatch.assert_not_awaited()
+
+    asyncio.run(_run())
+    update.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "callback,command,orch_path",
+    [
+        (antares_handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_ORCH),
+        (antares_handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_ORCH),
+    ],
+)
+def test_cmd_auto_enable_deny_uses_real_acl(unbound_handlers, callback, command, orch_path):
+    update = _update()
+    unbound_handlers.bind_rules(_MutableRules())
+    unbound_handlers.bind_logger(MagicMock())
+    seen: list[str] = []
+    real_guard = unbound_handlers.guard_or_deny
+
+    async def _spy(update_obj, cmd, rules):
+        seen.append(cmd)
+        return await real_guard(update_obj, cmd, rules)
+
+    with patch.object(unbound_handlers, "guard_or_deny", side_effect=_spy):
+        with patch(orch_path) as orch:
+            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                asyncio.run(callback(update, MagicMock()))
+                orch.assert_not_called()
+                dispatch.assert_not_awaited()
+
+    assert seen == [command]
+    texts = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert _PLAN_START not in texts
+    assert _RUN_START not in texts
+
+
+def test_cmd_auto_enable_plan_allow_actor_order_and_thread(unbound_handlers):
+    update = _update()
+    _bind_allow(unbound_handlers, "auto_enable_plan")
+    order: list[str] = []
+    off_loop: list[bool] = []
+
+    def _plan(actor, *, manual):
+        order.append("orch")
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+        assert isinstance(actor, Actor)
+        assert actor.kind == "tg"
+        assert actor.chat_id == -100
+        assert actor.user_id == 123
+        assert manual is True
+        return SimpleNamespace(skipped_reason=None, sent=True)
+
+    async def _reply(text, *args, **kwargs):
+        order.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+
+    with patch(_PLAN_ORCH, side_effect=_plan) as plan_fn:
+        with patch(_RUN_ORCH) as run_fn:
+            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                asyncio.run(unbound_handlers.cmd_auto_enable_plan(update, MagicMock()))
+                run_fn.assert_not_called()
+                dispatch.assert_not_awaited()
+
+    plan_fn.assert_called_once()
+    assert off_loop == [True]
+    assert order[0] == _PLAN_START
+    assert order[1] == "orch"
+    assert order[2] == "✅ Plan-only report sent=True. Antares/registry unchanged."
+
+
+def test_cmd_auto_enable_run_allow_actor_order_and_thread(unbound_handlers):
+    update = _update()
+    _bind_allow(unbound_handlers, "auto_enable_run")
+    order: list[str] = []
+    off_loop: list[bool] = []
+
+    def _run(actor, *, manual):
+        order.append("orch")
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+        assert isinstance(actor, Actor)
+        assert actor.kind == "tg"
+        assert actor.chat_id == -100
+        assert actor.user_id == 123
+        assert manual is True
+        return SimpleNamespace(skipped_reason=None, phase="executed", sent=True)
+
+    async def _reply(text, *args, **kwargs):
+        order.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+
+    with patch(_RUN_ORCH, side_effect=_run) as run_fn:
+        with patch(_PLAN_ORCH) as plan_fn:
+            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                asyncio.run(unbound_handlers.cmd_auto_enable_run(update, MagicMock()))
+                plan_fn.assert_not_called()
+                dispatch.assert_not_awaited()
+
+    run_fn.assert_called_once()
+    assert off_loop == [True]
+    assert order[0] == _RUN_START
+    assert order[1] == "orch"
+    assert order[2] == "✅ Auto-Enable execution finished. Telegram report sent=True"
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        (
+            SimpleNamespace(skipped_reason="disabled"),
+            "ℹ️ Auto-Enable disabled (job_params enabled=0).",
+        ),
+        (
+            SimpleNamespace(skipped_reason="error"),
+            "⚠️ Auto-Enable plan failed. См. route-отчёт.",
+        ),
+        (
+            SimpleNamespace(skipped_reason=None, sent=True),
+            "✅ Plan-only report sent=True. Antares/registry unchanged.",
+        ),
+    ],
+)
+def test_cmd_auto_enable_plan_result_branches(unbound_handlers, result, expected):
+    update = _update()
+    _bind_allow(unbound_handlers, "auto_enable_plan")
+    with patch(_PLAN_ORCH, return_value=result):
+        asyncio.run(unbound_handlers.cmd_auto_enable_plan(update, MagicMock()))
+    texts = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert texts[0] == _PLAN_START
+    assert texts[-1] == expected
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        (
+            SimpleNamespace(skipped_reason="disabled"),
+            "ℹ️ Auto-Enable disabled (job_params enabled=0).",
+        ),
+        (
+            SimpleNamespace(skipped_reason="error"),
+            "⚠️ Auto-Enable run failed. См. route-отчёт.",
+        ),
+        (
+            SimpleNamespace(skipped_reason=None, phase="plan-only"),
+            "ℹ️ Execution blocked by settings (dry_run=1). Plan-only report sent.",
+        ),
+        (
+            SimpleNamespace(skipped_reason=None, phase="executed", sent=False),
+            "✅ Auto-Enable execution finished. Telegram report sent=False",
+        ),
+    ],
+)
+def test_cmd_auto_enable_run_result_branches(unbound_handlers, result, expected):
+    update = _update()
+    _bind_allow(unbound_handlers, "auto_enable_run")
+    with patch(_RUN_ORCH, return_value=result):
+        asyncio.run(unbound_handlers.cmd_auto_enable_run(update, MagicMock()))
+    texts = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert texts[0] == _RUN_START
+    assert texts[-1] == expected
+
+
+def test_cmd_auto_enable_plan_orchestrator_exception(unbound_handlers):
+    update = _update()
+    logger = _bind_allow(unbound_handlers, "auto_enable_plan")
+    with patch(_PLAN_ORCH, side_effect=RuntimeError("plan boom")):
+        asyncio.run(unbound_handlers.cmd_auto_enable_plan(update, MagicMock()))
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "cmd_auto_enable_plan failed"
+    texts = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert texts[0] == _PLAN_START
+    assert texts[-1] == "❌ /auto_enable_plan failed: RuntimeError: plan boom"
+
+
+def test_cmd_auto_enable_run_orchestrator_exception(unbound_handlers):
+    update = _update()
+    logger = _bind_allow(unbound_handlers, "auto_enable_run")
+    with patch(_RUN_ORCH, side_effect=RuntimeError("run boom")):
+        asyncio.run(unbound_handlers.cmd_auto_enable_run(update, MagicMock()))
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "cmd_auto_enable_run failed"
+    texts = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert texts[0] == _RUN_START
+    assert texts[-1] == "❌ /auto_enable_run failed: RuntimeError: run boom"

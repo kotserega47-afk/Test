@@ -63,6 +63,8 @@ _ANTARES_CALLBACK_IDS = {
     id(handlers.cmd_registry_health),
     id(handlers.cmd_registry_replay),
     id(handlers.cmd_registry_export),
+    id(handlers.cmd_auto_enable_plan),
+    id(handlers.cmd_auto_enable_run),
 }
 
 _REGISTRY_CMDS = (
@@ -75,6 +77,7 @@ _FORBIDDEN_ON_HANDLERS_IMPORT = (
     "integrations.telegram_bot",
     "integrations.wallet_editor_registry",
     "integrations.wallet_editor_registry_db.registry_export_builder",
+    "integrations.wallet_editor_auto_enable",
     "playwright",
     "playwright.sync_api",
     "psycopg2",
@@ -442,6 +445,8 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert tg_commands.cmd_registry_health is handlers.cmd_registry_health
     assert tg_commands.cmd_registry_replay is handlers.cmd_registry_replay
     assert tg_commands.cmd_registry_export is handlers.cmd_registry_export
+    assert tg_commands.cmd_auto_enable_plan is handlers.cmd_auto_enable_plan
+    assert tg_commands.cmd_auto_enable_run is handlers.cmd_auto_enable_run
     assert handlers._rules is tg_commands.RULES
     assert handlers._logger is tg_commands.log
 
@@ -459,11 +464,13 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert assembled["registry_health"] is handlers.cmd_registry_health
     assert assembled["registry_replay"] is handlers.cmd_registry_replay
     assert assembled["registry_export"] is handlers.cmd_registry_export
+    assert assembled["auto_enable_plan"] is handlers.cmd_auto_enable_plan
+    assert assembled["auto_enable_run"] is handlers.cmd_auto_enable_run
     assert assembled["run_raccoon"] is tg_commands.cmd_run_raccoon
     assert assembled["run_raccoon"] is not handlers.cmd_run_hourly
     assert assembled["run_hourly_raccoon"] is tg_commands.cmd_run_hourly_raccoon
     assert assembled["registry_export"] is not handlers.cmd_registry_replay
-    assert len(_ANTARES_CALLBACK_IDS) == 9
+    assert len(_ANTARES_CALLBACK_IDS) == 11
 
 
 @pytest.mark.parametrize("callback,command", _REGISTRY_CMDS)

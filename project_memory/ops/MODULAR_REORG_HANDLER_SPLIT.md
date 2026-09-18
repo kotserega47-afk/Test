@@ -37,8 +37,8 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | 12 | `run_script_hello` | `cmd_run_script_hello` | `run_script_hello` | job `script_job:hello_world` | то же | **generic script** (нет Antares-данных) | `tests/unit/test_script_jobs_tg_command.py` |
 | 13 | `operator_wallets_ready` | `cmd_operator_wallets_ready` | `operator_wallets_ready` | job `script_job:operator_wallets_ready` | download Antares wallets, `CONVERSION_COLUMNS` | **Antares** (по содержимому, не по префиксу) | `tests/unit/test_script_jobs_operator_wallets_ready.py` |
 | 14 | `rules_validate` | `cmd_rules_validate` | `rules_validate` | `build_rules_validate_telegram_chunks_with_payload` + audit hook | rules_v2 ops | mixed-compat (workbook процесса) | `tests/test_access_guard_commands_map.py` (ACL map, не текст) |
-| 15 | `auto_enable_plan` | `cmd_auto_enable_plan` | `auto_enable_plan` | `run_auto_enable_plan(actor, manual=True)` **не** JOB_REGISTRY | WE Auto-Enable | **Antares WE** | `tests/unit/test_wallet_editor_auto_enable_orchestrator.py` |
-| 16 | `auto_enable_run` | `cmd_auto_enable_run` | `auto_enable_run` | `run_auto_enable(actor, manual=True)` | WE Auto-Enable | **Antares WE** | то же |
+| 15 | `auto_enable_plan` | `cmd_auto_enable_plan` | `auto_enable_plan` | `run_auto_enable_plan(actor, manual=True)` **не** JOB_REGISTRY | WE Auto-Enable | **Antares WE** (callback в `modules.antares.handlers`, mixed re-export) | `tests/unit/test_wallet_editor_auto_enable_orchestrator.py` |
+| 16 | `auto_enable_run` | `cmd_auto_enable_run` | `auto_enable_run` | `run_auto_enable(actor, manual=True)` | WE Auto-Enable | **Antares WE** (callback в `modules.antares.handlers`, mixed re-export) | то же |
 | 17 | `wallet_editor_refresh` | `cmd_wallet_editor_refresh` | `wallet_editor_refresh` | job `wallet_editor_registry_refresh` | `_run_job_async` | **Antares WE** | `tests/unit/test_wallet_editor_registry_refresh.py` (ACL allow/deny) |
 | 18 | `registry_health` | `cmd_registry_health` | `registry_health` | `build_registry_health_report` sync | WE registry | **Antares WE** | нет dedicated cmd |
 | 19 | `registry_replay` | `cmd_registry_replay` | `registry_replay` | `replay_pending_outbox_records()` **не** job `wallet_editor_registry_replay` | WE outbox | **Antares WE** | нет dedicated cmd |
@@ -59,7 +59,7 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 - `hello_world` — заглушка без кабинета/карт; **не** Antares-бизнес.  
 - `operator_wallets_ready` — выгрузка Antares-кошельков; **Antares**, несмотря на `script_job:*`.
 
-**WE:** Auto-Enable (прямой orchestrator), registry (часть через job; replay/health/export — прямые вызовы в `modules.antares.handlers`), document ingest (другой ACL).
+**WE:** Auto-Enable (прямой orchestrator из `modules.antares.handlers`), registry (часть через job; replay/health/export — прямые вызовы в handlers), document ingest (другой ACL).
 
 ---
 

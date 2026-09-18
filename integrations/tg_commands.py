@@ -12,9 +12,8 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 
 from core.access_rules import AccessRules
-from core.job_runner import get_status, Actor, JOB_REGISTRY
+from core.job_runner import get_status, JOB_REGISTRY
 from core.tg_command_dispatch import build_access_context, guard_or_deny, run_job_async
-from integrations.wallet_editor_auto_enable import run_auto_enable, run_auto_enable_plan
 from core.lock_status import KNOWN_JOB_TYPES, get_lock_status_for_job_types
 from core.scheduler_health import get_scheduler_health_snapshot
 
@@ -27,6 +26,8 @@ from modules.antares.jobs import run_download_job, run_hourly_job  # noqa: F401 
 from modules.antares.handlers import (
     bind_logger,
     bind_rules,
+    cmd_auto_enable_plan,
+    cmd_auto_enable_run,
     cmd_operator_wallets_ready,
     cmd_registry_export,
     cmd_registry_health,
@@ -359,70 +360,6 @@ async def cmd_run_script_hello(update: Update, context: ContextTypes.DEFAULT_TYP
     if not await _guard_or_deny(update, "run_script_hello"):
         return
     await _run_job_async(update, "script_job:hello_world")
-
-
-async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "auto_enable_plan"):
-        return
-
-    actor = Actor(
-        kind="tg",
-        chat_id=int(update.effective_chat.id),
-        user_id=int(update.effective_user.id),
-    )
-    await update.message.reply_text("🧩 Строю WalletEditor Auto-Enable plan (plan-only)...")
-
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_auto_enable_plan(actor, manual=True),
-        )
-        if result.skipped_reason == "disabled":
-            await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
-        elif result.skipped_reason == "error":
-            await update.message.reply_text("⚠️ Auto-Enable plan failed. См. route-отчёт.")
-        else:
-            await update.message.reply_text(
-                f"✅ Plan-only report sent={result.sent}. Antares/registry unchanged."
-            )
-    except Exception as e:
-        log.exception("cmd_auto_enable_plan failed")
-        await update.message.reply_text(f"❌ /auto_enable_plan failed: {type(e).__name__}: {e}")
-
-
-async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "auto_enable_run"):
-        return
-
-    actor = Actor(
-        kind="tg",
-        chat_id=int(update.effective_chat.id),
-        user_id=int(update.effective_user.id),
-    )
-    await update.message.reply_text("🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)...")
-
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_auto_enable(actor, manual=True),
-        )
-        if result.skipped_reason == "disabled":
-            await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
-        elif result.skipped_reason == "error":
-            await update.message.reply_text("⚠️ Auto-Enable run failed. См. route-отчёт.")
-        elif result.phase == "plan-only":
-            await update.message.reply_text(
-                "ℹ️ Execution blocked by settings (dry_run=1). Plan-only report sent."
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ Auto-Enable execution finished. Telegram report sent={result.sent}"
-            )
-    except Exception as e:
-        log.exception("cmd_auto_enable_run failed")
-        await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
 
 
 def get_handlers():

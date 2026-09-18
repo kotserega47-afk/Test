@@ -86,6 +86,10 @@ def test_assembled_job_registry_and_handlers_match_frozen_inventory() -> None:
     assert payload["registry_replay_reexport_is_antares"] is True
     assert payload["registry_export_callback_is_antares"] is True
     assert payload["registry_export_reexport_is_antares"] is True
+    assert payload["auto_enable_plan_callback_is_antares"] is True
+    assert payload["auto_enable_run_callback_is_antares"] is True
+    assert payload["auto_enable_plan_reexport_is_antares"] is True
+    assert payload["auto_enable_run_reexport_is_antares"] is True
     assert payload["run_raccoon_callback_is_tg"] is True
     assert payload["antares_run_callbacks_pairwise_distinct"] is True
 
