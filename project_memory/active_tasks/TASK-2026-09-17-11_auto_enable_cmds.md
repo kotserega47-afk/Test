@@ -6,7 +6,8 @@
 | **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-10 (PR #13), `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
-| **PR** | Draft (будет заполнен после открытия) |
+| **PR** | Draft [#14](https://github.com/deniskotdavydov1991-wq/Test/pull/14) `feat/task-2026-09-17-11-auto-enable-cmds`, base `feat/task-2026-09-17-10-registry-export` |
+| **HEAD** | `0f7d22fbe56d83a217a5b9efa63b814c66670e24` |
 | **Риск** | medium: владение Auto-Enable Telegram callbacks |
 
 `cmd_auto_enable_plan` и `cmd_auto_enable_run` переносятся в `modules.antares.handlers` как прямые операции через executor (не job-dispatch). Совместимый re-export и mixed `get_handlers()` сохраняются. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. GPT review ещё не выполнялся.

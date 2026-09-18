@@ -21,7 +21,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-08 Antares dispatch | реализован, review пройден (Draft PR #11, HEAD `7169cd48…`); шесть handlers; isolated entry нет | **нет** |
 | TASK-09 registry cmds | реализован, review пройден (Draft PR #12, HEAD `b8085a28…`); восемь handlers; isolated entry нет | **нет** |
 | TASK-10 registry export | реализован, review пройден (Draft PR #13, HEAD `8c37766…`); девять handlers; isolated entry нет | **нет** |
-| TASK-11 Auto-Enable cmds | in_progress (ветка `feat/task-2026-09-17-11-auto-enable-cmds`); 11 handlers; GPT review не пройден | **нет** |
+| TASK-11 Auto-Enable cmds | in_progress (Draft PR #14, HEAD `0f7d22fb…`); 11 handlers; GPT review не пройден | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; mixed `get_handlers` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
