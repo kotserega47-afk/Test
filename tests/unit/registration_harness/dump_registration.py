@@ -83,9 +83,11 @@ payload = {
     is antares_handlers.cmd_registry_health,
     "registry_replay_reexport_is_antares": tg_commands_mod.cmd_registry_replay
     is antares_handlers.cmd_registry_replay,
+    "registry_export_callback_is_antares": callback_by_command.get("registry_export")
+    is antares_handlers.cmd_registry_export,
+    "registry_export_reexport_is_antares": tg_commands_mod.cmd_registry_export
+    is antares_handlers.cmd_registry_export,
     "run_raccoon_callback_is_tg": callback_by_command.get("run_raccoon") is tg_commands_mod.cmd_run_raccoon,
-    "registry_export_callback_is_tg": callback_by_command.get("registry_export")
-    is tg_commands_mod.cmd_registry_export,
     "antares_run_callbacks_pairwise_distinct": len(
         {
             id(antares_handlers.cmd_run_wallet),
@@ -96,9 +98,10 @@ payload = {
             id(antares_handlers.cmd_wallet_editor_refresh),
             id(antares_handlers.cmd_registry_health),
             id(antares_handlers.cmd_registry_replay),
+            id(antares_handlers.cmd_registry_export),
         }
     )
-    == 8,
+    == 9,
 }
 out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 print("registration_dump_ok")

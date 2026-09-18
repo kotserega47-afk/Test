@@ -62,6 +62,7 @@ _ANTARES_CALLBACK_IDS = {
     id(handlers.cmd_wallet_editor_refresh),
     id(handlers.cmd_registry_health),
     id(handlers.cmd_registry_replay),
+    id(handlers.cmd_registry_export),
 }
 
 _REGISTRY_CMDS = (
@@ -73,6 +74,7 @@ _FORBIDDEN_ON_HANDLERS_IMPORT = (
     "integrations.tg_commands",
     "integrations.telegram_bot",
     "integrations.wallet_editor_registry",
+    "integrations.wallet_editor_registry_db.registry_export_builder",
     "playwright",
     "playwright.sync_api",
     "psycopg2",
@@ -439,6 +441,7 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert tg_commands.cmd_wallet_editor_refresh is handlers.cmd_wallet_editor_refresh
     assert tg_commands.cmd_registry_health is handlers.cmd_registry_health
     assert tg_commands.cmd_registry_replay is handlers.cmd_registry_replay
+    assert tg_commands.cmd_registry_export is handlers.cmd_registry_export
     assert handlers._rules is tg_commands.RULES
     assert handlers._logger is tg_commands.log
 
@@ -455,12 +458,12 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert assembled["wallet_editor_refresh"] is handlers.cmd_wallet_editor_refresh
     assert assembled["registry_health"] is handlers.cmd_registry_health
     assert assembled["registry_replay"] is handlers.cmd_registry_replay
+    assert assembled["registry_export"] is handlers.cmd_registry_export
     assert assembled["run_raccoon"] is tg_commands.cmd_run_raccoon
     assert assembled["run_raccoon"] is not handlers.cmd_run_hourly
     assert assembled["run_hourly_raccoon"] is tg_commands.cmd_run_hourly_raccoon
-    assert assembled["registry_export"] is tg_commands.cmd_registry_export
     assert assembled["registry_export"] is not handlers.cmd_registry_replay
-    assert len(_ANTARES_CALLBACK_IDS) == 8
+    assert len(_ANTARES_CALLBACK_IDS) == 9
 
 
 @pytest.mark.parametrize("callback,command", _REGISTRY_CMDS)

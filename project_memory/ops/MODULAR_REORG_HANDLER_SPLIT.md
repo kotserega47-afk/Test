@@ -42,7 +42,7 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 | 17 | `wallet_editor_refresh` | `cmd_wallet_editor_refresh` | `wallet_editor_refresh` | job `wallet_editor_registry_refresh` | `_run_job_async` | **Antares WE** | `tests/unit/test_wallet_editor_registry_refresh.py` (ACL allow/deny) |
 | 18 | `registry_health` | `cmd_registry_health` | `registry_health` | `build_registry_health_report` sync | WE registry | **Antares WE** | нет dedicated cmd |
 | 19 | `registry_replay` | `cmd_registry_replay` | `registry_replay` | `replay_pending_outbox_records()` **не** job `wallet_editor_registry_replay` | WE outbox | **Antares WE** | нет dedicated cmd |
-| 20 | `registry_export` | `cmd_registry_export` | `registry_export` | PG export + `reply_document` | `InputFile`, postgres builder | **Antares WE** | `tests/unit/test_tg_registry_export.py` |
+| 20 | `registry_export` | `cmd_registry_export` | `registry_export` | PG export + `reply_document` | `InputFile`, postgres builder | **Antares WE** (callback в `modules.antares.handlers`, mixed re-export) | `tests/unit/test_tg_registry_export.py` |
 | 21 | `filters.Document.ALL` | `handle_wallet_editor_document` | chat allowlist, не `check_access` | очередь WE xlsx | `integrations/wallet_editor_tg.py`, worker | **Antares WE** | `tests/unit/test_wallet_editor_tg_integration.py` |
 
 Инвентаризация имён/порядка `CommandHandler`: `tests/test_behavior_baseline_inventory.py` (AST). AST также фиксирует наличие `MessageHandler`, **не** `filters.Document.ALL`. Конкретный `Document.ALL`: `tests/test_behavior_baseline_registration.py`. Wiring scheduler: `tests/unit/test_project_profile_boot.py`.
@@ -59,7 +59,7 @@ ACL команд: `_guard_or_deny(update, "<command>")` → `check_access(RULES,
 - `hello_world` — заглушка без кабинета/карт; **не** Antares-бизнес.  
 - `operator_wallets_ready` — выгрузка Antares-кошельков; **Antares**, несмотря на `script_job:*`.
 
-**WE:** Auto-Enable (прямой orchestrator), registry (часть через job, replay/health/export — прямые вызовы), document ingest (другой ACL).
+**WE:** Auto-Enable (прямой orchestrator), registry (часть через job; replay/health/export — прямые вызовы в `modules.antares.handlers`), document ingest (другой ACL).
 
 ---
 

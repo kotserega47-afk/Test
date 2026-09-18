@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from telegram import InputFile, Update
+from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 from utils.loggers import get_logger
@@ -28,6 +28,7 @@ from modules.antares.handlers import (
     bind_logger,
     bind_rules,
     cmd_operator_wallets_ready,
+    cmd_registry_export,
     cmd_registry_health,
     cmd_registry_replay,
     cmd_run_download,
@@ -38,12 +39,6 @@ from modules.antares.handlers import (
 )
 
 from integrations.wallet_editor_tg import handle_wallet_editor_document
-from integrations.wallet_editor_registry_db.registry_export_builder import (
-    RegistryExportArtifact,
-    RegistryExportBuilder,
-    build_registry_export_from_postgres,
-    format_registry_export_summary,
-)
 from core.state_store import state_get
 from core.scheduler_clocks_control import request_scheduler_clocks_reset
 from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
@@ -428,35 +423,6 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         log.exception("cmd_auto_enable_run failed")
         await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
-
-
-async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "registry_export"):
-        return
-
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    if chat_id is None:
-        await update.message.reply_text("❌ Registry export failed: chat_id unavailable")
-        return
-
-    await update.message.reply_text("📤 Building registry export from PostgreSQL...")
-    try:
-        loop = asyncio.get_running_loop()
-        artifact: RegistryExportArtifact = await loop.run_in_executor(
-            None,
-            build_registry_export_from_postgres,
-        )
-        summary_text = format_registry_export_summary(artifact.summary)
-        with artifact.path.open("rb") as export_file:
-            await update.message.reply_document(
-                document=InputFile(export_file, filename=artifact.filename),
-                caption=summary_text[:1024],
-            )
-        if len(summary_text) > 1024:
-            await update.message.reply_text(summary_text)
-    except Exception as e:
-        log.exception("cmd_registry_export failed")
-        await update.message.reply_text(f"❌ Registry export failed: {e}")
 
 
 def get_handlers():
