@@ -21,7 +21,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-08 Antares dispatch | реализован, review пройден (Draft PR #11, HEAD `7169cd48…`); шесть handlers; isolated entry нет | **нет** |
 | TASK-09 registry cmds | реализован, review пройден (Draft PR #12, HEAD `b8085a28…`); восемь handlers; isolated entry нет | **нет** |
 | TASK-10 registry export | реализован, review пройден (Draft PR #13, HEAD `8c37766…`); девять handlers; isolated entry нет | **нет** |
-| TASK-11 Auto-Enable cmds | in_progress (Draft PR #14, HEAD `0f7d22fb…`); 11 handlers; GPT review не пройден | **нет** |
+| TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; mixed `get_handlers` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
@@ -29,7 +29,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
@@ -134,7 +134,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-11, до GPT review):** 11 Antares callbacks в `modules.antares.handlers`. Isolated Antares **не** готов.
+**Сейчас (после TASK-11):** 11 Antares callbacks в `modules.antares.handlers`. Isolated Antares **не** готов.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
@@ -356,6 +356,6 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4–#13)
+## Следующие задачи (не merge #4–#14)
 
 1. Isolated entry, `JOB_ACCEPT` и cutover **не** готовы. Help/status/Raccoon/`run_script_hello`/document ingest остаются в mixed `tg_commands`.

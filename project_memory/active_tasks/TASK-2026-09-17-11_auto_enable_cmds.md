@@ -3,14 +3,14 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-11 |
-| **Статус** | in_progress |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-10 (PR #13), `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
 | **PR** | Draft [#14](https://github.com/deniskotdavydov1991-wq/Test/pull/14) `feat/task-2026-09-17-11-auto-enable-cmds`, base `feat/task-2026-09-17-10-registry-export` |
-| **HEAD** | `0f7d22fbe56d83a217a5b9efa63b814c66670e24` |
+| **HEAD (проверен GPT)** | `0fa283eb54348c3f88f23a3970d602df6e60bd74` |
 | **Риск** | medium: владение Auto-Enable Telegram callbacks |
 
-`cmd_auto_enable_plan` и `cmd_auto_enable_run` переносятся в `modules.antares.handlers` как прямые операции через executor (не job-dispatch). Совместимый re-export и mixed `get_handlers()` сохраняются. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. GPT review ещё не выполнялся.
+`cmd_auto_enable_plan` и `cmd_auto_enable_run` **перенесены**. В `modules.antares.handlers` **11** callbacks. Auto-Enable вызывает прежний orchestrator через `loop.run_in_executor` (не job-dispatch). ACL, `Actor(kind="tg", ...)`, `manual=True`, ответы и обработка ошибок сохранены. Совместимый re-export и mixed `get_handlers()` сохранены. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #14 остаётся Draft.
 
 ---
 
@@ -22,21 +22,21 @@
 
 ## Граница изменения
 
-Переносятся только два callback. Orchestrator, executor Wallet Editor, eligibility, настройки, registry/outbox и бизнес-логика Auto-Enable не меняются. `expected_tg_commands.json` не меняется. Job-dispatch не вводится.
+Перенесено: только два callback. Orchestrator, executor Wallet Editor, eligibility, настройки, registry/outbox и бизнес-логика Auto-Enable не менялись. `expected_tg_commands.json` не менялся. Job-dispatch не вводился.
 
-Совместимые пути: `integrations.tg_commands.cmd_auto_enable_plan` и `cmd_auto_enable_run` — те же function objects.
+Совместимые пути: `integrations.tg_commands.cmd_auto_enable_plan` и `cmd_auto_enable_run` — те же function objects. Команды по-прежнему регистрируются в mixed `get_handlers()`.
 
 ---
 
 ## Success Criteria
 
-- [ ] Unbound / частичный bind — ошибка конфигурации до стартового ответа и orchestrator
-- [ ] ACL до Actor, стартового ответа и executor
-- [ ] plan вызывает только `run_auto_enable_plan`; run — только `run_auto_enable`
-- [ ] Identity re-export + 11 различимых callbacks
-- [ ] Mixed expected JSON без изменений
-- [ ] GPT review **не** ставился как пройденный
-- [ ] merge/deploy PR #4–#13 не выполнены
+- [x] Unbound / частичный bind — ошибка конфигурации до стартового ответа и orchestrator
+- [x] ACL до Actor, стартового ответа и executor
+- [x] plan вызывает только `run_auto_enable_plan`; run — только `run_auto_enable`
+- [x] Identity re-export + 11 различимых callbacks
+- [x] Mixed expected JSON без изменений
+- [x] GPT review HEAD `0fa283eb…`: блокирующих нет
+- [ ] merge/deploy PR #14 (намеренно открыто)
 
 ---
 
@@ -46,9 +46,18 @@ Isolated Antares **не** готов. В mixed `tg_commands` остаются: `
 
 ---
 
+## Происхождение проверки
+
+| Кто | Что |
+|-----|-----|
+| Cursor | **86 passed** на HEAD `0fa283eb…`, Python **3.12.10** (`test_antares_handlers`, `test_wallet_editor_auto_enable_orchestrator`, inventory, registration, profile boot) |
+| GPT | Проверил код и diff HEAD `0fa283eb…`. Набор 86 **независимо не запускал.** |
+
+---
+
 ## Out Of Scope
 
-isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#13; Railway; профили; document ingest; правка текстов dry_run/approval_required.
+isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#14; Railway; профили; document ingest; правка текстов dry_run/approval_required.
 
 ---
 
@@ -57,3 +66,4 @@ isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#13; Railway; про
 | Дата | Событие |
 |------|---------|
 | 2026-09-18 | выделение `cmd_auto_enable_plan` и `cmd_auto_enable_run` в `modules.antares.handlers` |
+| 2026-09-18 | GPT review HEAD `0fa283eb…`: блокирующих нет; merge/deploy нет |
