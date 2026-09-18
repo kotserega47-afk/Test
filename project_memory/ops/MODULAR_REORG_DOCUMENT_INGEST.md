@@ -163,31 +163,47 @@ Command ACL (`auto_enable_*` и т.д.) **не** заменяет allowlist.
 
 | Слой | После code PR |
 |------|----------------|
-| `modules.antares.document_ingest` | callback, helpers (`parse_allowed_chat_ids`, `is_wallet_editor_chat_allowed`, `is_xlsx_file_name`, `_telegram_user_id`, `_ensure_tmp_dir`), `TMP_DIR`, `_ALLOWLIST_STARTUP_LOGGED`, `log_wallet_editor_allowlist_startup_warning`, **единственный** import-time вызов warning |
-| `integrations.wallet_editor_tg` | **только** re-export тех же function objects / констант (`handle_wallet_editor_document is document_ingest.handle_wallet_editor_document`, то же для helpers, `TMP_DIR`, флага если он экспортируется). **Без** второго вызова startup warning и без второго `_ALLOWLIST_STARTUP_LOGGED` |
+| `modules.antares.document_ingest` | callback, helpers, **единственный** `TMP_DIR`, **единственный** `_ALLOWLIST_STARTUP_LOGGED`, `log_wallet_editor_allowlist_startup_warning` (единственный import-time вызов) |
+| `integrations.wallet_editor_tg` | явный re-export **тех же function objects**: `handle_wallet_editor_document` и совместимые helpers (`parse_allowed_chat_ids`, `is_wallet_editor_chat_allowed`, `is_xlsx_file_name`, `log_wallet_editor_allowlist_startup_warning`). **Не** реэкспортировать `_ALLOWLIST_STARTUP_LOGGED`. **Не** вызывать startup warning повторно |
 | `integrations.tg_commands.get_handlers` | по-прежнему импорт **`from integrations.wallet_editor_tg import handle_wallet_editor_document`** и тот же `MessageHandler`. Имя, фильтр, позиция не меняются. Identity: объект из `document_ingest` |
 | `scheduler.py` | без изменений: warning срабатывает, потому что `tg_commands` тянет `wallet_editor_tg` → `document_ingest` |
 | Harness sitecustomize | stub `integrations.wallet_editor_tg` можно оставить: mixed не обязан грузить `document_ingest`, если импорт идёт через stubbed compat |
 
 Обратного импорта `document_ingest` / `wallet_editor_tg` → `tg_commands` нет.
 
-### 3.1 Два экземпляра состояния / двойной warning
+### 3.1 Единственный владелец состояния
 
-Запрещено копировать `_ALLOWLIST_STARTUP_LOGGED` в compat-модуль.
+`_ALLOWLIST_STARTUP_LOGGED` существует **только** в `modules.antares.document_ingest`. Compat **не** экспортирует этот флаг, **не** даёт setter и **не** делает alias на модуль-владелец.
+
+Тесты будущего code PR:
+
+- сбрасывают `_ALLOWLIST_STARTUP_LOGGED` **на owner**;
+- подменяют `TMP_DIR`, которым пользуется callback, **на owner** (`modules.antares.document_ingest.TMP_DIR`);
+- не считают `integrations.wallet_editor_tg._ALLOWLIST_STARTUP_LOGGED = False` сбросом owner.
+
+Присваивание одноимённого атрибута на compat (`wallet_editor_tg._ALLOWLIST_STARTUP_LOGGED = …` или `wallet_editor_tg.TMP_DIR = …`) **не** меняет globals owner и **не** меняет путь, по которому callback пишет файл.
+
+`TMP_DIR`:
+
+- **чтение** старого имени с compat допустимо только как совместимый lookup того же *исходного* объекта, если code PR явно делает `from modules.antares.document_ingest import TMP_DIR` — это снимок имени на момент импорта compat;
+- **подмена значения, которое использует callback**, всегда через owner;
+- прозрачной синхронизации присваиваний между модулями **нет** и обещать её нельзя: после `wallet_editor_tg.TMP_DIR = tmp_path` callback продолжит видеть `document_ingest.TMP_DIR`.
 
 `wallet_editor_tg` не вызывает `log_wallet_editor_allowlist_startup_warning()` на своей последней строке.
 
-Проверка code PR: импорт `wallet_editor_tg` → ровно один warning/info allowlist; повторный импорт / повторный вызов helper — no-op по флагу **владельца**.
+### 3.2 Startup warning: одно место
 
-### 3.2 Startup warning: место вызова
+Единственное решение:
 
-**Сейчас:** последняя строка `wallet_editor_tg.py` при импорте, который делает mixed `tg_commands` (а scheduler импортирует `tg_commands`).
+- warning вызывается **при импорте owner** (`document_ingest`);
+- compat **сам** warning не вызывает;
+- `scheduler.py` **не** меняется.
 
-**План code PR:** тот же момент процесса, другой модуль: import-time **`document_ingest`**. Scheduler **не** переносить вызов, если compat импортирует owner (поведение «warning при загрузке mixed Telegram слоя» сохраняется).
+Сейчас warning стоит в конце `wallet_editor_tg.py` и срабатывает, потому что mixed `tg_commands` (а scheduler — `tg_commands`) импортирует этот модуль. После переноса тот же момент процесса: `tg_commands` → compat → owner → один import-time log.
 
-Если кто-то импортирует только `document_ingest` (будущий isolated Antares) — warning тоже сработает. Это совместимо с целью изоляции и **не** требует вызова из `scheduler.py` в TASK-13.
+Импорт только owner (будущий isolated Antares) тоже даёт один log. Отдельный вызов из scheduler не вводится.
 
-Перенос вызова в `scheduler.py` в этом плане **не** нужен. Если code PR всё же вынесет warning из import-time, единственное согласованное место — сразу после import mixed handlers в `scheduler.py` (рядом с текущим `from integrations.tg_commands import get_handlers`), с тестом: пустой allowlist → один warning; повторный вызов helper — тишина. **В TASK-12 код не пишется.**
+`importlib.reload` для проверки startup **не** использовать.
 
 ### 3.3 Что можно загружать отложенно (внутри callback, после allowlist/xlsx/operator)
 
@@ -205,19 +221,33 @@ Command ACL (`auto_enable_*` и т.д.) **не** заменяет allowlist.
 - Вызов `log_wallet_editor_allowlist_startup_warning()` — текущий контракт «при загрузке модуля ingest».
 - `TMP_DIR` / allowlist helpers — чистые, без I/O кроме чтения env.
 
+**«Чистый импорт» owner** (будущий тест): разрешены существующий `automation.audit.log`, чтение allowlist из env и startup log. Запрещены загрузка worker/routing, запуск потоков, браузер, сеть, БД и чтение рабочих Excel.
+
+Логирование при импорте **не** называть отсутствием всех побочных эффектов.
+
 Import-time **не** должен: ходить в Telegram, PostgreSQL, Playwright, запускать worker, читать operator workbook WalletEditor.
 
-### 3.4 Patch-пути будущего code PR
+### 3.4 Patch-пути для lazy imports
 
-Патчить **имя, связанное в `document_ingest` после lazy import**:
+Внутри callback:
 
-- если `from automation.worker import add_task` внутри callback — патч `automation.worker.add_task` **до** вызова (и/или `modules.antares.document_ingest.add_task`, если имя уже связано);
-- allowlist helpers — `modules.antares.document_ingest.is_wallet_editor_chat_allowed`;
-- тесты, импортирующие `integrations.wallet_editor_tg.handle_wallet_editor_document`, продолжают видеть **тот же** callback object.
+```python
+from automation.worker import add_task
+```
 
-Не оставлять патч `integrations.wallet_editor_tg.add_task`, если имя там больше не связывается.
+имя `add_task` **локальное**. Атрибут `modules.antares.document_ingest.add_task` от этого **не** появляется.
 
-Source-assert «нет `WALLET_EDITOR_ANTARES_LOGIN`» расширить на `document_ingest.py` (compat-модуль может стать слишком тонким для grep).
+Патчить **`automation.worker.add_task` до вызова callback** либо заранее ставить явный stub модуля `automation.worker`. То же для `add_add_wallet_task` / `add_edit_wallet_task`.
+
+Аналогично routing и прочим локальным импортам (`detect_excel_routing`, типы заданий, `resolve_operator_for_user`, dry_run helper): патч на модуль, откуда имя импортируется внутри callback, до входа в callback — либо заранее подменённый модуль.
+
+Глобальные helpers owner (`is_wallet_editor_chat_allowed`, `parse_allowed_chat_ids`, `is_xlsx_file_name`, `log_wallet_editor_allowlist_startup_warning`) патчить как `modules.antares.document_ingest.<name>`.
+
+Тесты, импортирующие `integrations.wallet_editor_tg.handle_wallet_editor_document`, вызывают **тот же** function object, что и owner.
+
+Не оставлять патч `integrations.wallet_editor_tg.add_task`: после переноса это имя в compat не используется callback.
+
+Source-assert «нет `WALLET_EDITOR_ANTARES_LOGIN`» расширить на `document_ingest.py` (compat станет тонким для grep).
 
 ---
 
@@ -258,9 +288,10 @@ Source-assert «нет `WALLET_EDITOR_ANTARES_LOGIN`» расширить на `
 - Ошибка `get_file` / `download_to_drive` → `❌ Ошибка при приёме файла:` + exception log; enqueue нет.
 - Ошибка `detect_excel_routing` (исключение, не AMBIGUOUS return) → тот же except.
 - Ошибка enqueue (`add_task` raises) → тот же except; файл не обязан удаляться (текущее поведение).
-- Identity: `tg_commands.handle` / `wallet_editor_tg.handle` **is** `document_ingest.handle_wallet_editor_document`; `get_handlers()` callback тот же; `filters.Document.ALL` (registration dump + один real import test).
-- Startup warning: один раз на owner-модуль; compat import не дублирует; пустой vs непустой allowlist.
-- Чистый импорт `document_ingest`: нет `integrations.tg_commands`, нет playwright/psycopg; worker/excel routing не загружены, если выбран lazy import. Не требовать «чистый import `wallet_editor_tg`», если compat намеренно реэкспортирует те же имена — тогда чистота проверяется на **owner**.
+- **Обязательный отдельный identity-тест** (не harness dump): реальные owner и compat, внешние границы заглушены (worker/routing/Telegram не живые). `document_ingest.handle_wallet_editor_document is wallet_editor_tg.handle_wallet_editor_document`. Если registration harness подменяет `wallet_editor_tg` целиком, его dump доказывает только mixed wiring и `filters.Document.ALL`. Такой dump **не** выдавать за проверку реального re-export.
+- `get_handlers()` (вне harness, с реальным compat): callback **is** owner; фильтр `Document.ALL`.
+- Startup в **свежем subprocess** (без `importlib.reload`): отдельно `owner → compat` и отдельно `compat → owner`; в каждом процессе ровно один startup log. Повторный вызов `log_wallet_editor_allowlist_startup_warning` в том же процессе log не добавляет.
+- Чистый импорт owner: см. § 3.3. Проверять owner, не «отсутствие любых логов».
 
 Не добавлять тесты реального worker / включения партнёра / production-БД / Telegram.
 
@@ -276,18 +307,20 @@ Source-assert «нет `WALLET_EDITOR_ANTARES_LOGIN`» расширить на `
 2. Сжать `integrations/wallet_editor_tg.py` до identity re-export.
 3. Не менять сигнатуру `get_handlers()` / фильтр / порядок.
 4. Перенацелить callback-тесты и patch на фактические имена; добавить пробелы из § 4.2.
-5. Расширить registration dump identity document callback, если harness позволяет отличить re-export (иначе отдельный non-harness identity test).
-6. Не трогать `automation/worker.py` очереди, engine, contracts Excel, scheduler, профили, `JOB_ACCEPT`.
+5. Отдельный identity-тест реальных owner/compat (§ 4.2). Registration dump не расширять до «re-export identity», пока harness подменяет `wallet_editor_tg`.
+6. Startup — свежие subprocess § 4.2, не `reload`.
+7. Не трогать `automation/worker.py` очереди, engine, contracts Excel, scheduler, профили, `JOB_ACCEPT`.
 
-Вне scope code PR: isolated entry, cutover, Railway, merge #4–#14, document ingest в `handlers.py`, замена allowlist на command ACL.
+Вне scope code PR: isolated entry, cutover, Railway, merge #4–#15, document ingest в `handlers.py`, замена allowlist на command ACL, TASK-13 до закрытия этого плана.
 
 ---
 
-## 6. Открытые вопросы
+## 6. Зафиксированные неоднозначности (закрыты)
 
-Не блокируют перенос, если code PR следует § 3:
+1. Флаг startup и рабочий `TMP_DIR` — только owner. Compat не экспортирует `_ALLOWLIST_STARTUP_LOGGED`. Присваивание одноимённого атрибута compat не синхронизирует owner.
+2. Lazy `from automation.worker import add_task` внутри callback → патч `automation.worker.add_task` (или stub модуля) до вызова. Не `document_ingest.add_task`.
+3. Startup warning — только import owner. Scheduler не менять. Альтернатива «вызов из scheduler» снята.
+4. Identity re-export — отдельный тест с реальными модулями. Harness dump = wiring + `Document.ALL`, не identity.
+5. Harness может stub'ить `wallet_editor_tg`; `document_ingest` в registration dump не обязан грузиться.
 
-1. Нужен ли отдельный export `_ALLOWLIST_STARTUP_LOGGED` из owner для существующих тестов, сбрасывающих флаг на `integrations.wallet_editor_tg` — **да**: либо re-export того же int/bool через alias на модуль-владелец (`wallet_editor_tg._ALLOWLIST_STARTUP_LOGGED` должен быть тем же объектом — для `bool` в Python re-export имени **копирует значение**; тесты, делающие `mod._ALLOWLIST_STARTUP_LOGGED = False`, должны патчить **owner** или иметь setter. Code PR: сбрасывать флаг на `document_ingest`, не на копию в compat).
-2. Харнес продолжает stub `wallet_editor_tg` — ок; не stub'ить `document_ingest` в registration dump, пока mixed импортирует только compat.
-
-Блокирующих UNKNOWN для переноса тела callback нет: контракт и очереди читаются из текущего файла.
+Блокирующих UNKNOWN для переноса тела callback нет. TASK-13 не начинать, пока этот план не принят.

@@ -30,7 +30,7 @@ Callback уже в `integrations/wallet_editor_tg.py`. Mixed `tg_commands` то�
 
 ## Desired Behavior
 
-Документ решения: карта зависимостей, контракт, владелец реализации, re-export без второго состояния, карта тестов и объём следующего code PR.
+Документ решения: карта зависимостей, контракт, единственный владелец состояния, точные patch-пути lazy import, одно место startup warning, identity-тест вне harness.
 
 ---
 
@@ -38,17 +38,18 @@ Callback уже в `integrations/wallet_editor_tg.py`. Mixed `tg_commands` то�
 
 - [x] Карта вызовов, patch-путей, scheduler/harness
 - [x] Контракт последовательности ingest и поля трёх очередей
-- [x] Владелец `modules.antares.document_ingest`; compat re-export; не bind_rules
-- [x] Пробелы тестов названы; регистрация не считается proof worker
-- [ ] GPT review **не** ставился как пройденный
-- [ ] merge/deploy PR #4–#14 не выполнены
-- [ ] code PR ingest (отдельное задание)
+- [x] Владелец `modules.antares.document_ingest`; флаг и рабочий `TMP_DIR` только на owner
+- [x] Lazy-import: патч `automation.worker.*` / routing-модуля, не `document_ingest.add_task`
+- [x] Startup только при импорте owner; identity — отдельный тест, не harness dump
+- [ ] GPT review исправлений плана **не** ставился как пройденный
+- [ ] merge/deploy PR #4–#15 не выполнены
+- [ ] code PR ingest / TASK-13 (отдельное задание, после принятия плана)
 
 ---
 
 ## Out Of Scope
 
-runtime/тесты этого PR; isolated entry; `JOB_ACCEPT`; cutover; Railway; профили; merge #4–#14; живые кабинеты/Telegram/БД/worker.
+runtime/тесты этого PR; isolated entry; `JOB_ACCEPT`; cutover; Railway; профили; merge #4–#15; TASK-13; живые кабинеты/Telegram/БД/worker.
 
 ---
 
@@ -57,3 +58,4 @@ runtime/тесты этого PR; isolated entry; `JOB_ACCEPT`; cutover; Railway
 | Дата | Событие |
 |------|---------|
 | 2026-09-18 | план document ingest подготовлен к review |
+| 2026-09-18 | уточнены владелец состояния, lazy patch-пути, startup и identity-тесты |
