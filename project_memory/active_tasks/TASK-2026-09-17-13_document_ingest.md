@@ -6,8 +6,8 @@
 | **Статус** | review (не пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-12 (PR #15, закрытие `66b99ab1d2e619cc24dbb0122c5d1f7820d82f96`), `ops/MODULAR_REORG_DOCUMENT_INGEST.md` |
-| **PR** | Draft (создаётся) `feat/task-2026-09-17-13-document-ingest`, base `feat/task-2026-09-17-12-document-ingest-plan` |
-| **HEAD** | (фиксируется после commit) |
+| **PR** | Draft (номер после create) `feat/task-2026-09-17-13-document-ingest`, base `feat/task-2026-09-17-12-document-ingest-plan` |
+| **HEAD** | `612b8f9b96f77c1ba23f6442c0818f4aabac2b1d` |
 | **Риск** | medium: владение Telegram document ingest |
 
 Тело `handle_wallet_editor_document` перенесено в `modules.antares.document_ingest`. `integrations.wallet_editor_tg` — identity re-export тех же function objects. Mixed `get_handlers()` по-прежнему регистрирует `MessageHandler(filters.Document.ALL, …)` через compat. Chat allowlist, operator map и `automation.audit.log` сохранены. `bind_rules` / command ACL не добавлялись. Review **не** пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы.
