@@ -6,7 +6,7 @@
 | **Статус** | review (не пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-12 (PR #15, закрытие `66b99ab1d2e619cc24dbb0122c5d1f7820d82f96`), `ops/MODULAR_REORG_DOCUMENT_INGEST.md` |
-| **PR** | Draft (номер после create) `feat/task-2026-09-17-13-document-ingest`, base `feat/task-2026-09-17-12-document-ingest-plan` |
+| **PR** | Draft [#16](https://github.com/deniskotdavydov1991-wq/Test/pull/16) `feat/task-2026-09-17-13-document-ingest`, base `feat/task-2026-09-17-12-document-ingest-plan` |
 | **HEAD** | `612b8f9b96f77c1ba23f6442c0818f4aabac2b1d` |
 | **Риск** | medium: владение Telegram document ingest |
 
