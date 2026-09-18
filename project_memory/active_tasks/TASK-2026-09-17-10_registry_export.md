@@ -6,7 +6,8 @@
 | **Статус** | in_progress |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-09 (PR #12), `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
-| **PR** | Draft (будет заполнен после открытия) |
+| **PR** | Draft [#13](https://github.com/deniskotdavydov1991-wq/Test/pull/13) `feat/task-2026-09-17-10-registry-export`, base `feat/task-2026-09-17-09-registry-cmds` |
+| **HEAD** | `42b80343fb71171329da2dc469708f02d0d47e5b` |
 | **Риск** | medium: владение `cmd_registry_export` |
 
 `cmd_registry_export` переносится в `modules.antares.handlers` как прямая операция (не job-dispatch). Совместимый re-export и mixed `get_handlers()` сохраняются. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. GPT review ещё не выполнялся.
