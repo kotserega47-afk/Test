@@ -284,7 +284,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-07** | **review** | Four Antares run-commands + three helpers; review passed (HEAD `94be3127`); **not merged** | Draft PR #10 |
 | **TASK-2026-09-17-08** | **review** | operator_wallets_ready + wallet_editor_refresh; review passed (HEAD `7169cd48`); **not merged** | Draft PR #11 |
 | **TASK-2026-09-17-09** | **review** | registry_health + registry_replay (direct ops); review passed (HEAD `b8085a28`); **not merged** | Draft PR #12 |
-| **TASK-2026-09-17-10** | **in_progress** | registry_export (direct TG delivery); GPT review not marked passed; **not merged** | Draft PR #13 |
+| **TASK-2026-09-17-10** | **review** | registry_export (direct ops via executor); review passed (HEAD `8c37766`); **not merged** | Draft PR #13 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

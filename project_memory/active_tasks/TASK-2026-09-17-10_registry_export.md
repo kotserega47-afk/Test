@@ -3,14 +3,14 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-10 |
-| **Статус** | in_progress |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-09 (PR #12), `ops/MODULAR_REORG_HANDLER_SPLIT.md` |
 | **PR** | Draft [#13](https://github.com/deniskotdavydov1991-wq/Test/pull/13) `feat/task-2026-09-17-10-registry-export`, base `feat/task-2026-09-17-09-registry-cmds` |
-| **HEAD** | `42b80343fb71171329da2dc469708f02d0d47e5b` |
+| **HEAD (проверен GPT)** | `8c37766689accbdbf5a8aff677dd096e4aaca06c` |
 | **Риск** | medium: владение `cmd_registry_export` |
 
-`cmd_registry_export` переносится в `modules.antares.handlers` как прямая операция (не job-dispatch). Совместимый re-export и mixed `get_handlers()` сохраняются. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. GPT review ещё не выполнялся.
+`cmd_registry_export` **перенесён**. В `modules.antares.handlers` **девять** callbacks. Это прямая операция через `loop.run_in_executor` (не job-dispatch). Совместимый re-export и mixed-сборка сохранены. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #13 остаётся Draft.
 
 ---
 
@@ -22,33 +22,42 @@
 
 ## Граница изменения
 
-Переносится только `cmd_registry_export`. Не меняются builder, PostgreSQL, формат XLSX, registry/outbox, правила хранения/удаления файлов, `expected_tg_commands.json`. Job-dispatch не вводится.
+Перенесено: только `cmd_registry_export`. Builder, PostgreSQL, формат XLSX, registry/outbox, правила хранения/удаления файлов и `expected_tg_commands.json` не менялись. Job-dispatch не вводился.
 
-Совместимый путь: `integrations.tg_commands.cmd_registry_export` — тот же function object.
+Совместимый путь: `integrations.tg_commands.cmd_registry_export` — тот же function object. Команда по-прежнему регистрируется в mixed `get_handlers()`.
 
 ---
 
 ## Success Criteria
 
-- [ ] Unbound / частичный bind — ошибка конфигурации до builder, стартового ответа и отправки
-- [ ] ACL `registry_export` до построения и отправки
-- [ ] Executor + caption[:1024] + extra reply при длине > 1024; файл закрывается
-- [ ] Identity re-export + девять различимых callbacks
-- [ ] Mixed expected JSON без изменений
-- [ ] GPT review **не** ставился как пройденный
-- [ ] merge/deploy PR #4–#12 не выполнены
+- [x] Unbound / частичный bind — ошибка конфигурации до builder, стартового ответа и отправки
+- [x] ACL `registry_export` до построения и отправки
+- [x] Executor + caption[:1024] + extra reply при длине > 1024; файл закрывается
+- [x] Identity re-export + девять различимых callbacks
+- [x] Mixed expected JSON без изменений
+- [x] GPT review HEAD `8c37766…`: блокирующих нет
+- [ ] merge/deploy PR #13 (намеренно открыто)
 
 ---
 
 ## Ограничения покрытия
 
-Isolated Antares **не** готов. В mixed `tg_commands` остаются: `start`/`help`/`status`, Raccoon cmds, `run_script_hello`, Auto-Enable, document ingest. Registry/outbox/БД и JOB_REGISTRY не переносились.
+Isolated Antares **не** готов. В mixed `tg_commands` остаются: `start`/`help`/`status`, Raccoon cmds, `run_script_hello`, Auto-Enable, document ingest. Регистрация `registry_export` в mixed `get_handlers()` сохраняется. Registry/outbox/БД и JOB_REGISTRY не переносились.
+
+---
+
+## Происхождение проверки
+
+| Кто | Что |
+|-----|-----|
+| Cursor | **97 passed** на HEAD `8c37766…`, Python **3.12.10** (`test_antares_handlers`, `test_tg_registry_export`, inventory, registration, profile boot, registry export builder/format) |
+| GPT | Проверил код и diff HEAD `8c37766…`. Набор 97 **независимо не запускал.** |
 
 ---
 
 ## Out Of Scope
 
-isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#12; Railway; профили; Auto-Enable; document ingest.
+isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#13; Railway; профили; Auto-Enable; document ingest.
 
 ---
 
@@ -57,3 +66,4 @@ isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#12; Railway; про
 | Дата | Событие |
 |------|---------|
 | 2026-09-18 | выделение `cmd_registry_export` в `modules.antares.handlers` |
+| 2026-09-18 | GPT review HEAD `8c37766…`: блокирующих нет; merge/deploy нет |
