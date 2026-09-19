@@ -361,4 +361,4 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ## Следующие задачи (не merge #4–#17)
 
-1. Code PR сборки этапа 1 — по `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md`. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. Early gate mixed не ослаблять.
+1. Первый code PR: split `script_jobs` (slim `__init__`, явный mixed bootstrap, `bind.py` без авторегистрации `hello_world`). Затем code PR сборки этапа 1 — `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md`. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. Early gate mixed не ослаблять.

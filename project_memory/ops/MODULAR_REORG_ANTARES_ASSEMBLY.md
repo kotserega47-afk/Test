@@ -5,105 +5,147 @@
 | **Статус** | подготовлено к review; **не** runtime; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
 | **Обследованный SHA** | `5f131ce50091a80cc03989d6fdf1e8b60f84b6ab` (закрытие TASK-13; код ingest = GPT `4a1e7796…`) |
-| **Источники** | `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`, `ops/MODULAR_REORG_HANDLER_SPLIT.md`; `integrations/tg_commands.py`; `modules/antares/{handlers,jobs,document_ingest}.py`; `integrations/{raccoon_jobs.py,script_jobs/}`; `core/{lock_status.py,project_profile_boot.py,job_runner.py}`; `scheduler.py` |
+| **Уточнение плана** | поверх `8fe4efbdadea40d189d4a714835ad1ea315501c0` |
+| **Источники** | ADR, MIGRATION, HANDLER_SPLIT; `integrations/tg_commands.py`; `modules/antares/{handlers,jobs,document_ingest}.py`; `integrations/script_jobs/{__init__,runtime,registry}.py`; `integrations/script_jobs/scripts/operator_wallets_ready.py`; `main.py`; `core/{job_runner,job_dispatch,job_health,lock_status,scheduler_health,project_profile_boot}.py`; `scheduler.py` |
 | **Эталон mixed** | `tests/fixtures/behavior_baseline/expected_tg_commands.json` (**не** менять) |
 
-Это обследование **исходников** на SHA выше, не production и не прогон. Isolated Antares entry **ещё нет**. `JOB_ACCEPT`, durable inbox и cutover **не** входят. Runtime в TASK-14 **не** менять.
+Это обследование **исходников**, не production. Isolated entry **нет**. `JOB_ACCEPT`, durable inbox, cutover **не** входят. Runtime в TASK-14 **не** менять.
 
 ---
 
 ## 1. Цель
 
-Определить минимальную **самостоятельную** сборку Antares, которая:
+Самостоятельная сборка Antares:
 
-- регистрирует только Antares jobs и Antares Telegram handlers;
-- **не** импортирует `integrations.tg_commands`;
-- **не** импортирует `integrations.raccoon_jobs` и не регистрирует ключи `raccoon_*`;
+- регистрирует только Antares jobs и Antares handlers;
+- **не** импортирует `integrations.tg_commands` и `integrations.raccoon_jobs`;
+- dispatch идёт через существующий `request_job` → **`core.job_runner.JOB_REGISTRY`** (не произвольный mapping);
 - не запускает polling, worker execution, schedules и внешние действия в проверке сборки.
 
-Наличие сборки handlers/jobs **не** означает готовность entrypoint, polling или production cutover. Early gate mixed `scheduler.py` **не** ослаблять: `PROJECT_PROFILE=antares` на legacy entry по-прежнему отказ.
+Этап 1 **не** готовность entrypoint / polling / cutover. Early gate mixed **не** ослаблять.
 
 ---
 
 ## 2. Состав будущих Antares handlers
 
-Порядок ниже — **будущий isolated** список (новый JSON позже). Mixed порядок 20 команд + document **не** менять.
+Порядок — **будущий isolated** список (новый JSON позже). Mixed 20 команд + document **не** менять.
 
-| # | Handler | Isolated callback | Владелец реализации | ACL | Регистрация isolated | Mixed совместимость | Проверки |
-|---|---------|-------------------|---------------------|-----|----------------------|---------------------|----------|
-| 1 | `start` | **новый** Antares `cmd_start` | `modules.antares.handlers` (или узкий sibling `control.py`) | `start` | `CommandHandler` | mixed `cmd_start` **остаётся** в `tg_commands` (другой объект; текст mixed) | isolated: нет `/run_raccoon`; mixed help-тест Raccoon не падает |
-| 2 | `help` | **новый** Antares `cmd_help` | то же | `help` | то же | mixed `_help_text()` **без изменений** | отдельный expected Antares help; `test_help_text_lists_raccoon_commands` только mixed |
-| 3 | `status` | **новый** Antares `cmd_status` | то же | `status` | то же | mixed `cmd_status` остаётся; `KNOWN_JOB_TYPES` как сейчас | isolated locks: только Antares tuple; mixed observation по-прежнему полный `KNOWN_JOB_TYPES` |
-| 4 | `whoami` | перенос существующего тела | `modules.antares.handlers` | `whoami` + `access_map` | то же | identity re-export в mixed | ACL deny; тот же `bind_rules` instance |
-| 5 | `reload_rules` | перенос существующего тела | то же | `reload_rules` | то же | identity re-export | `invalidate` + `get_snapshot(force_sync=True)` **того же** `AccessRules`; `request_scheduler_clocks_reset` без старта loop |
-| 6 | `run_wallet` | уже есть | `handlers.cmd_run_wallet` | `run_wallet` | то же | уже re-export | job_type `wallet` |
-| 7 | `run_hourly` | уже есть | `cmd_run_hourly` | `run_hourly` | то же | уже re-export | `hourly` |
-| 8 | `run_download` | уже есть | `cmd_run_download` | `run_download` | то же | уже re-export | `download` |
-| 9 | `run_rate` | уже есть | `cmd_run_rate` | `run_rate` | то же | уже re-export | `rate` |
-| 10 | `operator_wallets_ready` | уже есть | `cmd_operator_wallets_ready` | `operator_wallets_ready` | то же | уже re-export | job `script_job:operator_wallets_ready` **есть** в registry |
-| 11 | `rules_validate` | перенос существующего тела | `handlers` | `rules_validate` | то же | identity re-export | executor + audit hook; без dispatch job |
-| 12 | `auto_enable_plan` | уже есть | `cmd_auto_enable_plan` | `auto_enable_plan` | то же | уже re-export | не JOB_REGISTRY |
-| 13 | `auto_enable_run` | уже есть | `cmd_auto_enable_run` | `auto_enable_run` | то же | уже re-export | не JOB_REGISTRY |
-| 14 | `wallet_editor_refresh` | уже есть | `cmd_wallet_editor_refresh` | `wallet_editor_refresh` | то же | уже re-export | job `wallet_editor_registry_refresh` |
-| 15 | `registry_health` | уже есть | `cmd_registry_health` | `registry_health` | то же | уже re-export | прямой вызов, не job |
-| 16 | `registry_replay` | уже есть | `cmd_registry_replay` | `registry_replay` | то же | уже re-export | прямой outbox; **не** путать с job `wallet_editor_registry_replay` |
-| 17 | `registry_export` | уже есть | `cmd_registry_export` | `registry_export` | то же | уже re-export | PG export |
-| 18 | `filters.Document.ALL` | уже есть | `document_ingest.handle_wallet_editor_document` | chat allowlist | последний `MessageHandler` | mixed через `wallet_editor_tg` identity | тот же function object |
+**Владелец новых `start` / `help` / `status`:** `modules.antares.handlers` (тот же модуль, что 11 уже выделенных command callbacks). Отдельный `control.py` **не** вводится.
 
-**Не входят в Antares handlers:** `run_raccoon`, `run_hourly_raccoon`, `run_script_hello`.
+| # | Handler | Isolated callback | Владелец | ACL | Mixed |
+|---|---------|-------------------|----------|-----|-------|
+| 1 | `start` | **новый** `cmd_start` | `modules.antares.handlers` | `start` | mixed `cmd_start` остаётся в `tg_commands` (другой объект) |
+| 2 | `help` | **новый** `cmd_help` | то же | `help` | mixed `_help_text()` без изменений |
+| 3 | `status` | **новый** `cmd_status` | то же | `status` | mixed `cmd_status` остаётся; `KNOWN_JOB_TYPES` без изменений |
+| 4 | `whoami` | перенос тела | то же | `whoami` | identity re-export |
+| 5 | `reload_rules` | перенос тела | то же | `reload_rules` | identity re-export |
+| 6–9 | `run_wallet` / `hourly` / `download` / `rate` | уже есть | то же | command = имя | уже re-export |
+| 10 | `operator_wallets_ready` | уже есть | то же | `operator_wallets_ready` | уже re-export |
+| 11 | `rules_validate` | перенос тела | то же | `rules_validate` | identity re-export |
+| 12–13 | `auto_enable_plan` / `run` | уже есть | то же | те же ACL | уже re-export |
+| 14 | `wallet_editor_refresh` | уже есть | то же | `wallet_editor_refresh` | уже re-export |
+| 15–17 | `registry_health` / `replay` / `export` | уже есть | то же | те же ACL | уже re-export |
+| 18 | `filters.Document.ALL` | уже есть | `document_ingest` | chat allowlist | mixed via `wallet_editor_tg` identity |
 
-Итого isolated: **17 CommandHandler + 1 MessageHandler**. Mixed: **20 + 1** (эталон JSON).
+**Не входят:** `run_raccoon`, `run_hourly_raccoon`, `run_script_hello`.
 
-Уже выделенные **11** command callbacks остаются в `modules.antares.handlers`.
+Isolated: **17 CommandHandler + 1 MessageHandler**. Mixed: **20 + 1**.
 
 ---
 
-## 3. Решение: Antares help / start / status
+## 3. Registry = реестр dispatch
 
-Mixed callbacks **нельзя** переиспользовать.
+`core.tg_command_dispatch.run_job_async` → `dispatch_job_async` → `request_job` читает **`core.job_runner.JOB_REGISTRY.get(job_type)`**. Произвольный `dict`, переданный в сборку, этот путь **не** переключает. Обобщённую DI для dispatch **не** вводить.
 
-Источник mixed help (`integrations/tg_commands.py` `_help_text` на обследованном SHA): перечень включает `/run_raccoon`, `/run_hourly_raccoon`, `/run_script_hello`. Тест `tests/test_raccoon_tg_commands.py::test_help_text_lists_raccoon_commands` фиксирует mixed текст. **Не** менять.
+### Контракт этапа 1
 
-Источник mixed status: при `OBSERVATION_ENABLED` — scheduler health, `get_lock_status_for_job_types(KNOWN_JOB_TYPES)`, conversion `state_get`, Telegram sender, routes, job_health. `KNOWN_JOB_TYPES` в `core/lock_status.py` содержит `raccoon_wallet`, `raccoon_hourly`, `raccoon_daily_conversion`. Без observation — `get_status()` по **всему** `_RUNNING` процесса.
+- Сборка пишет **только** в фактический `core.job_runner.JOB_REGISTRY`.
+- Если у функции есть параметр `registry`, допустим **только** `registry is JOB_REGISTRY`; иначе отказ **до** bind и **до** записи в registry.
+- Отдельный mapping **не** называть рабочей сборкой.
+- Процесс: **fresh**, без предварительного `import integrations.tg_commands` / `raccoon_jobs` / package bootstrap `script_jobs`.
+- Чужие ключи в `JOB_REGISTRY` (raccoon, `hello_world`, любой лишний) → **явный отказ**. **Не** `clear()`. **Не** удалять Raccoon/чужие ключи как способ «починить» процесс.
+- После **успешной** сборки: `set(JOB_REGISTRY) ==` ровно семь ключей § 5, и `request_job` видит те же callables.
 
-**Выбор:** отдельные Antares callbacks (не параметр profile у mixed функций).
+### Повторный вызов
 
-| Поверхность | Antares текст / данные | Граница |
-|-------------|------------------------|---------|
-| `start` | `"Ок.\nЯ готов.\n\n"` + **Antares** help | не вызывать mixed `_help_text()` |
-| `help` | тот же перечень команд, что isolated handlers, **без** raccoon и **без** `/run_script_hello` | строки `/run_raccoon` и `/run_hourly_raccoon` запрещены |
-| `status` (observation) | те же блоки scheduler / conversion / TG sender / routes / job_health, что mixed, но locks только по Antares tuple: `wallet`, `hourly`, `rate`, `download`, `wallet_editor_registry_refresh` | **не** передавать default `KNOWN_JOB_TYPES`; не читать raccoon lock files «за компанию» |
-| `status` (без observation) | `get_status()` процесса | корректно, только если в процессе нет raccoon keys (обеспечивает registry сборки) |
+Проверяемые предусловия **до** изменения bind и registry:
 
-`core.lock_status.KNOWN_JOB_TYPES` **не** сужать в этом плане: mixed observation зависит от полного кортежа. Isolated передаёт явный список.
+| Ситуация | Итог |
+|----------|------|
+| Те же объекты `rules` и `logger`, что уже bound; `JOB_REGISTRY` уже ровно семь согласованных ключей с **теми же** executor objects | допустим (no-op или повторная запись тех же callables) |
+| Другой `rules` / `logger`, чем bound | отказ |
+| Конфликтующий executor на одном из семи ключей (другой callable) | отказ |
+| Чужие ключи | отказ (см. выше) |
+| `registry is not JOB_REGISTRY` | отказ |
+
+### Сбой импорта / частичная регистрация
+
+Если импорт downloader/script bind/handlers падает **после** начала записи в registry или bind: сборка **неуспешна**; частичный `JOB_REGISTRY` / частичный bind **не использовать**; polling/worker/schedules **запрещены**. Откат через `clear()` или вырезание чужих ключей **не** делать. Процесс считать грязным; для новой попытки — **новый процесс**.
 
 ---
 
-## 4. Решение: `run_script_hello`
+## 4. Selective script API (без авторегистрации)
 
-**Не включать** в isolated Antares handlers и **не** регистрировать `script_job:hello_world` в Antares JOB_REGISTRY.
+### Факт импорта (SHA обследования)
 
-Обоснование (исходники SHA обследования):
+```
+integrations.script_jobs.__init__
+  → registry.py  (тянет operator_wallets_ready)
+  → runtime.py
+      → module-level register_script_jobs()   # оба ключа в JOB_REGISTRY
+```
 
-- `hello_world` — заглушка без кабинета/карт (`integrations/script_jobs/registry.py`); не Antares-бизнес.
-- `integrations.script_jobs.runtime.register_script_jobs()` на import регистрирует **все** ключи `SCRIPT_REGISTRY` (`hello_world` и `operator_wallets_ready`) в глобальный `JOB_REGISTRY`.
-- `operator_wallets_ready` **нужен** Antares (выгрузка кошельков, уже `handlers.cmd_operator_wallets_ready`).
-- Импорт пакета `integrations.script_jobs` тянет `scripts/operator_wallets_ready.py` → `main.CONVERSION_COLUMNS` / Excel export. Это не Raccoon, но и не «пустой» import.
-- Полный script registry в Antares-сборке дал бы лишний `hello_world` job (побочная регистрация) и лишнюю команду.
+Любой `from integrations.script_jobs.<sub> import …` **сначала** выполняет пакетный `__init__.py`. Параметр `keys=` у **текущей** `register_script_jobs` **недостаточен**: `hello_world` уже может оказаться в `JOB_REGISTRY` до вызова.
 
-Как регистрировать нужный script job:
+Запрещены как изоляция: env-флаг; удаление `hello_world` после импорта; `JOB_REGISTRY.clear()`.
 
-- ввести **явный** API вида `register_script_jobs(keys=("operator_wallets_ready",))` (или `register_script_job("operator_wallets_ready")`), который пишет в переданный `registry` **только** `script_job:operator_wallets_ready`;
-- mixed по-прежнему делает `from integrations import script_jobs` (оба ключа) — поведение mixed не менять, пока отдельный PR не докажет identity;
-- isolated **не** импортирует raccoon и **не** вызывает текущий import-time `register_script_jobs()` «на всём словаре», если это добавляет `hello_world`.
+### Транзитив `operator_wallets_ready` (не «просто тяжёлый import»)
 
-Команда `/run_script_hello` остаётся только в mixed `tg_commands`. Isolated help её не перечисляет.
+`integrations/script_jobs/registry.py` делает:
+
+`from integrations.script_jobs.scripts.operator_wallets_ready import run_operator_wallets_ready`
+
+Этот модуль делает `from main import CONVERSION_COLUMNS`. **`main.py` на import** загружает:
+
+- `analyzers.selector` (`get_analyzer`);
+- `integrations.dropbox_watcher` (`download_file`, `move_file`);
+- `integrations.telegram_bot` (`send_message_sync`);
+- `run_once_guard`;
+- `utils.logger` (handlers на `logs/app.log`).
+
+Это **не** выполнение `run_operator_wallets_ready`, но это загрузка selector, Dropbox-клиента и Telegram send stack в процесс сборки, если импортировать `registry.py` или `operator_wallets_ready.py`. Isolated сборка **не должна** импортировать эти модули на этапе bind.
+
+### Выбранное решение
+
+| Модуль | Роль | Import-time регистрация в JOB_REGISTRY |
+|--------|------|----------------------------------------|
+| `integrations/script_jobs/identity.py` (**новый**) | `SCRIPT_JOB_PREFIX`, `script_job_type`, `parse_script_job_type` | нет |
+| `integrations/script_jobs/bind.py` (**новый**) | `register_script_job(script_key)` пишет **lazy** callable в `JOB_REGISTRY` (только `JOB_REGISTRY`, identity). Lazy `import` runner — при **`request_job`**, не при bind | нет, пока не вызвать функцию |
+| `integrations/script_jobs/runtime.py` | исполнение `run_script_job`; **убрать** module-level `register_script_jobs()` | нет после правки |
+| `integrations/script_jobs/registry.py` | `SCRIPT_REGISTRY` (hello + operator spec) | нет (спеки, не JOB_REGISTRY) |
+| `integrations/script_jobs/bootstrap.py` (**новый**) | `register_all_script_jobs()` — оба ключа, как сегодня, для **mixed** | только при явном вызове |
+| `integrations/script_jobs/__init__.py` | реэкспорт types/identity/**без** import `runtime` и **без** вызова register | нет |
+
+Isolated импортирует **`integrations.script_jobs.bind`** (пакетный `__init__` больше не bootstrap'ит JOB_REGISTRY) и вызывает `register_script_job("operator_wallets_ready")`. Не импортирует `registry.py` / `runtime.py` / `scripts.operator_wallets_ready` на bind.
+
+Mixed: заменить `from integrations import script_jobs  # noqa: F401` в `integrations/tg_commands.py` на явный `from integrations.script_jobs.bootstrap import register_all_script_jobs` + вызов. Оба jobs как сейчас.
+
+`bind.py` не импортирует `registry.py`. Executor на ключ `script_job:operator_wallets_ready` при первом `request_job` импортирует `runtime` → тогда уже `registry` / `operator_wallets_ready` / `main` — это **исполнение**, не сборка.
+
+### Затрагиваемые существующие пути (подэтап 1)
+
+- `integrations/script_jobs/__init__.py`, `runtime.py`
+- `integrations/tg_commands.py` (явный bootstrap)
+- тесты, которые считают `import integrations.script_jobs` регистрацией: `tests/unit/test_script_jobs_registry.py`, `test_script_jobs_runtime.py`, `test_script_jobs_operator_wallets_ready.py` (строки `import integrations.script_jobs  # bootstrap`)
+- `test_script_jobs_delivery.py` импортирует `delivery` — после slim `__init__` не должен регистрировать jobs; проверить, что тест не зависит от авторегистрации
+
+Это **первый code PR**, отдельно от полной сборки handlers.
 
 ---
 
 ## 5. Jobs isolated Antares
 
-Точный набор ключей:
+Семь ключей, согласованных с `request_job`:
 
 ```
 wallet
@@ -115,116 +157,119 @@ wallet_editor_registry_replay
 script_job:operator_wallets_ready
 ```
 
-Семь ключей. `ANTARES_JOB_KEYS` (шесть) уже в `modules.antares.jobs`. Replay-job **регистрируется**, хотя TG-команда `registry_replay` идёт прямым вызовом outbox — как сегодня в mixed.
+**Запрещены:** `raccoon_*`, `script_job:hello_world`.
 
-**Запрещены:** `raccoon_wallet`, `raccoon_hourly`, `raccoon_daily_conversion`, `script_job:hello_world`.
-
-`register_jobs(registry)` на обследованном SHA при **вызове** импортирует `bakai_monitor_playwright`, `downloader_wallets`, `wallet_editor_registry`, `wallet_editor_registry_refresh`. Это регистрация, не запуск job. Проверка сборки **может** загрузить эти модули, но **не** должна вызывать callables, Playwright, TG send, PG write.
+`modules.antares.jobs.register_jobs` сегодня принимает mapping; на этапе 1 вызывать **только** как `register_jobs(JOB_REGISTRY)` (тот же объект). При вызове импортирует bakai/downloader_wallets/registry refresh — регистрация, не run. Тест сборки не вызывает эти callables.
 
 ---
 
-## 6. Последовательность сборки (будущая)
+## 6. Antares `start` / `help` / `status`
 
-Порядок, когда появится код:
+Владелец: **`modules.antares.handlers`**. Mixed callbacks не reuse.
 
-1. **Проверка профиля** — только на **isolated** entry (ещё нет). Mixed `enforce_legacy_scheduler_profile()` не трогать: unset → legacy mixed; явное `antares`/`raccoon`/`wr` → отказ. Не расширять mixed scheduler до isolated.
-2. **Rules / logger** — создать существующие объекты: `AccessRules(...)` (конструктор workbook **не** читает) и `get_logger` профиля `MAIN`, как mixed. Не второй экземпляр правил «для Antares» в том же процессе, что mixed.
-3. **bind** — `bind_rules(rules)` + `bind_logger(logger)` на те же объекты. Reload — `invalidate` внутри того же instance.
-4. **Регистрация jobs** — `register_jobs(registry)` + один script job `operator_wallets_ready`. Registry — переданный mapping (в процессе обычно `JOB_REGISTRY`). Без `raccoon_jobs`.
-5. **Handlers** — `get_antares_handlers()`: 17 команд + `MessageHandler(filters.Document.ALL, handle_wallet_editor_document)`.
-6. **Подключение к приложению** — `Application.add_handler` + `run_polling` — это **этап 3**, не этап 1.
+`start`: `"Ок.\nЯ готов.\n\n"` + Antares help (не mixed `_help_text()`).
 
-Разделение этапов (ADR / MIGRATION):
+`help`: перечень isolated команд § 2, без `/run_raccoon`, `/run_hourly_raccoon`, `/run_script_hello`. Mixed `_help_text()` не менять.
 
-| Этап | Что | Готовность сейчас |
-|------|-----|-------------------|
-| **1** | Построить Antares handlers/jobs **без запуска** | план; кода сборки нет |
-| **2** | Отдельный entrypoint (`apps/…` или аналог), не `scheduler.py` mixed | **нет**; `apps/` в репозитории нет |
-| **3** | Polling + `ensure_worker_started` + `schedule_loop` | только mixed `scheduler.py` |
-| **4** | Production cutover | нет `JOB_ACCEPT`, нет durable inbox |
+### `/status` — блоки (не «mixed observation минус locks»)
 
-Этап 1 **не** включает 2–4.
+Константа isolated locks/jobs: `ANTARES_STATUS_JOB_TYPES` = те же **семь** ключей § 5. Mixed `KNOWN_JOB_TYPES` **не** менять и **не** передавать в Antares status.
 
----
+| Блок | Источник | Область | Фильтр | До запуска scheduler (этап 1 / нет loop) | Нет данных |
+|------|----------|---------|--------|------------------------------------------|------------|
+| Observation off: running jobs | `core.job_runner.get_status()` | `_RUNNING` процесса | **да**: показать только ключи из семи; чужой ключ в `_RUNNING` не выводить | пустой `_RUNNING` | `🟢 Сейчас ничего не выполняется.` (как mixed idle) |
+| Observation on: scheduler | `get_scheduler_health_snapshot()` | in-memory tick/error/schedule count/hourly gate этого процесса | нет job-keys (это scheduler, не raccoon jobs) | `tick_ts`/`tick_age`/`active_schedules` = `unknown`; `last_error` = `none`; gate reason `none`, age `unknown` | те же `unknown`/`none` в существующих форматах строк mixed |
+| Observation on: telegram_sender | `get_telegram_sender_health_snapshot()` | in-memory sender процесса | нет (не каталог jobs) | счётчики 0, ages `none`/`unknown` по текущему snapshot | `- unknown` при exception (как mixed) |
+| Observation on: telegram_routes | `format_telegram_routes_status_lines()` | workbook routes процесса (hourly/wallet/conversion/bakai **Antares Test**, не `raccoon_*` jobs) | **нет** фильтра по семи keys: это маршруты отчётов, не JOB_REGISTRY. Не вызывать, если нужен raccoon-only catalog — его здесь нет | может читать rules snapshot при вызове **status**, не при сборке; `loaded`/`missing_sheet` как helper | `telegram_routes:` + `- unknown` |
+| Observation on: **locks** | `get_lock_status_for_job_types(ANTARES_STATUS_JOB_TYPES)` | PID lock files | **только семь keys** | `pid=none age=none` если файла нет (`lock_status._read_lock_fields`) | `- unknown` при exception |
+| Observation on: conversion | `state_get("conversion", …)` как `_format_conversion_observation_lines` | Antares conversion state_store, **не** ключ JOB_REGISTRY | не job-key filter; это не raccoon. Блок **оставить**: операционное состояние Test/Antares | `- no data` если status/run ts отсутствуют | `- no data` / `- unknown` |
+| Observation on: job_health | `get_job_health_snapshot` / разбор `jobs` | сейчас `format_job_health_lines()` итератор **`KNOWN_JOB_TYPES` (есть raccoon)** | **нельзя** вызывать mixed `format_job_health_lines()` as-is. Antares формат: `mode` + `executor_queue_depth` + строки **только** по семи keys | mode `off` или snapshot пустой → `state=unknown`/`idle` по текущей логике helper для отсутствующих jt | `job_health:` + `- unknown` при exception |
+| Observation on: jobs | `get_status()` | `_RUNNING` | **да**, только семь keys | `🟢 idle` | `🟢 idle` / `unknown` при exception |
 
-## 7. Что мешает сборке без mixed `tg_commands`
+Почему каждый из семи в **locks** (и в job_health per-job):
 
-Зафиксировано по исходникам SHA обследования.
-
-### Уже можно не импортировать `tg_commands`
-
-- `modules.antares.handlers` — telegram + `core.tg_command_dispatch` / `Actor`. Тест `test_import_handlers_does_not_load_mixed_tg_commands`.
-- `modules.antares.jobs` — import не регистрирует jobs; `register_jobs` лениво тянет Antares downloaders.
-- `modules.antares.document_ingest` — `automation.audit.log`, startup warning; worker/routing ленивые. Не импортирует `tg_commands`.
-
-### Глобальные реестры и process state
-
-| Объект | Где | Риск |
-|--------|-----|------|
-| `JOB_REGISTRY` | `core.job_runner` (пустой dict, наполняется импортами) | `import raccoon_jobs` / `import script_jobs` пишут в **тот же** процесс |
-| `_RUNNING` | `job_runner` | mixed `get_status()` видит все job_type процесса |
-| `handlers._rules` / `_logger` | module globals | один bind на процесс |
-| `_ALLOWLIST_STARTUP_LOGGED` | `document_ingest` | один startup log на процесс |
-| `KNOWN_JOB_TYPES` | `lock_status` | mixed status; isolated не должен использовать default |
-| `ThreadPoolExecutor` | `core.job_dispatch.get_job_executor` | создаётся при **dispatch**, не при import handlers |
-
-### Side effects импорта
-
-| Импорт | Эффект |
-|--------|--------|
-| `integrations.tg_commands` | `raccoon_jobs` + `script_jobs` (оба script keys) + `register_jobs(JOB_REGISTRY)` + `AccessRules()` + bind + ingest через compat |
-| `integrations.raccoon_jobs` | три raccoon keys; импорт raccoon downloaders/analyzers |
-| `integrations.script_jobs` | `register_script_jobs()` на всём `SCRIPT_REGISTRY` |
-| `document_ingest` | startup allowlist log; `utils.logger` → `logs/app.log` |
-| `handlers` → `job_runner` | `rules_provider` на import chain (workbook **не** обязан читаться до `get_snapshot`) |
-| `register_jobs(...)` | import Playwright-adjacent downloader modules |
-| `scheduler.py` | gate, затем `tg_commands`, Application, `ensure_worker_started`, daemon `schedule_loop`, `run_polling` |
-
-### Scheduler dependencies (не этап 1)
-
-`scheduler.py`: `get_handlers, RULES` из `tg_commands`; `ensure_worker_started`; `load_schedules`; `dispatch_job_background`. Isolated сборка **не** вызывается отсюда, пока нет отдельного entry.
+| Ключ | Locks / job_health | Почему |
+|------|--------------------|--------|
+| `wallet` `hourly` `rate` `download` | **включены** | `request_job` берёт PID lock по `job_type`; mixed уже показывает первые три + download |
+| `wallet_editor_registry_refresh` | **включён** | в mixed `KNOWN_JOB_TYPES`; job в семи |
+| `wallet_editor_registry_replay` | **включён** | job в семи; mixed status **сейчас не** показывает этот lock — isolated **согласует со сборкой**, не копирует пропуск mixed |
+| `script_job:operator_wallets_ready` | **включён** | job в семи; `job_runner` лочит `script_job:operator_wallets_ready`; mixed `KNOWN_JOB_TYPES` script jobs **не** содержит — isolated не копирует этот пробел |
+| `raccoon_*` / `hello_world` | **исключены** | нет в семи; не читать их lock files |
 
 ---
 
-## 8. Приёмка будущего code PR (не этот PR)
+## 7. Последовательность сборки
 
-- Isolated registry **точно** семь ключей § 5; raccoon keys отсутствуют.
-- Отдельный expected список Antares handlers (новый fixture; **не** переписывать mixed `expected_tg_commands.json`).
-- Import сборки / `modules.antares.assembly` (имя уточнит code PR) **не** загружает `integrations.tg_commands`, `integrations.raccoon_jobs`, `integrations.raccoon_*`.
-- Mixed baseline: inventory AST + registration dump + help Raccoon — без регрессии.
-- ACL на перенесённых whoami/reload/validate; reload того же `AccessRules` без повторного bind.
-- Сборка **не** вызывает `run_polling`, `ensure_worker_started`, `schedule_loop`, job callables, живой Telegram, Playwright run, PG write.
-- Identity: 11 существующих callbacks и ingest object те же, что mixed re-export.
-- Early gate mixed **без** изменений: явное `antares` на `scheduler.py` по-прежнему отказ.
+1. Профиль — только будущий isolated entry. Mixed gate не трогать.
+2. Создать `AccessRules(...)` + MAIN logger (конструктор workbook не читает).
+3. Предусловия § 3 (identity registry, чужие ключи, bind).
+4. `bind_rules` / `bind_logger`.
+5. `register_jobs(JOB_REGISTRY)` + `register_script_job("operator_wallets_ready")`.
+6. Собрать handlers § 2.
+7. `Application` / polling / `ensure_worker_started` / `schedule_loop` — **этап 3**, не этап 1.
 
-Проверки — subprocess / sandbox, без живых кабинетов.
+Этапы 1–4 как прежде: сборка без запуска; entrypoint нет; polling только mixed; cutover нет.
 
 ---
 
-## 9. Минимальный следующий code PR (не TASK-14)
+## 8. Проверки реальной сборки (будущие code PR)
 
-Один PR сборки **этапа 1**:
+Разделить тесты:
 
-1. Селективная регистрация `script_job:operator_wallets_ready` без обязательной регистрации `hello_world` на isolated пути.
-2. Функция сборки: принять `registry`, `rules`, `logger` → bind → `register_jobs` → script job → список handlers § 2.
-3. Antares `start`/`help`/`status` — новые callbacks; mixed тексты не трогать.
-4. Перенос `whoami` / `reload_rules` / `rules_validate` в Antares handlers + identity re-export в mixed (как остальные команды).
-5. Тесты § 8. Mixed `get_handlers()` имена/порядок JSON без изменений.
-6. **Не** добавлять isolated entrypoint; **не** менять `scheduler.py` / `project_profile_boot.py`; **не** вводить `JOB_ACCEPT`; **не** merge #4–#16.
+| Слой | Что проверять | Subprocess |
+|------|-----------------|------------|
+| Import модуля сборки | нет `tg_commands`, `raccoon_jobs`, `raccoon_*`; `JOB_REGISTRY` ещё **не** обязан быть семёркой (bind не вызван) | да, fresh |
+| Вызов функции сборки | успех; handlers 17+document | тот же процесс после import **или** отдельный вызов в том же child |
+| Фактический `JOB_REGISTRY` | `JOB_REGISTRY is` объект, из которого `request_job` делает `.get`; `set(keys)==` семь; `hello_world` нет | **реальные** `job_runner.JOB_REGISTRY`, `modules.antares.jobs.register_jobs`, `script_jobs.bind` — **не** stub этих модулей |
+| Повторная сборка | same rules/logger/executors → OK | |
+| Отказ при загрязнении | заранее вставить чужой ключ → отказ, ключ **остаётся**, семёрка не «вычищается» | |
+| Запрещённые импорты **после вызова** сборки | `sys.modules` не содержит `integrations.tg_commands`, `integrations.raccoon_jobs`, `integrations.raccoon_wallet_downloader` и т.п. | не подменять raccoon stub'ом sitecustomize: stub маскирует запрещённый import |
+| Сбой импорта | если forced failure mid-register — процесс не стартует; тест не использует частичный registry как success | |
 
-Вне этого PR: этап 2 entry, этап 3 polling/worker/schedules, этап 4 cutover, Railway, профили production.
+Внешние границы (Playwright, live Telegram, PG, Dropbox download) — stubs **вне** registration path.
+
+Mixed baseline — **отдельный** прогон: inventory, registration harness, `test_help_text_lists_raccoon_commands`, script_jobs tests после явного bootstrap. Не смешивать с isolated subprocess.
+
+---
+
+## 9. Следующий code scope
+
+### Подэтап 1 (первый code PR) — обязателен раньше полной сборки
+
+Файлы:
+
+- `integrations/script_jobs/__init__.py` — без import `runtime`, без авторегистрации
+- `integrations/script_jobs/runtime.py` — удалить module-level `register_script_jobs()`
+- `integrations/script_jobs/identity.py` — новый
+- `integrations/script_jobs/bind.py` — новый, lazy, только `JOB_REGISTRY`
+- `integrations/script_jobs/bootstrap.py` — новый, оба jobs для mixed
+- `integrations/tg_commands.py` — явный `register_all_script_jobs()`
+- `tests/unit/test_script_jobs_{registry,runtime,operator_wallets_ready}.py` — явный bootstrap вместо import-side-effect
+- тесты: isolated import `bind` в fresh process **не** создаёт `script_job:hello_world`; не загружает `main` / `analyzers.selector` / `dropbox_watcher`
+
+Не в этом PR: Antares `get_handlers`, start/help/status, entrypoint, gate, `JOB_ACCEPT`.
+
+### Подэтап 2 — сборка этапа 1
+
+- `modules.antares.assembly` (имя фиксируется в code PR) + `cmd_start`/`cmd_help`/`cmd_status` в **`handlers.py`**
+- перенос whoami / reload_rules / rules_validate + mixed re-export
+- `register_jobs(JOB_REGISTRY)` + `register_script_job("operator_wallets_ready")`
+- тесты § 8; mixed JSON без изменений
+- не менять `scheduler.py` / `project_profile_boot.py`
+
+Вне обоих: этап 2–4, Railway, merge #4–#17.
 
 ---
 
 ## 10. Нерешённые блокеры
 
-Блокирующих UNKNOWN для **плана этапа 1** нет.
+Для **плана** этапа 1 после этого уточнения блокирующих UNKNOWN нет.
 
-Ограничения, которые code PR должен учесть, но не обязан закрывать целиком:
+Ограничения:
 
-1. `operator_wallets_ready.py` импортирует `from main import CONVERSION_COLUMNS` — тяжёлый транзитивный import при загрузке script registry. Не Raccoon; не считать «чистым» import. Сборка может грузить этот модуль при регистрации script job; не запускать `run_operator_wallets_ready`.
-2. `register_jobs()` импортирует downloader/registry modules. Допустимо для регистрации; запрещены вызовы run-функций в тесте сборки.
-3. Глобальный `JOB_REGISTRY`: тесты сборки — свежий subprocess, не после `import tg_commands`.
-4. Isolated entry + разрешение `PROJECT_PROFILE=antares` — **другая** задача; иначе gate и ADR противоречат друг другу.
+1. Пока подэтап 1 не сделан, isolated **не может** импортировать пакет `script_jobs` без авторегистрации hello_world — поэтому сборка не объединяется с bind-split.
+2. `register_jobs()` по-прежнему импортирует downloader modules при вызове; не run.
+3. Грязный процесс после неуспешной частичной регистрации не восстанавливается in-process.
+4. Isolated entry / `PROJECT_PROFILE=antares` на mixed scheduler — другая задача.
 
-`JOB_ACCEPT`, durable inbox, cutover — отдельные задачи, не блокеры этого плана.
+`JOB_ACCEPT`, durable inbox, cutover — не блокеры этого плана.
