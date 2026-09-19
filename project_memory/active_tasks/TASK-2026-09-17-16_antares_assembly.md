@@ -7,7 +7,7 @@
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-15 (PR #18, закрытие `89873a0749708460579311b452613b1167e3df43`, pin `14e36a7ca86d0ee8ba591cb9e6a2aa9530739e17`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` § подэтап 2 |
 | **PR** | Draft [#19](https://github.com/deniskotdavydov1991-wq/Test/pull/19) `feat/task-2026-09-17-16-antares-assembly`, base `feat/task-2026-09-17-15-script-job-bind` |
-| **HEAD** | `7a7a16bb8f71b388eef62056c770408b2c1720cb` |
+| **HEAD** | `e33b7539b233496d59669999eb0a1e009b7305f4` |
 | **Риск** | medium: isolated сборка handlers/jobs без запуска |
 
 Подэтап 2 плана TASK-14: явная `assemble_antares`, новые Antares start/help/status, перенос whoami/reload_rules/rules_validate с identity re-export в mixed. Семь jobs на фактическом `JOB_REGISTRY`. Mixed start/help/status, `KNOWN_JOB_TYPES` и `expected_tg_commands.json` не менялись. Isolated entry, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** пройден.
