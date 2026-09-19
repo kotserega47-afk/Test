@@ -173,10 +173,8 @@ Jobs: шесть ключей TASK-05 + `script_job:operator_wallets_ready` (+ �
 
 ---
 
-## 5. Открытые вопросы (не блокируют § 4)
+## 5. Открытые вопросы
 
-1. Isolated `help`/`status`: отдельные callbacks vs параметр profile — решать **после** четырёх run-команд.
-2. Держать ли `hello_world` на isolated Antares (удобство ops vs чистота профиля).
-3. `cmd_registry_replay` vs job `wallet_editor_registry_replay` — разные пути; не смешивать в одном «тонком dispatch».
+Закрыты планом TASK-14 (`ops/MODULAR_REORG_ANTARES_ASSEMBLY.md`): isolated `help`/`status` — новые callbacks, не reuse mixed; `hello_world` **не** входит в Antares; `cmd_registry_replay` и job `wallet_editor_registry_replay` по-прежнему разные пути.
 
 Передача `RULES` для TASK-07 закрыта: только `bind_rules(RULES)` (§ 2.1).
