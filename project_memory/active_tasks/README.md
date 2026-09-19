@@ -44,6 +44,7 @@
 | [TASK-2026-09-17-13](TASK-2026-09-17-13_document_ingest.md) | Перенос document ingest: review пройден, merge нет (PR #16) |
 | [TASK-2026-09-17-14](TASK-2026-09-17-14_antares_assembly_plan.md) | План сборки Antares: review пройден, merge нет (PR #17) |
 | [TASK-2026-09-17-15](TASK-2026-09-17-15_script_job_bind.md) | Selective script JOB_REGISTRY bind: review пройден, merge нет (PR #18) |
+| [TASK-2026-09-17-16](TASK-2026-09-17-16_antares_assembly.md) | Сборка Antares без запуска: готово к review, merge нет |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

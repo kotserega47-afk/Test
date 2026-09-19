@@ -447,6 +447,12 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert tg_commands.cmd_registry_export is handlers.cmd_registry_export
     assert tg_commands.cmd_auto_enable_plan is handlers.cmd_auto_enable_plan
     assert tg_commands.cmd_auto_enable_run is handlers.cmd_auto_enable_run
+    assert tg_commands.cmd_whoami is handlers.cmd_whoami
+    assert tg_commands.cmd_reload_rules is handlers.cmd_reload_rules
+    assert tg_commands.cmd_rules_validate is handlers.cmd_rules_validate
+    assert tg_commands.cmd_start is not handlers.cmd_start
+    assert tg_commands.cmd_help is not handlers.cmd_help
+    assert tg_commands.cmd_status is not handlers.cmd_status
     assert handlers._rules is tg_commands.RULES
     assert handlers._logger is tg_commands.log
 
@@ -466,6 +472,11 @@ def test_mixed_reexport_and_get_handlers_identity() -> None:
     assert assembled["registry_export"] is handlers.cmd_registry_export
     assert assembled["auto_enable_plan"] is handlers.cmd_auto_enable_plan
     assert assembled["auto_enable_run"] is handlers.cmd_auto_enable_run
+    assert assembled["whoami"] is handlers.cmd_whoami
+    assert assembled["reload_rules"] is handlers.cmd_reload_rules
+    assert assembled["rules_validate"] is handlers.cmd_rules_validate
+    assert assembled["start"] is tg_commands.cmd_start
+    assert assembled["start"] is not handlers.cmd_start
     assert assembled["run_raccoon"] is tg_commands.cmd_run_raccoon
     assert assembled["run_raccoon"] is not handlers.cmd_run_hourly
     assert assembled["run_hourly_raccoon"] is tg_commands.cmd_run_hourly_raccoon

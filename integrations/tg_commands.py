@@ -1,6 +1,5 @@
 # integrations/tg_commands.py
 from __future__ import annotations
-import asyncio
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -32,18 +31,18 @@ from modules.antares.handlers import (
     cmd_registry_export,
     cmd_registry_health,
     cmd_registry_replay,
+    cmd_reload_rules,
+    cmd_rules_validate,
     cmd_run_download,
     cmd_run_hourly,
     cmd_run_rate,
     cmd_run_wallet,
     cmd_wallet_editor_refresh,
+    cmd_whoami,
 )
 
 from integrations.wallet_editor_tg import handle_wallet_editor_document
 from core.state_store import state_get
-from core.scheduler_clocks_control import request_scheduler_clocks_reset
-from core.rules_v2.ops_rules_validate_summary import build_rules_validate_telegram_chunks_with_payload
-from core.rules_v2.rules_validate_audit import try_append_manual_validate_audit_from_payload
 
 
 def _mk(profile_key: str):
@@ -278,71 +277,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append(f"- {jt}: job_id={info['job_id']} runtime={info['runtime_sec']}s старт={started}")
 
     await update.message.reply_text("\n".join(lines))
-
-
-async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "whoami"):
-        return
-
-    chat = update.effective_chat
-    user = update.effective_user
-
-    try:
-        snap = RULES.get_snapshot()
-        chat_key = "private" if chat.type == "private" else int(chat.id)
-        level = int(snap.access_map.get((chat_key, int(user.id)), 0))
-    except Exception:
-        level = 0
-
-    if level < 1:
-        await update.message.reply_text("❌ Нет доступа (ты не добавлен в access).")
-        return
-
-    await update.message.reply_text(
-        "👤 whoami\n"
-        f"chat_type: {chat.type}\n"
-        f"chat_id: {chat.id}\n"
-        f"user_id: {user.id}\n"
-        f"username: {user.username or '-'}\n"
-        f"level: {level}"
-    )
-
-async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "rules_validate"):
-        return
-
-    loop = asyncio.get_running_loop()
-    try:
-        chunks, payload = await loop.run_in_executor(None, build_rules_validate_telegram_chunks_with_payload)
-    except Exception as e:
-        log.exception("/rules_validate failed")
-        await update.message.reply_text(f"❌ /rules_validate failed: {type(e).__name__}: {e}")
-        return
-
-    total = len(chunks)
-    for idx, body in enumerate(chunks):
-        prefix = "" if idx == 0 else f"(part {idx + 1}/{total})\n"
-        await update.message.reply_text(prefix + body)
-
-    try:
-        await loop.run_in_executor(None, try_append_manual_validate_audit_from_payload, payload)
-    except Exception:  # noqa: BLE001
-        log.exception("rules_validate_audit: tg manual_validate hook failed (ignored)")
-
-async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard_or_deny(update, "reload_rules"):
-        return
-
-    RULES.invalidate()
-    try:
-        snap = RULES.get_snapshot(force_sync=True)
-        request_scheduler_clocks_reset(reason="reload_rules")
-        await update.message.reply_text(
-            f"♻️ rules snapshot перечитан.\n"
-            f"source: {snap.source}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
 
 
 async def cmd_run_raccoon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

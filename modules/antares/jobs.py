@@ -54,8 +54,8 @@ def run_download_job() -> None:
     run_download()
 
 
-def register_jobs(registry: MutableMapping[str, Callable[..., object]]) -> None:
-    """Bind Antares job_types onto an existing registry. Does not run jobs."""
+def antares_job_executors() -> dict[str, Callable[..., object]]:
+    """Real Antares job callables. Importing this does not run jobs."""
     from integrations.bakai_monitor_playwright import run_rate_monitor_safe
     from integrations.downloader_wallets import run_wallet_cycle
     from integrations.wallet_editor_registry import run_registry_outbox_replay_job
@@ -63,13 +63,16 @@ def register_jobs(registry: MutableMapping[str, Callable[..., object]]) -> None:
         run_wallet_editor_registry_refresh_job,
     )
 
-    registry.update(
-        {
-            "wallet": run_wallet_cycle,
-            "hourly": run_hourly_job,
-            "rate": run_rate_monitor_safe,
-            "download": run_download_job,
-            "wallet_editor_registry_refresh": run_wallet_editor_registry_refresh_job,
-            "wallet_editor_registry_replay": run_registry_outbox_replay_job,
-        }
-    )
+    return {
+        "wallet": run_wallet_cycle,
+        "hourly": run_hourly_job,
+        "rate": run_rate_monitor_safe,
+        "download": run_download_job,
+        "wallet_editor_registry_refresh": run_wallet_editor_registry_refresh_job,
+        "wallet_editor_registry_replay": run_registry_outbox_replay_job,
+    }
+
+
+def register_jobs(registry: MutableMapping[str, Callable[..., object]]) -> None:
+    """Bind Antares job_types onto an existing registry. Does not run jobs."""
+    registry.update(antares_job_executors())

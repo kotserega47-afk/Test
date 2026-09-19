@@ -25,21 +25,26 @@ def _string_keys_from_register_jobs(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     keys: set[str] = set()
     for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) or node.name != "register_jobs":
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name not in {"register_jobs", "antares_job_executors"}:
             continue
         for call in ast.walk(node):
-            if not isinstance(call, ast.Call):
-                continue
-            func = call.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "update"):
-                continue
-            if not isinstance(func.value, ast.Name) or func.value.id != "registry":
-                continue
-            if not call.args:
-                continue
-            arg0 = call.args[0]
-            if isinstance(arg0, ast.Dict):
-                for key in arg0.keys:
+            if isinstance(call, ast.Call):
+                func = call.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "update"):
+                    continue
+                if not isinstance(func.value, ast.Name) or func.value.id != "registry":
+                    continue
+                if not call.args:
+                    continue
+                arg0 = call.args[0]
+                if isinstance(arg0, ast.Dict):
+                    for key in arg0.keys:
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            keys.add(key.value)
+            if isinstance(call, ast.Return) and isinstance(call.value, ast.Dict):
+                for key in call.value.keys:
                     if isinstance(key, ast.Constant) and isinstance(key.value, str):
                         keys.add(key.value)
     return keys
@@ -61,16 +66,16 @@ def _string_keys_from_job_registry_update(path: Path) -> set[str]:
     return keys
 
 
-def _get_handlers_fn(tree: ast.Module) -> ast.FunctionDef:
+def _get_handlers_fn(tree: ast.Module, name: str = "get_handlers") -> ast.FunctionDef:
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "get_handlers":
+        if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
-    raise AssertionError("get_handlers() not found at module level")
+    raise AssertionError(f"{name}() not found at module level")
 
 
-def _command_handler_names_in_get_handlers(path: Path) -> list[str]:
+def _command_handler_names_in_get_handlers(path: Path, fn_name: str = "get_handlers") -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    fn = _get_handlers_fn(tree)
+    fn = _get_handlers_fn(tree, fn_name)
     names: list[str] = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
@@ -83,9 +88,9 @@ def _command_handler_names_in_get_handlers(path: Path) -> list[str]:
     return names
 
 
-def _document_handler_in_get_handlers(path: Path) -> bool:
+def _document_handler_in_get_handlers(path: Path, fn_name: str = "get_handlers") -> bool:
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    fn = _get_handlers_fn(tree)
+    fn = _get_handlers_fn(tree, fn_name)
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
             continue
@@ -159,6 +164,18 @@ def test_source_inventory_antares_run_cmds_not_defined_in_tg_commands() -> None:
             "cmd_registry_export",
             "cmd_auto_enable_plan",
             "cmd_auto_enable_run",
+            "cmd_whoami",
+            "cmd_reload_rules",
+            "cmd_rules_validate",
         }
     )
+
+
+def test_source_inventory_antares_get_handlers_commands_and_document() -> None:
+    expected = json.loads((_FIXTURE / "expected_antares_tg_commands.json").read_text(encoding="utf-8"))
+    path = ROOT / "modules" / "antares" / "handlers.py"
+    names = _command_handler_names_in_get_handlers(path, "get_antares_handlers")
+    assert names == expected["commands"]
+    assert _document_handler_in_get_handlers(path, "get_antares_handlers") is True
+    assert expected.get("also_registers_document_handler") is True
 
