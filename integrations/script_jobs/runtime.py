@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
-
 from core.config_manager import get_job_params
-from core.job_runner import JOB_REGISTRY, Actor
+from core.job_runner import Actor
 
 from integrations.script_jobs.delivery import deliver_script_result
-from integrations.script_jobs.registry import SCRIPT_REGISTRY, script_job_type
+from integrations.script_jobs.identity import script_job_type
+from integrations.script_jobs.registry import SCRIPT_REGISTRY
 from integrations.script_jobs.types import ScriptExecutionContext, ScriptResult, ScriptSource
 
 log = logging.getLogger(__name__)
@@ -83,30 +82,3 @@ def run_script_job(actor: Actor, script_key: str) -> None:
   result = run_script(script_key, context)
   if result.status == "failed":
     raise RuntimeError(result.text or f"script_job:{script_key} failed")
-
-
-def _make_job_registry_entry(script_key: str) -> Callable[[Actor], None]:
-  """Closure binds script_key; request_job passes actor explicitly (no globals)."""
-
-  def _entry(actor: Actor) -> None:
-    run_script_job(actor, script_key)
-
-  return _entry
-
-
-def register_script_jobs() -> None:
-  """Register script_job:<key> handlers into JOB_REGISTRY.
-
-  Lock strategy: each job_type is ``script_job:<script_key>``. job_runner locks by
-  job_type, so ``_safe_job_name`` yields distinct files (e.g. script_job_hello_world.lock)
-  without changing wallet/hourly/rate/download lock paths.
-  """
-  for script_key, spec in SCRIPT_REGISTRY.items():
-    if spec.script_key != script_key:
-      raise ValueError(f"SCRIPT_REGISTRY key mismatch: {script_key} != {spec.script_key}")
-    job_type = script_job_type(script_key)
-    JOB_REGISTRY[job_type] = _make_job_registry_entry(script_key)
-    log.info("[script_jobs] registered job_type=%s command=%s", job_type, spec.command_name)
-
-
-register_script_jobs()

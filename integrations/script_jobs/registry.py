@@ -2,24 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Final
-
+from integrations.script_jobs.identity import SCRIPT_JOB_PREFIX, parse_script_job_type, script_job_type
 from integrations.script_jobs.scripts.operator_wallets_ready import run_operator_wallets_ready
 from integrations.script_jobs.types import ScriptExecutionContext, ScriptResult, ScriptSpec
 
-SCRIPT_JOB_PREFIX: Final[str] = "script_job:"
-
-
-def script_job_type(script_key: str) -> str:
-  """Canonical scheduler / lock / JOB_REGISTRY identity for a whitelisted script."""
-  return f"{SCRIPT_JOB_PREFIX}{script_key}"
-
-
-def parse_script_job_type(job_type: str) -> str | None:
-  if not job_type.startswith(SCRIPT_JOB_PREFIX):
-    return None
-  key = job_type[len(SCRIPT_JOB_PREFIX) :].strip()
-  return key or None
+__all__ = (
+    "SCRIPT_JOB_PREFIX",
+    "SCRIPT_REGISTRY",
+    "parse_script_job_type",
+    "script_job_type",
+)
 
 
 def _hello_world_run(context: ScriptExecutionContext) -> ScriptResult:

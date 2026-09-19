@@ -20,7 +20,7 @@ from core.scheduler_health import get_scheduler_health_snapshot
 from integrations.telegram_bot import get_telegram_sender_health_snapshot
 
 from integrations import raccoon_jobs  # noqa: F401 — registers Raccoon job types
-from integrations import script_jobs  # noqa: F401 — registers script_job:* handlers
+from integrations.script_jobs.bootstrap import register_all_script_jobs
 from modules.antares.jobs import register_jobs
 from modules.antares.jobs import run_download_job, run_hourly_job  # noqa: F401 — compatible exports
 from modules.antares.handlers import (
@@ -195,6 +195,7 @@ def _format_observation_status() -> str:
 # Jobs (Antares bindings live in modules.antares.jobs)
 # =============================================================================
 
+register_all_script_jobs()
 register_jobs(JOB_REGISTRY)
 
 # =============================================================================

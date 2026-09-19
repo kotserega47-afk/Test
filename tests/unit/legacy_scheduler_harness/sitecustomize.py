@@ -127,7 +127,6 @@ _INTERNAL_STUB_ATTRS: dict[str, dict] = {
     "integrations.bakai_monitor_playwright": {"run_rate_monitor_safe": _blocked_internal},
     "integrations.downloader": {"run_download": _blocked_internal},
     "integrations.raccoon_jobs": {},
-    "integrations.script_jobs": {},
     "analyzers.hourly_report": {"run_hourly_report": _blocked_internal},
     "integrations.telegram_routes": {
         "ROUTE_PLATFORM_HOURLY_REPORT": "hourly",

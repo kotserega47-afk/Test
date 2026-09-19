@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import integrations.script_jobs  # noqa: F401
 from core import job_runner
 from core.job_runner import Actor, JOB_REGISTRY, request_job
+from integrations.script_jobs.bootstrap import register_all_script_jobs
 from integrations.script_jobs.runtime import (
     UnknownScriptError,
     build_execution_context,
@@ -160,6 +160,7 @@ def test_request_job_lifecycle_for_script_job(mock_deliver, monkeypatch: pytest.
         lambda **kwargs: events.append(kwargs.get("type") or ""),
     )
 
+    register_all_script_jobs()
     job_id = request_job("script_job:hello_world", Actor(kind="tg", chat_id=1, user_id=2))
 
     assert job_id

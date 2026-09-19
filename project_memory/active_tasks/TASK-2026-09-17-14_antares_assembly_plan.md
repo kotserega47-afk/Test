@@ -9,6 +9,7 @@
 | **PR** | Draft [#17](https://github.com/deniskotdavydov1991-wq/Test/pull/17) `feat/task-2026-09-17-14-antares-assembly-plan`, base `feat/task-2026-09-17-13-document-ingest` |
 | **HEAD (проверен GPT)** | `f123a4bf5482f45a5efacb2910ad0c7a4ade8171` |
 | **Закрытие docs** | `e0f0400500d3d459067c4070cbbc8213df31fbed` |
+| **Закрытие (pin SHA)** | `99d2db55027b94cb7739efd18ff349b838b22a21` |
 | **Риск** | low: только документы |
 
 План минимальной самостоятельной сборки Antares **принят**. Runtime сборки Antares в TASK-14 **не** реализовывался и **не** выпущен. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #17 остаётся Draft. Реализация подэтапа 1 (script registration) — TASK-15.

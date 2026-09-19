@@ -6,11 +6,10 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
-import integrations.script_jobs  # noqa: F401 — bootstrap JOB_REGISTRY
 from core.config_manager import ALLOWED_JOB_PARAMS
 from core.job_runner import Actor, JOB_REGISTRY
 from core.rules_v2.constants import ALLOWED_JOB_PARAMS as RULES_V2_JOB_PARAMS
-from integrations.script_jobs import SCRIPT_REGISTRY
+from integrations.script_jobs.registry import SCRIPT_REGISTRY
 from integrations.script_jobs.antares_wallets_export import format_login_failure_message
 from integrations.script_jobs.scripts.operator_wallets_ready import (
     READY_STATUSES_NORM,
