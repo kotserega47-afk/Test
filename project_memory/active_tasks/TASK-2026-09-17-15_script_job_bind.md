@@ -7,7 +7,7 @@
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-14 (PR #17, закрытие `99d2db55027b94cb7739efd18ff349b838b22a21`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` §4 подэтап 1 |
 | **PR** | Draft [#18](https://github.com/deniskotdavydov1991-wq/Test/pull/18) `feat/task-2026-09-17-15-script-job-bind`, base `feat/task-2026-09-17-14-antares-assembly-plan` |
-| **HEAD** | `6681e666d961b13ae3ab7f782845b92a1f23e078` (до коммита сужения изоляции; SHA коммита — следующим pin) |
+| **HEAD** | `7015066c42ca82c0d7a987bb9b79a69b73cf84ff` |
 | **Риск** | medium: смена способа регистрации script jobs в `JOB_REGISTRY` |
 
 Selective script registration: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated entry, сборка Antares, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** пройден.
