@@ -8,7 +8,7 @@
 | **Связанные артефакты** | TASK-14 (PR #17, закрытие `99d2db55027b94cb7739efd18ff349b838b22a21`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` §4 подэтап 1 |
 | **PR** | Draft [#18](https://github.com/deniskotdavydov1991-wq/Test/pull/18) `feat/task-2026-09-17-15-script-job-bind`, base `feat/task-2026-09-17-14-antares-assembly-plan` |
 | **HEAD (проверен GPT)** | `6e4c6c4d6b6ec5e6c1bcfaef464039f83fb7450b` |
-| **Закрытие docs** | (этот коммит; pin SHA — следующим docs commit) |
+| **Закрытие docs** | `89873a0749708460579311b452613b1167e3df43` |
 | **Риск** | medium: смена способа регистрации script jobs в `JOB_REGISTRY` |
 
 Selective script registration реализована: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed bootstrap сохранён: `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated Antares assembly, entrypoint, `JOB_ACCEPT` и cutover **не** реализованы и **не** выпущены. Review пройден на HEAD `6e4c6c4…`. PR #18 остаётся Draft.
@@ -100,3 +100,4 @@ Antares assembly; новые start/help/status; перенос whoami/reload_rul
 | 2026-09-19 | bind conflict для `None`; узкий child-harness вместо глобального SIG_IGN; review не пройден |
 | 2026-09-19 | сняты глобальный SIG_IGN и collection telegram stub; тяжёлые импорты в child harness; asyncio.run возвращён; статус review |
 | 2026-09-19 | GPT review HEAD `6e4c6c4…`: блокирующих нет; merge/deploy нет; PR #18 Draft |
+| 2026-09-19 | документационное закрытие `89873a07…`; PR #18 остаётся Draft |
