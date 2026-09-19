@@ -6,8 +6,8 @@
 | **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-14 (PR #17, закрытие `99d2db55027b94cb7739efd18ff349b838b22a21`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` §4 подэтап 1 |
-| **PR** | Draft (номер фиксируется отдельным docs-коммитом) `feat/task-2026-09-17-15-script-job-bind`, base `feat/task-2026-09-17-14-antares-assembly-plan` |
-| **HEAD** | фиксируется после коммита |
+| **PR** | Draft [#18](https://github.com/deniskotdavydov1991-wq/Test/pull/18) `feat/task-2026-09-17-15-script-job-bind`, base `feat/task-2026-09-17-14-antares-assembly-plan` |
+| **HEAD** | `9c2c58c44d4be0da0a8af05f26c2acc62ba5344e` |
 | **Риск** | medium: смена способа регистрации script jobs в `JOB_REGISTRY` |
 
 Selective script registration: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated entry, сборка Antares, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** пройден.
@@ -52,7 +52,8 @@ Isolated Antares **не** готов. `hello_world` остаётся в mixed. �
 
 | Кто | Что |
 |-----|-----|
-| Cursor | **61 passed** script_jobs + inventory + registration; teardown hang from pre-existing job_runner thread. **23 passed** `test_project_profile_boot`. Python **3.12.10**. |
+| Cursor | **61 passed** script_jobs + inventory + registration; teardown hang from pre-existing job_runner thread. **23 passed** `test_project_profile_boot`. Python **3.12.10**. HEAD `9c2c58c…`. |
+| GPT | ещё не проверял |
 | GPT | ещё не проверял |
 
 ---
