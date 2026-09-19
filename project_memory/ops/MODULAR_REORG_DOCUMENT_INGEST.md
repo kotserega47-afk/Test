@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | план review пройден (HEAD `428d50fe…`); реализация TASK-13 — review **не** пройден; merge нет |
+| **Статус** | план review пройден (HEAD `428d50fe…`); реализация TASK-13 review пройден (HEAD `4a1e7796…`); **не** выпущен; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
 | **Обследованный SHA** | `8e57e49f2b04c919680918c3d704136032015bdc` |
 | **Основной источник** | `modules/antares/document_ingest.py` (compat: `integrations/wallet_editor_tg.py`) |
