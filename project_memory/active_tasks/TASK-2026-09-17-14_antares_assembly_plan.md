@@ -12,7 +12,7 @@
 | **Закрытие (pin SHA)** | `99d2db55027b94cb7739efd18ff349b838b22a21` |
 | **Риск** | low: только документы |
 
-План минимальной самостоятельной сборки Antares **принят**. Runtime сборки Antares в TASK-14 **не** реализовывался и **не** выпущен. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #17 остаётся Draft. Реализация подэтапа 1 (script registration) — TASK-15.
+План минимальной самостоятельной сборки Antares **принят**. Runtime сборки Antares в TASK-14 **не** реализовывался и **не** выпущен. Review пройден. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #17 остаётся Draft. Подэтап 1 (script registration) — TASK-15, review пройден (PR #18 Draft). Сборка handlers — TASK-16.
 
 ---
 
@@ -31,7 +31,8 @@
 - [x] Следующий code: подэтап 1 (script import split), затем сборка
 - [x] GPT review HEAD `f123a4bf…`: блокирующих нет
 - [ ] merge/deploy PR #17 (намеренно открыто)
-- [ ] code PR script bind / TASK-15 (отдельное задание)
+- [x] code PR script bind / TASK-15 (Draft PR #18, review HEAD `6e4c6c4…`; merge нет)
+- [ ] code PR сборка Antares / TASK-16 (отдельное задание)
 
 ---
 
@@ -58,3 +59,4 @@ runtime/тесты TASK-14; isolated entry; `JOB_ACCEPT`; cutover; Railway; пр
 | 2026-09-19 | уточнены JOB_REGISTRY identity, script bind без авторегистрации, контракт `/status` |
 | 2026-09-19 | GPT review HEAD `f123a4bf…`: план принят; merge/deploy нет |
 | 2026-09-19 | документационное закрытие `e0f04005…`; PR #17 остаётся Draft |
+| 2026-09-19 | TASK-15 (подэтап 1) review пройден HEAD `6e4c6c4…`; PR #18 Draft |

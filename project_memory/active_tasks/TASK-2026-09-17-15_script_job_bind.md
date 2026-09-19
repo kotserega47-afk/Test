@@ -3,14 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-15 |
-| **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-14 (PR #17, закрытие `99d2db55027b94cb7739efd18ff349b838b22a21`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` §4 подэтап 1 |
 | **PR** | Draft [#18](https://github.com/deniskotdavydov1991-wq/Test/pull/18) `feat/task-2026-09-17-15-script-job-bind`, base `feat/task-2026-09-17-14-antares-assembly-plan` |
-| **HEAD** | `7015066c42ca82c0d7a987bb9b79a69b73cf84ff` |
+| **HEAD (проверен GPT)** | `6e4c6c4d6b6ec5e6c1bcfaef464039f83fb7450b` |
+| **Закрытие docs** | (этот коммит; pin SHA — следующим docs commit) |
 | **Риск** | medium: смена способа регистрации script jobs в `JOB_REGISTRY` |
 
-Selective script registration: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated entry, сборка Antares, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** пройден.
+Selective script registration реализована: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed bootstrap сохранён: `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated Antares assembly, entrypoint, `JOB_ACCEPT` и cutover **не** реализованы и **не** выпущены. Review пройден на HEAD `6e4c6c4…`. PR #18 остаётся Draft.
 
 ---
 
@@ -33,22 +34,22 @@ Selective script registration: `identity.py` / `bind.py` / `bootstrap.py`; па�
 ## Success Criteria
 
 - [x] Import package и bind не регистрирует jobs
-- [x] `register_script_job("operator_wallets_ready")` добавляет только выбранный ключ без runtime, registry, operator_wallets_ready, main, selector и telegram_bot. `dropbox_watcher` транзитивно импортируется через `core.job_runner` → `rules_provider`; отсутствие этого импорта текущая реализация не обеспечивает
+- [x] `register_script_job("operator_wallets_ready")` добавляет только выбранный ключ без runtime, registry, operator_wallets_ready, main, selector и telegram_bot. `dropbox_watcher` транзитивно импортируется через `core.job_runner` → `rules_provider`; отсутствие этого импорта текущая реализация не обеспечивает. Разделение `job_runner` в TASK-16 автоматически не входит.
 - [x] Неизвестный ключ и конфликт (чужой callable или значение `None`) — отказ без изменения registry; повторный bind сохраняет identity executor
 - [x] Mixed bootstrap — оба прежних script jobs, разные callables
 - [x] Тесты import-side-effect адаптированы; script runtime/delivery сохранены
-- [ ] GPT review: блокирующих нет
-- [ ] merge/deploy PR (намеренно открыто)
+- [x] GPT review HEAD `6e4c6c4…`: блокирующих нет (код/diff; наборы не запускал)
+- [ ] merge/deploy PR #18 (намеренно открыто)
 
 ---
 
 ## Ограничения покрытия
 
-Isolated Antares **не** готов. `hello_world` остаётся в mixed. Живой script / браузер / БД / Telegram не запускались. Production этим PR не переключался. `dropbox_watcher` загружается при импорте `JOB_REGISTRY` через `core.job_runner` → `rules_provider`. Разделение `core.job_runner` в этот PR не входит.
+Isolated Antares **не** готов и **не** выпущен. `hello_world` остаётся в mixed. Живой script / браузер / БД / Telegram не запускались. Production этим PR не переключался. `dropbox_watcher` загружается при импорте `JOB_REGISTRY` через `core.job_runner` → `rules_provider`. Разделение `core.job_runner` в этот PR не входит и в следующую задачу автоматически не включается.
 
 Подтверждено: родительский pytest получал SIGINT (signum=2) — `asyncio.Runner._on_sigint` и `KeyboardInterrupt` в `Thread.start`/`Condition.wait`. Наблюдалось: daemon `Thread-1 (_loop_runner)` в `integrations.telegram_bot` после импорта настоящего модуля. Источник SIGINT **не установлен**. Не утверждается, что child `python -c` / registration dump шлёт `CTRL_C_EVENT`.
 
-Глобальные `signal.signal(SIGINT, SIG_IGN)` и session-autouse остановка Telegram из `tests/conftest.py` сняты. Collection-stub `telegram_bot` и `async_test_runner` удалены. Parent pytest снова с обычным SIGINT. Тяжёлые импорты registry/runtime/delivery/operator/command идут в child `tests/unit/script_jobs_import_harness` (`sitecustomize` ставит stub Telegram только у ребёнка). Bind/bootstrap/`JOB_REGISTRY`, runtime/delivery и callbacks остаются реальными; внешние операции патчатся в тестах. Узкий stub `integrations.script_jobs.runtime` сохранён только в forwarding/error тестах bind. Timeout ребёнка — ошибка, не успех. Внутренний assertion ребёнка даёт ненулевой exit и падение parent-wrapper с stdout/stderr ребёнка (проба `probe-fail-visible`, parent EXIT=1).
+Глобальные `signal.signal(SIGINT, SIG_IGN)` и session-autouse остановка Telegram из `tests/conftest.py` сняты. Collection-stub `telegram_bot` и `async_test_runner` удалены. Parent pytest снова с обычным SIGINT. Тяжёлые импорты registry/runtime/delivery/operator/command идут в child `tests/unit/script_jobs_import_harness` (`sitecustomize` ставит stub Telegram только у ребёнка). Bind/bootstrap/`JOB_REGISTRY`, runtime/delivery и callbacks остаются реальными; внешние операции патчатся в тестах. Узкий stub `integrations.script_jobs.runtime` сохранён только в forwarding/error тестах bind. Timeout ребёнка — ошибка, не успех. Внутренний assertion ребёнка даёт ненулевой exit и падение parent-wrapper с stdout/stderr ребёнка (проба `probe-fail-visible`, parent EXIT=1). Parent-wrapper **не** равен числу внутренних тестовых случаев.
 
 ### Соответствие прежних кейсов
 
@@ -66,11 +67,13 @@ Parent-wrapper — один тест на файл; число wrappers не р�
 
 Bind/None conflict тесты в parent `test_script_jobs_bind.py` не переносились.
 
-### Прогоны (Python 3.12.10, worktree TASK-15, Start-Process, HasExited=True)
+### Прогоны (Cursor, Python 3.12.10, worktree TASK-15, Start-Process, HasExited=True)
 
 1. `py -3.12 -m pytest tests/unit/test_script_jobs_bind.py tests/unit/test_script_jobs_registry.py tests/unit/test_script_jobs_runtime.py tests/unit/test_script_jobs_operator_wallets_ready.py tests/unit/test_script_jobs_delivery.py tests/unit/test_script_jobs_tg_command.py tests/unit/test_script_jobs_job_params.py tests/test_behavior_baseline_inventory.py tests/test_behavior_baseline_registration.py -q --tb=line` → **28 passed**, 0 failed, 0 skipped, **EXIT=0**
 2. `py -3.12 -m pytest tests/unit/test_project_profile_boot.py -q --tb=line` → **23 passed**, 0 failed, 0 skipped, **EXIT=0**
 3. `py -3.12 -m pytest tests/unit/test_script_jobs_tg_command.py -q --tb=short` (без соседних файлов) → **1 passed** (wrapper; в ребёнке оба command-кейса), 0 failed, 0 skipped, **EXIT=0**
+
+GPT код/diff на HEAD `6e4c6c4…` проверил; эти наборы **не** запускал.
 
 ---
 
@@ -78,14 +81,14 @@ Bind/None conflict тесты в parent `test_script_jobs_bind.py` не пере
 
 | Кто | Что |
 |-----|-----|
-| Cursor | прогоны выше; GPT новый diff изоляции ещё не проверял |
-| GPT | ещё не проверял этот diff |
+| Cursor | прогоны 28 / 23 / 1 passed, Python 3.12.10, EXIT=0 |
+| GPT | Проверил код/diff HEAD `6e4c6c4…`. Наборы **не** запускал. Блокирующих нет. |
 
 ---
 
 ## Out Of Scope
 
-Antares assembly; новые start/help/status; перенос whoami/reload_rules/rules_validate; entrypoint; изменение gate; `JOB_ACCEPT`; cutover; Railway; профили production; merge #4–#17.
+Antares assembly; новые start/help/status; перенос whoami/reload_rules/rules_validate; entrypoint; изменение gate; `JOB_ACCEPT`; cutover; Railway; профили production; merge #4–#17; разделение `core.job_runner`.
 
 ---
 
@@ -96,3 +99,4 @@ Antares assembly; новые start/help/status; перенос whoami/reload_rul
 | 2026-09-19 | selective script registration; статус — готово к GPT review |
 | 2026-09-19 | bind conflict для `None`; узкий child-harness вместо глобального SIG_IGN; review не пройден |
 | 2026-09-19 | сняты глобальный SIG_IGN и collection telegram stub; тяжёлые импорты в child harness; asyncio.run возвращён; статус review |
+| 2026-09-19 | GPT review HEAD `6e4c6c4…`: блокирующих нет; merge/deploy нет; PR #18 Draft |

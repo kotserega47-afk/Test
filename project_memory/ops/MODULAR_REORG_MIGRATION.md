@@ -25,11 +25,11 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, закрытие `66b99ab1…`); runtime плана не менялся | **нет** |
 | TASK-13 document ingest | код перенесён; review пройден (Draft PR #16, код `4a1e7796…`, закрытие `5f131ce…`); не выпущен | **нет** |
 | TASK-14 Antares assembly plan | план принят, review пройден (Draft PR #17, код `f123a4bf…`, закрытие `99d2db55…`); runtime сборки нет | **нет** |
-| TASK-15 script job bind | selective bind + mixed bootstrap; готово к review (Draft PR #18, не пройден); runtime сборки Antares нет | **нет** |
+| TASK-15 script job bind | selective bind + mixed bootstrap; review пройден (Draft PR #18, HEAD `6e4c6c4…`); runtime сборки Antares нет; не выпущен | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | isolated entry **не** готов; selective script registration в review; сборка Antares — позже | — |
+| Следующая | isolated entry **не** готов; selective script registration review пройден (не выпущен); сборка Antares — TASK-16 | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
@@ -138,7 +138,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-15):** selective script bind готов к review. Кода сборки handlers/jobs нет. Isolated entry **не** готов.
+**Сейчас (после TASK-15):** selective script bind реализован, mixed bootstrap сохранён, review пройден. Кода сборки handlers/jobs нет. Isolated entry **не** готов. `dropbox_watcher` по-прежнему грузится при импорте `JOB_REGISTRY` (`job_runner` → `rules_provider`); разделение `job_runner` в следующую задачу автоматически не входит.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 

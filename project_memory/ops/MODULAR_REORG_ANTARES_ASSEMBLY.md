@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | review пройден (HEAD `f123a4bf…`); **не** runtime сборки; merge нет |
+| **Статус** | план review пройден (HEAD `f123a4bf…`); подэтап 1 (TASK-15) review пройден (`6e4c6c4…`); **не** runtime сборки handlers; merge нет |
 | **Репозиторий** | `deniskotdavydov1991-wq/Test` |
 | **Обследованный SHA** | `5f131ce50091a80cc03989d6fdf1e8b60f84b6ab` (закрытие TASK-13; код ingest = GPT `4a1e7796…`) |
 | **Уточнение плана** | поверх `8fe4efbdadea40d189d4a714835ad1ea315501c0` |
@@ -113,7 +113,9 @@ integrations.script_jobs.__init__
 - `run_once_guard`;
 - `utils.logger` (handlers на `logs/app.log`).
 
-Это **не** выполнение `run_operator_wallets_ready`, но это загрузка selector, Dropbox-клиента и Telegram send stack в процесс сборки, если импортировать `registry.py` или `operator_wallets_ready.py`. Isolated сборка **не должна** импортировать эти модули на этапе bind.
+Это **не** выполнение `run_operator_wallets_ready`, но это загрузка selector, Dropbox-клиента и Telegram send stack в процесс сборки, если импортировать `registry.py` или `operator_wallets_ready.py`. Isolated **bind** (`register_script_job`) эти модули **не** импортирует.
+
+Отдельное ограничение (не путать с bind): импорт фактического `core.job_runner.JOB_REGISTRY` идёт через `job_runner` → `rules_provider` и **транзитивно загружает** `integrations.dropbox_watcher`. Это установленный факт TASK-15, не обещание «модуля нет в процессе». Разделение `core.job_runner`, чтобы убрать этот транзитив, в следующую задачу (сборка handlers) **автоматически не входит**.
 
 ### Выбранное решение
 
@@ -234,7 +236,9 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 
 ## 9. Следующий code scope
 
-### Подэтап 1 (первый code PR) — обязателен раньше полной сборки
+### Подэтап 1 (первый code PR) — TASK-15, review пройден
+
+Сделано в Draft PR #18 (HEAD `6e4c6c4…`). Mixed явный bootstrap. `dropbox_watcher` при импорте `JOB_REGISTRY` остаётся транзитивом `job_runner` → `rules_provider`.
 
 Файлы:
 
@@ -245,17 +249,18 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 - `integrations/script_jobs/bootstrap.py` — новый, оба jobs для mixed
 - `integrations/tg_commands.py` — явный `register_all_script_jobs()`
 - `tests/unit/test_script_jobs_{registry,runtime,operator_wallets_ready}.py` — явный bootstrap вместо import-side-effect
-- тесты: isolated import `bind` в fresh process **не** создаёт `script_job:hello_world`; не загружает `main` / `analyzers.selector` / `dropbox_watcher`
+- тесты: isolated import `bind` в fresh process **не** создаёт `script_job:hello_world`; не загружает `main` / `analyzers.selector` / `operator_wallets_ready`. Импорт `JOB_REGISTRY` через `job_runner` по-прежнему может загрузить `dropbox_watcher` (ограничение выше; split `job_runner` не входит автоматически).
 
 Не в этом PR: Antares `get_handlers`, start/help/status, entrypoint, gate, `JOB_ACCEPT`.
 
-### Подэтап 2 — сборка этапа 1
+### Подэтап 2 — сборка этапа 1 (TASK-16, отдельный PR)
 
 - `modules.antares.assembly` (имя фиксируется в code PR) + `cmd_start`/`cmd_help`/`cmd_status` в **`handlers.py`**
 - перенос whoami / reload_rules / rules_validate + mixed re-export
 - `register_jobs(JOB_REGISTRY)` + `register_script_job("operator_wallets_ready")`
 - тесты § 8; mixed JSON без изменений
 - не менять `scheduler.py` / `project_profile_boot.py`
+- **не** включать разделение `core.job_runner` автоматически
 
 Вне обоих: этап 2–4, Railway, merge #4–#17.
 
@@ -267,9 +272,10 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 
 Ограничения:
 
-1. Пока подэтап 1 не сделан, isolated **не может** импортировать пакет `script_jobs` без авторегистрации hello_world — поэтому сборка не объединяется с bind-split.
+1. Подэтап 1 (TASK-15) сделан: isolated может вызвать `register_script_job` без авторегистрации `hello_world`. Сборка handlers — отдельный TASK-16.
 2. `register_jobs()` по-прежнему импортирует downloader modules при вызове; не run.
 3. Грязный процесс после неуспешной частичной регистрации не восстанавливается in-process.
 4. Isolated entry / `PROJECT_PROFILE=antares` на mixed scheduler — другая задача.
+5. Импорт `JOB_REGISTRY` транзитивно грузит `dropbox_watcher` через `job_runner` → `rules_provider`. Split `job_runner` в TASK-16 автоматически не входит.
 
 `JOB_ACCEPT`, durable inbox, cutover — не блокеры этого плана.
