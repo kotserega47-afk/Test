@@ -6,21 +6,22 @@ import json
 import subprocess
 import sys
 import tempfile
+import types
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from core.job_runner import Actor, JOB_REGISTRY
 from integrations.script_jobs.bind import ScriptJobBindError, register_script_job
 from integrations.script_jobs.bootstrap import register_all_script_jobs
-from tests.unit.isolated_child_env import isolated_child_env, missing_dependency_hint
+from tests.unit.isolated_child_env import child_subprocess_kwargs, isolated_child_env, missing_dependency_hint
 
 ROOT = Path(__file__).resolve().parents[2]
+_MISSING = object()
 
-# Script-registration must not pull operator_wallets_ready → main. Importing
-# JOB_REGISTRY still loads dropbox_watcher via core.job_runner → rules_provider
-# (pre-existing; not a bind.py import).
+# Script-registration must not pull operator_wallets_ready → main.
+# dropbox_watcher is still loaded via core.job_runner → rules_provider.
 _FORBIDDEN_AFTER_BIND = (
     "integrations.script_jobs.runtime",
     "integrations.script_jobs.registry",
@@ -29,6 +30,35 @@ _FORBIDDEN_AFTER_BIND = (
     "analyzers.selector",
     "integrations.telegram_bot",
 )
+
+
+def _snapshot_registry_key(job_type: str):
+    if job_type in JOB_REGISTRY:
+        return JOB_REGISTRY[job_type]
+    return _MISSING
+
+
+def _restore_registry_key(job_type: str, previous) -> None:
+    if previous is _MISSING:
+        JOB_REGISTRY.pop(job_type, None)
+    else:
+        JOB_REGISTRY[job_type] = previous
+
+
+@contextmanager
+def _stub_script_runtime(run_script_job):
+    name = "integrations.script_jobs.runtime"
+    previous = sys.modules.get(name, _MISSING)
+    stub = types.ModuleType(name)
+    stub.run_script_job = run_script_job
+    sys.modules[name] = stub
+    try:
+        yield stub
+    finally:
+        if previous is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
 
 
 def _run_child(script: str, extra: dict[str, str] | None = None) -> dict:
@@ -42,6 +72,7 @@ def _run_child(script: str, extra: dict[str, str] | None = None) -> dict:
             text=True,
             timeout=30,
             check=False,
+            **child_subprocess_kwargs(),
         )
     if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr or ""):
         raise AssertionError(missing_dependency_hint(proc.stderr))
@@ -74,17 +105,25 @@ try:
 except ScriptJobBindError:
     conflict_ok = JOB_REGISTRY["script_job:hello_world"] is sentinel
 
+JOB_REGISTRY["script_job:hello_world"] = None
+none_ok = False
+try:
+    register_script_job("hello_world")
+except ScriptJobBindError:
+    none_ok = "script_job:hello_world" in JOB_REGISTRY and JOB_REGISTRY["script_job:hello_world"] is None
+
 print(json.dumps({
     "unknown_ok": unknown_ok,
     "identity_ok": identity_ok,
     "conflict_ok": conflict_ok,
-    "keys_after_bind": sorted(k for k in JOB_REGISTRY if k != "script_job:hello_world" or JOB_REGISTRY[k] is sentinel),
+    "none_ok": none_ok,
 }))
 """
     payload = _run_child(script)
     assert payload["unknown_ok"] is True
     assert payload["identity_ok"] is True
     assert payload["conflict_ok"] is True
+    assert payload["none_ok"] is True
 
 
 def test_mixed_bootstrap_in_fresh_process_registers_both_keys() -> None:
@@ -161,33 +200,54 @@ def test_unknown_key_does_not_change_registry() -> None:
 def test_conflict_does_not_overwrite_registry() -> None:
     job_type = "script_job:hello_world"
     sentinel = object()
-    previous = JOB_REGISTRY.get(job_type)
+    previous = _snapshot_registry_key(job_type)
     JOB_REGISTRY[job_type] = sentinel
     try:
         with pytest.raises(ScriptJobBindError, match="conflicting"):
             register_script_job("hello_world")
         assert JOB_REGISTRY[job_type] is sentinel
     finally:
-        if previous is None:
-            JOB_REGISTRY.pop(job_type, None)
-        else:
-            JOB_REGISTRY[job_type] = previous
+        _restore_registry_key(job_type, previous)
+
+
+def test_conflict_none_does_not_overwrite_registry() -> None:
+    job_type = "script_job:hello_world"
+    previous = _snapshot_registry_key(job_type)
+    JOB_REGISTRY[job_type] = None
+    try:
+        with pytest.raises(ScriptJobBindError, match="conflicting"):
+            register_script_job("hello_world")
+        assert job_type in JOB_REGISTRY
+        assert JOB_REGISTRY[job_type] is None
+    finally:
+        _restore_registry_key(job_type, previous)
 
 
 def test_registered_executor_forwards_actor_and_script_key() -> None:
     executor = register_script_job("operator_wallets_ready")
     actor = Actor(kind="tg", chat_id=11, user_id=22)
-    with patch("integrations.script_jobs.runtime.run_script_job") as run:
+    calls: list[tuple] = []
+
+    def _run(received_actor, script_key):
+        calls.append((received_actor, script_key))
+
+    with _stub_script_runtime(_run):
+        assert "integrations.script_jobs.runtime" in sys.modules
+        assert not hasattr(sys.modules["integrations.script_jobs.runtime"], "__file__")
         executor(actor)
-    run.assert_called_once_with(actor, "operator_wallets_ready")
+    assert "integrations.script_jobs.runtime" not in sys.modules or hasattr(
+        sys.modules.get("integrations.script_jobs.runtime"), "__file__"
+    )
+    assert calls == [(actor, "operator_wallets_ready")]
 
 
 def test_registered_executor_propagates_runtime_error() -> None:
     executor = register_script_job("hello_world")
-    with patch(
-        "integrations.script_jobs.runtime.run_script_job",
-        side_effect=RuntimeError("script boom"),
-    ):
+
+    def _boom(_actor, _script_key):
+        raise RuntimeError("script boom")
+
+    with _stub_script_runtime(_boom):
         with pytest.raises(RuntimeError, match="script boom"):
             executor(Actor(kind="cli"))
 
@@ -206,7 +266,7 @@ def test_mixed_bootstrap_registers_distinct_executors() -> None:
     def _record(actor, script_key):
         captured.append((actor, script_key))
 
-    with patch("integrations.script_jobs.runtime.run_script_job", side_effect=_record):
+    with _stub_script_runtime(_record):
         actor_a = Actor(kind="cli")
         actor_b = Actor(kind="tg", chat_id=1, user_id=2)
         hello(actor_a)

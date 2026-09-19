@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,6 +80,24 @@ def isolated_child_env(
 
 
 def missing_dependency_hint(stderr: str) -> str:
+    return (
+        f"sys.executable={sys.executable} is missing a module required to run "
+        "this subprocess. Install project dependencies into this same interpreter. "
+        "Tests do not switch Python versions and do not skip.\n"
+        f"{stderr}"
+    )
+
+
+def child_subprocess_kwargs() -> dict:
+    """Keep child processes out of the parent's Windows console Ctrl+C group."""
+    if sys.platform == "win32":
+        return {
+            "creationflags": (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            )
+        }
+    return {}
+
     return (
         f"sys.executable={sys.executable} is missing a module required to run "
         "this subprocess. Install project dependencies into this same interpreter. "

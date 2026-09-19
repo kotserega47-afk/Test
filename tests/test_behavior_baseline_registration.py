@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tests.unit.isolated_child_env import isolated_child_env, missing_dependency_hint
+from tests.unit.isolated_child_env import child_subprocess_kwargs, isolated_child_env, missing_dependency_hint
 
 ROOT = Path(__file__).resolve().parents[1]
 _FIXTURE = ROOT / "tests" / "fixtures" / "behavior_baseline"
@@ -41,6 +41,7 @@ def _dump(extra: dict[str, str] | None = None) -> dict:
             text=True,
             timeout=60,
             check=False,
+            **child_subprocess_kwargs(),
         )
         if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr or ""):
             raise AssertionError(missing_dependency_hint(proc.stderr))

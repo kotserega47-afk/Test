@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from tests.unit.telegram_bot_import_stub import install_telegram_bot_stub
+
+install_telegram_bot_stub()
+
 from core.job_runner import Actor
 from integrations.script_jobs.delivery import deliver_script_result
 from integrations.script_jobs.types import ScriptExecutionContext, ScriptResult

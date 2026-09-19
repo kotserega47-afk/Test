@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-import asyncio
+from tests.unit.telegram_bot_import_stub import install_telegram_bot_stub
+
+install_telegram_bot_stub()
+
+from tests.unit.async_test_runner import run_coro
 from unittest.mock import AsyncMock, patch
 
 from integrations.tg_commands import cmd_run_script_hello
@@ -18,7 +22,7 @@ def test_run_script_hello_command_is_guarded():
             await cmd_run_script_hello(update, context)
             guard.assert_awaited_once_with(update, "run_script_hello")
 
-    asyncio.run(run())
+    run_coro(run())
 
 
 def test_run_script_hello_dispatches_script_job_when_allowed():
@@ -34,4 +38,4 @@ def test_run_script_hello_dispatches_script_job_when_allowed():
                 await cmd_run_script_hello(update, context)
                 run_job.assert_awaited_once_with(update, "script_job:hello_world")
 
-    asyncio.run(run())
+    run_coro(run())

@@ -36,6 +36,8 @@ def register_script_job(script_key: str) -> Callable[[Actor], None]:
     """Bind one known script job onto ``core.job_runner.JOB_REGISTRY``.
 
     Does not import runtime/registry/operator_wallets_ready until the callable runs.
+    Refuses an existing JOB_REGISTRY key whose value is not this executor,
+    including an explicit ``None``.
     """
     key = (script_key or "").strip()
     if key not in KNOWN_SCRIPT_KEYS:
@@ -47,8 +49,10 @@ def register_script_job(script_key: str) -> Callable[[Actor], None]:
         executor = _make_executor(key)
         _EXECUTORS[key] = executor
 
-    existing = JOB_REGISTRY.get(job_type)
-    if existing is not None and existing is not executor:
+    if job_type in JOB_REGISTRY:
+        existing = JOB_REGISTRY[job_type]
+        if existing is executor:
+            return executor
         raise ScriptJobBindError(
             f"conflicting JOB_REGISTRY entry for {job_type}: refusing overwrite"
         )

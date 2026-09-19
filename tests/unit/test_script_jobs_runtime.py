@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from tests.unit.telegram_bot_import_stub import install_telegram_bot_stub
+
+install_telegram_bot_stub()
+
 import threading
 import time
 from unittest.mock import MagicMock, patch

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-import asyncio
+from tests.unit.telegram_bot_import_stub import install_telegram_bot_stub
+
+install_telegram_bot_stub()
+
+from tests.unit.async_test_runner import run_coro
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
@@ -20,8 +24,9 @@ from integrations.script_jobs.scripts.operator_wallets_ready import (
     parse_priority_partners,
     run_operator_wallets_ready,
 )
+from integrations.script_jobs.bootstrap import register_all_script_jobs
 from integrations.script_jobs.types import ScriptExecutionContext
-from integrations.tg_commands import cmd_operator_wallets_ready
+from modules.antares.handlers import cmd_operator_wallets_ready
 
 
 @pytest.mark.parametrize(
@@ -126,6 +131,7 @@ def test_run_failure_includes_exception_class_and_message(mock_download):
 
 
 def test_registry_contains_operator_wallets_ready():
+    register_all_script_jobs()
     assert "operator_wallets_ready" in SCRIPT_REGISTRY
     assert SCRIPT_REGISTRY["operator_wallets_ready"].command_name == "operator_wallets_ready"
     assert "script_job:operator_wallets_ready" in JOB_REGISTRY
@@ -153,14 +159,15 @@ def test_operator_wallets_ready_command_is_guarded():
     context = AsyncMock()
 
     async def run() -> None:
-        with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
-            guard.return_value = False
-            await cmd_operator_wallets_ready(update, context)
-            guard.assert_awaited_once()
-            assert guard.await_args.args[0] is update
-            assert guard.await_args.args[1] == "operator_wallets_ready"
+        with patch("modules.antares.handlers._require_bound", return_value=(object(), object())):
+            with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
+                guard.return_value = False
+                await cmd_operator_wallets_ready(update, context)
+                guard.assert_awaited_once()
+                assert guard.await_args.args[0] is update
+                assert guard.await_args.args[1] == "operator_wallets_ready"
 
-    asyncio.run(run())
+    run_coro(run())
 
 
 def test_operator_wallets_ready_dispatches_script_job():
@@ -170,15 +177,16 @@ def test_operator_wallets_ready_dispatches_script_job():
     context = AsyncMock()
 
     async def run() -> None:
-        with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
-            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
-                guard.return_value = True
-                dispatch.return_value = "jid-operator"
-                await cmd_operator_wallets_ready(update, context)
-                dispatch.assert_awaited_once()
-                assert dispatch.await_args.args[0] == "script_job:operator_wallets_ready"
+        with patch("modules.antares.handlers._require_bound", return_value=(object(), object())):
+            with patch("modules.antares.handlers.guard_or_deny", new_callable=AsyncMock) as guard:
+                with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                    guard.return_value = True
+                    dispatch.return_value = "jid-operator"
+                    await cmd_operator_wallets_ready(update, context)
+                    dispatch.assert_awaited_once()
+                    assert dispatch.await_args.args[0] == "script_job:operator_wallets_ready"
 
-    asyncio.run(run())
+    run_coro(run())
 
 
 def test_format_login_failure_message_includes_diagnostics_paths():
