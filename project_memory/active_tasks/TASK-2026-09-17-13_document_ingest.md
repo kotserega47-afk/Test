@@ -8,6 +8,7 @@
 | **Связанные артефакты** | TASK-12 (PR #15, закрытие `66b99ab1d2e619cc24dbb0122c5d1f7820d82f96`), `ops/MODULAR_REORG_DOCUMENT_INGEST.md` |
 | **PR** | Draft [#16](https://github.com/deniskotdavydov1991-wq/Test/pull/16) `feat/task-2026-09-17-13-document-ingest`, base `feat/task-2026-09-17-12-document-ingest-plan` |
 | **HEAD (проверен GPT)** | `4a1e7796b13eac0b55b7f1b62054adf0e82b1fe6` |
+| **Закрытие docs** | `59a4ad91d674ac9f177096807ef2ee96ff125942` |
 | **Риск** | medium: владение Telegram document ingest |
 
 Тело `handle_wallet_editor_document` **выделено** в `modules.antares.document_ingest`. `integrations.wallet_editor_tg` — identity re-export тех же function objects. Mixed `get_handlers()` по-прежнему регистрирует `MessageHandler(filters.Document.ALL, …)` через compat. Chat allowlist, operator map и `automation.audit.log` сохранены. `bind_rules` / command ACL не добавлялись. Review пройден. Перенос **не выпущен**. Isolated entry, `JOB_ACCEPT` и cutover **не** реализованы. PR #16 остаётся Draft.
@@ -70,3 +71,4 @@ isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#16; Railway; про
 | 2026-09-18 | перенос ingest в `modules.antares.document_ingest`; Draft code PR |
 | 2026-09-19 | уточнены startup-счётчик, monkeypatch и отделение Draft PR #16 от production |
 | 2026-09-19 | GPT review HEAD `4a1e7796…`: блокирующих нет; merge/deploy нет |
+| 2026-09-19 | документационное закрытие `59a4ad91…`; PR #16 остаётся Draft |
