@@ -149,10 +149,10 @@ def test_empty_wallet_editor_allowlist_is_fail_closed() -> None:
         assert is_wallet_editor_chat_allowed(-5102627011) is False
 
 
-def test_startup_warning_when_allowlist_empty(caplog) -> None:
+def test_startup_warning_when_allowlist_empty(caplog, monkeypatch) -> None:
     from modules.antares import document_ingest as ingest
 
-    ingest._ALLOWLIST_STARTUP_LOGGED = False
+    monkeypatch.setattr(ingest, "_ALLOWLIST_STARTUP_LOGGED", False)
     with patch.dict("os.environ", {}, clear=True):
         with caplog.at_level("WARNING"):
             ingest.log_wallet_editor_allowlist_startup_warning()

@@ -504,11 +504,11 @@ def test_enqueue_error_keeps_downloaded_file() -> None:
     asyncio.run(run())
 
 
-def test_compat_tmp_dir_assignment_does_not_redirect_owner(tmp_path) -> None:
+def test_compat_tmp_dir_assignment_does_not_redirect_owner(tmp_path, monkeypatch) -> None:
     from integrations import wallet_editor_tg as compat
 
     owner_dir = ingest.TMP_DIR
-    compat.TMP_DIR = tmp_path / "compat-ignored"
+    monkeypatch.setattr(compat, "TMP_DIR", tmp_path / "compat-ignored", raising=False)
     assert ingest.TMP_DIR == owner_dir
     assert ingest.TMP_DIR != compat.TMP_DIR
 
@@ -517,13 +517,18 @@ def _startup_script(order: str) -> str:
     return f"""
 import json
 import logging
-from io import StringIO
 
-buf = StringIO()
-handler = logging.StreamHandler(buf)
-handler.setLevel(logging.DEBUG)
+class _Capture(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append({{"level": record.levelname, "msg": record.getMessage()}})
+
+capture = _Capture()
 root = logging.getLogger()
-root.addHandler(handler)
+root.addHandler(capture)
 root.setLevel(logging.DEBUG)
 
 if {order!r} == "owner_then_compat":
@@ -534,9 +539,9 @@ else:
     import modules.antares.document_ingest as ingest
 
 from modules.antares.document_ingest import log_wallet_editor_allowlist_startup_warning
-before = buf.getvalue()
+before = list(capture.records)
 log_wallet_editor_allowlist_startup_warning()
-after = buf.getvalue()
+after = list(capture.records)
 print(json.dumps({{
     "same_callback": ingest.handle_wallet_editor_document is compat.handle_wallet_editor_document,
     "before": before,
@@ -570,13 +575,20 @@ def test_startup_log_once_in_fresh_subprocess(order: str, allowlist: str, expect
     payload = json.loads(proc.stdout.strip().splitlines()[-1])
     assert payload["same_callback"] is True
     assert payload["flag"] is True
-    text = payload["before"]
-    assert text.count("WALLET_EDITOR_ALLOWED_CHAT_IDS") == (1 if expect_empty else 0)
+
+    def _count(records: list, level: str, needle: str) -> int:
+        return sum(1 for rec in records if rec["level"] == level and needle in rec["msg"])
+
+    empty_warnings = _count(payload["before"], "WARNING", "WALLET_EDITOR_ALLOWED_CHAT_IDS")
+    configured_infos = _count(payload["before"], "INFO", "allowed chats configured")
     if expect_empty:
-        assert "fail-closed" in text or "отключён" in text
+        assert empty_warnings == 1
+        assert configured_infos == 0
+        assert any("fail-closed" in rec["msg"] for rec in payload["before"] if rec["level"] == "WARNING")
     else:
-        assert "allowed chats configured" in text
-        assert "-5102627011" in text
+        assert configured_infos == 1
+        assert empty_warnings == 0
+        assert any("-5102627011" in rec["msg"] for rec in payload["before"] if rec["level"] == "INFO")
     assert payload["after"] == payload["before"]
 
 

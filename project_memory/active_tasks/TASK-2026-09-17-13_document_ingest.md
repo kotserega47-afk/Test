@@ -67,3 +67,4 @@ isolated entry; `JOB_ACCEPT`; cutover; merge/deploy PR #4–#16; Railway; про
 | Дата | Событие |
 |------|---------|
 | 2026-09-18 | перенос ingest в `modules.antares.document_ingest`; Draft code PR |
+| 2026-09-19 | уточнены startup-счётчик, monkeypatch и отделение Draft PR #16 от production |

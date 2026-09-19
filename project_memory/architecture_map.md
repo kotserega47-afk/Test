@@ -204,8 +204,8 @@ flowchart LR
 | `analyzers/raccoon_wallet_analyzer.py` | Raccoon PayIn analysis + TG | `raccoon_wallet_downloader`, `raccoon_jobs` |
 | `integrations/raccoon_wallet_downloader.py` | Raccoon Playwright PayIn download | job `raccoon_wallet` |
 | `integrations/raccoon_jobs.py` | Raccoon job registry bindings | `JOB_REGISTRY` |
-| `modules/antares/document_ingest.py` | WalletEditor: TG document ingest, allowlist, TMP_DIR, startup warning | mixed `wallet_editor_tg` re-export |
-| `integrations/wallet_editor_tg.py` | Compatible re-export of document ingest | `tg_commands` MessageHandler |
+| `modules/antares/document_ingest.py` | Draft PR #16: proposed owner of WE document ingest (not released; production not switched) | mixed `wallet_editor_tg` re-export |
+| `integrations/wallet_editor_tg.py` | Mixed/production-compatible WE ingest path (`tg_commands` MessageHandler). In Draft PR #16 this file is an identity re-export, still not merged | `tg_commands` MessageHandler |
 | `automation/worker.py` | Per-profile queues + daemon workers | `scheduler.ensure_worker_started`, document ingest |
 | `automation/engine.py` | WalletEditor Playwright business logic — disable flow (Antares UI) | `automation/worker` |
 | `automation/add_wallet_contract.py` | Add Wallet Excel contract, routing, batch prep, result dataframe | `wallet_editor_tg`, `add_wallet_engine` |
@@ -411,21 +411,22 @@ automation/worker.py add_task → engine.run → result xlsx → Telegram
 | | |
 |---|---|
 | **Trigger** | Telegram document (`.xlsx`) от mapped operator в allowed chat |
-| **Entry** | `modules.antares.document_ingest.handle_wallet_editor_document` (mixed: `integrations.wallet_editor_tg`) |
-| **Production path** | `scheduler.py` → PTB `app.run_polling()` → `integrations/tg_commands.py` MessageHandler |
+| **Entry** | Production: `integrations.wallet_editor_tg.handle_wallet_editor_document`. Draft PR #16 owner (not released): `modules.antares.document_ingest` |
+| **Production path** | `scheduler.py` → PTB `app.run_polling()` → `integrations/tg_commands.py` MessageHandler. PR #16 does **not** switch production |
 | **Input** | `.xlsx` из Telegram; operator credentials из env map |
 | **Routing** | `detect_excel_routing()`: disable = `card`+`action`+`value`; Add Wallet = `card`+`phone` (no `action`/`value`); ambiguous → reject |
 | **Output** | Result `.xlsx` в Telegram (`send_document`); summary text |
 
-**Pipeline (production):**
+**Pipeline (production; PR #16 not released):**
 
 ```
 Telegram document (.xlsx)
         ↓
 PTB polling (основной runtime — scheduler.py)
         ↓
-modules/antares/document_ingest.py
-        (mixed re-export: integrations/wallet_editor_tg.py)
+integrations/wallet_editor_tg.py
+        (Draft PR #16 only: identity re-export of modules.antares.document_ingest;
+         that owner is not in production)
         ↓
 chat allowlist (WALLET_EDITOR_ALLOWED_CHAT_IDS)
         ↓

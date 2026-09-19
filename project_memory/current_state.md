@@ -244,7 +244,7 @@ main.process_file(conversion) → run_conversion_pipeline → conversion.run
 |--------|-------|
 | **Status** | ACTIVE — integrated, production-ready |
 | **Architecture** | One PTB polling loop via `scheduler.py` |
-| **Ingest** | Telegram `.xlsx` → `modules.antares.document_ingest` (mixed re-export `integrations.wallet_editor_tg`) |
+| **Ingest** | Production path: Telegram `.xlsx` → `integrations.wallet_editor_tg` (not switched by this program). Owner `modules.antares.document_ingest` exists only in Draft PR #16 and is **not** released |
 | **Access control** | Dedicated allowlist `WALLET_EDITOR_ALLOWED_CHAT_IDS` (fail-closed) |
 | **Credentials** | Per-operator via `WALLET_EDITOR_OPERATOR_MAP` + `WALLET_EDITOR_OPERATOR_<PROFILE>_*` |
 | **Execution** | Per-profile queue + daemon worker (`automation/worker.py`) |
