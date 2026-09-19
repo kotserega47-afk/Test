@@ -6,7 +6,8 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-13 (PR #16, закрытие `5f131ce50091a80cc03989d6fdf1e8b60f84b6ab`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md`, ADR, MIGRATION, HANDLER_SPLIT |
-| **PR** | Draft (создаётся) `feat/task-2026-09-17-14-antares-assembly-plan`, base `feat/task-2026-09-17-13-document-ingest` |
+| **PR** | Draft [#17](https://github.com/deniskotdavydov1991-wq/Test/pull/17) `feat/task-2026-09-17-14-antares-assembly-plan`, base `feat/task-2026-09-17-13-document-ingest` |
+| **HEAD** | `1222a278fa46b55d578f956da4bf73c0602bc08e` |
 | **Обследованный SHA** | `5f131ce50091a80cc03989d6fdf1e8b60f84b6ab` |
 | **Риск** | low: только документы |
 

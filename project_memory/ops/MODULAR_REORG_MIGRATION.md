@@ -24,7 +24,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
 | TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, закрытие `66b99ab1…`); runtime плана не менялся | **нет** |
 | TASK-13 document ingest | код перенесён; review пройден (Draft PR #16, код `4a1e7796…`, закрытие `5f131ce…`); не выпущен | **нет** |
-| TASK-14 Antares assembly plan | план изолированной сборки handlers/jobs; runtime не менялся | **нет** |
+| TASK-14 Antares assembly plan | план изолированной сборки handlers/jobs; Draft PR #17; runtime не менялся | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
