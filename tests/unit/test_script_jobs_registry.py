@@ -1,23 +1,9 @@
 from __future__ import annotations
 
-from tests.unit.telegram_bot_import_stub import install_telegram_bot_stub
-
-install_telegram_bot_stub()
-
 from core.job_runner import JOB_REGISTRY
-from integrations.script_jobs.bind import KNOWN_SCRIPT_KEYS
-from integrations.script_jobs.bootstrap import MIXED_SCRIPT_KEYS, register_all_script_jobs
+from integrations.script_jobs.bootstrap import register_all_script_jobs
 from integrations.script_jobs.identity import parse_script_job_type, script_job_type
-from integrations.script_jobs.registry import SCRIPT_REGISTRY
-
-
-def test_script_registry_contains_hello_world():
-    assert "hello_world" in SCRIPT_REGISTRY
-    spec = SCRIPT_REGISTRY["hello_world"]
-    assert spec.script_key == "hello_world"
-    assert spec.command_name == "run_script_hello"
-    assert set(KNOWN_SCRIPT_KEYS) == set(SCRIPT_REGISTRY)
-    assert set(MIXED_SCRIPT_KEYS) == set(SCRIPT_REGISTRY)
+from tests.unit.script_jobs_child_runner import run_import_harness_pytest
 
 
 def test_script_job_type_format():
@@ -47,3 +33,7 @@ def test_bootstrap_does_not_remove_existing_job_registry_entries():
             JOB_REGISTRY.pop("wallet", None)
         else:
             JOB_REGISTRY["wallet"] = previous
+
+
+def test_script_registry_contents_in_import_harness():
+    run_import_harness_pytest("test_script_jobs_registry.py")

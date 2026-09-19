@@ -89,18 +89,9 @@ def missing_dependency_hint(stderr: str) -> str:
 
 
 def child_subprocess_kwargs() -> dict:
-    """Keep child processes out of the parent's Windows console Ctrl+C group."""
+    """Windows: start children in a new process group so they are not the
+    parent's console control process. Does not change parent SIGINT handling.
+    """
     if sys.platform == "win32":
-        return {
-            "creationflags": (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            )
-        }
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     return {}
-
-    return (
-        f"sys.executable={sys.executable} is missing a module required to run "
-        "this subprocess. Install project dependencies into this same interpreter. "
-        "Tests do not switch Python versions and do not skip.\n"
-        f"{stderr}"
-    )

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import signal
-import sys
-import threading
+import os
 
 import pytest
 
@@ -28,16 +25,14 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "platform_compare: explicit Platform checkout compare (needs --platform-checkout)",
     )
-    if sys.platform == "win32":
-        # Child python processes in this suite can deliver CTRL_C_EVENT to the
-        # console group; ignore it so later tests are not aborted.
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-
 
 
 def pytest_ignore_collect(collection_path, config: pytest.Config) -> bool:  # noqa: ANN001
     if collection_path.name == "compare_platform_raccoon_payin.py":
         return not bool(config.getoption("--platform-checkout"))
+    if "script_jobs_import_harness" in collection_path.parts:
+        if collection_path.name.startswith("test_") and collection_path.suffix == ".py":
+            return os.environ.get("SCRIPT_JOBS_IMPORT_HARNESS") != "1"
     return False
 
 
@@ -45,29 +40,3 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if config.getoption("--platform-checkout"):
         return
     items[:] = [item for item in items if item.get_closest_marker("platform_compare") is None]
-
-
-def _stop_telegram_bot_background_loop() -> None:
-    """If a test imported the real telegram_bot module, stop its asyncio loop."""
-    mod = sys.modules.get("integrations.telegram_bot")
-    if mod is None or getattr(mod, "__file__", None) is None:
-        return
-    loop = getattr(mod, "loop", None)
-    if loop is None or not loop.is_running():
-        return
-    request = getattr(mod, "request", None)
-    shutdown = getattr(request, "shutdown", None)
-    if callable(shutdown):
-        asyncio.run_coroutine_threadsafe(shutdown(), loop).result()
-    loop.call_soon_threadsafe(loop.stop)
-    runner = getattr(mod, "_loop_runner", None)
-    for thread in threading.enumerate():
-        if getattr(thread, "_target", None) is runner:
-            thread.join()
-            break
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _stop_telegram_bot_loop_imported_by_tests() -> None:
-    yield
-    _stop_telegram_bot_background_loop()
