@@ -24,11 +24,11 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
 | TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, закрытие `66b99ab1…`); runtime плана не менялся | **нет** |
 | TASK-13 document ingest | код перенесён; review пройден (Draft PR #16, код `4a1e7796…`, закрытие `5f131ce…`); не выпущен | **нет** |
-| TASK-14 Antares assembly plan | план изолированной сборки handlers/jobs; Draft PR #17; runtime не менялся | **нет** |
+| TASK-14 Antares assembly plan | план принят, review пройден (Draft PR #17, HEAD `f123a4bf…`); runtime сборки нет | **нет** |
 | Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | isolated entry **не** готов; план сборки — TASK-14 (docs); mixed help/status/Raccoon/`run_script_hello` ещё в `tg_commands` | — |
+| Следующая | isolated entry **не** готов; план сборки принят (TASK-14); следующий code — selective script registration | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
@@ -137,7 +137,7 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-14 docs):** план сборки Antares без `tg_commands`/Raccoon подготовлен. Кода сборки нет. Isolated entry **не** готов.
+**Сейчас (после TASK-14):** план сборки Antares принят (HEAD `f123a4bf…`). Кода сборки handlers/jobs нет. Isolated entry **не** готов.
 
 Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
 
