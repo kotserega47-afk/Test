@@ -10,6 +10,7 @@ _HARNESS_FILES = (
     "test_assembly_refuse_foreign.py",
     "test_assembly_refuse_conflict.py",
     "test_assembly_refuse_bind.py",
+    "test_assembly_refuse_logger.py",
     "test_assembly_import_fail.py",
     "test_assembly_commands.py",
 )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from core.event_log import append_event
@@ -27,6 +28,14 @@ SnapshotValue = Union[str, float, int]
 
 _last_eval_ts: float = 0.0
 _last_snapshot: Dict[str, Any] = {}
+_last_eval_by_key: Dict[tuple[str, ...], float] = {}
+_last_snapshot_by_key: Dict[tuple[str, ...], Dict[str, Any]] = {}
+
+
+def _resolve_job_types(job_types: Sequence[str] | None) -> tuple[str, ...]:
+    if job_types is None:
+        return KNOWN_JOB_TYPES
+    return tuple(job_types)
 
 
 def job_health_guard_enabled() -> bool:
@@ -150,14 +159,15 @@ def _is_ghost_lock(job_type: str, lock_pid: SnapshotValue, lock_age: SnapshotVal
     return False
 
 
-def evaluate_job_health() -> Dict[str, Any]:
-    """Build a fresh health snapshot for all known job types."""
+def evaluate_job_health(job_types: Sequence[str] | None = None) -> Dict[str, Any]:
+    """Build a fresh health snapshot for ``job_types`` (default: mixed KNOWN_JOB_TYPES)."""
+    types = _resolve_job_types(job_types)
     now = time.time()
     running = get_status()
-    locks = get_lock_status_for_job_types(KNOWN_JOB_TYPES)
+    locks = get_lock_status_for_job_types(types)
     jobs: Dict[str, Dict[str, SnapshotValue]] = {}
 
-    for jt in KNOWN_JOB_TYPES:
+    for jt in types:
         lock_info = locks.get(jt, {})
         lock_age = lock_info.get("lock_age_sec", "unknown")
         lock_pid = lock_info.get("lock_pid", "unknown")
@@ -240,7 +250,7 @@ def _emit_observe_events(snapshot: Dict[str, Any]) -> None:
 
 
 def evaluate_job_health_if_due() -> None:
-    """Called from scheduler loop; throttled, never raises."""
+    """Called from scheduler loop; throttled, never raises. Mixed catalog only."""
     global _last_eval_ts, _last_snapshot
     if not job_health_guard_enabled():
         return
@@ -249,36 +259,49 @@ def evaluate_job_health_if_due() -> None:
         if now - _last_eval_ts < _tick_interval_sec():
             return
         _last_eval_ts = now
-        _last_snapshot = evaluate_job_health()
-        _emit_observe_events(_last_snapshot)
+        snap = evaluate_job_health()
+        _last_snapshot = snap
+        _last_eval_by_key[KNOWN_JOB_TYPES] = now
+        _last_snapshot_by_key[KNOWN_JOB_TYPES] = snap
+        _emit_observe_events(snap)
     except Exception:
         log.warning("job_health: evaluate failed", exc_info=True)
 
 
-def get_job_health_snapshot(*, force_refresh: bool = False) -> Dict[str, Any]:
+def get_job_health_snapshot(
+    *,
+    force_refresh: bool = False,
+    job_types: Sequence[str] | None = None,
+) -> Dict[str, Any]:
     """Snapshot for /status (uses cache unless force_refresh or guard disabled)."""
-    global _last_snapshot
+    types = _resolve_job_types(job_types)
     if not job_health_guard_enabled():
         return {
             "enabled": False,
             "mode": "off",
             "executor_queue_depth": "unknown",
-            "jobs": {jt: {"state": "unknown"} for jt in KNOWN_JOB_TYPES},
+            "jobs": {jt: {"state": "unknown"} for jt in types},
         }
-    if force_refresh or not _last_snapshot:
-        return evaluate_job_health()
-    return _last_snapshot
+    if force_refresh:
+        return evaluate_job_health(job_types=types)
+    if types == KNOWN_JOB_TYPES and _last_snapshot:
+        return _last_snapshot
+    cached = _last_snapshot_by_key.get(types)
+    if cached:
+        return cached
+    return evaluate_job_health(job_types=types)
 
 
-def format_job_health_lines() -> List[str]:
+def format_job_health_lines(*, job_types: Sequence[str] | None = None) -> List[str]:
     """Lines for ``/status`` job_health block."""
-    snap = get_job_health_snapshot(force_refresh=True)
+    types = _resolve_job_types(job_types)
+    snap = get_job_health_snapshot(force_refresh=True, job_types=types)
     lines = ["job_health:", f"- mode={snap.get('mode', 'off')}"]
     qd = snap.get("executor_queue_depth", "unknown")
     lines.append(f"- executor_queue_depth={qd}")
 
     jobs = snap.get("jobs") or {}
-    for jt in KNOWN_JOB_TYPES:
+    for jt in types:
         info = jobs.get(jt, {})
         state = info.get("state", "unknown")
         line_parts = [f"- {jt}: state={state}"]
@@ -307,3 +330,5 @@ def _reset_job_health_for_tests() -> None:
     global _last_eval_ts, _last_snapshot
     _last_eval_ts = 0.0
     _last_snapshot = {}
+    _last_eval_by_key.clear()
+    _last_snapshot_by_key.clear()

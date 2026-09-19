@@ -12,10 +12,12 @@ from core.job_health import (
     _reset_job_health_for_tests,
     evaluate_job_health,
     format_job_health_lines,
+    get_job_health_snapshot,
     job_health_guard_enabled,
     job_health_recovery_mode,
 )
 from core.job_progress import _reset_job_progress_for_tests, record_progress
+from core.lock_status import KNOWN_JOB_TYPES
 
 
 @pytest.fixture(autouse=True)
@@ -128,3 +130,71 @@ def test_wallet_stage_records_progress() -> None:
     prog = get_progress("wallet")
     assert prog is not None
     assert prog[0] == "payin_export_click"
+
+
+def test_evaluate_without_job_types_keeps_mixed_catalog(guard_on: None) -> None:
+    from core.lock_status import KNOWN_JOB_TYPES
+
+    seen: list[tuple[str, ...]] = []
+
+    def _locks(job_types=KNOWN_JOB_TYPES):
+        seen.append(tuple(job_types))
+        return {jt: {"lock_pid": "none", "lock_age_sec": "none"} for jt in job_types}
+
+    with patch("core.job_health.get_lock_status_for_job_types", side_effect=_locks):
+        snap = evaluate_job_health()
+    assert seen == [KNOWN_JOB_TYPES]
+    assert "raccoon_wallet" in snap["jobs"]
+    assert "script_job:operator_wallets_ready" not in snap["jobs"]
+    text = "\n".join(format_job_health_lines())
+    assert "raccoon_wallet: state=idle" in text
+
+
+def test_evaluate_antares_job_types_classifies_replay_and_operator(guard_on: None) -> None:
+    from modules.antares.handlers import ANTARES_STATUS_JOB_TYPES
+
+    seen: list[tuple[str, ...]] = []
+
+    def _locks(job_types=KNOWN_JOB_TYPES):
+        requested = tuple(job_types)
+        seen.append(requested)
+        assert set(requested) == set(ANTARES_STATUS_JOB_TYPES)
+        return {jt: {"lock_pid": "none", "lock_age_sec": "none"} for jt in requested}
+
+    started = time.time() - 15
+    job_runner._RUNNING["wallet_editor_registry_replay"] = ("jid-replay", started, {"kind": "cli"})
+    job_runner._RUNNING["script_job:operator_wallets_ready"] = ("jid-op", started, {"kind": "cli"})
+    job_runner._RUNNING["raccoon_wallet"] = ("jid-r", started, {"kind": "cli"})
+    record_progress("wallet_editor_registry_replay", "replay_batch")
+    record_progress("script_job:operator_wallets_ready", "export")
+
+    with patch("core.job_health.get_lock_status_for_job_types", side_effect=_locks):
+        snap = evaluate_job_health(job_types=ANTARES_STATUS_JOB_TYPES)
+    assert set(snap["jobs"]) == set(ANTARES_STATUS_JOB_TYPES)
+    assert snap["jobs"]["wallet_editor_registry_replay"]["state"] == "running_ok"
+    assert snap["jobs"]["script_job:operator_wallets_ready"]["state"] == "running_ok"
+    assert "raccoon_wallet" not in snap["jobs"]
+    assert seen and all(set(call) == set(ANTARES_STATUS_JOB_TYPES) for call in seen)
+
+    job_runner._RUNNING.clear()
+    _reset_job_progress_for_tests()
+    with patch("core.job_health.get_lock_status_for_job_types", side_effect=_locks):
+        idle = evaluate_job_health(job_types=ANTARES_STATUS_JOB_TYPES)
+    assert idle["jobs"]["wallet_editor_registry_replay"]["state"] == "idle"
+    assert idle["jobs"]["script_job:operator_wallets_ready"]["state"] == "idle"
+
+
+def test_mixed_cache_is_not_returned_for_antares_job_types(guard_on: None) -> None:
+    from core import job_health
+    from modules.antares.handlers import ANTARES_STATUS_JOB_TYPES
+
+    job_runner._RUNNING["raccoon_wallet"] = ("jid-r", time.time() - 10, {"kind": "cli"})
+    mixed = evaluate_job_health()
+    assert "raccoon_wallet" in mixed["jobs"]
+    job_health._last_snapshot = mixed
+    job_health._last_snapshot_by_key[KNOWN_JOB_TYPES] = mixed
+
+    antares = get_job_health_snapshot(job_types=ANTARES_STATUS_JOB_TYPES)
+    assert "raccoon_wallet" not in antares["jobs"]
+    assert set(antares["jobs"]) == set(ANTARES_STATUS_JOB_TYPES)
+    assert get_job_health_snapshot()["jobs"]["raccoon_wallet"]["state"] == "running_ok"

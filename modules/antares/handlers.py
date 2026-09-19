@@ -306,33 +306,9 @@ def _format_conversion_observation_lines() -> list[str]:
 
 
 def _format_antares_job_health_lines() -> list[str]:
-    from core.job_health import get_job_health_snapshot
+    from core.job_health import format_job_health_lines
 
-    snap = get_job_health_snapshot(force_refresh=True)
-    lines = ["job_health:", f"- mode={snap.get('mode', 'off')}", f"- executor_queue_depth={snap.get('executor_queue_depth', 'unknown')}"]
-    jobs = snap.get("jobs") or {}
-    for jt in ANTARES_STATUS_JOB_TYPES:
-        info = jobs.get(jt, {})
-        state = info.get("state", "unknown")
-        line_parts = [f"- {jt}: state={state}"]
-        stage = info.get("stage")
-        if stage and stage != "none" and state in {"running_ok", "running_slow", "stuck"}:
-            line_parts.append(f"stage={stage}")
-        pa = info.get("progress_age_sec")
-        if pa != "none" and pa != "unknown" and state in {"running_ok", "running_slow", "stuck"}:
-            if isinstance(pa, (int, float)):
-                line_parts.append(f"progress_age={round(float(pa), 1)}s")
-            else:
-                line_parts.append(f"progress_age={pa}")
-        rt = info.get("runtime_sec")
-        if isinstance(rt, (int, float)) and state in {"running_ok", "running_slow", "stuck"}:
-            line_parts.append(f"runtime={round(float(rt), 1)}s")
-        if state in {"running_ok", "running_slow", "stuck", "ghost_lock"}:
-            line_parts.append(f"lock_pid={info.get('lock_pid', 'unknown')}")
-            la = info.get("lock_age_sec", "unknown")
-            line_parts.append(f"lock_age={la}s" if isinstance(la, (int, float)) else f"lock_age={la}")
-        lines.append(" ".join(line_parts))
-    return lines
+    return format_job_health_lines(job_types=ANTARES_STATUS_JOB_TYPES)
 
 
 def _running_antares_jobs() -> dict:
