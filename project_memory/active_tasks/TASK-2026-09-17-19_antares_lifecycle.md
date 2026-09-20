@@ -6,7 +6,7 @@
 | **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-18 (PR #21, review `2c6eeac34940f70413be70da35ddbc81e720ec83`, закрытие `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0`, тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`), `ops/MODULAR_REORG_ANTARES_LIFECYCLE.md`, `ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md` § 4 |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-19-antares-lifecycle`, base `feat/task-2026-09-17-18-antares-boot` |
+| **PR** | Draft [#22](https://github.com/deniskotdavydov1991-wq/Test/pull/22) `feat/task-2026-09-17-19-antares-lifecycle`, base `feat/task-2026-09-17-18-antares-boot` |
 | **Риск** | low: только документы |
 
 Контракт запуска и остановки isolated Antares **подготовлен к review**. Runtime, mixed gate, Railway и профили **не** менялись. `python -m apps.antares` остаётся boot exit 0. Polling, worker, schedules, sender loop, `JOB_ACCEPT` и cutover **не** реализованы.
@@ -56,4 +56,4 @@ runtime/тесты TASK-19; реализация `run` в этом PR; polling; 
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-20 | контракт lifecycle подготовлен к review; Draft PR от закрытия TASK-18 |
+| 2026-09-20 | контракт lifecycle подготовлен к review; Draft PR #22 |
