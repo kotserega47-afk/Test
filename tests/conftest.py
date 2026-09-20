@@ -36,6 +36,9 @@ def pytest_ignore_collect(collection_path, config: pytest.Config) -> bool:  # no
     if "antares_assembly_harness" in collection_path.parts:
         if collection_path.name.startswith("test_") and collection_path.suffix == ".py":
             return os.environ.get("ANTARES_ASSEMBLY_HARNESS") != "1"
+    if "antares_send_harness" in collection_path.parts:
+        if collection_path.name.startswith("test_") and collection_path.suffix == ".py":
+            return os.environ.get("ANTARES_SEND_HARNESS") != "1"
     return False
 
 

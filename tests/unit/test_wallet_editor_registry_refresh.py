@@ -84,6 +84,18 @@ def _seed_registry_state(
 def refresh_env(monkeypatch, tmp_path):
     from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
     from integrations.wallet_editor_registry_refresh import RefreshBreakdown, _RefreshOutcome
+    from tests.unit.sender_test_stub import ensure_sender_stub
+
+    ensure_sender_stub()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    def _blocked_pg(**_kwargs):
+        raise RuntimeError("postgres connect blocked in refresh tests")
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.connection.connect",
+        _blocked_pg,
+    )
 
     registry_state = {
         "all_results": pd.DataFrame(columns=ALL_RESULTS_COLUMNS),

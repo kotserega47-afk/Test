@@ -118,6 +118,9 @@ def _read_registry(data: bytes) -> dict[str, pd.DataFrame]:
 
 @pytest.fixture
 def registry_env(monkeypatch, tmp_path):
+    from tests.unit.registry_dropbox_test_backend import install_dropbox_registry_scenario
+
+    install_dropbox_registry_scenario(monkeypatch)
     store: dict[str, bytes] = {}
     revs: dict[str, str] = {}
 

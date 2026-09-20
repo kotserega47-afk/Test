@@ -37,6 +37,8 @@ class BootRun:
     stdout: str
     stderr: str
     import_attempts: list[str]
+    events: list[dict]
+    harness_ready: bool
 
 
 def _copy_boot_tree(dest: Path) -> None:
@@ -61,6 +63,20 @@ def _write_env_file(dest: Path, lines: dict[str, str] | None) -> None:
     path.write_text(body, encoding="utf-8")
 
 
+def _read_required_json_list(path: Path, *, label: str) -> list:
+    if not path.is_file():
+        raise AssertionError(f"antares boot {label} is missing: {path}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8") or "[]")
+    except OSError as exc:
+        raise AssertionError(f"antares boot {label} is unreadable: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"antares boot {label} is not valid JSON: {path}") from exc
+    if not isinstance(raw, list):
+        raise AssertionError(f"antares boot {label} is not a list: {path}")
+    return raw
+
+
 def run_antares_boot(
     sandbox: Path,
     *,
@@ -73,8 +89,12 @@ def run_antares_boot(
     _copy_boot_tree(tree)
     _write_env_file(tree, dotenv_lines)
     import_log = sandbox / "forbidden_imports.json"
+    events_log = sandbox / "boot_events.json"
+    ready = sandbox / "harness_ready.txt"
     extra = {
         "ANTARES_BOOT_IMPORT_LOG": str(import_log),
+        "ANTARES_BOOT_EVENTS_LOG": str(events_log),
+        "ANTARES_BOOT_HARNESS_READY": str(ready),
         "TELEGRAM_CHAT_ID_ANALIZ": "antares-boot-harness",
     }
     if pollute_registry:
@@ -106,14 +126,19 @@ def run_antares_boot(
         ) from exc
     if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr or ""):
         raise AssertionError(missing_dependency_hint(proc.stderr))
-    attempts: list[str] = []
-    if import_log.exists():
-        raw = json.loads(import_log.read_text(encoding="utf-8") or "[]")
-        if isinstance(raw, list):
-            attempts = [str(item) for item in raw]
+    if not ready.is_file():
+        raise AssertionError(
+            "antares boot harness did not confirm installation\n"
+            f"{proc.stdout or ''}{proc.stderr or ''}"
+        )
+    attempts = [str(item) for item in _read_required_json_list(import_log, label="forbidden-import log")]
+    events_raw = _read_required_json_list(events_log, label="events log")
+    events = [item if isinstance(item, dict) else {"kind": str(item)} for item in events_raw]
     return BootRun(
         returncode=proc.returncode,
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
         import_attempts=attempts,
+        events=events,
+        harness_ready=True,
     )

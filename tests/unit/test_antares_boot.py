@@ -24,7 +24,27 @@ def _run(**kwargs):
 
 
 def _assert_no_forbidden(result) -> None:
+    assert result.harness_ready is True
     assert result.import_attempts == [], result.import_attempts
+
+
+def _event_kinds(result) -> list[str]:
+    return [str(item.get("kind", "")) for item in result.events]
+
+
+def _refusal_reasons(result) -> list[str]:
+    return [
+        str(item.get("reason", ""))
+        for item in result.events
+        if item.get("kind") == "assembly_refused"
+    ]
+
+
+def _assert_not_false_refusal(result) -> None:
+    combined = result.stdout + result.stderr
+    assert "RecursionError" not in combined
+    assert "AttributeError" not in combined
+    assert "forbidden import" not in combined
 
 
 def test_boot_rejects_unset_profile() -> None:
@@ -128,6 +148,14 @@ def test_boot_refuses_polluted_registry() -> None:
     assert result.returncode != 0, result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_no_forbidden(result)
+    _assert_not_false_refusal(result)
+    assert "conflict_injected" in _event_kinds(result)
+    assert "assembly_called" in _event_kinds(result)
+    reasons = _refusal_reasons(result)
+    assert reasons, result.events
+    assert any("foreign keys" in reason for reason in reasons), reasons
+    assert "antares assembly failed:" in result.stderr
+    assert "foreign keys" in result.stderr
 
 
 def test_boot_refuses_incompatible_bind() -> None:
@@ -138,6 +166,16 @@ def test_boot_refuses_incompatible_bind() -> None:
     assert result.returncode != 0, result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_no_forbidden(result)
+    _assert_not_false_refusal(result)
+    assert "conflict_injected" in _event_kinds(result)
+    assert "assembly_called" in _event_kinds(result)
+    reasons = _refusal_reasons(result)
+    assert reasons, result.events
+    assert any(
+        "different AccessRules" in reason or "different logger" in reason for reason in reasons
+    ), reasons
+    assert "antares assembly failed:" in result.stderr
+    assert "different AccessRules" in result.stderr or "different logger" in result.stderr
 
 
 def test_boot_process_exits_after_success() -> None:
