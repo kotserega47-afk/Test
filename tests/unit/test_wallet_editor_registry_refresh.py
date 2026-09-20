@@ -82,20 +82,15 @@ def _seed_registry_state(
 
 @pytest.fixture
 def refresh_env(monkeypatch, tmp_path):
-    from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
-    from integrations.wallet_editor_registry_refresh import RefreshBreakdown, _RefreshOutcome
-    from tests.unit.sender_test_stub import ensure_sender_stub
+    from contextlib import contextmanager
 
-    ensure_sender_stub()
+    from integrations.wallet_editor_registry_db.config import ENV_REGISTRY_SOURCE
+
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+
     def _blocked_pg(**_kwargs):
         raise RuntimeError("postgres connect blocked in refresh tests")
-
-    monkeypatch.setattr(
-        "integrations.wallet_editor_registry_db.connection.connect",
-        _blocked_pg,
-    )
 
     registry_state = {
         "all_results": pd.DataFrame(columns=ALL_RESULTS_COLUMNS),
@@ -105,39 +100,70 @@ def refresh_env(monkeypatch, tmp_path):
         "commits": 0,
     }
 
-    def fake_refresh_attempt_postgres(
-        *,
-        dropbox_path: str,
-        today,
-        normalize_all_results,
-        recalculate_all_results,
-        compute_lifecycle_diff,
-        lifecycle_row_changed,
-    ):
-        before_df = normalize_all_results(registry_state["all_results"])
-        recalculated, _missing = recalculate_all_results(
-            before_df,
-            registry_state["hold"],
-            registry_state["otlezka"],
-            today=today,
-        )
-        changed_rows, breakdown = compute_lifecycle_diff(before_df, recalculated)
-        if changed_rows == 0:
-            return _RefreshOutcome.SKIPPED, 0, breakdown, None, None
-        registry_state["all_results"] = recalculated
-        registry_state["commits"] += 1
-        return _RefreshOutcome.SUCCESS, changed_rows, breakdown, None, None
+    def fake_load_frames():
+        return registry_state["all_results"], registry_state["runs"]
+
+    def fake_hold_otlezka(dropbox_path: str):
+        return registry_state["hold"], registry_state["otlezka"], True, True
+
+    class _RecordingStore:
+        def __init__(self, _cur):
+            pass
+
+        def upsert_run(self, _row):
+            return None
+
+        def upsert_results_batch(self, _batch):
+            registry_state["commits"] += 1
+
+    @contextmanager
+    def fake_connect(*, for_mirror: bool = False):
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cur
+        conn.cursor.return_value.__exit__.return_value = False
+        yield conn
+
+    from integrations.wallet_editor_registry_refresh import recalculate_all_results_runtime as _orig_recalc
+
+    def _track_recalc(*args, **kwargs):
+        out = _orig_recalc(*args, **kwargs)
+        registry_state["all_results"] = out[0]
+        return out
 
     state_root = tmp_path / "state"
     monkeypatch.setenv("STATE_DIR", str(state_root))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
     monkeypatch.setenv(ENV_REGISTRY_SOURCE, "postgres")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://registry-refresh-test.invalid:1/unused")
     monkeypatch.setenv("WALLET_EDITOR_MANUAL_READERS_SOURCE", "postgres")
-
     monkeypatch.setattr(
-        "integrations.wallet_editor_registry_db.postgres_source.refresh_attempt_postgres",
-        fake_refresh_attempt_postgres,
+        "integrations.wallet_editor_registry_db.postgres_source.load_registry_frames_from_postgres",
+        fake_load_frames,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.load_hold_otlezka_for_runtime",
+        fake_hold_otlezka,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.connect",
+        fake_connect,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.postgres_source.PostgresRegistryStore",
+        _RecordingStore,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_refresh.recalculate_all_results_runtime",
+        _track_recalc,
+    )
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.connection.connect",
+        _blocked_pg,
+    )
+    monkeypatch.setattr(
+        "integrations.dropbox_watcher._get_dbx",
+        _blocked_pg,
     )
     monkeypatch.setattr(
         "integrations.wallet_editor_registry_db.manual_sync.run_manual_sync_prerun_gate",
@@ -150,8 +176,8 @@ def refresh_env(monkeypatch, tmp_path):
             return_value=MagicMock(chat_id=-9001, source="test"),
         ),
         patch(
-            "integrations.telegram_bot.send_message_sync",
-            return_value=None,
+            "integrations.wallet_editor_registry_refresh._send_to_route",
+            return_value=True,
         ),
     ):
         yield registry_state, tmp_path

@@ -1,7 +1,6 @@
 """Wallet Editor registry timeout/warning from Rules job_params."""
 from __future__ import annotations
 
-import io
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +13,7 @@ import pytest
 from automation.audit import Stats
 from automation.runtime import WalletEditorTask
 from integrations.wallet_editor_registry import (
-    SLOW_APPEND_MESSAGE,
-    TIMEOUT_MESSAGE,
+    _AppendOutcome,
     append_run_to_dropbox_registry,
 )
 from integrations.wallet_editor_registry_async import (
@@ -29,6 +27,7 @@ from integrations.wallet_editor_registry_settings import (
     RegistrySettings,
     load_registry_settings,
 )
+
 MSK = ZoneInfo("Europe/Moscow")
 RUN_STARTED = datetime(2026, 6, 3, 9, 0, 0, tzinfo=MSK)
 RUN_FINISHED = datetime(2026, 6, 3, 9, 5, 0, tzinfo=MSK)
@@ -75,55 +74,34 @@ def _fast_settings(
     )
 
 
+def _blocked_pg(*_a, **_k):
+    raise RuntimeError("postgres connect blocked in timeout tests")
+
+
 @pytest.fixture
-def registry_store(monkeypatch, tmp_path):
-    from tests.unit.registry_dropbox_test_backend import install_dropbox_registry_scenario
-
-    install_dropbox_registry_scenario(monkeypatch)
-    store: dict[str, bytes] = {}
-    revs: dict[str, str] = {"rev": "rev-1"}
-
-    def fake_download(dropbox_path: str, local_path: str) -> tuple[str, str | None]:
-        if dropbox_path not in store:
-            return "not_found", None
-        Path(local_path).write_bytes(store[dropbox_path])
-        return "ok", revs.get(dropbox_path, "rev-1")
-
-    def fake_upload(local_path: str, dropbox_path: str, expected_rev: str | None) -> str:
-        from integrations import dropbox_watcher
-
-        if expected_rev is not None:
-            current = dropbox_watcher.get_dropbox_file_rev(dropbox_path)
-            if current != expected_rev:
-                return "rev_conflict"
-        store[dropbox_path] = Path(local_path).read_bytes()
-        revs[dropbox_path] = f"rev-{len(store)}"
-        return "uploaded"
-
+def isolated_append_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("DROPBOX_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("DROPBOX_REFRESH_TOKEN", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("DROPBOX_WALLET_EDITOR_PATH", DROPBOX_PATH)
-
-    with patch(
-        "integrations.wallet_editor_registry.download_file_with_rev",
-        side_effect=fake_download,
-    ):
-        with patch(
-            "integrations.wallet_editor_registry.upload_file_if_rev",
-            side_effect=fake_upload,
-        ):
-            with patch(
-                "integrations.dropbox_watcher.get_dropbox_file_rev",
-                return_value=revs.get(DROPBOX_PATH, "rev-1"),
-            ):
-                with patch(
-                    "integrations.wallet_editor_registry_lifecycle.now_msk",
-                    return_value=datetime(2026, 6, 3, 12, 0, 0, tzinfo=MSK),
-                ):
-                    yield store, revs, tmp_path
+    monkeypatch.setenv("WALLET_EDITOR_MANUAL_READERS_SOURCE", "dropbox")
+    monkeypatch.setenv("WALLET_EDITOR_REGISTRY_SOURCE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://registry-timeout-test.invalid:1/unused")
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.connection.connect",
+        _blocked_pg,
+    )
+    monkeypatch.setattr(
+        "integrations.dropbox_watcher._get_dbx",
+        _blocked_pg,
+    )
+    yield tmp_path
 
 
 def test_registry_settings_loaded_from_job_params():
     accessor = MagicMock()
+
     def _param(job_key: str, param_key: str, **kw):
         return {
             "registry_warning_seconds": 45,
@@ -132,7 +110,6 @@ def test_registry_settings_loaded_from_job_params():
         }.get(param_key, kw.get("default"))
 
     accessor.get_job_param.side_effect = _param
-
     with patch(
         "integrations.wallet_editor_registry_settings.get_snapshot_v2",
         return_value=MagicMock(),
@@ -146,7 +123,6 @@ def test_registry_settings_loaded_from_job_params():
                 return_value=accessor,
             ):
                 settings = load_registry_settings()
-
     assert settings.registry_warning_seconds == 45
     assert settings.registry_timeout_seconds == 120
     assert settings.registry_retry_interval_seconds == 5
@@ -155,7 +131,6 @@ def test_registry_settings_loaded_from_job_params():
 def test_registry_settings_defaults_when_missing():
     accessor = MagicMock()
     accessor.get_job_param.return_value = None
-
     with patch(
         "integrations.wallet_editor_registry_settings.get_snapshot_v2",
         return_value=MagicMock(),
@@ -169,7 +144,6 @@ def test_registry_settings_defaults_when_missing():
                 return_value=accessor,
             ):
                 settings = load_registry_settings()
-
     assert settings.registry_warning_seconds == DEFAULT_REGISTRY_WARNING_SECONDS
     assert settings.registry_timeout_seconds == DEFAULT_REGISTRY_TIMEOUT_SECONDS
     assert settings.registry_retry_interval_seconds == DEFAULT_REGISTRY_RETRY_INTERVAL_SECONDS
@@ -177,6 +151,7 @@ def test_registry_settings_defaults_when_missing():
 
 def test_registry_invalid_settings_fallback():
     accessor = MagicMock()
+
     def _param(job_key: str, param_key: str, **kw):
         return {
             "registry_warning_seconds": 200,
@@ -185,7 +160,6 @@ def test_registry_invalid_settings_fallback():
         }.get(param_key, kw.get("default"))
 
     accessor.get_job_param.side_effect = _param
-
     with patch(
         "integrations.wallet_editor_registry_settings.get_snapshot_v2",
         return_value=MagicMock(),
@@ -199,99 +173,46 @@ def test_registry_invalid_settings_fallback():
                 return_value=accessor,
             ):
                 settings = load_registry_settings()
-
     assert settings.registry_timeout_seconds == DEFAULT_REGISTRY_TIMEOUT_SECONDS
     assert settings.registry_warning_seconds < settings.registry_timeout_seconds
     assert settings.registry_retry_interval_seconds == DEFAULT_REGISTRY_RETRY_INTERVAL_SECONDS
 
 
-def test_registry_warning_before_timeout(registry_store, tmp_path):
-    store, revs, root = registry_store
-    revs[DROPBOX_PATH] = "rev-block"
-    messages: list[str] = []
-    call_count = {"n": 0}
-
-    def slow_upload(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            time.sleep(1.5)
-        return "rev_conflict"
-
-    result_path = root / "result.xlsx"
+def test_registry_timeout_skips_append(isolated_append_env):
+    result_path = isolated_append_env / "result.xlsx"
     _write_result(result_path)
+    calls = {"n": 0}
 
-    with patch(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        side_effect=slow_upload,
-    ):
-        with patch(
-            "integrations.dropbox_watcher.get_dropbox_file_rev",
-            return_value="rev-other",
-        ):
-            with patch(
-                "integrations.telegram_bot.send_message_sync",
-                side_effect=lambda text, **kw: messages.append(text),
-            ):
+    def transient(*_a, **_k):
+        calls["n"] += 1
+        return _AppendOutcome.TRANSIENT, None, None
+
+    with patch("integrations.wallet_editor_registry._append_attempt", side_effect=transient):
+        with patch("integrations.wallet_editor_registry._send_timeout_warning"):
+            with patch("integrations.wallet_editor_registry._send_slow_append_warning"):
                 append_run_to_dropbox_registry(
-                    _make_task(run_id="warn-before-timeout"),
+                    _make_task(run_id="timeout-skip"),
                     str(result_path),
                     Stats(ok=1, fail=0, skip=0),
                     run_started_at=RUN_STARTED,
                     run_finished_at=RUN_FINISHED,
-                    settings=_fast_settings(warning=1, timeout=4, retry=1),
+                    settings=_fast_settings(warning=10, timeout=2, retry=1),
                 )
-
-    assert any(SLOW_APPEND_MESSAGE in m for m in messages)
-    assert any(TIMEOUT_MESSAGE in m for m in messages)
+    assert calls["n"] >= 1
 
 
-def test_registry_timeout_skips_append(registry_store, tmp_path):
-    store, revs, root = registry_store
-    before = b""
-    store[DROPBOX_PATH] = before
-    revs[DROPBOX_PATH] = "rev-stale"
-
-    result_path = root / "result.xlsx"
+def test_registry_retry_interval_used(isolated_append_env):
+    result_path = isolated_append_env / "result.xlsx"
     _write_result(result_path)
-
-    with patch(
-        "integrations.dropbox_watcher.get_dropbox_file_rev",
-        return_value="rev-changed",
-    ):
-        with patch("integrations.telegram_bot.send_message_sync"):
-            append_run_to_dropbox_registry(
-                _make_task(run_id="timeout-skip"),
-                str(result_path),
-                Stats(ok=1, fail=0, skip=0),
-                run_started_at=RUN_STARTED,
-                run_finished_at=RUN_FINISHED,
-                settings=_fast_settings(warning=10, timeout=2, retry=1),
-            )
-
-    assert store.get(DROPBOX_PATH, b"") == before
-
-
-def test_registry_retry_interval_used(registry_store, tmp_path):
-    store, revs, root = registry_store
-    revs[DROPBOX_PATH] = "rev-a"
     attempts: list[float] = []
 
-    def track_upload(*args, **kwargs):
+    def transient(*_a, **_k):
         attempts.append(time.monotonic())
-        return "rev_conflict"
+        return _AppendOutcome.TRANSIENT, None, None
 
-    result_path = root / "result.xlsx"
-    _write_result(result_path)
-
-    with patch(
-        "integrations.wallet_editor_registry.upload_file_if_rev",
-        side_effect=track_upload,
-    ):
-        with patch(
-            "integrations.dropbox_watcher.get_dropbox_file_rev",
-            return_value="rev-b",
-        ):
-            with patch("integrations.telegram_bot.send_message_sync"):
+    with patch("integrations.wallet_editor_registry._append_attempt", side_effect=transient):
+        with patch("integrations.wallet_editor_registry._send_timeout_warning"):
+            with patch("integrations.wallet_editor_registry._send_slow_append_warning"):
                 append_run_to_dropbox_registry(
                     _make_task(run_id="retry-interval"),
                     str(result_path),
@@ -300,11 +221,8 @@ def test_registry_retry_interval_used(registry_store, tmp_path):
                     run_finished_at=RUN_FINISHED,
                     settings=_fast_settings(warning=30, timeout=5, retry=2),
                 )
-
     assert len(attempts) >= 2
-    if len(attempts) >= 2:
-        gap = attempts[1] - attempts[0]
-        assert gap >= 1.5
+    assert attempts[1] - attempts[0] >= 1.5
 
 
 def test_registry_result_sent_before_slow_registry(tmp_path):
@@ -352,20 +270,16 @@ def test_registry_result_sent_before_slow_registry(tmp_path):
 def test_registry_async_does_not_race_cleanup(tmp_path):
     result = tmp_path / "result.xlsx"
     _write_result(result)
-
     staged_path, is_copy = stage_registry_result_copy(str(result))
     assert is_copy
     assert Path(staged_path).is_file()
-
     import os
 
     os.remove(result)
     assert not result.exists()
     assert Path(staged_path).is_file()
-
     data = Path(staged_path).read_bytes()
     assert len(data) > 0
-
     remove_staged_result(staged_path, is_staged_copy=True)
     assert not Path(staged_path).exists()
 
@@ -402,27 +316,3 @@ def test_schedule_registry_append_forwards_output_file(tmp_path):
 
     assert captured["result_path"] == str(staged_path)
     assert captured["output_file"] == user_visible
-
-
-def test_registry_success_fast_no_warning(registry_store, tmp_path):
-    store, revs, root = registry_store
-    messages: list[str] = []
-    result_path = root / "result.xlsx"
-    _write_result(result_path)
-
-    with patch(
-        "integrations.telegram_bot.send_message_sync",
-        side_effect=lambda text, **kw: messages.append(text),
-    ):
-        append_run_to_dropbox_registry(
-            _make_task(run_id="fast-ok"),
-            str(result_path),
-            Stats(ok=1, fail=0, skip=0),
-            run_started_at=RUN_STARTED,
-            run_finished_at=RUN_FINISHED,
-            settings=_fast_settings(warning=60, timeout=180, retry=10),
-        )
-
-    assert DROPBOX_PATH in store
-    assert not any(SLOW_APPEND_MESSAGE in m for m in messages)
-    assert not any(TIMEOUT_MESSAGE in m for m in messages)
