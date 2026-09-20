@@ -6,7 +6,8 @@
 | **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-16 (PR #19, review `f29cc8918eef022e0a4b88b1ac7f59a67212798f`, закрытие `a05ee7f7d06d3dd801b58181de963d4832d9bfd9`, pin `950a66a745bbac64cbf2281951a5ed28e01474cf`), `ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md` |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-17-antares-entrypoint`, base `feat/task-2026-09-17-16-antares-assembly` |
+| **PR** | Draft [#20](https://github.com/deniskotdavydov1991-wq/Test/pull/20) `feat/task-2026-09-17-17-antares-entrypoint`, base `feat/task-2026-09-17-16-antares-assembly` |
+| **HEAD** | `bf1a1353ea89854c1431ce3037549bdc40278d79` |
 | **Риск** | low: только документы |
 
 План отдельного Antares process entry **подготовлен к review**. Runtime, mixed gate, Railway и профили **не** менялись. Isolated entrypoint, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** реализованы. Сборка TASK-16 остаётся реализованной и **не** выпущенной.
@@ -68,4 +69,4 @@ runtime/тесты TASK-17; реализация `apps/antares.py`; polling; wor
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-20 | план isolated Antares entrypoint подготовлен к review |
+| 2026-09-20 | план isolated Antares entrypoint подготовлен к review; Draft PR #20 |
