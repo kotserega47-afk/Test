@@ -11,7 +11,7 @@
 | **Закрытие docs** | `89873a0749708460579311b452613b1167e3df43` |
 | **Риск** | medium: смена способа регистрации script jobs в `JOB_REGISTRY` |
 
-Selective script registration реализована: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed bootstrap сохранён: `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated Antares assembly, entrypoint, `JOB_ACCEPT` и cutover **не** реализованы и **не** выпущены. Review пройден на HEAD `6e4c6c4…`. PR #18 остаётся Draft.
+Selective script registration реализована: `identity.py` / `bind.py` / `bootstrap.py`; пакетный `__init__` не импортирует runtime/registry и не регистрирует jobs. Mixed bootstrap сохранён: `tg_commands` явно вызывает `register_all_script_jobs()`. Исполнение scripts, delivery, Actor/context, правила и логика `operator_wallets_ready` не менялись. Isolated Antares assembly реализована в TASK-16 (PR #19, HEAD `f29cc89…`, не выпущена). Entrypoint, `JOB_ACCEPT` и cutover **не** реализованы. Review пройден на HEAD `6e4c6c4…`. PR #18 остаётся Draft.
 
 ---
 

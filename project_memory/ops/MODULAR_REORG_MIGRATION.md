@@ -26,14 +26,15 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-13 document ingest | код перенесён; review пройден (Draft PR #16, код `4a1e7796…`, закрытие `5f131ce…`); не выпущен | **нет** |
 | TASK-14 Antares assembly plan | план принят, review пройден (Draft PR #17, код `f123a4bf…`, закрытие `99d2db55…`); runtime сборки нет | **нет** |
 | TASK-15 script job bind | selective bind + mixed bootstrap; review пройден (Draft PR #18, HEAD `6e4c6c4…`); runtime сборки Antares нет; не выпущен | **нет** |
-| Модули проектов | пакеты `modules/*`; 11 callbacks в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
+| TASK-16 Antares assembly | сборка handlers/jobs без запуска; review пройден (Draft PR #19, HEAD `f29cc89…`); реализована, **не** выпущена; entrypoint/polling/worker/schedules/cutover нет | **нет** |
+| Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | isolated entry **не** готов; selective script registration review пройден (не выпущен); сборка Antares — TASK-16 | — |
+| Следующая | isolated Antares entrypoint — TASK-17 (план); сборка Antares review пройден, не выпущена | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 

@@ -32,7 +32,8 @@
 - [x] GPT review HEAD `f123a4bf…`: блокирующих нет
 - [ ] merge/deploy PR #17 (намеренно открыто)
 - [x] code PR script bind / TASK-15 (Draft PR #18, review HEAD `6e4c6c4…`; merge нет)
-- [ ] code PR сборка Antares / TASK-16 (отдельное задание)
+- [x] code PR сборка Antares / TASK-16 (Draft PR #19, review HEAD `f29cc89…`; реализована, не выпущена; merge нет)
+- [ ] isolated entrypoint / TASK-17 (отдельное задание)
 
 ---
 

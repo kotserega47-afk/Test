@@ -253,7 +253,9 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 
 Не в этом PR: Antares `get_handlers`, start/help/status, entrypoint, gate, `JOB_ACCEPT`.
 
-### Подэтап 2 — сборка этапа 1 (TASK-16, отдельный PR)
+### Подэтап 2 — сборка этапа 1 (TASK-16, review пройден, не выпущена)
+
+Сделано в Draft PR #19 (HEAD `f29cc89…`). Isolated entrypoint, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** входили.
 
 - `modules.antares.assembly` (имя фиксируется в code PR) + `cmd_start`/`cmd_help`/`cmd_status` в **`handlers.py`**
 - перенос whoami / reload_rules / rules_validate + mixed re-export
@@ -275,7 +277,7 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 1. Подэтап 1 (TASK-15) сделан: isolated может вызвать `register_script_job` без авторегистрации `hello_world`. Сборка handlers — отдельный TASK-16.
 2. `register_jobs()` по-прежнему импортирует downloader modules при вызове; не run.
 3. Грязный процесс после неуспешной частичной регистрации не восстанавливается in-process.
-4. Isolated entry / `PROJECT_PROFILE=antares` на mixed scheduler — другая задача.
+4. Isolated entry / `PROJECT_PROFILE=antares` на mixed scheduler — TASK-17 (план) / следующий code PR. Mixed gate не ослаблять.
 5. Импорт `JOB_REGISTRY` транзитивно грузит `dropbox_watcher` через `job_runner` → `rules_provider`. Split `job_runner` в TASK-16 автоматически не входит.
 
 `JOB_ACCEPT`, durable inbox, cutover — не блокеры этого плана.
