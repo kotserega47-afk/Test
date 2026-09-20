@@ -8,7 +8,7 @@
 | **Связанные артефакты** | TASK-15 (PR #18, закрытие `89873a0749708460579311b452613b1167e3df43`, pin `14e36a7ca86d0ee8ba591cb9e6a2aa9530739e17`), `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md` § подэтап 2 |
 | **PR** | Draft [#19](https://github.com/deniskotdavydov1991-wq/Test/pull/19) `feat/task-2026-09-17-16-antares-assembly`, base `feat/task-2026-09-17-15-script-job-bind` |
 | **HEAD (проверен GPT)** | `f29cc8918eef022e0a4b88b1ac7f59a67212798f` |
-| **Закрытие docs** | (этот коммит на ветке PR #19) |
+| **Закрытие docs** | `a05ee7f7d06d3dd801b58181de963d4832d9bfd9` |
 | **Риск** | medium: isolated сборка handlers/jobs без запуска |
 
 Подэтап 2 плана TASK-14: явная `assemble_antares`, новые Antares start/help/status, перенос whoami/reload_rules/rules_validate с identity re-export в mixed. Семь jobs на фактическом `JOB_REGISTRY`. Mixed start/help/status, `KNOWN_JOB_TYPES` и `expected_tg_commands.json` не менялись. Isolated entrypoint, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** реализованы. Сборка Antares **реализована, не выпущена**. Review **пройден** на HEAD `f29cc89…`. PR #19 остаётся Draft.
@@ -76,4 +76,4 @@ entrypoint; polling; worker execution; schedules; `JOB_ACCEPT`; split `job_runne
 | 2026-09-19 | сборка Antares без запуска; статус review |
 | 2026-09-19 | PR #19; параметризован расчёт job health на семь keys |
 | 2026-09-20 | GPT review HEAD `f29cc89…`: блокирующих нет; merge/deploy нет; PR #19 Draft |
-| 2026-09-20 | документационное закрытие на ветке PR #19; сборка реализована, не выпущена |
+| 2026-09-20 | документационное закрытие `a05ee7f7…`; PR #19 остаётся Draft |
