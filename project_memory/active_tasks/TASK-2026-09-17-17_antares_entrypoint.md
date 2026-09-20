@@ -7,7 +7,7 @@
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-16 (PR #19, review `f29cc8918eef022e0a4b88b1ac7f59a67212798f`, закрытие `a05ee7f7d06d3dd801b58181de963d4832d9bfd9`, pin `950a66a745bbac64cbf2281951a5ed28e01474cf`), `ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md` |
 | **PR** | Draft [#20](https://github.com/deniskotdavydov1991-wq/Test/pull/20) `feat/task-2026-09-17-17-antares-entrypoint`, base `feat/task-2026-09-17-16-antares-assembly` |
-| **HEAD** | (после этого коммита на PR #20) |
+| **HEAD** | `abb8a284feaa94d22d4137e6544776d9c88e4225` |
 | **Риск** | low: только документы |
 
 План отдельного Antares process entry **подготовлен к review**. Runtime, mixed gate, Railway и профили **не** менялись. Isolated entrypoint, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** реализованы. TASK-18 **не** начат.
