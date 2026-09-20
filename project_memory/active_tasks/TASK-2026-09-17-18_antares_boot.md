@@ -7,7 +7,7 @@
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-17 (PR #20, review `ed3cbaf2b240786c7985108dac9a7cd775f2b871`, закрытие pin `e3bbac8338c6a074f0fa9aef871c7b92f0cb5a2c`) |
 | **PR** | Draft [#21](https://github.com/deniskotdavydov1991-wq/Test/pull/21) `feat/task-2026-09-17-18-antares-boot`, base `feat/task-2026-09-17-17-antares-entrypoint` |
-| **HEAD (проверенные тесты)** | `54ffa35da381b286bcb31ce57f9e4a7bc519955f` |
+| **HEAD (проверенные тесты)** | `0603eb9ac42c3c04b282df6b38ed804b62db7307` |
 | **Риск** | medium: isolated boot + lazy sender imports |
 
 Isolated `python -m apps.antares`: gate → `{repo_root}/.env` (`override=False`) → token strip → AccessRules/logger → `assemble_antares` → диагностика → exit 0. Polling/worker/schedules **нет**. Mixed gate **не** менялся.
@@ -26,7 +26,7 @@ Isolated `python -m apps.antares`: gate → `{repo_root}/.env` (`override=False`
 
 Изменено: lazy-import `telegram_bot` в `telegram_transport`, bakai, registry, registry_refresh.
 
-Review-fix (тесты/harness, production не менялся): конфликт boot вносится один раз после полной загрузки модуля, без `__import__` hook и без доступа к частичным модулям; send-тесты в child-harness со stub до импорта; Dropbox/timeout fixtures с явным dropbox backend и блоком PG.
+Review-fix (тесты/harness, production не менялся): конфликт boot после полной загрузки модуля; send-тесты в child-harness. Подмена `_append_attempt` на тестовый Dropbox-алгоритм **удалена**.
 
 Не менялись: `scheduler.py`, `enforce_legacy_scheduler_profile`, Railway, `JOB_ACCEPT`.
 
@@ -38,30 +38,43 @@ Review-fix (тесты/harness, production не менялся): конфлик�
 - [x] Explicit `antares` only; отсутствие ключа в процессе → exit 2
 - [x] Lazy sender; harness запрещает загрузку telegram_bot/mixed/raccoon
 - [x] Успех: 17 commands + document, семь jobs, exit 0
-- [x] Review-fix: отказ boot по foreign keys / different AccessRules; send isolation; registry fixtures
-- [ ] GPT review нового diff (ещё не проверял)
+- [x] Review-fix: отказ boot по foreign keys / different AccessRules; send isolation
+- [x] Убрана тестовая реализация Dropbox append; карта покрытия ниже
+- [ ] GPT review нового test-diff (код/diff смотрел, тесты не запускал)
 - [ ] merge/deploy
 
 ---
 
 ## Прогоны (Cursor, Python 3.12.10)
 
-Review-fix (проверенный код тестов `54ffa35da381b286bcb31ce57f9e4a7bc519955f`):
+Исторический результат Cursor на `54ffa35…` (часть registry-тестов шла через замену `_append_attempt` на `dropbox_append_attempt`, это **не** regression текущего postgres append):
 
 ```
 python -m pytest tests/unit/test_antares_boot.py tests/unit/test_telegram_transport.py tests/unit/test_wallet_editor_dropbox_registry.py tests/unit/test_wallet_editor_registry_timeout.py tests/unit/test_wallet_editor_registry_refresh.py -q --tb=short
 ```
 
-**85 passed, 0 failed, 0 skipped, exit 0.** Интерпретатор: `C:\Users\sereg\AppData\Local\Programs\Python\Python312\python.exe` (Python **3.12.10**). Прогон Cursor.
+**85 passed, 0 failed, 0 skipped, exit 0.**
 
-Ожидаемые отказы boot (оба rc=1, без `antares boot ok`, без forbidden import / AttributeError / RecursionError):
+После удаления тестового append (`0603eb9ac42c3c04b282df6b38ed804b62db7307`, тот же набор файлов, Python **3.12.10**, прогон Cursor):
 
-- загрязнение registry: `JOB_REGISTRY has foreign keys: ['raccoon_hourly']`
-- несовместимый bind: `antares handlers already bound to a different AccessRules instance`
+**79 passed, 0 failed, 0 skipped, exit 0.**
 
-Production после review-fix не менялся; assembly/mixed regression не повторялись.
+Ожидаемые отказы boot (без изменений harness injection):
 
-Ранее, до review-fix: boot+send 23 passed; assembly 8 passed в составе 168 passed (parser/gate/mixed/handlers/jobs/routes/refresh).
+- `JOB_REGISTRY has foreign keys: ['raccoon_hourly']`
+- `antares handlers already bound to a different AccessRules instance`
+
+### Карта покрытия (после удаления dropbox_append_attempt)
+
+Реальные функции: isolated boot/`assemble_antares`; `send_text`/`send_document`; `_send_to_current_route`; `_send_chat_warning`; `_send_to_route`; `_process_missing_otlezka_warnings`; lifecycle/xlsx (`recalculate_all_results`, `rows_from_result_excel`, `normalize_all_results`, `save_registry_workbook`, `load_registry_frames`, `run_id_already_processed`); `append_run_to_dropbox_registry` orchestration (retry/timeout); `append_attempt_postgres`; `refresh_attempt_postgres` / `refresh_wallet_editor_registry_lifecycle`; settings/async staging/worker send-order.
+
+Подменённые границы: sender stub только в child-harness; `connection.connect` / `_get_dbx`; postgres load/persist/store; `_append_attempt` как узкая последовательность TRANSIENT/SUCCESS без workbook; `_send_to_route` в refresh (отправка refresh покрыта send-boundary).
+
+Не подтверждают текущий runtime: Dropbox rev-CAS upload как путь append (`upload_file_if_rev` внутри `_append_attempt`); исторический 85 passed на тестовом Dropbox-алгоритме.
+
+GPT проверил код/diff, тесты не запускал.
+
+Production registry и mixed gate не менялись.
 
 ---
 
@@ -69,8 +82,8 @@ Production после review-fix не менялся; assembly/mixed regression 
 
 | Кто | Что |
 |-----|-----|
-| Cursor | прогоны выше, включая review-fix 85 passed |
-| GPT | новый diff review-fix ещё не проверял |
+| Cursor | 85 passed (с заменой append); затем 79 passed без тестового Dropbox-алгоритма |
+| GPT | смотрел код/diff; тесты не запускал |
 
 polling; worker; schedules; idle; JOB_ACCEPT; Railway; cutover; merge; исходное Test.
 
@@ -82,3 +95,4 @@ polling; worker; schedules; idle; JOB_ACCEPT; Railway; cutover; merge; исхо�
 |------|---------|
 | 2026-09-20 | isolated Antares boot без polling |
 | 2026-09-20 | review-fix: conflict injection after load, send child-harness, dropbox fixtures; GPT новый diff ещё не проверял |
+| 2026-09-20 | убрана тестовая реализация registry append; GPT смотрел код/diff, тесты не запускал |

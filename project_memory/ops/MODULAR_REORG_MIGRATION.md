@@ -28,7 +28,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-15 script job bind | selective bind + mixed bootstrap; review пройден (Draft PR #18, HEAD `6e4c6c4…`); runtime сборки Antares нет; не выпущен | **нет** |
 | TASK-16 Antares assembly | сборка handlers/jobs без запуска; review пройден (Draft PR #19, HEAD `f29cc89…`); реализована, **не** выпущена; entrypoint/polling/worker/schedules/cutover нет | **нет** |
 | TASK-17 Antares entrypoint plan | план isolated `python -m apps.antares`; review пройден (Draft PR #20, HEAD `ed3cbaf…`); runtime не менялся | **нет** |
-| TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; lazy sender; без polling; review-fix harness/tests (`54ffa35…`); GPT новый diff ещё не проверял | **нет** |
+| TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; lazy sender; без polling; тестовый Dropbox append убран; GPT смотрел код/diff, тесты не запускал | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
