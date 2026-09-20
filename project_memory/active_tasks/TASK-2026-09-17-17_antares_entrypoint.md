@@ -8,7 +8,7 @@
 | **Связанные артефакты** | TASK-16 (PR #19, review `f29cc8918eef022e0a4b88b1ac7f59a67212798f`, закрытие `a05ee7f7d06d3dd801b58181de963d4832d9bfd9`, pin `950a66a745bbac64cbf2281951a5ed28e01474cf`), `ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md` |
 | **PR** | Draft [#20](https://github.com/deniskotdavydov1991-wq/Test/pull/20) `feat/task-2026-09-17-17-antares-entrypoint`, base `feat/task-2026-09-17-16-antares-assembly` |
 | **HEAD (проверен GPT)** | `ed3cbaf2b240786c7985108dac9a7cd775f2b871` |
-| **Закрытие docs** | (этот коммит на PR #20) |
+| **Закрытие docs** | `6dfef8ab7b1276fc7d2327628c3989adb35d1912` |
 | **Риск** | low: только документы |
 
 План isolated Antares entry **принят**. Runtime, mixed gate, Railway и профили **не** менялись. Isolated entrypoint, polling, worker, schedules, `JOB_ACCEPT` и cutover **не** реализованы. Review **пройден** на HEAD `ed3cbaf…`. PR #20 остаётся Draft. Реализация boot — TASK-18.
@@ -60,4 +60,4 @@ runtime/тесты TASK-17; реализация `apps/` в этом PR; polling
 | 2026-09-20 | план isolated Antares entrypoint подготовлен к review; Draft PR #20 |
 | 2026-09-20 | уточнён выполнимый boot: цепочки sender, harness-запрет, exit 0, dotenv/профиль |
 | 2026-09-20 | GPT review HEAD `ed3cbaf…`: план принят; merge/deploy нет |
-| 2026-09-20 | документационное закрытие на ветке PR #20 |
+| 2026-09-20 | документационное закрытие `6dfef8ab…`; PR #20 остаётся Draft |
