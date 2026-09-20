@@ -28,15 +28,16 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-15 script job bind | selective bind + mixed bootstrap; review пройден (Draft PR #18, HEAD `6e4c6c4…`); runtime сборки Antares нет; не выпущен | **нет** |
 | TASK-16 Antares assembly | сборка handlers/jobs без запуска; review пройден (Draft PR #19, HEAD `f29cc89…`); реализована, **не** выпущена; entrypoint/polling/worker/schedules/cutover нет | **нет** |
 | TASK-17 Antares entrypoint plan | план isolated `python -m apps.antares`; review пройден (Draft PR #20, HEAD `ed3cbaf…`); runtime не менялся | **нет** |
-| TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; без sender/polling/worker/schedules; review пройден (Draft PR #21, HEAD `2c6eeac…`; тесты `0603eb9…`, 79 passed Cursor 3.12.10); GPT код/diff, набор не запускал; исторический 85 passed с ограничением fake-append; **не выпущено** | **нет** |
+| TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; без sender/polling/worker/schedules; review пройден (Draft PR #21, HEAD `2c6eeac…`; тесты `0603eb9…`, 79 passed Cursor 3.12.10); GPT код/diff, набор не запускал; исторический 85 passed с ограничением fake-append; закрытие docs `d1d11e3…`; **не выпущено** | **нет** |
+| TASK-19 Antares lifecycle plan | контракт start/stop, фильтр семи keys, изоляция, первый code = argv `run` + fail-fast snapshot; runtime не менялся; подготовлено к review | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | TASK-19 контракт lifecycle запуска/остановки Antares (документы; runtime не менять); boot TASK-18 review пройден, не выпущен | — |
+| Следующая | после review TASK-19 — code PR: argv `run` + fail-fast snapshot, без Application/polling; boot TASK-18 не выпущен | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 и Draft PR TASK-19 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 

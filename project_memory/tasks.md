@@ -293,6 +293,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-16** | **review** | Isolated Antares handler/job assembly without start; review passed (HEAD `f29cc89`); assembly not released; **not merged** | Draft PR #19 |
 | **TASK-2026-09-17-17** | **review** | Plan isolated Antares process entry; review passed (HEAD `ed3cbaf`); **not merged** | Draft PR #20 |
 | **TASK-2026-09-17-18** | **review** | Isolated Antares boot without polling; review passed (HEAD `2c6eeac`); 79 passed Cursor 3.12.10; GPT code/diff only; **not released / not merged** | Draft PR #21 |
+| **TASK-2026-09-17-19** | **review** | Plan Antares start/stop lifecycle; docs only; **not merged** | Draft PR (this branch) |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
