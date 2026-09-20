@@ -292,6 +292,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-15** | **review** | Selective script JOB_REGISTRY bind; review passed (HEAD `6e4c6c4`); **not merged** | Draft PR #18 |
 | **TASK-2026-09-17-16** | **review** | Isolated Antares handler/job assembly without start; review passed (HEAD `f29cc89`); assembly not released; **not merged** | Draft PR #19 |
 | **TASK-2026-09-17-17** | **review** | Plan isolated Antares process entry; review passed (HEAD `ed3cbaf`); **not merged** | Draft PR #20 |
+| **TASK-2026-09-17-18** | **review** | Isolated Antares boot without polling; ready for GPT review; **not merged** | Draft PR |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

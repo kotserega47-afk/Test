@@ -228,7 +228,7 @@ def test_bakai_send_current_flag_off_legacy(monkeypatch: pytest.MonkeyPatch) -> 
         "integrations.bakai_monitor_playwright.send_message_to_route",
     ) as send_route:
         with patch(
-            "integrations.bakai_monitor_playwright.send_message_sync",
+            "integrations.telegram_bot.send_message_sync",
         ) as send_sync:
             bakai._send_to_current_route("current msg")
     send_sync.assert_called_once_with("current msg", chat_id="-legacy-current")
@@ -243,7 +243,7 @@ def test_bakai_send_alert_flag_on_rules(monkeypatch: pytest.MonkeyPatch) -> None
             "integrations.bakai_monitor_playwright.send_message_to_route",
         ) as send_route:
             with patch(
-                "integrations.bakai_monitor_playwright.send_message_sync",
+                "integrations.telegram_bot.send_message_sync",
             ) as send_sync:
                 bakai._send_to_alert_route("alert msg")
     send_route.assert_called_once_with(ROUTE_BAKAI_RATE_ALERT, "alert msg")

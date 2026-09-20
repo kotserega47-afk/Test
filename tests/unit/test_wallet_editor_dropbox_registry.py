@@ -522,7 +522,7 @@ def test_missing_otlezka_warning_sent_once_per_partner(registry_env, tmp_path):
     messages: list[str] = []
 
     with patch(
-        "integrations.wallet_editor_registry.send_message_sync",
+        "integrations.telegram_bot.send_message_sync",
         side_effect=lambda text, chat_id=None, **_kw: messages.append(text),
     ):
         append_run_to_dropbox_registry(
@@ -550,7 +550,7 @@ def test_missing_otlezka_warning_state_cleared_after_fix(registry_env, tmp_path)
     result_path = tmp_path / "result.xlsx"
     _write_result_xlsx(result_path, partner="Teon")
 
-    with patch("integrations.wallet_editor_registry.send_message_sync"):
+    with patch("integrations.telegram_bot.send_message_sync"):
         append_run_to_dropbox_registry(
             _make_task(run_id="teon-1"),
             str(result_path),
@@ -571,7 +571,7 @@ def test_missing_otlezka_warning_state_cleared_after_fix(registry_env, tmp_path)
         )
     store[DROPBOX_PATH] = local.read_bytes()
 
-    with patch("integrations.wallet_editor_registry.send_message_sync"):
+    with patch("integrations.telegram_bot.send_message_sync"):
         append_run_to_dropbox_registry(
             _make_task(run_id="teon-2"),
             str(result_path),
@@ -915,7 +915,7 @@ def test_registry_rev_conflict_warns_telegram(registry_env, tmp_path):
         return_value="rev-changed-by-user",
     ):
         with patch(
-            "integrations.wallet_editor_registry.send_message_sync",
+            "integrations.telegram_bot.send_message_sync",
             side_effect=lambda text, chat_id=None, **_kw: messages.append(text),
         ):
             append_run_to_dropbox_registry(

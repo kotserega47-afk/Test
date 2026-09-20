@@ -171,6 +171,8 @@ def test_conversion_not_using_wallet_route() -> None:
 def _patch_wallet_cycle_send_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTARES_LOGIN", "u")
     monkeypatch.setenv("ANTARES_PASSWORD", "p")
+    monkeypatch.setattr(downloader_wallets, "LOGIN", "u")
+    monkeypatch.setattr(downloader_wallets, "PASSWORD", "p")
 
 
 def _patch_wallet_params() -> object:

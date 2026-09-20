@@ -15,7 +15,6 @@ from core.datetime_utils import now_msk
 from core.job_runner import Actor
 from integrations.dropbox_watcher import download_file_with_rev, upload_file_if_rev
 from integrations.telegram_routes import resolve_route_chat_id, routes_from_rules_v2_enabled
-from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry import _lock, wallet_editor_dropbox_path
 from integrations.wallet_editor_registry_db.config import mirror_enabled
 from integrations.wallet_editor_registry_db.mirror import (
@@ -207,6 +206,8 @@ def build_refresh_report(
 
 
 def _send_to_route(route_key: str, text: str) -> bool:
+    from integrations.telegram_bot import send_message_sync
+
     resolution = resolve_route_chat_id(route_key)
     if resolution.chat_id:
         try:

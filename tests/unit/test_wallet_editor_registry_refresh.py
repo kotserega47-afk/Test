@@ -138,7 +138,7 @@ def refresh_env(monkeypatch, tmp_path):
             return_value=MagicMock(chat_id=-9001, source="test"),
         ),
         patch(
-            "integrations.wallet_editor_registry_refresh.send_message_sync",
+            "integrations.telegram_bot.send_message_sync",
             return_value=None,
         ),
     ):

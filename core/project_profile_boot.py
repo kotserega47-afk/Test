@@ -14,11 +14,16 @@ from typing import Final
 from core.project_profile import InvalidProjectProfileError, parse_project_profile
 
 LEGACY_MIXED: Final = "legacy_mixed"
+ANTARES_ISOLATED: Final = "antares"
 _EXIT_CODE: Final = 2
 
 
 class UnwiredProjectProfileError(RuntimeError):
     """Explicit profile requested, but no isolated entry exists yet."""
+
+
+class IsolatedAntaresProfileError(RuntimeError):
+    """Isolated Antares entry refused this PROJECT_PROFILE value."""
 
 
 def project_profile_env_value(
@@ -50,5 +55,33 @@ def enforce_legacy_scheduler_profile(
     try:
         return decide_legacy_scheduler_boot(raw)
     except (InvalidProjectProfileError, UnwiredProjectProfileError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(_EXIT_CODE) from exc
+
+
+def decide_antares_isolated_boot(value: str | None) -> str:
+    """Return ``antares`` only for an explicit parser match. Does not import jobs."""
+    selection = parse_project_profile(value)
+    if not selection.implicit_default and selection.name == "antares":
+        return ANTARES_ISOLATED
+    if selection.implicit_default:
+        raise IsolatedAntaresProfileError(
+            "PROJECT_PROFILE is unset or empty; "
+            "isolated Antares entry requires PROJECT_PROFILE=antares."
+        )
+    raise IsolatedAntaresProfileError(
+        f"PROJECT_PROFILE={selection.name!r} is not allowed "
+        "for isolated Antares entry."
+    )
+
+
+def enforce_antares_isolated_profile(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Gate for ``apps.antares``. SystemExit on reject; parser never exits."""
+    raw = project_profile_env_value(environ)
+    try:
+        return decide_antares_isolated_boot(raw)
+    except (InvalidProjectProfileError, IsolatedAntaresProfileError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(_EXIT_CODE) from exc

@@ -114,6 +114,29 @@ def test_enforce_exits_nonzero_for_unwired() -> None:
     assert exc.value.code == 2
 
 
+def test_decide_antares_isolated_accepts_explicit_antares() -> None:
+    from core.project_profile_boot import ANTARES_ISOLATED, decide_antares_isolated_boot
+
+    assert decide_antares_isolated_boot("antares") == ANTARES_ISOLATED
+    assert decide_antares_isolated_boot("  antares  ") == ANTARES_ISOLATED
+
+
+@pytest.mark.parametrize("value", [None, "", "  \t", "raccoon", "wr"])
+def test_decide_antares_isolated_rejects_non_explicit_antares(value: str | None) -> None:
+    from core.project_profile_boot import IsolatedAntaresProfileError, decide_antares_isolated_boot
+
+    with pytest.raises(IsolatedAntaresProfileError):
+        decide_antares_isolated_boot(value)
+
+
+def test_enforce_antares_isolated_exits_when_env_key_missing() -> None:
+    from core.project_profile_boot import enforce_antares_isolated_profile
+
+    with pytest.raises(SystemExit) as exc:
+        enforce_antares_isolated_profile(environ={})
+    assert exc.value.code == 2
+
+
 def _assert_reject_subprocess(profile: str) -> None:
     proc = _run_python(_REJECT_IMPORT, {"PROJECT_PROFILE": profile})
     assert proc.returncode == 2, proc.stderr + proc.stdout

@@ -226,7 +226,7 @@ def test_registry_warning_before_timeout(registry_store, tmp_path):
             return_value="rev-other",
         ):
             with patch(
-                "integrations.wallet_editor_registry.send_message_sync",
+                "integrations.telegram_bot.send_message_sync",
                 side_effect=lambda text, **kw: messages.append(text),
             ):
                 append_run_to_dropbox_registry(
@@ -255,7 +255,7 @@ def test_registry_timeout_skips_append(registry_store, tmp_path):
         "integrations.dropbox_watcher.get_dropbox_file_rev",
         return_value="rev-changed",
     ):
-        with patch("integrations.wallet_editor_registry.send_message_sync"):
+        with patch("integrations.telegram_bot.send_message_sync"):
             append_run_to_dropbox_registry(
                 _make_task(run_id="timeout-skip"),
                 str(result_path),
@@ -288,7 +288,7 @@ def test_registry_retry_interval_used(registry_store, tmp_path):
             "integrations.dropbox_watcher.get_dropbox_file_rev",
             return_value="rev-b",
         ):
-            with patch("integrations.wallet_editor_registry.send_message_sync"):
+            with patch("integrations.telegram_bot.send_message_sync"):
                 append_run_to_dropbox_registry(
                     _make_task(run_id="retry-interval"),
                     str(result_path),
@@ -408,7 +408,7 @@ def test_registry_success_fast_no_warning(registry_store, tmp_path):
     _write_result(result_path)
 
     with patch(
-        "integrations.wallet_editor_registry.send_message_sync",
+        "integrations.telegram_bot.send_message_sync",
         side_effect=lambda text, **kw: messages.append(text),
     ):
         append_run_to_dropbox_registry(

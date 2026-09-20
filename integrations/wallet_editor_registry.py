@@ -21,7 +21,6 @@ from integrations.dropbox_watcher import (
     download_file_with_rev,
     upload_file_if_rev,
 )
-from integrations.telegram_bot import send_message_sync
 from integrations.wallet_editor_registry_lifecycle import (
     ACTION_REMOVE_PARTNER,
     OUTBOX_STATUS_FAILED,
@@ -142,6 +141,8 @@ def resolve_source(operator_profile: str) -> str:
 
 
 def _send_chat_warning(chat_id: int, text: str) -> None:
+    from integrations.telegram_bot import send_message_sync
+
     try:
         send_message_sync(text, chat_id=str(chat_id))
     except Exception:
@@ -166,6 +167,7 @@ def _send_missing_otlezka_warnings(
     *,
     details: dict[str, str] | None = None,
 ) -> None:
+    from integrations.telegram_bot import send_message_sync
     from integrations.wallet_editor_registry_lifecycle import WARN_MESSAGE_TEMPLATE
 
     details = details or {}

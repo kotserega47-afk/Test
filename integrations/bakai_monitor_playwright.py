@@ -8,7 +8,6 @@ from playwright.sync_api import sync_playwright
 from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from core.playwright_cleanup import close_playwright_stack
-from integrations.telegram_bot import send_message_sync
 from integrations.telegram_routes import (
     ENV_BAKAI_RATE_ALERT_LEGACY,
     ENV_BAKAI_RATE_CURRENT_LEGACY,
@@ -58,6 +57,8 @@ def _legacy_env_chat(env_name: str) -> str | None:
 
 
 def _send_to_current_route(text: str, *, override_chat_id: str | None = None) -> None:
+    from integrations.telegram_bot import send_message_sync
+
     if override_chat_id and not routes_from_rules_v2_enabled():
         send_message_sync(text, chat_id=override_chat_id)
         return
@@ -75,6 +76,8 @@ def _send_to_current_route(text: str, *, override_chat_id: str | None = None) ->
 
 
 def _send_to_alert_route(text: str) -> None:
+    from integrations.telegram_bot import send_message_sync
+
     if routes_from_rules_v2_enabled():
         send_message_to_route(ROUTE_BAKAI_RATE_ALERT, text)
         return
