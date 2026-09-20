@@ -277,7 +277,7 @@ Mixed baseline — **отдельный** прогон: inventory, registration 
 1. Подэтап 1 (TASK-15) сделан: isolated может вызвать `register_script_job` без авторегистрации `hello_world`. Сборка handlers — отдельный TASK-16.
 2. `register_jobs()` по-прежнему импортирует downloader modules при вызове; не run.
 3. Грязный процесс после неуспешной частичной регистрации не восстанавливается in-process.
-4. Isolated entry — план TASK-17 (`ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md`). Mixed gate не ослаблять. Boot-код без polling — отдельный code PR.
+4. Isolated entry — план TASK-17 (`ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md`). Mixed gate не ослаблять и для isolated **не** потребуется. Boot-код — отдельный TASK-18 (не начат): lazy-import sender + exit 0 после сборки.
 5. Импорт `JOB_REGISTRY` транзитивно грузит `dropbox_watcher` через `job_runner` → `rules_provider`. Split `job_runner` в TASK-16 автоматически не входит.
 
 `JOB_ACCEPT`, durable inbox, cutover — не блокеры этого плана.

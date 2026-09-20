@@ -31,7 +31,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | isolated entrypoint **план** TASK-17 (готово к review); boot-код без polling — следующий code PR; сборка Antares review пройден, не выпущена | — |
+| Следующая | isolated entrypoint **план** TASK-17 (уточнён boot-контракт, готово к review, PR #20); TASK-18 boot-код **не** начат | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 

@@ -4,214 +4,188 @@
 |------|----------|
 | **Статус** | PROPOSED (только документы; runtime не менялся) |
 | **База** | закрытие TASK-16 `950a66a745bbac64cbf2281951a5ed28e01474cf` (review HEAD `f29cc89…`) |
+| **Уточнение контракта** | после review HEAD `40d84b262c5bb93450c288db86aa1cb049b14cab` |
 | **Сборка** | [MODULAR_REORG_ANTARES_ASSEMBLY.md](MODULAR_REORG_ANTARES_ASSEMBLY.md) |
 | **ADR** | [MODULAR_REORG_ADR.md](MODULAR_REORG_ADR.md) `apps/` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Этот документ — контракт **отдельного** процесса Antares. Mixed `scheduler.py` и `enforce_legacy_scheduler_profile()` остаются как есть: явный `PROJECT_PROFILE=antares` на mixed entry по-прежнему отказ (exit 2). Railway `startCommand`, профили production, merge и cutover **не** входят.
+Этот документ — контракт **отдельного** процесса Antares. Mixed `scheduler.py` и `enforce_legacy_scheduler_profile()` остаются как есть: явный `PROJECT_PROFILE=antares` на mixed entry — отказ (exit 2). Isolated entry **не** требует и **не** предполагает последующего ослабления mixed gate: это другой файл запуска. Railway `startCommand`, профили production, merge и cutover **не** входят.
 
 ---
 
-## 1. Путь и команда
+## 1. Путь, пакет `apps` и команда
 
 | | Контракт | Сейчас (CONFIRMED) |
 |--|----------|--------------------|
-| Isolated entry | `apps/antares.py` (тонкий process entry по ADR) | файла **нет** |
-| Команда (локально / subprocess) | `py -3.12 apps/antares.py` из корня репозитория | не существует |
-| Mixed entry | `python scheduler.py` | `scheduler.py` L368–369 `if __name__ == "__main__": main()` |
-| Prod start | `/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py` | `railway.toml` `[deploy].startCommand` |
+| Пакет | `apps/` — Python package: `apps/__init__.py` (пустой допустим) + `apps/antares.py` | каталога **нет** |
+| Команда | из **корня репозитория**: `py -3.12 -m apps.antares` | не существует |
+| `sys.path` | `antares.py` добавляет корень репозитория (`Path(__file__).resolve().parent.parent`) в `sys.path` **сам**, без пользовательского `PYTHONPATH` | — |
+| Mixed | `python scheduler.py` | L368–369 |
+| Prod | `/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py` | `railway.toml` |
 
-Первый code PR **не** меняет `railway.toml`, `nixpacks.toml`, `Procfile`. Isolated команда — только новый файл + тесты. Выкат на сервис Test этой командой — отдельный ops-PR после приёмки.
+Не считать командой `python apps/antares.py`: тогда `sys.path[0]` = `apps/`, `import core` ломается. `-m apps.antares` из корня находит пакет `apps`; вставка корня из `__file__` даёт `core` / `modules` / `integrations`.
 
-Не вызывать isolated entry через `import scheduler` / `python scheduler.py`: mixed gate отклонит `antares`.
-
----
-
-## 2. Допустимый `PROJECT_PROFILE` и ранний отказ
-
-Парсер `core.project_profile.parse_project_profile` **не** менять. Isolated gate — **новая** функция (тот же модуль `project_profile_boot.py` или соседний), **без** изменения `decide_legacy_scheduler_boot` / `enforce_legacy_scheduler_profile`.
-
-| Вход | Isolated `apps/antares.py` | Mixed `scheduler.py` (без изменений) |
-|------|---------------------------|--------------------------------------|
-| `PROJECT_PROFILE=antares` (точное имя, `implicit_default=False`) | **допуск** после isolated gate | `UnwiredProjectProfileError`, exit **2** |
-| unset / `""` / whitespace (`implicit_default=True`) | **отказ** рано: это documented mixed, не Antares | `legacy_mixed`, продолжение |
-| `raccoon` / `wr` | **отказ** рано | отказ exit 2 |
-| неизвестное значение | **отказ** (`InvalidProjectProfileError`) | отказ exit 2 |
-
-Отказ isolated gate: stderr + `SystemExit` 2 **до** импорта Telegram, `JOB_REGISTRY`, `assemble_antares`, `telegram_bot`, worker, schedules.
-
-`PROJECT_PROFILE=antares` **не** включать на mixed entry в этом же PR.
+Первый code PR **не** меняет `railway.toml`, `nixpacks.toml`, `Procfile`. Не вызывать isolated через `import scheduler` / `python scheduler.py`.
 
 ---
 
-## 3. Порядок: gate → rules/logger → assembly → запрет старта при сбое
+## 2. Профиль: окружение процесса, затем dotenv
 
-Целевой `main` isolated entry (первый code PR реализует шаги 1–5 **без** шагов 6–9):
+Парсер `parse_project_profile` **не** менять. Isolated gate — **новая** функция; `decide_legacy_scheduler_boot` / `enforce_legacy_scheduler_profile` **без** смены поведения.
 
-1. Isolated profile gate (§ 2).
-2. Явный `load_dotenv()` **после** gate (сейчас dotenv только в `integrations.telegram_bot` на import, `scheduler.py` сам dotenv не вызывает).
-3. Проверка `TELEGRAM_BOT_TOKEN` (непусто). Отказ **до** импорта `telegram_bot` / Application, чтобы не стартовал sender loop.
-4. `AccessRules(os.getenv("RULES_XLSX_PATH", "").strip())` + MAIN logger. Конструктор workbook **не** читает (как mixed).
-5. `assemble_antares(rules=…, logger=…)`. Любой `AntaresAssemblyError` / сбой импорта → `SystemExit` ≠ 0, **без** `Application`, `run_polling`, `ensure_worker_started`, `schedule_loop`.
-6. *(будущий code, не первый PR)* `get_snapshot(force_sync=True)` fail-fast workbook.
-7. *(будущий)* `Application.builder().token(…).concurrent_updates(True)` + `get_antares_handlers()`.
-8. *(будущий)* `ensure_worker_started()` затем daemon `schedule_loop` **только** с фильтром семи keys.
-9. *(будущий)* `app.run_polling(close_loop=False)` как mixed, пока нет отдельного shutdown-контракта.
+**Порядок:** прочитать `PROJECT_PROFILE` из `os.environ` процесса (**до** `load_dotenv`). Нормализация — существующий parser: отсутствует ключ → `None` → `implicit_default=True`; `""` / whitespace → strip → `implicit_default=True`; точное `antares`/`raccoon`/`wr` → `implicit_default=False`; иное → `InvalidProjectProfileError`.
 
-Смешанный `main()` сегодня (CONFIRMED, `scheduler.py` L349–365): token → Application → mixed `get_handlers()` → `RULES.get_snapshot(force_sync=True)` → worker → `schedule_loop` thread → `run_polling`. Импорты mixed jobs уже произошли **до** `main` (L38–42), после mixed gate (L4–8). Isolated **не** копировать этот import-порядок.
+Профиль, который есть **только** в `.env`, **не** даёт допуск (dotenv ещё не читали).
 
----
+| Вход процесса (до dotenv) | Isolated `-m apps.antares` | Mixed `scheduler.py` |
+|---------------------------|----------------------------|----------------------|
+| точное `PROJECT_PROFILE=antares` | допуск | exit **2** (без изменений) |
+| ключ отсутствует / `""` / whitespace | отказ exit 2 (это mixed, не Antares) | `legacy_mixed` |
+| `raccoon` / `wr` | отказ exit 2 | отказ exit 2 |
+| неизвестное значение | отказ exit 2 | отказ exit 2 |
 
-## 4. Будущий старт и остановка компонентов
+Отказ gate: stderr + exit 2 **до** dotenv, token, `assemble_antares`, `telegram_bot`, worker, schedules.
 
-Порядок **старта** (после успешной сборки; не в первом code PR):
+### `.env`
 
-1. Isolated gate + dotenv + token.
-2. Rules/logger + `assemble_antares`.
-3. Fail-fast rules snapshot.
-4. Telegram Application + Antares handlers (17 CommandHandler + Document.ALL).
-5. Wallet Editor worker (`automation.worker.ensure_worker_started`).
-6. Filtered schedule thread.
-7. Polling.
+| Правило | Значение |
+|---------|----------|
+| Путь | только `{repo_root}/.env`, где `repo_root = Path(__file__).resolve().parent.parent` для `apps/antares.py` |
+| Вызов | `load_dotenv(dotenv_path=repo_root / ".env", override=False)` |
+| Поиск | **не** вызывать `find_dotenv()`, **не** обходить родительские каталоги |
+| Файл отсутствует | допустимо (Railway env); загрузка no-op |
+| Тесты | временный `.env` в sandbox; **без** рабочих credentials / боевого token |
 
-Порядок **остановки** (сейчас в mixed **нет** graceful shutdown: `run_polling(close_loop=False)`, sender loop `run_forever` daemon, schedule_loop daemon). Зафиксировать как цель, не реализовывать в первом code PR:
-
-1. Прекратить polling (не принимать новые updates).
-2. Остановить schedule thread (не диспатчить новые jobs).
-3. Дождаться / отказать новые `dispatch_job_*` / `request_job`.
-4. Остановить profile worker queues (`automation.worker`).
-5. Остановить sender loop (`integrations.telegram_bot.loop.stop` / join thread) — сегодня stop API **нет**.
-6. Не считать `close_loop=False` контрактом isolated shutdown, пока нет явной реализации.
-
-Первый code PR **не** вводит новый shutdown; только документирует, что после ошибки сборки шаги 3–7 не начинаются.
+Token **после** этой загрузки: `(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()`; whitespace = пусто → отказ **до** import `telegram_bot`. Не использовать `TG_BOT_TOKEN`.
 
 ---
 
-## 5. Обследование исходников (факты / неизвестное)
+## 3. Boot: единственное поведение
 
-### 5.1 Токен, routes, workbook, `.env`
+Первый code PR реализует **только** шаги 1–6. Idle-режима, polling и фонового ожидания **нет**.
 
-| Тема | CONFIRMED | Следствие для isolated |
-|------|-----------|------------------------|
-| Token | Mixed: `BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")` после импортов; `main` бросает, если пусто. `telegram_bot`: `load_dotenv()` затем `TELEGRAM_TOKEN` на import. Platform Raccoon в survey — `TG_BOT_TOKEN` (другой репозиторий). | Isolated читать **`TELEGRAM_BOT_TOKEN` после dotenv**, до `telegram_bot`. Не переключать на `TG_BOT_TOKEN`. |
-| `.env` | Только `telegram_bot` (и CLI tools). Railway задаёт env без файла. | Явный dotenv в entry **после** gate, один раз. Не импортировать `telegram_bot` ради dotenv. |
-| Workbook | `RULES_XLSX_PATH` → `AccessRules` → `get_snapshot_v2` / `rules_provider` → `dropbox_watcher.download_file`. Конструктор не качает файл. | Сборка (шаг 5) workbook не обязана читать. Fail-fast snapshot — шаг 6 (следующий code). |
-| Routes | `ALLOWED_TELEGRAM_ROUTE_KEYS` содержит и Antares (`platform_*`, `conversion_wallet_editor`, `bakai_*`, WE), и **`raccoon_*`**, и `analiz_*`. Jobs Antares шлют через `send_message_to_route` на platform/WE/bakai. `/status` mixed helper **не** фильтрует raccoon route keys. | Первый entry PR routes не режет. Чужие route keys в constants — не регистрация jobs. Фильтр status/routes — не минимальный code. |
+1. Isolated gate по `os.environ` (до dotenv).
+2. `load_dotenv` по § 2.
+3. Token strip; пусто → exit ≠ 0.
+4. `AccessRules(RULES_XLSX_PATH)` + MAIN logger (конструктор workbook не читает).
+5. `assemble_antares(rules=…, logger=…)`.
+6. **Успех:** краткий диагностический вывод (профиль, факт сборки, число handlers, семь keys) → **`SystemExit` / exit 0**. Процесс **завершается**. Нет `run_polling`, worker, `schedule_loop`, idle sleep.
 
-### 5.2 Import-time sender loop и внешние clients
+Сбой gate / token / `AntaresAssemblyError` / сбой импорта → exit ≠ 0, без шагов 6 (успех) и без старта компонентов.
 
-| Тема | CONFIRMED | Следствие |
-|------|-----------|-----------|
-| Sender loop | `telegram_bot` L346–356: `asyncio.new_event_loop()` + daemon `run_forever` **на import**, даже если token пуст (`bot is None`). | Isolated **не** импортировать `telegram_bot` до успешной сборки и до решения стартовать sender/polling. `handlers.cmd_status` делает lazy import `get_telegram_sender_health_snapshot` — сработает только при `/status`, не при `assemble_antares`. |
-| Dropbox | `core.job_runner` → `rules_provider` → `import dropbox_watcher`. `_get_dbx()` lazy при download. | Import модуля Dropbox при сборке неизбежен, пока нет split `job_runner`. Соединение — при snapshot/download, не на import. |
-| Playwright / engine | `register_jobs()` подгружает downloader-модули при **вызове** сборки; `automation.engine` — при WE task, не при assemble. | Сборка уже в TASK-16. Первый entry вызывает `assemble_antares`, не `engine.run`. |
-| HTTPX Bot | `telegram_bot` создаёт `HTTPXRequest` + `Bot` на import. | Ещё один аргумент отложить import `telegram_bot`. |
+Поздние шаги (**не** boot-PR): fail-fast snapshot; Application + handlers; worker; filtered schedules; polling.
 
-### 5.3 Чужие schedules
-
-| Тема | CONFIRMED |
-|------|-----------|
-| Loader | `core.schedules.load_schedules` возвращает **все** enabled rows workbook, без allowlist job_type. |
-| Dispatch | `schedule_loop` для каждого `s.job_type` вызывает `dispatch_job_background` → `request_job`. |
-| Unknown job | `JOB_REGISTRY.get` is None → event `job_failed` / `unknown_job_type`, **без** lock. Snapshot rules всё равно читается. |
-
-Isolated **не** должен крутить raccoon/hello schedules. Фильтр: только `ANTARES_ASSEMBLY_JOB_TYPES` (семь keys) **перед** dispatch. Без фильтра чужая строка workbook даст failed events и лишний rules sync.
-
-Фильтр schedules — **не** в первом code PR (там нет `schedule_loop`). Обязателен в PR, который включает шаг 8.
-
-Содержимое prod `rules.xlsx` (есть ли raccoon rows на сервисе Test) — **UNKNOWN** (survey U12).
-
-### 5.4 State, locks, tmp, очереди
-
-| Ресурс | Путь / объект | Общий с mixed? |
-|--------|----------------|----------------|
-| Job PID locks | `STATE_DIR/locks/<job>.lock` (`job_runner`, default `/data/state`) | **да**, те же семь Antares keys + raccoon names если mixed жив |
-| Scheduler clocks | in-memory `next_every` / `next_cron` процесса | нет шаринга между процессами |
-| WE ingest tmp | `modules.antares.document_ingest.TMP_DIR` = `/tmp/wallet_editor` | **да**, если два процесса |
-| WE results | `automation.runtime.WALLET_EDITOR_RESULT_DIR` = `/tmp/wallet_editor` | **да** |
-| Auth state | `/tmp/auth_state_wallet_editor.json` / per-operator env | **да** |
-| Durable WE | `{STATE_DIR}/wallet_editor/…` outbox/results | **да** |
-| Sender queue | `telegram_bot.queue` asyncio, in-process | отдельная на процесс; **два polling** на один token — конфликт Telegram |
-| Job executor | `core.job_dispatch` ThreadPoolExecutor, process-local | process-local |
-| Profile workers | `automation.worker._profile_workers` Queue+Thread | process-local; диск/Antares UI — нет |
-
-Первый isolated process **не** вводит отдельные `STATE_DIR` / tmp. Два живых процесса (mixed prod + isolated) на одном токене и `STATE_DIR` — **блокер cutover**, не блокер docs/первого code.
-
-### 5.5 Общий worker / engine
-
-`automation.worker` + `automation.engine` — единственный WE runtime (ingest, add/edit, auto-enable batch). Isolated Antares **должен** использовать тот же worker после старта компонентов. Raccoon downloaders worker **не** используют. Ядро `job_runner.request_job` общее; изоляция — составом `JOB_REGISTRY` после `assemble_antares` (семь keys, TASK-16).
-
-Split `job_runner` / отдельный engine **не** входят в первый entry PR.
+Mixed `main()` (CONFIRMED L349–365) не копировать.
 
 ---
 
-## 6. Минимальный следующий code PR
+## 4. Будущий старт и остановка (после boot-PR)
 
-**Один** code PR после этого плана (предлагаемое имя TASK-18 / `feat/task-…-18-antares-entrypoint-boot`):
+Старт: gate + dotenv + token → rules/logger → assembly → snapshot → Application/handlers → worker → filtered schedule thread → polling.
 
-Добавить:
-
-- `apps/antares.py` — `main` / `__main__`
-- isolated gate (новая функция; mixed `enforce_legacy_scheduler_profile` **без** правок поведения)
-- вызов: gate → dotenv → token → AccessRules+logger → `assemble_antares` → успех: процесс завершается с 0 **или** остаётся idle без polling (фиксируется в code PR: предпочтение **exit 0 после сборки**, чтобы случайно не крутить Telegram)
-- child-harness тесты
-
-Не включать в этот PR:
-
-- `Application.run_polling`, `ensure_worker_started`, `schedule_loop`
-- фильтр schedules (нужен только со loop)
-- изменение mixed gate / `PROJECT_PROFILE=antares` на `scheduler.py`
-- Railway / Nixpacks / профили сервиса
-- `JOB_ACCEPT`, durable inbox, cutover
-- split `job_runner`, отложенный import `dropbox_watcher`
-- graceful shutdown sender loop
-- отдельный `STATE_DIR`
-
-Следующий **после** boot-PR: start order § 4 шаги 6–9 + schedule allowlist + subprocess «ошибка сборки ⇒ нет polling».
+Остановка (сейчас в mixed нет graceful shutdown): stop polling → schedule thread → jobs → worker queues → sender loop. Stop API у sender **нет**. Boot-PR shutdown не вводит.
 
 ---
 
-## 7. Subprocess-проверки первого code PR
+## 5. Транзитивный import sender (CONFIRMED на текущем коде)
 
-Все в **отдельном** процессе (как TASK-16 harness). Pytest родителя не импортирует `apps.antares` так, чтобы обойти gate.
+`assemble_antares` вызывает `_check_job_registry_preconditions` → `antares_job_executors()` и затем `register_jobs` → снова `antares_job_executors()`. Это **единственный** путь регистрации шести Antares jobs. Тесты TASK-16 со **stub** `telegram_bot` в sitecustomize **не** доказывают отсутствие sender в настоящем boot: stub как раз подменяет модуль и скрывает import-time loop.
+
+### 5.1 Цепочка wallet (как в review)
+
+```
+assemble_antares
+  → antares_job_executors
+    → integrations.downloader_wallets   # module-level
+      → transport.telegram_transport    # L6: from integrations.telegram_bot import …
+        → integrations.telegram_bot     # load_dotenv + daemon loop на import
+```
+
+`downloader_wallets` также импортирует `telegram_routes` на уровне модуля; `send_message_to_route` / `send_file_to_route` делают **lazy** import `telegram_bot` внутри функций — этот путь **сам** sender на assemble не стартует.
+
+### 5.2 Остальные шесть keys при `antares_job_executors()`
+
+| Key | Как берётся callable | Import `telegram_bot` на **вызове** `antares_job_executors()` |
+|-----|----------------------|---------------------------------------------------------------|
+| `wallet` | `from integrations.downloader_wallets import run_wallet_cycle` | **да** — § 5.1 |
+| `rate` | `from integrations.bakai_monitor_playwright import run_rate_monitor_safe` | **да** — L11 `from integrations.telegram_bot import send_message_sync` |
+| `wallet_editor_registry_replay` | `from integrations.wallet_editor_registry import run_registry_outbox_replay_job` | **да** — L24 тот же прямой import |
+| `wallet_editor_registry_refresh` | `from integrations.wallet_editor_registry_refresh import …` | **да** — L18 прямой import **и** L19 import `wallet_editor_registry` (§ выше) |
+| `hourly` | `run_hourly_job` (определён в `jobs.py`) | **нет** на assemble: `hourly_report` / `telegram_routes` только внутри функции при **запуске** job |
+| `download` | `run_download_job` (обёртка в `jobs.py`) | **нет** на assemble: `integrations.downloader` (L23 прямой `telegram_bot`) только при **запуске** job |
+
+Итого на текущем коде **нельзя** обещать boot без sender, если только не размыкать границы ниже. `register_script_job("operator_wallets_ready")` runtime/telegram **не** импортирует (lazy в executor). `handlers.get_antares_handlers` не импортирует `telegram_bot`; `cmd_status` — lazy при `/status` (boot `/status` не вызывает).
+
+### 5.3 Необходимое размыкание в boot-PR (минимальное)
+
+Перенести `from integrations.telegram_bot import …` **внутрь** функций отправки, **без** смены сигнатур, маршрутов и **без** переделки lifecycle sender (loop по-прежнему стартует при первом реальном import модуля, не на assemble):
+
+1. `transport/telegram_transport.py` — сейчас module-level `send_file_sync` / `send_message_sync`; перенести внутрь `send_text` / `send_document`.
+2. `integrations/bakai_monitor_playwright.py` — module-level `send_message_sync` → внутрь функций, которые вызывают send.
+3. `integrations/wallet_editor_registry.py` — то же.
+4. `integrations/wallet_editor_registry_refresh.py` — то же (даже после lazy в registry: у refresh свой прямой import).
+
+Не входит в это размыкание (уже lazy или не на assemble): `telegram_routes` send helpers; `modules.antares.handlers.cmd_status`; `jobs.run_hourly_job` / `run_download_job`; `script_jobs.bind` executor.
+
+`integrations/downloader.py` L23 остаётся module-level; на boot assemble **не** грузится. Менять в boot-PR **не** обязательно; если позже `antares_job_executors` начнёт eager-import `downloader` — отдельная граница.
+
+Более широкое изменение (не обещать вместо п. 1–4): отложить сам `antares_job_executors()` / не импортировать downloader-модули до первого job; split `job_runner`; отложенный Dropbox. Без п. 1–4 boot без sender на **текущем** коде **невыполним**.
+
+### 5.4 Прочие клиенты на assemble (не sender)
+
+- `job_runner` → `rules_provider` → import `dropbox_watcher`; `_get_dbx()` lazy при download.
+- `downloader_wallets` / `bakai_monitor_playwright` / registry refresh импортируют `playwright.sync_api` на уровне модуля — браузер не стартует от import. Live Playwright/Dropbox/PG/Telegram API в boot-тестах блокировать на границах (не подменять `telegram_bot` stub'ом в `sys.modules`).
+
+---
+
+## 6. Минимальный TASK-18 code scope (не начинать в TASK-17)
+
+Один boot-PR:
+
+- пакет `apps/` + `apps/antares.py`; команда `py -3.12 -m apps.antares`
+- isolated gate (mixed без изменений)
+- dotenv § 2; token после dotenv
+- AccessRules + logger + `assemble_antares`
+- lazy-import sender на границах § 5.3
+- успех → диагностика → **exit 0**
+- subprocess-harness § 7
+
+Не включать: polling, worker, schedules, Railway, `JOB_ACCEPT`, cutover, split `job_runner`, отдельный `STATE_DIR`, shutdown sender, ослабление mixed gate, idle.
+
+---
+
+## 7. Subprocess-проверки boot-PR
+
+Отдельный процесс. Pytest родителя не обходит gate. **Не** класть `telegram_bot` (ни stub, ни настоящий) в `sys.modules` **заранее**.
+
+Наблюдаемый запрет импорта: meta path / hook, который при **любой** попытке загрузить `integrations.telegram_bot` (и аналогично `integrations.tg_commands`, `integrations.raccoon_jobs`, raccoon downloaders) **валит проверку**. Это не stub, который притворяется модулем.
+
+Реальные: isolated gate, `assemble_antares`, `register_jobs`, `register_script_job`, `core.job_runner.JOB_REGISTRY`. Dropbox download, Playwright run, живой Telegram API, PG — отказать на границах вызова, не подменой `telegram_bot`.
 
 | # | Проверка | Ожидание |
 |---|----------|----------|
-| 1 | `PROJECT_PROFILE` unset / `""` / raccoon / wr / мусор | exit 2, нет `assemble_antares` успеха, нет `telegram_bot` в `sys.modules` |
-| 2 | `PROJECT_PROFILE=antares`, token пуст | отказ до `telegram_bot` import / до polling |
-| 3 | `antares` + валидные rules/logger stubs, чистый registry | `assemble_antares` успех; `set(JOB_REGISTRY)==` семь keys |
-| 4 | чужой ключ в registry до сборки | `AntaresAssemblyError`, exit ≠ 0, нет `run_polling` |
-| 5 | после успеха/отказа | нет `integrations.tg_commands`, `integrations.raccoon_jobs` в `sys.modules` |
-| 6 | `python scheduler.py` с `PROJECT_PROFILE=antares` (регресс mixed) | по-прежнему exit 2 (существующие `test_project_profile_boot`) |
+| 1 | профиль unset / `""` / whitespace / raccoon / wr / мусор | exit 2; `telegram_bot` **не** загружался |
+| 2 | `antares` в процессе; профиль только в `.env` sandbox | отказ (gate до dotenv) |
+| 3 | `antares`, token whitespace/пусто после dotenv | отказ; `telegram_bot` не загружался |
+| 4 | успех сборки | семь keys; диагностика; **exit 0**; процесс не живёт; `telegram_bot` / mixed / raccoon **не** в `sys.modules` и hook не срабатывал |
+| 5 | чужой ключ / конфликт bind | `AntaresAssemblyError`, exit ≠ 0; снова **нет** sender/mixed/raccoon import (мало «`run_polling` не вызван») |
+| 6 | mixed `scheduler.py` + `PROJECT_PROFILE=antares` | по-прежнему exit 2 |
 
-Не запускать живой Telegram, Dropbox download, Playwright, PG. Sitecustomize ребёнка — как TASK-16 (telegram/playwright stubs **не** маскируют запрещённый raccoon import).
-
-Docs-only TASK-17: pytest **не** запускать.
+Временный `.env` без рабочих секретов. Docs-only TASK-17: pytest **не** запускать.
 
 ---
 
 ## 8. Блокеры и UNKNOWN
 
-Не блокеры этого **плана** (можно review документов):
+Не блокеры review **этого плана**.
 
-- отсутствие `apps/antares.py` — это следующий code;
-- mixed gate отклоняет `antares` — **намеренно**;
-- `JOB_ACCEPT` / cutover / Railway.
+Boot-PR **выполним**, если в него входит размыкание § 5.3. Иначе обещание «assemble без sender» ложно.
 
-Блокеры **первого code**, если их не учесть в scope:
+Блокеры **позднего start** (не boot): фильтр schedules; два процесса / один token / общий `STATE_DIR`; Railway всё ещё `scheduler.py`; нет stop API sender.
 
-1. Import `telegram_bot` стартует sender loop — entry не должен импортировать его «за компанию».
-2. Грязный процесс после частичной регистрации (TASK-16): отказ сборки проверять **новым** процессом.
+UNKNOWN (без mixed gate):
 
-Блокеры **запуска** isolated (не этот план, не boot-PR):
+- U12: raccoon schedules на сервисе Test.
+- Нужен ли отдельный `STATE_DIR` при первом start-PR или только cutover.
 
-3. `load_schedules` без allowlist — чужие rows workbook.
-4. Общий `STATE_DIR`/locks/tmp с живым mixed и **один** `TELEGRAM_BOT_TOKEN` (двойной polling).
-5. Prod start всё ещё `scheduler.py` — isolated не выйдет на Railway без ops-PR.
-6. Нет API остановки sender loop.
-
-UNKNOWN:
-
-- U12: исполняются ли raccoon schedules на сервисе Test.
-- Нужен ли отдельный `STATE_DIR` уже во втором code PR или только при cutover.
-- Когда ослаблять mixed gate (только после доказанного isolated start, отдельное решение).
+**Не UNKNOWN:** нужен ли ослабленный mixed gate для isolated entry — **нет, не нужен**. Isolated = `-m apps.antares` + `PROJECT_PROFILE=antares` в **окружении процесса**. Mixed продолжает отклонять явный `antares`.
