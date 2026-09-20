@@ -18,12 +18,12 @@
 | | Контракт | Сейчас (CONFIRMED) |
 |--|----------|--------------------|
 | Пакет | `apps/` — Python package: `apps/__init__.py` (пустой допустим) + `apps/antares.py` | каталога **нет** |
-| Команда | из **корня репозитория**: `py -3.12 -m apps.antares` | не существует |
-| `sys.path` | `antares.py` добавляет корень репозитория (`Path(__file__).resolve().parent.parent`) в `sys.path` **сам**, без пользовательского `PYTHONPATH` | — |
+| Команда | из **корня репозитория**: `python -m apps.antares` | не существует |
+| `sys.path` | при `-m` из корня cwd уже в `sys.path[0]`; **не** менять `sys.path` вручную | — |
 | Mixed | `python scheduler.py` | L368–369 |
 | Prod | `/usr/bin/tini -s -- /opt/venv/bin/python scheduler.py` | `railway.toml` |
 
-Не считать командой `python apps/antares.py`: тогда `sys.path[0]` = `apps/`, `import core` ломается. `-m apps.antares` из корня находит пакет `apps`; вставка корня из `__file__` даёт `core` / `modules` / `integrations`.
+Не считать командой `python apps/antares.py`: тогда `sys.path[0]` = `apps/`, `import core` ломается. `python -m apps.antares` из корня даёт пакет `apps` и импорт `core` без правки `sys.path` и без пользовательского `PYTHONPATH`.
 
 Первый code PR **не** меняет `railway.toml`, `nixpacks.toml`, `Procfile`. Не вызывать isolated через `import scheduler` / `python scheduler.py`.
 
@@ -35,7 +35,7 @@
 
 **Порядок:** прочитать `PROJECT_PROFILE` из `os.environ` процесса (**до** `load_dotenv`). Нормализация — существующий parser: отсутствует ключ → `None` → `implicit_default=True`; `""` / whitespace → strip → `implicit_default=True`; точное `antares`/`raccoon`/`wr` → `implicit_default=False`; иное → `InvalidProjectProfileError`.
 
-Профиль, который есть **только** в `.env`, **не** даёт допуск (dotenv ещё не читали).
+Профиль, который есть **только** в `.env`, **не** даёт допуск. Проверка: в окружении процесса ключ `PROJECT_PROFILE` **отсутствует** (даже если `{repo_root}/.env` содержит `PROJECT_PROFILE=antares`) → isolated gate → **exit 2**. Dotenv ещё не читали.
 
 | Вход процесса (до dotenv) | Isolated `-m apps.antares` | Mixed `scheduler.py` |
 |---------------------------|----------------------------|----------------------|
@@ -142,7 +142,7 @@ assemble_antares
 
 Один boot-PR:
 
-- пакет `apps/` + `apps/antares.py`; команда `py -3.12 -m apps.antares`
+- пакет `apps/` + `apps/antares.py`; команда `python -m apps.antares` из корня; **без** правки `sys.path`
 - isolated gate (mixed без изменений)
 - dotenv § 2; token после dotenv
 - AccessRules + logger + `assemble_antares`
@@ -165,7 +165,7 @@ assemble_antares
 | # | Проверка | Ожидание |
 |---|----------|----------|
 | 1 | профиль unset / `""` / whitespace / raccoon / wr / мусор | exit 2; `telegram_bot` **не** загружался |
-| 2 | `antares` в процессе; профиль только в `.env` sandbox | отказ (gate до dotenv) |
+| 2 | ключ `PROJECT_PROFILE` **отсутствует** в окружении процесса; в sandbox `.env` есть `PROJECT_PROFILE=antares` | **exit 2** (gate до dotenv) |
 | 3 | `antares`, token whitespace/пусто после dotenv | отказ; `telegram_bot` не загружался |
 | 4 | успех сборки | семь keys; диагностика; **exit 0**; процесс не живёт; `telegram_bot` / mixed / raccoon **не** в `sys.modules` и hook не срабатывал |
 | 5 | чужой ключ / конфликт bind | `AntaresAssemblyError`, exit ≠ 0; снова **нет** sender/mixed/raccoon import (мало «`run_polling` не вызван») |
