@@ -46,7 +46,7 @@
 | [TASK-2026-09-17-15](TASK-2026-09-17-15_script_job_bind.md) | Selective script JOB_REGISTRY bind: review пройден, merge нет (PR #18) |
 | [TASK-2026-09-17-16](TASK-2026-09-17-16_antares_assembly.md) | Сборка Antares без запуска: review пройден, не выпущена, merge нет (PR #19) |
 | [TASK-2026-09-17-17](TASK-2026-09-17-17_antares_entrypoint.md) | План isolated Antares entrypoint: review пройден, merge нет (PR #20) |
-| [TASK-2026-09-17-18](TASK-2026-09-17-18_antares_boot.md) | Isolated Antares boot без polling: готово к review (PR #21) |
+| [TASK-2026-09-17-18](TASK-2026-09-17-18_antares_boot.md) | Isolated Antares boot без polling: review-fix опубликован, GPT новый diff ещё не проверял (PR #21) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
