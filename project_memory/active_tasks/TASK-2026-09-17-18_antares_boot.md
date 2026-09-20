@@ -6,7 +6,8 @@
 | **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-17 (PR #20, review `ed3cbaf2b240786c7985108dac9a7cd775f2b871`, закрытие pin `e3bbac8338c6a074f0fa9aef871c7b92f0cb5a2c`) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-18-antares-boot`, base `feat/task-2026-09-17-17-antares-entrypoint` |
+| **PR** | Draft [#21](https://github.com/deniskotdavydov1991-wq/Test/pull/21) `feat/task-2026-09-17-18-antares-boot`, base `feat/task-2026-09-17-17-antares-entrypoint` |
+| **HEAD** | `bc1fe9381ab3945d5dca08e9b84263ed2758e09e` |
 | **Риск** | medium: isolated boot + lazy sender imports |
 
 Isolated `python -m apps.antares`: gate → `{repo_root}/.env` (`override=False`) → token strip → AccessRules/logger → `assemble_antares` → диагностика → exit 0. Polling/worker/schedules **нет**. Mixed gate **не** менялся.
