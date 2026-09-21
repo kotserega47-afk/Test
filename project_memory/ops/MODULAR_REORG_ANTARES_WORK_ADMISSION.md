@@ -175,7 +175,13 @@ with admission.lock:          # threading.Lock, только этот блок
 await asyncio.wrap_future(future)   # без lock; это уже D
 ```
 
-**Принято** = `executor.submit` (или для очереди — `queue.put_nowait`) **вернулся внутри lock при state==open**.
+**Принято** = `executor.submit` (или для очереди — `queue.put_nowait`) **вернулся внутри lock при state==open** без исключения.
+
+Последствия Accepted:
+
+- Ошибка последующего Telegram `reply` («Запускаю» / «Принято») **не** отменяет submit. Future — слой D; job может идти без ответа оператору. Логировать сбой reply отдельно, не `future.cancel()`.
+- Исключение самого `submit` (отказ executor, TypeError callable) → **не** Accepted. Состояние допуска из‑за неудачной постановки не становится «принято»; caller видит ошибку постановки.
+- `request_job` внутри Future после успешного submit — исполнение D, не повторное принятие.
 
 Запрещено держать этот lock:
 
@@ -282,13 +288,23 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 **Единый запрос остановки** (имя code PR; контракт обязателен):
 
+Порядок: **сначала `seal()`, потом `stop.set()`**. `Event.set()` вызывать **в потоке event loop**, которому принадлежит `stop` (тот же loop, что `run_ptb_lifecycle` / `stop.wait()`).
+
+Из потока loop (sandbox после callback; signal handler, если loop его принимает):
+
 ```text
-def request_antares_stop(stop: asyncio.Event, admission: WorkAdmission) -> None:
-    admission.seal()    # sync, короткий lock; state → sealed
-    stop.set()          # будит run_ptb_lifecycle
+admission.seal()    # любой поток: короткий lock
+stop.set()          # только loop-thread
 ```
 
-Порядок: **сначала seal, потом set**. Вызывать из того потока, который инициирует stop (sandbox после наблюдаемого callback; будущий serve — signal wrapper). Не `stop.set()` в обход.
+Из **другого** потока (worker, signal на Windows без `add_signal_handler`):
+
+```text
+admission.seal()    # sync в этом потоке — допуск закрыт сразу
+loop.call_soon_threadsafe(stop.set)   # не stop.set() напрямую
+```
+
+`seal()` до `call_soon_threadsafe`: окно до пробуждения helper уже **не** принимает новую работу на подключённых путях. Не `set()` без предшествующего `seal`. Не считать `call_soon_threadsafe` заменой seal.
 
 `run_ptb_lifecycle` **не** считает `stop.wait()` возврат заменой seal. Если helper догоняет stop без предшествующего seal — это нарушение caller'а; helper на всякий случай `seal()` **синхронно в начале except/finally до первого await cleanup** (идемпотентно).
 
@@ -317,6 +333,8 @@ def request_antares_stop(stop: asyncio.Event, admission: WorkAdmission) -> None:
 | bind + ошибка start | состояние не unbound; submit нет |
 | mixed / unbound | `dispatch_job_async` / `run_job_async` как сейчас; admission no-op |
 | `/run_wallet` open | submit + (после lock) «Запускаю»; нет «Запускаю» при Rejected |
+| submit бросил | не Accepted; Future нет; sealed/open как до вызова |
+| Accepted, затем reply упал | Future жив; job не отменяют |
 | `/run_hourly` (первый этап) | **без** gate — документированный обход, тест что путь ещё не через `submit_job_if_open` |
 
 Не sleep-as-sync. Не обещать, что hourly/ingest/auto-enable batch закрыты.

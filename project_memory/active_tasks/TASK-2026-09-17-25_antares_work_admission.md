@@ -28,9 +28,10 @@
 - [x] «Запускаю» после успешного submit на первом пути (явная смена порядка)
 - [x] Первый code: примитив + только `/run_wallet`; прочие пути — явные обходы
 - [x] Внутренний Auto-Enable/job re-enqueue — следующий этап, не глобальный запрет
-- [x] `request_antares_stop`: `seal()` затем `stop.set()`; `Event.set()` сам не закрывает допуск
-- [x] Гонка: seal победил / принятие победило (Future = D); bound/closed и mixed отдельно
-- [ ] реализация допуска (отдельное задание)
+- [x] `request_antares_stop`: `seal()` затем `stop.set()` в loop-thread; другой поток — `seal` + `call_soon_threadsafe`
+- [x] Accepted: сбой reply не отменяет submit; сбой submit не Accepted
+- [x] Узкий первый code: примитив + `/run_wallet`; переход Antares — отдельный план в MIGRATION.md, не этот code
+- [ ] реализация допуска (отдельное задание; **не** начинать, пока review)
 - [ ] закрытие TASK-25 (намеренно открыто)
 - [ ] merge/deploy (намеренно открыто)
 
@@ -47,7 +48,7 @@
 
 ## Out Of Scope
 
-runtime/тесты TASK-25; live polling; sender stop; worker join; executor shutdown; mixed gate; `JOB_ACCEPT` env; Railway; cutover; merge; исходное Test.
+runtime/тесты TASK-25; live polling; sender stop; worker join; executor shutdown; mixed gate; `JOB_ACCEPT` env; реализация перехода; merge; исходное Test. План перехода — docs в MIGRATION, не code.
 
 ---
 
@@ -57,3 +58,4 @@ runtime/тесты TASK-25; live polling; sender stop; worker join; executor shu
 |------|---------|
 | 2026-09-21 | контракт допуска подготовлен к review; Draft PR #28 |
 | 2026-09-21 | уточнены состояния bind/closed, атомарный submit, stop vs seal, узкий `/run_wallet` scope |
+| 2026-09-21 | MIGRATION: статусы Draft/sandbox/выпуск; план перехода A–F; оценка диапазонами; Accepted/reply/submit; loop vs `call_soon_threadsafe`; TASK-25 не закрыт |

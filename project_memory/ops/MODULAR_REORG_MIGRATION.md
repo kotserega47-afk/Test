@@ -1,55 +1,60 @@
-# Миграция — этапы, cutover, проверки, первый code PR
+# Миграция — этапы, cutover, проверки, первый переход Antares
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | PROPOSED (этап 0–1 в Draft PR; runtime Test ещё не выкатывался) |
+| **Статус** | программа в **Draft PR**, runtime Test **не** выкатывался; этот файл обновлён в TASK-25 (PR #28) |
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **ADR** | [MODULAR_REORG_ADR.md](MODULAR_REORG_ADR.md) |
+| **Допуск** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
+| **Первый переход Antares** | § «Конечный план первого перехода» ниже; не путать с первым code scope TASK-25 (`/run_wallet` only) |
 
-Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/03. Это **не** значит, что merge в подключённую ветку безопасен: см. § Автодеплой.
+Merge/deploy **намеренно** не входят в TASK-01…25. Merge в `test_main` может перезапустить Test — см. § Автодеплой.
 
-### Состояние программы (2026-09-17)
+### Как читать статусы
 
-| Task | Что сделано | Merge/deploy |
-|------|-------------|--------------|
-| TASK-02 парсер | реализован, review пройден (Draft PR #5) | **нет** |
-| TASK-03 early gate | реализован, review пройден (Draft PR #6, HEAD `48a2a82…`) | **нет** |
-| TASK-04 эталон | подготовлен, review пройден (Draft PR #7, HEAD `443ba70e…`; docs `2bc0ee0…`) | **нет** |
-| TASK-05 Antares jobs | реализован, review пройден (Draft PR #8, HEAD кода `a6d7ebcf…`; docs `0ce4d53…`) | **нет** |
-| TASK-06 TG handlers | план подготовлен, review пройден (Draft PR #9, HEAD `380a4bb…`) | **нет** |
-| TASK-07 Antares run cmds | реализован, review пройден (Draft PR #10, HEAD `94be3127…`); isolated entry нет | **нет** |
-| TASK-08 Antares dispatch | реализован, review пройден (Draft PR #11, HEAD `7169cd48…`); шесть handlers; isolated entry нет | **нет** |
-| TASK-09 registry cmds | реализован, review пройден (Draft PR #12, HEAD `b8085a28…`); восемь handlers; isolated entry нет | **нет** |
-| TASK-10 registry export | реализован, review пройден (Draft PR #13, HEAD `8c37766…`); девять handlers; isolated entry нет | **нет** |
-| TASK-11 Auto-Enable cmds | реализован, review пройден (Draft PR #14, HEAD `0fa283eb…`); 11 handlers; isolated entry нет | **нет** |
-| TASK-12 document ingest plan | план принят, review пройден (Draft PR #15, закрытие `66b99ab1…`); runtime плана не менялся | **нет** |
-| TASK-13 document ingest | код перенесён; review пройден (Draft PR #16, код `4a1e7796…`, закрытие `5f131ce…`); не выпущен | **нет** |
-| TASK-14 Antares assembly plan | план принят, review пройден (Draft PR #17, код `f123a4bf…`, закрытие `99d2db55…`); runtime сборки нет | **нет** |
-| TASK-15 script job bind | selective bind + mixed bootstrap; review пройден (Draft PR #18, HEAD `6e4c6c4…`); runtime сборки Antares нет; не выпущен | **нет** |
-| TASK-16 Antares assembly | сборка handlers/jobs без запуска; review пройден (Draft PR #19, HEAD `f29cc89…`); реализована, **не** выпущена; entrypoint/polling/worker/schedules/cutover нет | **нет** |
-| TASK-17 Antares entrypoint plan | план isolated `python -m apps.antares`; review пройден (Draft PR #20, HEAD `ed3cbaf…`); runtime не менялся | **нет** |
-| TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; без sender/polling/worker/schedules; review пройден (Draft PR #21, HEAD `2c6eeac…`; тесты `0603eb9…`, 79 passed Cursor 3.12.10); GPT код/diff, набор не запускал; исторический 85 passed с ограничением fake-append; закрытие docs `d1d11e3…`; **не выпущено** | **нет** |
-| TASK-19 Antares lifecycle plan | контракт start/stop; первый code = argv `run` + локальный `RULES_XLSX_PATH` + snapshot + exit 0; `force_sync`/`STRICT` не свежесть; review пройден (Draft PR #22, HEAD `b76a377…`); runtime/`rules_provider` не менялись; pytest не запускался; сервисный lifecycle **не** реализован | **нет** |
-| TASK-20 local rules diagnostic | `python -m apps.antares run`: local xlsx + snapshot + exit 0; boot сохранён; review пройден (Draft PR #23, HEAD `8b42e4d…`; 78 passed `cd23a7a…`, 31 passed `8b42e4d…` Cursor 3.12.10); GPT код/diff, наборы не запускал; Application/polling нет; **не выпущено** | **нет** |
-| TASK-21 Application без запуска | план принят: после local snapshot — `Application.build()` + handlers; без initialize/polling; review пройден (Draft PR #24, HEAD `777a52f…`); GPT читал контракт, pytest не запускал; runtime не менялся | **нет** |
-| TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; review пройден (Draft PR #25, HEAD `d9592ff…`; 81 passed / 33 boot Cursor 3.12.10, PTB 22.8, httpx 0.28.1; job-queue extra нет); GPT код/diff, наборы не запускал; процесс exit ≠ graceful shutdown; **не выпущено** | **нет** |
-| TASK-23 start/stop plan | контракт ручного async initialize/start/stop; не `run_polling`; review пройден (Draft PR #26, HEAD `6540a36…`); закрытие `94951c6…`; runtime не менялся | **нет** |
-| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox; review пройден (Draft PR #27, HEAD `34ef7af…`; 15/96 Cursor 3.12.10, PTB 22.8, httpx 0.28.1); GPT код/diff, наборы не запускал; historical 91/10 `e737281`, 94/13 `d842912`; SimpleUpdateProcessor/Updater, без persistence/JobQueue extra; boot/run без helper; serve/polling нет; **не выпущено**; stop бизнес-потоков не готов | **нет** |
-| Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
-| Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
-| Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| TASK-25 work admission | контракт допуска новой работы (docs, Draft PR #28); runtime не менялся; не реализован | **нет** |
-| Следующая | code допуска (после review TASK-25); polling/sender/worker-stop отдельно | — |
+| Метка | Значение |
+|-------|----------|
+| **Draft реализовано** | код или принятый docs-контракт в Draft PR; merge **нет** |
+| **Sandbox проверено** | именованный прогон на указанном SHA (Cursor и/или GPT). Прогоны **не** складывать в «N уникальных тестов» |
+| **Выпущено** | merge в `test_main` / production процесс. Для линейки 01–25: **нет** |
 
-Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
+Рабочий production Test по-прежнему **legacy mixed** (`PROJECT_PROFILE` unset). Isolated `python -m apps.antares` в prod **не** запущен.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 / #23 / #24 / #25 / #26 / #27 / #28 **пока не сливать**.
+### Состояние программы (2026-09-21)
 
-Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
+| Task | Draft | Sandbox (свои SHA, не сумма) | Выпущено |
+|------|-------|------------------------------|----------|
+| TASK-02 парсер | код, review, PR #5 | Cursor **41 passed** TASK-02/03 вместе, Python **3.13.14**; GPT **18** тестов на `acfb9958…` (изолированная директория, полный набор не гонял); GPT diff PR #6, набор 41 **не** перезапускал | **нет** |
+| TASK-03 early gate | код, review, PR #6, HEAD `48a2a82…` | тот же прогон 41, что строка TASK-02 | **нет** |
+| TASK-04 эталон | docs, review, PR #7 | pytest не требовался | **нет** |
+| TASK-05…11 handlers/jobs | код в PR #8–#14, review | отдельные task-прогоны на своих SHA (не суммировать с 41 / 79 / 15) | **нет** |
+| TASK-12/13 ingest | план + код, PR #15/#16 | код ingest GPT `4a1e7796…`; закрытие `5f131ce…` | **нет** |
+| TASK-14/15/16 сборка | план + script bind + `assemble_antares`, PR #17–#19 | сборка **не** сервис | **нет** |
+| TASK-17 entryplan | docs, PR #20 | pytest не требовался | **нет** |
+| TASK-18 boot | код, PR #21, review `2c6eeac…`, close `d1d11e3…` | Cursor **79 passed** на `0603eb9…`, 3.12.10; GPT код/diff, набор не запускал; исторический **85 passed** с fake-append — **другой** SHA/ограничение | **нет** |
+| TASK-19 lifecycle plan | docs, PR #22, close `8d80647…` | pytest не запускался | **нет** |
+| TASK-20 local rules | код, PR #23, review `8b42e4d…` | Cursor **78 passed** `cd23a7a…`, **31 passed** `8b42e4d…`; GPT набор не запускал | **нет** |
+| TASK-21 Application plan | docs, PR #24 | pytest не запускался | **нет** |
+| TASK-22 build-only | код, PR #25, review `d9592ff…` | Cursor **81 passed** / **33 boot**, 3.12.10, PTB 22.8, httpx 0.28.1; GPT набор не запускал | **нет** |
+| TASK-23 start/stop plan | docs, PR #26, close `94951c6…` | pytest не запускался | **нет** |
+| TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
+| TASK-25 допуск | **только docs**, PR #28; code **нет** | pytest не требуется | **нет** |
+| Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
+| Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
+| Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
+| Stop бизнес-потоков | **нет** (worker/sender/executor) | — | **нет** |
 
-После согласования выпуска: слить **#4** → переназначить base **#5** и проверить diff → слить **#5** → переназначить base **#6** и проверить diff. Если после переназначения код изменился, прежний review **не** считать автоматически действующим.
+Прогоны выше — **разные наборы и SHA**. 41 ≠ 79 ≠ 81 ≠ 15; не складывать.
 
-Предлагаемые флаги **`JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде отсутствуют.** Ниже они — требования будущих PR, не текущий runtime.
+Draft PR #4…#28 **пока не сливать**.
+
+Перед любым выпуском в `test_main`: окно restart Test; **нет непустого `PROJECT_PROFILE`** у текущего mixed-сервиса (иначе после TASK-03 процесс не стартует).
+
+После согласования выпуска: слить **#4** → retarget **#5** и проверить diff → … по цепочке. Review после retarget **не** автоматический.
+
+`JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
+
+**Следующий code (не этот PR):** примитив допуска + `/run_wallet` (WORK_ADMISSION.md § 7). Не serve, не полный переход.
 
 ---
 
@@ -148,9 +153,9 @@ Production-настройки Railway в этой задаче **не менят
 Регистрация jobs через модуль; mixed legacy остаётся default, пока enforce не включён.  
 `JOB_ACCEPT` / drain — **предложение, кода нет**; реализовать **до** cutover, не в TASK-02.
 
-**Сейчас (после TASK-15):** selective script bind реализован, mixed bootstrap сохранён, review пройден. Кода сборки handlers/jobs нет. Isolated entry **не** готов. `dropbox_watcher` по-прежнему грузится при импорте `JOB_REGISTRY` (`job_runner` → `rules_provider`); разделение `job_runner` в следующую задачу автоматически не входит.
+**Сейчас (2026-09-21, Draft, не выпущено):** selective script bind (TASK-15) и `assemble_antares` (TASK-16) есть в Draft. Isolated `boot`/`run` (TASK-18/20/22) собирают Application без polling. Helper `run_ptb_lifecycle` (TASK-24) в sandbox без live Telegram. Допуск работы — **только контракт** TASK-25. Serve/polling, worker/sender/executor stop, isolated schedules **нет**. `dropbox_watcher` по-прежнему грузится при импорте `JOB_REGISTRY`; разделение `job_runner` автоматически не входит.
 
-Совместимость: enforce off = **смешанный** процесс, не «уже antares-only».
+Совместимость: enforce off = **смешанный** процесс, не «уже antares-only». Isolated entry **не** ослабляет mixed gate.
 
 Выпуск: только сервис Test (`test_main`), проверить неизменность Raccoon SHA.
 
@@ -181,7 +186,8 @@ Production-настройки Railway в этой задаче **не менят
 | `JOB_ACCEPT` | нет | прекратить приём новых jobs, не убивая процесс | до cutover (этап 3/4) |
 | Durable queue + schedule cursor | нет / частично | TG updates и cron не только in-memory | до cutover |
 | `EXTERNAL_SIDE_EFFECTS=0` | нет | shadow-сравнение | этап 2/4 сравнение |
-| Isolated entry per profile | нет | `raccoon`/`wr` не на legacy mixed scheduler | после gate + register |
+| Isolated entry per profile | Draft: `apps.antares` boot/run + helper; **serve нет**; **не выпущено** | `raccoon`/`wr` не на mixed scheduler | до первого перехода Antares (serve) |
+| Isolated work admission | docs PR #28; **кода нет** | seal новой работы | до serve; первый code = `/run_wallet` only |
 
 ---
 
@@ -370,6 +376,165 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 ---
 
-## Следующие задачи (не merge #4–#17)
+## Конечный план первого перехода Antares
 
-1. Первый code PR: split `script_jobs` (slim `__init__`, явный mixed bootstrap, `bind.py` без авторегистрации `hello_world`). Затем code PR сборки этапа 1 — `ops/MODULAR_REORG_ANTARES_ASSEMBLY.md`. Isolated entry, `JOB_ACCEPT` и cutover **не** входят. Early gate mixed не ослаблять.
+Это переход **mixed Test → isolated Antares** на токене/кабинетах Antares. Не порт Raccoon, не WR, не «урезанный бот».
+
+Первый **code** TASK-25 (`WorkAdmission` + `/run_wallet`) — **не** этот переход. Переход требует допуска **всех включённых путей**, иначе обходы (ingest, Auto-Enable, прочие `/run_*`) принимают работу после seal.
+
+### Состав первого выпуска (не сокращать)
+
+Взято из сборки TASK-16 и mixed Antares-функций. Не выкидывать ingest/Auto-Enable/registry «чтобы быстрее».
+
+| Область | Входит в первый выпуск | Источник |
+|---------|------------------------|----------|
+| Команды | 17: `start`, `help`, `status`, `whoami`, `reload_rules`, `run_wallet`, `run_hourly`, `run_download`, `run_rate`, `operator_wallets_ready`, `rules_validate`, `auto_enable_plan`, `auto_enable_run`, `wallet_editor_refresh`, `registry_health`, `registry_replay`, `registry_export` | `get_antares_handlers()` |
+| Ingest | `Document.ALL` → WE worker queues | `document_ingest` |
+| Jobs | семь keys: `download`, `hourly`, `rate`, `wallet`, `wallet_editor_registry_refresh`, `wallet_editor_registry_replay`, `script_job:operator_wallets_ready` | `assemble_antares` |
+| Расписания | isolated loop **только** этих семи keys; skip unknown / non-Antares rows | LIFECYCLE.md |
+| Прямые ops | registry replay/export, Auto-Enable plan/run, reload_rules | handlers без `request_job` |
+| Sender | исходящие отчёты/ошибки jobs | `telegram_bot` (stop API ещё нет — блокер этапа B) |
+| Read-only | whoami/help/start/status/registry_health/rules_validate | не постановка |
+
+**Не входят** в первый выпуск Antares: Raccoon commands/jobs, `hello_world`, conversion bridge как mixed/Raccoon путь, WR, dual polling.
+
+### Обязательные блокеры vs можно отложить
+
+**Блокеры перехода** (без них mixed остаётся единственным исполнителем):
+
+1. Допуск на **всех** путях состава выше, включая ingest `put_nowait`, прямые ops, schedules `submit`, внутренний `enqueue_auto_enable_batch` (или эквивалент isolated).
+2. Завершение **принятой** работы и остановка ресурсов: worker join/sentinel, production `ThreadPoolExecutor.shutdown`, sender stop, PTB stop/shutdown (helper TASK-24 есть в Draft, не выпущен).
+3. Публичный `serve`: initialize → start → `open()` → polling → `request_antares_stop` (seal затем `stop.set()` / `call_soon_threadsafe`).
+4. Проверка конфигурации и состояния: token только у одного процесса; `PROJECT_PROFILE`/startCommand isolated; rules snapshot политика; `STATE_DIR`/locks; WE allowlist; PG/Dropbox; anti-restart старого mixed.
+5. Интеграционная проверка на не-prod токене или объявленном окне (команды, ingest, один schedule tick, stop/drain).
+6. Переключение и откат: stop mixed после idle, единственный isolated ACTIVE, runbook отката SHA.
+
+**Можно отложить после первого выпуска** (не выкидывая функции выпуска):
+
+- Durable Telegram inbox / schedule cursor — только если окно явно объявляет потерю *ещё не принятых* updates и пропуск слотов (§ Cutover 4–5). Принятая работа всё равно должна дожиматься.
+- `JOB_ACCEPT` **env** двух процессов — isolated in-process seal закрывает новый приём; env остаётся рычагом cutover, если старый mixed ещё жив отдельно.
+- `EXTERNAL_SIDE_EFFECTS`, split `job_runner`, отдельный prod `STATE_DIR` если текущий каталог согласован.
+- Raccoon/WR isolated, soak Platform.
+- Reservation-токен ingest (admit до `get_file`).
+
+Откладывать **сам ingest / Auto-Enable / registry / schedules семи keys** нельзя: это действующие Antares-функции mixed.
+
+### Последовательность этапов
+
+#### A. Допуск всех включённых путей
+
+| | |
+|--|--|
+| Результат | `seal()` ⇒ нет нового `submit`/`put_nowait`/входа в прямую ops на составе выпуска, включая внутренний Auto-Enable enqueue |
+| Зависимости | контракт TASK-25; примитив; затем остальные TG jobs, ingest, прямые ops, isolated schedule dispatch |
+| Готовность | тесты Event/barrier на **каждом** подключённом submit/put; список обходов пуст **для состава выпуска**; mixed unbound без изменений |
+| Не готовность | только `/run_wallet` (это TASK-25 code, не переход) |
+
+#### B. Завершение принятой работы и остановка ресурсов
+
+| | |
+|--|--|
+| Результат | после seal слой D дожимается или durable-handoff; затем join worker, shutdown executor, stop sender, PTB stop/shutdown; idle: `_RUNNING` пуст, WE queues пусты **или** handoff записан |
+| Зависимости | A; production stop API (сейчас нет); helper TASK-24 для PTB |
+| Готовность | сценарий: Accepted Future переживает seal; timeout дожима → эскалация, не silent kill Save |
+| Не готовность | kill процесса / только `app.stop` |
+
+#### C. Serve и сигналы
+
+| | |
+|--|--|
+| Результат | `python -m apps.antares serve` (имя argv — code PR): bind до initialize, `open` после start, polling, stop через `request_antares_stop` |
+| Зависимости | A (иначе polling кормит обходы); B хотя бы API stop; STARTSTOP.md порядок initialize→start→polling |
+| Готовность | SIGINT/loop-thread `set`; другой поток: `seal()` затем `loop.call_soon_threadsafe(stop.set)`; Windows SIGTERM — UNKNOWN, не обещать |
+| Не готовность | `run_polling` как isolated; `enable_polling=True` без serve-контракта |
+
+#### D. Проверка конфигурации и состояния
+
+| | |
+|--|--|
+| Результат | один token; startCommand isolated; нет второго polling; rules/STATE_DIR/WE/PG согласованы; anti-restart mixed проверен **на этих** сервисах |
+| Зависимости | Railway connector факты; чеклист Cutover «подтверждение остановки» |
+| Готовность | записанные UUID сервисов, SHA, env без случайного `PROJECT_PROFILE` на старом mixed до окна |
+| UNKNOWN | pin SHA в Railway; живые prod rows workbook; фактический restart policy |
+
+#### E. Интеграционная проверка
+
+| | |
+|--|--|
+| Результат | на выделенном токене или объявленном окне: `/whoami`, `/run_wallet`, ingest .xlsx, registry_health, один schedule key, затем seal+drain+stop |
+| Зависимости | C+D; stubs или реальный кабинет по решению ops |
+| Готовность | нет getUpdates conflict; нет чужих JOB_REGISTRY keys; отчёты уходят; после stop нет новых `job_started` |
+| Не готовность | только unit TASK-24 `/whoami` sandbox |
+
+#### F. Переключение и откат
+
+| | |
+|--|--|
+| Результат | mixed drain (A+B на **старом**, когда рычаг есть) → stop + anti-restart → isolated единственный ACTIVE; откат: сначала stop isolated тем же A+B, затем старый SHA |
+| Зависимости | E; § Cutover ниже (locks не кластерные; dual poll запрещён) |
+| Готовность | runbook с deployment id, временем передачи, checklist формата данных для отката |
+| Не готовность | два ACTIVE на одном токене; откат при нечитаемом новом формате state без миграции |
+
+Порядок A→B→C→D→E→F **обязателен по смыслу**: serve без A оставляет обходы; switch без B рвёт Save; switch без D/E — ops-лотерея.
+
+---
+
+## Оценка оставшейся работы (диапазоны, не дата)
+
+Оценка **инженерной ёмкости**, не календарный дедлайн. Календарь = ёмкость × (ревью Draft-цепочки + окно Railway + WAIT на UNKNOWN). Не обещать дату.
+
+| Блок | Разработка | Проверка | Эксплуатационное окно |
+|------|------------|----------|------------------------|
+| TASK-25 code: примитив + `/run_wallet` | **1–2** инж.-дня | **0.5–1** день Event/barrier | **0** (не выпуск) |
+| Допуск остальных путей выпуска (A), вкл. ingest + internal Auto-Enable | **3–6** дн. | **2–4** дн. | 0 |
+| Stop API worker/executor/sender + drain (B) | **4–8** дн. | **2–4** дн. | 0 до serve |
+| Serve + сигналы (C), без live cutover | **2–4** дн. | **1–2** дн. sandbox + 1 не-prod token | не prod |
+| Конфиг/состояние/runbook (D) | **1–3** дн. docs/ops | **1–2** дн. сверка Railway | входит в F |
+| Интеграция (E) | поддержка фиксов **1–3** дн. | **2–5** дн. сценариев | опционально staging |
+| Переключение (F) | runbook **0.5–1** дн. | dry-run стопа **0.5–1** дн. | **2–6 часов** стены + запас на неизвестный Save |
+| Цепочка merge #4…N + retarget | не feature-работа | **1–3** дн. на сверку diff после каждого retarget | restart Test при каждом merge в `test_main` — **отдельные** окна, не F |
+
+**Сумма до готовности F (разработка+проверка, один инженер, без ожидания UNKNOWN):** примерно **15–35** инж.-дней. Не переводить в дату. Два инженера сужают календарь не линейно (ревью, один token, одно окно).
+
+Критический путь: **A (все пути) → B (stop API) → C (serve) → E → F**. TASK-25 `/run_wallet` на критическом пути только как первый камень A. Merge-цепочка может **блокировать календарь** раньше F, если каждый merge = restart mixed.
+
+### Допущения
+
+- Один isolated процесс Antares; mixed gate не ослабляют.
+- Состав выпуска = таблица выше, без вырезания WE.
+- PTB 22.8, SimpleUpdateProcessor, без JobQueue extra, пока extra не войдёт отдельным решением.
+- Прогоны остаются привязаны к SHA; новый code не «наследует» 15/96 как покрытие допуска.
+- Окно F одно; dual poll запрещён.
+
+### UNKNOWN (двигают верх диапазона, не дату)
+
+- Проверенный anti-restart Railway на **этом** service UUID.
+- Pin SHA / restart policy.
+- Prod workbook schedule rows (какие из семи keys реально enabled).
+- SIGTERM на Windows serve.
+- Нужен ли отдельный `STATE_DIR` до F.
+- Совместимость формата outbox/registry при откате.
+- Сколько живых WE очередей/профилей в момент окна (длина drain).
+
+### Нерешённые блокеры перехода (сейчас)
+
+- Нет кода допуска (даже `/run_wallet`).
+- Нет допуска на ingest, прямых ops, schedules, internal enqueue.
+- Нет production stop worker/sender/executor.
+- Нет isolated serve/polling.
+- Anti-restart mixed **не доказан**.
+- Durable inbox нет (переход без него только с объявленной потерей непринятых updates).
+- Ни один Draft PR линейки не слит.
+
+---
+
+## Следующие задачи (актуально)
+
+Не merge #4–#28 в этом PR. Не начинать code, пока TASK-25 на review.
+
+1. После review TASK-25: code примитива + `/run_wallet` (узкий scope). Остальные пути — обходы до этапа A.
+2. Затем code допуска остальных путей состава выпуска (A), не «заодно» serve.
+3. Stop API (B) и serve (C) — отдельные PR.
+4. Raccoon/WR isolated — после первого перехода Antares, не вместо него.
+
+Устарело как «следующий code»: split `script_jobs` (сделан в TASK-15 Draft) и «кода сборки нет» (TASK-16 Draft).
