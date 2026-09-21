@@ -52,7 +52,8 @@
 | [TASK-2026-09-17-21](TASK-2026-09-17-21_antares_application.md) | Контракт Application + handlers без polling: review пройден (`777a52f…`), runtime не менялся, merge нет (PR #24) |
 | [TASK-2026-09-17-22](TASK-2026-09-17-22_antares_application_build.md) | Isolated `run` Application build-only: review пройден (`d9592ff…`), не выпущено, merge нет (PR #25) |
 | [TASK-2026-09-17-23](TASK-2026-09-17-23_antares_startstop.md) | Контракт initialize/polling/stop: review пройден (`6540a36…`), закрытие `94951c6…`, merge нет (PR #26) |
-| [TASK-2026-09-17-24](TASK-2026-09-17-24_antares_ptb_lifecycle.md) | Sandbox PTB lifecycle helper: review пройден (`34ef7af…`), 15/96 Cursor, не выпущено, merge нет (PR #27) |
+| [TASK-2026-09-17-24](TASK-2026-09-17-24_antares_ptb_lifecycle.md) | Sandbox PTB lifecycle helper: review пройден (`34ef7af…`), закрытие `3649764…`, 15/96 Cursor, не выпущено, merge нет (PR #27) |
+| [TASK-2026-09-17-25](TASK-2026-09-17-25_antares_work_admission.md) | Контракт допуска работы: подготовлен к review, runtime не менялся (Draft PR) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

@@ -239,7 +239,7 @@ primary = исключение тела (initialize/start/polling/wait)
 
 ## 11. Graceful shutdown сервиса — позже
 
-Нет `JOB_ACCEPT`, stop sender, join worker, production executor shutdown. PTB stop это не закрывает. Remote/stale, token, locks, cutover — отдельные решения.
+Нет `JOB_ACCEPT`, stop sender, join worker, production executor shutdown. PTB stop это не закрывает. Допуск новой работы — [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) (TASK-25). Remote/stale, token, locks, cutover — отдельные решения.
 
 ---
 
