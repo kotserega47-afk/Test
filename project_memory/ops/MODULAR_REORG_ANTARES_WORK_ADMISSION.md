@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 `08132f2…`; прямые ops — TASK-28 (этот PR, не выпущено); cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 `08132f2…`; export/Auto-Enable — TASK-28 review `f0bd06bf157f4b377ad7648410605ee67841835f` (не выпущено); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
