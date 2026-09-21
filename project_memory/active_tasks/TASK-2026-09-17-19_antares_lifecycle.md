@@ -9,7 +9,7 @@
 | **PR** | Draft [#22](https://github.com/deniskotdavydov1991-wq/Test/pull/22) `feat/task-2026-09-17-19-antares-lifecycle`, base `feat/task-2026-09-17-18-antares-boot` |
 | **Риск** | low: только документы |
 
-Контракт запуска и остановки isolated Antares **подготовлен к review**. Runtime, mixed gate, Railway и профили **не** менялись. `python -m apps.antares` остаётся boot exit 0. Polling, worker, schedules, sender loop, `JOB_ACCEPT` и cutover **не** реализованы.
+Контракт запуска и остановки isolated Antares **уточнён, к review**. Runtime, `rules_provider`, mixed gate, Railway и профили **не** менялись. `python -m apps.antares` остаётся boot exit 0. Первый будущий `run` — диагностика локального workbook с завершением процесса. Polling, worker, schedules, sender, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** отмечать пройденным.
 
 Опора: принятый план entrypoint TASK-17 и фактический boot TASK-18.
 
@@ -17,23 +17,25 @@
 
 ## Goal
 
-Зафиксировать выполнимый lifecycle: сохранить boot, отдельно включить `run`, fail-fast snapshot до Application, фильтр семи job keys до dispatch, владение ресурсами без ложного graceful shutdown, изоляцию token/files vs process-local, минимальный следующий code PR.
+Зафиксировать выполнимый lifecycle: сохранить boot; отдельно `run`; первый code — локальный xlsx + snapshot без UNKNOWN источника; `force_sync`/`STRICT` не считать свежестью; фильтр семи keys и stop — позже; изоляция token/files vs process-local.
 
 ---
 
 ## Success Criteria
 
 - [x] Boot без argv = TASK-18 (сборка, exit 0, нет polling)
-- [x] `run` — отдельный argv; запрет после неуспешной сборки
-- [x] Порядок: snapshot до Application (не копировать mixed)
-- [x] Таблица start/stop: sender, Application, executor, schedule thread, worker queues — что есть / чего нет
-- [x] Фильтр семи Antares keys до `dispatch_job_background`; unknown workbook job_key без dispatch
-- [x] Изоляция: token, workbook/routes, STATE_DIR/locks, tmp auth-state, WE очереди; нет mixed/raccoon bootstrap; семь keys ≠ изоляция сервиса
-- [x] Первый code scope: argv + fail-fast snapshot, без Application/polling
-- [x] Subprocess-проверки описаны; pytest в TASK-19 **не** требуется
-- [ ] GPT review этого плана
+- [x] `run` — отдельный argv; запрет после неуспешной сборки; snapshot не вызывать
+- [x] Первый `run`: существующий локальный `RULES_XLSX_PATH` после dotenv, иначе отказ до snapshot
+- [x] Путь только из env; конструктор `AccessRules` аргумент не использует
+- [x] `force_sync` ≠ свежесть remote; STRICT ≠ защита от `_RULES_LOCAL` в свежем процессе
+- [x] Успешная диагностика ≠ Dropbox freshness / сервис / cutover
+- [x] Remote download и disk-cache fallback не входят в успех этого подэтапа
+- [x] Отдельное будущее решение: remote source и stale reuse до запуска сервиса
+- [x] Таблица start/stop ресурсов; фильтр семи keys — не первый code
+- [x] Контракт subprocess-тестов (sandbox audit/identity)
+- [ ] GPT review (ещё не пройден)
 - [ ] merge/deploy (намеренно открыто)
-- [ ] code PR argv+snapshot (отдельное задание)
+- [ ] code PR argv + local snapshot (отдельное задание)
 
 ---
 
@@ -41,14 +43,14 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Документы по исходникам на `d1d11e3…`; pytest **не** требовался |
-| GPT | ещё не проверял |
+| Cursor | Документы по исходникам; pytest **не** требовался |
+| GPT | review плана **ещё не** пройден |
 
 ---
 
 ## Out Of Scope
 
-runtime/тесты TASK-19; реализация `run` в этом PR; polling; worker execution; schedules; sender shutdown; `JOB_ACCEPT`; Railway; cutover; merge/retarget/deploy; исходное дерево Test; живой workbook/prod env.
+runtime/тесты TASK-19; реализация `run` в этом PR; смена `rules_provider` / mixed gate; polling; worker; schedules; sender shutdown; `JOB_ACCEPT`; Railway; cutover; merge/retarget/deploy; исходное дерево Test; живой workbook/prod env.
 
 ---
 
@@ -57,3 +59,4 @@ runtime/тесты TASK-19; реализация `run` в этом PR; polling; 
 | Дата | Событие |
 |------|---------|
 | 2026-09-20 | контракт lifecycle подготовлен к review; Draft PR #22 |
+| 2026-09-21 | уточнён первый подэтап: local `RULES_XLSX_PATH`, пределы `force_sync`/`STRICT`, тесты sandbox; review не пройден |
