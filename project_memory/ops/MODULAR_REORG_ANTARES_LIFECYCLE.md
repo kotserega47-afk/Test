@@ -48,7 +48,7 @@ Idle без polling **не** вводить. Успешный boot и успеш
 
 1. локальная проверка workbook — TASK-20, не выпущено
 2. Application + Antares handlers без polling — TASK-22, не выпущено
-3. Sandbox initialize/start/process_update/stop — [STARTSTOP](MODULAR_REORG_ANTARES_STARTSTOP.md) (docs TASK-23; code отдельно; **не** live polling)
+3. Sandbox: тот же PTB helper, initialize → start, `update_queue`, без `start_polling` — [STARTSTOP](MODULAR_REORG_ANTARES_STARTSTOP.md)
 4. `serve` + getUpdates — после sandbox; не менять argv `run`
 5. worker / sender stop API и допуск заданий — до заявления graceful shutdown
 6. schedule thread **с фильтром семи keys до dispatch**

@@ -7,191 +7,252 @@
 | **Application build-only** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) |
 | **Lifecycle обзор** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
 | **PTB** | **22.8** (Cursor Python 3.12.10); `requirements.txt` `>=20.7`, не pin. Railway **UNKNOWN** |
-| **job-queue extra** | на Cursor 3.12.10 **нет** (`APS_AVAILABLE is False`); builder даёт `job_queue=None` |
+| **job-queue extra** | на Cursor 3.12.10 **нет** (`APS_AVAILABLE is False`); builder даёт `job_queue=None`. Ветка extra **не** в scope первого sandbox и **не** заявляется проверенной |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Runtime, mixed `scheduler.py`, профили, `requirements.txt`, Railway, workbook/routes и `STATE_DIR` в этом PR **не** менять. Boot и диагностический `run` TASK-22 **сохраняются**. Pytest **не** требуется.
+Runtime в этом PR **не** менять. Boot и диагностический `run` TASK-22 **сохраняются**. Публичный `serve` и live polling в следующий code scope **не** входят. Pytest **не** требуется.
 
 ---
 
-## 1. Выбор lifecycle: ручной async, не `run_polling`
+## 0. Единственный порядок (везде в этом документе)
 
-**Единственный механизм isolated Antares:** явные `await app.initialize()`, `await app.start()`, при живом сервисе отдельно `await app.updater.start_polling(…)`, остановка в обратном порядке `updater.stop` → `app.stop` → `app.shutdown`. Event loop принадлежит isolated-коду (`asyncio.run` / созданный loop), не `Application.__run`.
+**Запуск**
 
-**Не** вызывать `Application.run_polling` / `run_webhook` / `stop_running` в isolated процессе. Два механизма не смешивать.
+1. `await app.initialize()`
+2. `await app.start()`
+3. `await app.updater.start_polling(...)` — **только будущий сервис**. Первый sandbox-подэтап этот шаг **не** вызывает.
 
-Обоснование по исходникам PTB 22.8 (`telegram/ext/_application.py`):
+Это **намеренно не** порядок `run_polling` (там polling **до** `start`). Isolated не копирует `__run`.
 
-| | `run_polling` / `__run` | Ручной async |
-|--|-------------------------|--------------|
-| Сеть getUpdates | всегда `Updater.start_polling` до `start()` | polling — отдельный шаг; sandbox может обойтись без него |
-| Loop | `__run` берёт/создаёт loop, `run_forever`, опционально `close_loop` | владелец — наш `asyncio.run` |
-| `stop_running` | заточен под `run_forever` (докстринг: custom lifecycle «not guaranteed») | не использовать |
-| Частичный `initialize` | `finally` зовёт `Application.shutdown()`, который **no-op**, если `_initialized` ещё ложно | явный `try/finally` с `Bot.shutdown`, см. § 4 |
-| Windows | `add_signal_handler` на ProactorEventLoop **нет** (mixed это уже обходит warning'ом) | SIGINT → `KeyboardInterrupt` на `asyncio.run`; не обещать POSIX signal handlers |
-| Тесты | live polling или полная подмена `__run` | `process_update` / очередь без getUpdates |
+**Остановка**
 
-Mixed (`scheduler.py` L365) остаётся на `run_polling(close_loop=False)`. Isolated **не** копирует mixed `main()`.
+1. Остановить поступление updates (не класть в очередь; polling не кормит getUpdates).
+2. `await app.updater.stop()` — **если** updater запущен (`updater.running`).
+3. `await app.stop()` — **если** Application запущен (`app.running`).
+4. `await app.shutdown()` — если Application дошёл до `_initialized`; иначе staged cleanup § 6, **не** один `Bot.shutdown` на все компоненты.
 
----
-
-## 2. Кто владеет event loop
-
-- Diagnostic `boot` / `run`: loop **не** нужен (синхронный `build`/`add_handler`).
-- Будущий сервис и sandbox lifecycle: **один** loop, созданный isolated-кодом. PTB callbacks (`process_update`, `start`, `stop`) исполняются на нём.
-- `ThreadPoolExecutor` jobs, sender thread, WE worker — **другие** потоки; PTB `stop` их **не** останавливает.
-- `close_loop`: в ручном пути закрывать loop только если мы его создали и больше не используем (`asyncio.run` делает это сам). Не звать `Application.run_polling(..., close_loop=…)`.
+Пропуск шага, который не стартовал, обязателен. Ошибка шага **не** отменяет оставшиеся доступные шаги и **не** затирает исходное исключение (§ 6.1).
 
 ---
 
-## 3. Порядок start и обратной остановки (PTB 22.8)
+## 1. Выбор: ручной async helper, не `run_polling`
 
-### 3.1 Start (ручной)
+Единственный механизм isolated Antares — helper § 2. **Не** `Application.run_polling` / `run_webhook` / `stop_running`. Mixed (`scheduler.py` L365) остаётся на `run_polling(close_loop=False)`; isolated его **не** копирует.
 
-1. Уже есть: boot-prefix + local snapshot + `Application.build()` + `assembled.handlers` (TASK-22).
-2. `await app.initialize()`: `Bot.initialize` (`HTTPXRequest.initialize` + **`get_me`**) → `update_processor.initialize` → `Updater.initialize` (повторный `Bot.initialize`, idempotent) → `_initialized = True`. Persistence в isolated **нет**.
-3. Живой сервис **только**: `await app.updater.start_polling(...)` — getUpdates в очередь. **Не** в первом code и **не** в диагностическом `run`.
-4. `await app.start()`: если `job_queue` задан — `JobQueue.start()`; иначе skip; затем task `_update_fetcher` из `update_queue` → `process_update`. **Не** открывает Telegram HTTP сам по себе.
-
-`get_me` = первая авторизация token. Успех `build()` этим не является.
-
-### 3.2 Stop (ручной, обратный)
-
-Если polling был запущен: `await app.updater.stop()` **до** `app.stop()` (как в `__run` finally: updater.stop, затем Application.stop, затем shutdown).
-
-Затем:
-
-1. `await app.stop()` — если `running`: в очередь `_STOP_SIGNAL`, `join` текущих, `JobQueue.stop(wait=True)` при наличии, `gather` задач `create_task`. Докстринг: после вызова **новые** элементы из очереди не забираются, даже если очередь не пуста (кладётся stop-сигнал).
-2. `await app.shutdown()` — только если `_initialized`: `Bot.shutdown` (`HTTPXRequest.shutdown` → `AsyncClient.aclose()`), processor, `Updater.shutdown` (ещё раз `Bot.shutdown`, уже no-op). Если `_initialized` ложно — **return без aclose**.
-3. Isolated **не** обещает stop sender / worker / executor / `schedule_loop` (API нет).
-
-SIGINT/SIGTERM: в ручном `asyncio.run` типично `KeyboardInterrupt` / отмена task. На Windows `loop.add_signal_handler` **не** контракт. После прерывания — тот же finally, что и штатный stop. `SystemExit` из PTB `_raise_system_exit` — только если кто-то поставил signal handlers как `__run`.
-
-Ошибки Telegram на getUpdates: у `run_polling` есть `error_callback` → `process_error(update=None)`. В ручном polling тот же callback нужно повесить самим, когда (позже) включат `start_polling`. InvalidToken / сеть на `get_me` — отказ initialize, не polling.
-
-Отмена (`CancelledError`): не глотать без stop/shutdown; после частичного start — § 4.
+| | `run_polling` / `__run` | Isolated helper |
+|--|-------------------------|-----------------|
+| Порядок | initialize → **polling** → start | initialize → **start** → polling (polling только serve) |
+| Loop | `__run` / `run_forever` | caller `asyncio.run`; helper не создаёт второй loop |
+| `stop_running` | заточен под `run_forever` | **не** использовать; стоп через `stop` Event |
+| Sandbox | live getUpdates или подмена `__run` | тот же helper, `enable_polling=False`, очередь без Telegram |
 
 ---
 
-## 4. Частичные отказы и cleanup
+## 2. Production helper (его же исполняет sandbox)
 
-`Application.shutdown()` **не** закрывает httpx, пока `_initialized` ложно. `Bot.initialize` ставит `_requests_initialized` **до** `get_me`. Если `get_me` падает, `Application._initialized` остаётся False, но клиенты уже созданы/«initialized».
+Будущий модуль (имя файла code PR может уточнить, контракт нет): `modules.antares.application_lifecycle`.
 
-| Этап отказа | Уже есть | Cleanup | Не делать |
-|-------------|---------|---------|-----------|
-| gate / assemble / snapshot / build / add_handler | как TASK-22 | процесс exit (диагностика) | initialize ради shutdown |
-| `initialize`: ошибка **до** `_requests_initialized` | Application в памяти | `Application.shutdown` no-op; процесс/finally | `get_me` retry как success |
-| `initialize`: `get_me` / InvalidToken / сеть **после** `_requests_initialized` | Bot requests «открыты», `Application._initialized` False | **`await app.bot.shutdown()`** (это вызывает `HTTPXRequest.shutdown` → `AsyncClient.aclose`). Не полагаться на `Application.shutdown()` | `run_polling`; initialize повторно без shutdown |
-| `initialize` успешен, `start` падает после `JobQueue.start` | scheduler может быть running, `Application.running` сброшен в `except` | `JobQueue.stop` если extra есть и scheduler.running; затем `Application.shutdown` | `stop()` — бросит «not running» |
-| `start` успешен, `start_polling` падает | fetcher жив, updater может быть running | `updater.stop` если `updater.running`; `app.stop`; `app.shutdown` | оставить polling |
-| polling/start живы, ошибка handler | update в обработке | PTB `process_error`; jobs/worker/sender — **свои** потоки, PTB stop их не снимает | считать PTB stop полным stop сервиса |
-| штатный выход сервиса | всё PTB running | updater.stop → app.stop → app.shutdown | process kill как «graceful» |
+```text
+async def run_ptb_lifecycle(
+    app: Application,
+    *,
+    stop: asyncio.Event,
+    enable_polling: bool = False,
+) -> None
+```
 
-Нет метода `HTTPXRequest.aclose()`. Есть `HTTPXRequest.shutdown()` → внутренний `client.aclose()`.
+| | Контракт |
+|--|----------|
+| Кто владеет `Application` | **Caller**: собрал token, snapshot, `build()`, `add_handler` (как TASK-22). Helper Application **не** строит и **не** вешает handlers |
+| Кто владеет loop | **Caller** (`asyncio.run`). Helper только `await` на текущем loop |
+| Запрос остановки | `stop.set()` с того же loop (sandbox после наблюдаемого callback; будущий serve — отдельная обвязка сигналов) |
+| `enable_polling` | sandbox / первый code: **`False`**. `True` только будущий публичный serve, **не** этот code scope |
+| Что helper делает | порядок § 0; ждёт `stop`; finally — остановка § 0 |
+| Чего нет | argv, dotenv, assemble, snapshot, `run_polling`, sender/worker/schedules, смена mixed gate |
 
----
+Sandbox **обязан** вызывать этот helper (после того же build+handlers, что production). Отдельный lifecycle только в test runner **не** засчитывается: он не подтверждает путь приложения.
 
-## 5. Очередь updates и активные callbacks
+Boot и `run` helper **не** вызывают.
 
-- `start()` читает `update_queue` и зовёт `process_update` (в т.ч. concurrent_updates=256, как mixed).
-- Sandbox может класть синтетический `Update` в очередь **или** звать `await app.process_update(update)` без fetcher. Для проверки handlers достаточно `process_update` после `initialize` (initialize нужен, если handler ходит в `context.bot`; часть handlers делает `reply_text` / `get_file` — это снова сеть, в тестах границу закрыть).
-- `stop()`: stop-сигнал; in-flight `create_task` gather'ятся; необработанный хвост очереди **не** контрактовать как «все updates дойдут».
-- PTB JobQueue jobs (если extra) ждут `JobQueue.stop(wait=True)`. Это **не** Antares `JOB_REGISTRY`.
-
----
-
-## 6. JobQueue extra vs без extra
-
-Antares jobs живут в `core.job_runner.JOB_REGISTRY`, не в PTB JobQueue.
-
-| | extra нет (Cursor 3.12.10) | extra установлен |
-|--|----------------------------|------------------|
-| `build()` | `job_queue is None` | `JobQueue()` + `set_application` |
-| `start()` | skip scheduler | `AsyncIOScheduler.start()` |
-| `stop()` | skip | `JobQueue.stop(wait=True)` |
-| Isolated jobs | `request_job` / executor | то же; PTB scheduler **не** заменяет JOB_REGISTRY |
-
-Первый code **не** требует `python-telegram-bot[job-queue]`. Не планировать Antares расписания через PTB JobQueue в этом срезе. Если extra появится — start/stop PTB JobQueue идут вместе с Application.start/stop; не стартовать PTB jobs самим.
-
-`requirements.txt` **не** менять в TASK-23/первом startstop code.
+Публичный `serve` и `enable_polling=True` — **не** следующий code.
 
 ---
 
-## 7. Первый update — не «только Telegram»
+## 3. Event loop и сигналы (раздельно)
 
-Отсутствие `schedule_loop` **не** значит отсутствие бизнес-действий. Реальные Antares handlers (CONFIRMED):
+| Механизм | Что это | Первый sandbox | Будущий serve |
+|----------|---------|----------------|---------------|
+| Stop event | `stop.set()` → helper выходит из `wait` в штатный finally | **да**, основной путь | да |
+| Cancellation главной async-задачи | `CancelledError` на `stop.wait()` / mid-start; срабатывает `finally` helper | **да**, отдельный сценарий | да |
+| SIGINT | обычно `KeyboardInterrupt` / отмена task в `asyncio.run` | **не** контракт первого подэтапа | определить в serve-PR |
+| SIGTERM | `asyncio.run` **сам не** ставит обработчик SIGTERM | **не** в sandbox | Unix: `loop.add_signal_handler(SIGTERM, stop.set)` если loop это умеет. Windows ProactorEventLoop: `add_signal_handler` **нет** (как warning mixed). Не обещать SIGTERM на Windows без отдельной проверки |
 
-| Вход | Что может начаться |
-|------|-------------------|
-| `/run_wallet` `/run_hourly` `/run_download` `/run_rate` `/operator_wallets_ready` `/wallet_editor_refresh` | `run_job_async` → `dispatch_job_async` → `request_job` → lock + executor + job (Dropbox/Playwright/PG/TG routes). Routes **lazy**-импортируют `telegram_bot` → **sender loop** |
-| `/status` | lazy `get_telegram_sender_health_snapshot` → import `telegram_bot` |
-| `/registry_replay` `/registry_export` `/auto_enable_*` | registry/outbox/PG; export шлёт в Telegram |
-| `Document.ALL` | `handle_wallet_editor_document`: `bot.get_file` (сеть), `add_task` → **WE worker** (lazy `ensure_worker` на `add_task`) |
-| `/reload_rules` | snapshot force_sync |
-| `reply_text` / `get_file` | Telegram HTTP, если Bot уже initialize |
-
-Поэтому следующий code проверяет lifecycle **в sandbox**: синтетические updates, границы сети/SDK/sender/worker/jobs, **без** live getUpdates и рабочих credentials. Успех такого прогона **не** разрешение запускать сервис и **не** cutover.
+Не писать «`asyncio.run` обрабатывает SIGTERM».
 
 ---
 
-## 8. Как запускать сервис vs диагностика
+## 4. Initialize по стадиям (PTB 22.8)
 
-Не добавлять live-запуск в существующий `run` молча.
+`Application.initialize` (`_application.py` ~470–511), без persistence:
+
+1. `await self.bot.initialize()`
+2. `await self._update_processor.initialize()`
+3. `await self.updater.initialize()` (снова `Bot.initialize`, уже idempotent)
+4. `self._initialized = True`
+
+`Bot.initialize` (`_bot.py` ~843–868):
+
+1. Если ещё нет: `HTTPXRequest.initialize` на обоих request → **`_requests_initialized = True`**
+2. `await self.get_me()` → `_bot_initialized = True`. InvalidToken перехватывается здесь.
+
+`HTTPXRequest.initialize` пересоздаёт client, только если он уже `closed`; иначе почти no-op. Клиенты **созданы на `build()`**.
+
+`Application.shutdown` no-op, пока `_initialized` ложно. Он **не** вызывается на промежуточных стадиях сам. **`Bot.shutdown` не очищает processor и Updater.**
+
+| Стадия отказа | Флаги | Cleanup helper (доступные шаги, по порядку § 0 затем staged) |
+|---------------|-------|--------------------------------------------------------------|
+| 1. Ошибка инициализации **requests** (`gather` initialize упал **до** `_requests_initialized`) | Bot requests flag ложь; Application не initialized; updater нет | `updater.stop`/`app.stop`/`app.shutdown` не применимы. `Bot.shutdown` **no-op**. Idle httpx с `build()` этим **не** закрыть. Не называть `Bot.shutdown` очисткой. Диагностика: процесс exit; сервисный helper: записать, что request shutdown не через Bot API |
+| 2. Ошибка **`get_me`** (сеть/InvalidToken) **после** `_requests_initialized` | requests да; `_bot_initialized` нет; Application/updater/processor initialize дальше **не** шли | `await app.bot.shutdown()` → `HTTPXRequest.shutdown` → `AsyncClient.aclose`. **Не** `Application.shutdown()` (no-op). Processor/Updater не инициализированы — их shutdown не звать «за компанию» |
+| 3. `Bot.initialize` **успешен**, отказ **до** `Application._initialized` (processor или `Updater.initialize`) | Bot полностью initialized; Application flag ложь; updater/processor **частично** | `Application.shutdown` всё ещё **no-op** — **не** закроет processor. Сделать: если `updater.running` (не должно); если `updater._initialized` — `updater.shutdown` (он зовёт `Bot.shutdown`); иначе `Bot.shutdown`; если processor.initialize уже вернул успех — **отдельный** `await app._update_processor.shutdown()`, не считать это сделанным `Bot.shutdown`. Не обобщать один вызов на все компоненты |
+
+Имена `_initialized` внутренние PTB; helper в code может опираться на публичные `running` и на факт, что `shutdown`/`stop` бросают или no-op — но контракт cleanup **стадийный**, не «всегда Bot.shutdown».
+
+---
+
+## 5. Очередь, callbacks, ошибки
+
+### 5.1 Как проверять start/stop (обязательно)
+
+Последовательность событий sandbox (тот же helper, `enable_polling=False`):
+
+1. Caller: build + handlers (TASK-22 путь).
+2. Зарегистрировать **наблюдаемый** error handler на этом `app` (до helper).
+3. `await helper` доходит до `start` (fetcher читает `app.update_queue`).
+4. Положить **один** синтетический `Update` в `app.update_queue` (не `process_update`).
+5. **Дождаться** наблюдаемого завершения callback (harness-событие / Event), не таймаут «наверное обработалось».
+6. Остановить поступление (больше не `put`).
+7. `stop.set()` → helper: updater.stop пропускается → `app.stop` → `app.shutdown`.
+
+`await app.process_update(update)` — **отдельная** проверка handlers без fetcher. Она **не** доказывает `_update_fetcher`, очередь, `task_done`, `concurrent_updates`.
+
+### 5.2 Ошибки callback
+
+`process_update` ловит Exception из blocking handler и зовёт `process_error` (`_application.py` ~1324–1327, 1249–1250). Успешный **возврат** `process_update` (нет raise наружу) **не** есть успех callback: ошибка могла уйти в error handler.
+
+Контракт проверки:
+
+- Положительный путь: событие «callback completed» у выбранного handler.
+- Отрицательный путь (инъекция raise в callback): событие error handler с тем же типом; **и** явная проверка, что бизнес-успех (diag line / «handler ok») **отсутствует**.
+- Не использовать «`process_update` не бросил» как pass.
+
+### 5.3 Синтетический Update
+
+Безопасный выбор: private `/whoami` (`cmd_whoami`) — access из sandbox xlsx, **без** `request_job`, **без** import `telegram_bot`, **без** document ingest.
+
+`reply_text` → Telegram HTTP: на границе `HTTPXRequest.do_request` синтетический **успешный** JSON для `getMe` (initialize) и для `sendMessage` (ответ whoami). Прочие method/url — запись попытки и отказ. Это не live Telegram.
+
+Не использовать `/run_*`, `/status`, `/registry_*`, Document.ALL как первый lifecycle-update.
+
+Jobs, sender, worker, Dropbox, PG, Playwright, живая сеть — запрещены.
+
+### 5.4 Уже в очереди vs запрет новых (PTB 22.8)
+
+Исходники: `stop` кладёт `_STOP_SIGNAL` и `await update_queue.join()` (`_application.py` ~669–685). `__update_fetcher` читает FIFO, пока не увидит `_STOP_SIGNAL`, затем **return** (~1210–1217). `_update_fetcher` **finally** снимает хвост через `get_nowait` с логом `Dropping pending update` (~1234–1240). Докстринг `stop`: после вызова updates из очереди больше не fetch'атся, даже если очередь не пуста (~645–647). Concurrent path (`concurrent_updates=True` → 256): handler уходит в `create_task`; `stop` потом `gather` `__create_task_tasks`.
+
+Контракт:
+
+- **Новые поступления:** caller/helper прекращают `put` и не включают polling **до** `app.stop`. Это запрет **новых** входов, не свойство FIFO.
+- **Уже стоявшие до `_STOP_SIGNAL`:** реализация может обработать их до сигнала или дропнуть хвост в `finally`. **Не** обещать ни потерю, ни полное завершение хвоста без отдельной проверки.
+- Sandbox поэтому: один update, дождаться callback, **потом** stop — не опираться на drain-during-stop.
+
+---
+
+## 6. Cleanup: не глотать исходную ошибку, не пропускать шаги
+
+### 6.1 Правило finally
+
+```text
+primary = исключение тела (initialize/start/polling/wait)
+для каждого доступного шага остановки § 0 / § 4:
+    try: шаг
+    except: запомнить рядом с primary, продолжить
+в конце: если primary — выбросить его; cleanup-ошибки в __context__ / ExceptionGroup
+не подменять primary ошибкой cleanup
+не skip оставшийся шаг из-за сбоя предыдущего cleanup
+```
+
+`app.stop()` при `not running` бросает RuntimeError — поэтому «если запущен». То же `updater.stop`.
+
+### 6.2 Таблица частичных отказов (порядок § 0)
+
+| Отказ | Уже есть | Cleanup (доступное) | Не делать |
+|-------|----------|---------------------|-----------|
+| assemble / snapshot / build / add_handler | TASK-22 | процесс exit; helper нет | initialize ради cleanup |
+| initialize, стадия requests | Application в памяти, requests flag ложь | § 4 стадия 1 | `Bot.shutdown` как будто закроет httpx |
+| initialize, стадия get_me | requests да | `Bot.shutdown`; не `app.shutdown` | `run_polling`; повтор initialize без shutdown requests |
+| initialize, после успешного Bot, до Application flag | Bot да; processor/updater частично | § 4 стадия 3 | один `Bot.shutdown` «за всё» |
+| `start` падает (например после JobQueue.start, если extra когда-либо будет) | `running` сброшен в except start | JobQueue.stop **только если extra и scheduler.running** (сейчас extra нет — не заявлять); `app.shutdown` если `_initialized` | `app.stop()` при not running |
+| `start` успешен, `start_polling` падает | fetcher жив; updater может быть running | поступление стоп → updater.stop если running → app.stop → app.shutdown | оставить polling; **не в sandbox** (polling нет) |
+| штатный stop после callback | start без polling | поступление стоп → skip updater.stop → app.stop → app.shutdown | process kill |
+| callback бросил | PTB process_error | не PTB-stop jobs/sender/worker (их нет в успехе sandbox) | считать возврат process_update успехом |
+
+---
+
+## 7. JobQueue extra
+
+Сейчас extra **нет**. Первый sandbox **не** проверяет и **не** обещает `JobQueue.start`/`stop`.
+
+Если extra **войдёт в scope** отдельным решением (не этот docs PR, не молча): окружение с установленным `[job-queue]`; тот же helper; наблюдать `JobQueue.start` на `app.start` и `JobQueue.stop(wait=True)` на `app.stop`; по-прежнему не класть Antares jobs в PTB scheduler; `JOB_REGISTRY` отдельно. Пока extra нет — эта строка N/A.
+
+`requirements.txt` не менять.
+
+---
+
+## 8. Первый update vs бизнес-эффекты
+
+Нет `schedule_loop` ≠ нет действий. `/run_*`, `/status`, registry, Document.ALL могут поднять jobs, sender, worker, outbox, `get_file`. Для lifecycle-проверки выбран `/whoami` (§ 5.3). Успех sandbox **не** разрешение сервиса и не cutover.
+
+---
+
+## 9. argv
 
 | argv | Поведение | Когда |
 |------|-----------|--------|
-| нет / `boot` | TASK-18: сборка, exit 0, нет Application | сохранить |
-| `run` | TASK-22: snapshot + `build` + handlers, одна диагностика, **exit 0**, нет initialize/polling | сохранить; **не** превращать в сервис |
-| будущий `serve` (имя можно уточнить в code PR, не `run`) | ручной async: initialize → start → (позже) polling; процесс **живёт** до stop | **не** первый code TASK-23; отдельный code после sandbox lifecycle |
-| иное | отказ, как сейчас | сохранить |
-
-Idle без polling **не** вводить как замену `serve`.
+| нет / `boot` | TASK-18 | сохранить |
+| `run` | TASK-22 диагностика, **exit 0**, без helper/initialize | сохранить; не превращать в сервис |
+| будущий `serve` | caller + helper `enable_polling=True` | **не** следующий code |
+| иное | отказ | сохранить |
 
 ---
 
-## 9. Минимальный следующий code (не этот PR)
+## 10. Минимальный следующий code (не этот PR)
 
-Только проверка ручного PTB lifecycle в subprocess/sandbox на базе TASK-22 Application:
-
-1. Сохранить `boot` и диагностический `run` без initialize.
-2. Не звать `run_polling` / `start_polling` / live getUpdates.
-3. Синтетический token + граница HTTP: `get_me` **не** идёт в Telegram (stub/перехват `do_request` / Bot.get_me на границе, с записью попытки). Успех initialize в тесте ≠ авторизация боевого token.
-4. `initialize` → `start` → `process_update` (синтетика) → `stop` → `shutdown`; ненулевой exit и нет success, если шаг падает.
-5. Частичный `get_me` fail: cleanup через `Bot.shutdown`, не через no-op `Application.shutdown`.
-6. Границы: сеть, `telegram_bot`, mixed/raccoon, Dropbox, PG, Playwright, `request_job` / `add_task` — отказ на вызове; первый update **не** должен стартовать sender/worker/job, пока тест это не разрешит явно (по умолчанию запрет).
-7. Не стартовать `schedule_loop`. Не менять mixed gate, scheduler, profiles, requirements, Railway, STATE_DIR, remote/stale policy.
-
-Не считать этот code «сервис запущен». `serve` + getUpdates — **следующий** code PR после принятия этого контракта и зелёного sandbox.
+1. Добавить helper § 2. Не дублировать lifecycle в pytest runner.
+2. Сохранить `boot` / `run` без helper.
+3. Не `run_polling`, не `start_polling`, не публичный serve.
+4. Sandbox subprocess: тот же build+handlers; `do_request` синтетический getMe (+ sendMessage для whoami); helper `enable_polling=False`; очередь `/whoami`; ждать callback; `stop.set()`.
+5. Отдельные сценарии: отказ initialize по стадиям § 4; cancellation; callback raise → error handler; прямой `process_update` **не** вместо очереди.
+6. Запрет jobs/sender/worker/SDK/сети кроме разрешённого синтетического do_request.
+7. JobQueue extra не проверять, пока extra нет.
 
 ---
 
-## 10. Полный безопасный shutdown сервиса — зависимости (не первый code)
+## 11. Graceful shutdown сервиса — позже
 
-PTB stop/shutdown **не** останавливает Antares-потоки. Пока нет API — не писать success «graceful shutdown сервиса».
-
-Порядок реализации **после** sandbox lifecycle и **до** заявления production serve:
-
-1. **Допуск заданий** (`JOB_ACCEPT` или эквивалент) — сейчас **нет**; иначе первый update/`request_job` исполняет работу.
-2. Stop **sender** (сейчас import = daemon без join) — **нет**.
-3. Stop **WE worker** (sentinel/join) — **нет**.
-4. Shutdown **job executor** вне test helper — **нет**.
-5. `schedule_loop` stop event + фильтр семи keys — если loop вообще вводить; **не** в первом startstop code.
-6. Remote/stale workbook, общий token, `STATE_DIR` locks, `/tmp` auth-state, cutover — **отдельные** решения до реального запуска.
-
-Пока пункты 1–4 отсутствуют: даже корректный PTB stop оставляет бизнес-потоки. Isolated `serve` в prod **не** готов.
+Нет `JOB_ACCEPT`, stop sender, join worker, production executor shutdown. PTB stop это не закрывает. Remote/stale, token, locks, cutover — отдельные решения.
 
 ---
 
-## 11. Вне скоупа TASK-23 и первого startstop code
+## 12. Вне скоупа
 
-Live Telegram; рабочий token; смена `run` в сервис; `run_polling`; mixed gate/`scheduler.py`; production profiles; `requirements.txt`; Railway; workbook/routes; `STATE_DIR`; remote/stale; cutover; merge/retarget/deploy; исходное Test.
+Live Telegram; рабочий token; смена `run`; `run_polling`; mixed gate; scheduler; profiles; requirements; Railway; STATE_DIR; merge; исходное Test; реализация helper в этом docs PR.
 
 ---
 
-## 12. Оставшиеся вопросы
+## 13. Оставшиеся вопросы
 
-1. Точное имя argv сервиса (`serve` vs иное) — code PR, не `run`.
-2. Stub `get_me`: уровень `Bot.get_me` vs `HTTPXRequest.do_request` — выбрать в code, оба допустимы, если попытка сети записана и отклонена.
-3. Нужен ли `process_update` без `start()` (без fetcher) — допустимо для unit handlers; контракт сервиса всё же включает `start`/`stop`, чтобы проверить очередь и JobQueue extra-ветку.
-4. PTB/Railway version — **UNKNOWN**; контракт 22.8.
-5. `ResourceWarning` httpx в diagnostic `run` — по-прежнему не доказан родительским `-W default`.
+1. Точное имя модуля/функции helper — code PR, контракт § 2.
+2. Имя argv serve — не сейчас.
+3. Как именно Windows-serve увидит SIGTERM — serve-PR.
+4. Railway PTB / extra — UNKNOWN.
+5. Поведение хвоста очереди при stop — не обещать без отдельного теста.
