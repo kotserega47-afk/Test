@@ -6,7 +6,7 @@
 | **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-19 (PR #22, review `b76a377bacc437e72b066f4ccb12f7fc29557b7c`, закрытие `8d806477d86ddb88dbc1ae5bbccce32d10bef15e`), `ops/MODULAR_REORG_ANTARES_LIFECYCLE.md` § 4.3 / § 11 |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-20-antares-local-rules`, base `feat/task-2026-09-17-19-antares-lifecycle` |
+| **PR** | Draft [#23](https://github.com/deniskotdavydov1991-wq/Test/pull/23) `feat/task-2026-09-17-20-antares-local-rules`, base `feat/task-2026-09-17-19-antares-lifecycle` |
 | **Риск** | medium: isolated `run` читает локальный xlsx через реальный provider |
 
 Диагностический `python -m apps.antares run`: boot-prefix + существующий локальный `.xlsx` + `rules.get_snapshot(force_sync=True)` → печать → **exit 0**. Application, polling, worker, schedules, sender **не** стартуют. `AccessRules` / `rules_provider` / mixed gate **не** менялись. Review **не** отмечать принятым заранее.
@@ -71,4 +71,4 @@ Application; polling; worker; schedules; sender shutdown; смена `rules_prov
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | диагностический `run` по локальному workbook; статус review |
+| 2026-09-21 | диагностический `run` по локальному workbook; Draft PR #23; статус review |
