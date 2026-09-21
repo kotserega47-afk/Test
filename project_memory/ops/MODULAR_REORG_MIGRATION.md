@@ -26,7 +26,7 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 |------|-------|------------------------------|----------|
 | TASK-02 парсер | код, review, PR #5 | Cursor **41 passed** TASK-02/03 вместе, Python **3.13.14**; GPT **18** тестов на `acfb9958…` (изолированная директория, полный набор не гонял); GPT diff PR #6, набор 41 **не** перезапускал | **нет** |
 | TASK-03 early gate | код, review, PR #6, HEAD `48a2a82…` | тот же прогон 41, что строка TASK-02 | **нет** |
-| TASK-04 эталон | docs, review, PR #7 | pytest не требовался | **нет** |
+| TASK-04 эталон | docs + golden/inventory/harness, review, PR #7, HEAD GPT `443ba70e…` | Cursor **94 passed** на `493c776e…` (inventory/registration/goldens/parser+gate; **не** повтор на `443ba70e…`); отдельно Platform compare **1 passed** на `443ba70e…`; отдельно payin golden **1 passed** на `443ba70e…`. GPT код/diff `443ba70e…`, наборы 94 / 1 / 1 **не** запускал | **нет** |
 | TASK-05…11 handlers/jobs | код в PR #8–#14, review | отдельные task-прогоны на своих SHA (не суммировать с 41 / 79 / 15) | **нет** |
 | TASK-12/13 ingest | план + код, PR #15/#16 | код ingest GPT `4a1e7796…`; закрытие `5f131ce…` | **нет** |
 | TASK-14/15/16 сборка | план + script bind + `assemble_antares`, PR #17–#19 | сборка **не** сервис | **нет** |
@@ -140,11 +140,22 @@ Production-настройки Railway в этой задаче **не менят
 
 **Task:** [TASK-2026-09-17-04](../active_tasks/TASK-2026-09-17-04_behavior_baseline.md) — **review пройден**, Draft PR #7, merge нет. Артефакт: [MODULAR_REORG_BEHAVIOR_BASELINE.md](MODULAR_REORG_BEHAVIOR_BASELINE.md).
 
+Harness / тесты (не суммировать в одно число):
+
+| Прогон | SHA | Что |
+|--------|-----|-----|
+| Cursor **94 passed** | `493c776e…` | связанный набор Test: inventory AST, registration subprocess, goldens, parser+gate. **Не** повторялся на `443ba70e…` |
+| Cursor **1 passed** | `443ba70e…` | Platform compare: `tests/compare_platform_raccoon_payin.py --platform-checkout` |
+| Cursor **1 passed** | `443ba70e…` | Test payin golden (`test_raccoon_payin_format_golden.py`) |
+| GPT | `443ba70e…` | код/diff; наборы 94 / Platform 1 / payin 1 **не** запускал |
+
+94, два раза по 1 и прогоны других TASK — **разные** наборы/SHA.
+
 | | |
 |--|--|
-| Файлы | golden; поведенческий diff Raccoon Platform vs Test |
-| Сравнение версий | только на сохранённых входах **или** среда без внешних изменений. Нужны **явные stubs** Playwright/TG |
-| `EXTERNAL_SIDE_EFFECTS` | **предложение, кода нет.** Пока флага нет, слово dry-run **не** доказывает отсутствие побочных эффектов |
+| Файлы | `ops/MODULAR_REORG_BEHAVIOR_BASELINE.md`; golden; `tests/test_behavior_baseline_inventory.py`; `tests/test_behavior_baseline_registration.py`; Platform compare |
+| Сравнение версий | сохранённые входы; Platform — stubs sender/rules, блок сети/потоков |
+| `EXTERNAL_SIDE_EFFECTS` | **предложение, кода нет.** Dry-run **не** доказывает отсутствие побочных эффектов |
 
 ---
 
@@ -470,37 +481,66 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 | | |
 |--|--|
-| Результат | mixed drain (A+B на **старом**, когда рычаг есть) → stop + anti-restart → isolated единственный ACTIVE; откат: сначала stop isolated тем же A+B, затем старый SHA |
-| Зависимости | E; § Cutover ниже (locks не кластерные; dual poll запрещён) |
+| Результат | mixed drain (порядок § «Остановка старого mixed») → stop + anti-restart → isolated единственный ACTIVE; откат: сначала stop isolated (A+B isolated), затем старый SHA |
+| Зависимости | E; **остановка mixed не следует из isolated `seal`** (ниже); § Cutover (locks не кластерные; dual poll запрещён) |
 | Готовность | runbook с deployment id, временем передачи, checklist формата данных для отката |
 | Не готовность | два ACTIVE на одном токене; откат при нечитаемом новом формате state без миграции |
 
 Порядок A→B→C→D→E→F **обязателен по смыслу**: serve без A оставляет обходы; switch без B рвёт Save; switch без D/E — ops-лотерея.
 
+### Остановка старого mixed (не isolated seal)
+
+Isolated `WorkAdmission` живёт в процессе `python -m apps.antares`. Mixed `scheduler.py` **не** bind'ит допуск: `seal()` isolated **не** прекращает приём на старом Test.
+
+Безопасная остановка **старого** исполнителя — отдельная цепочка **в том же mixed-процессе**:
+
+1. **Прекращение приёма** — новые TG jobs, ingest `queue.put`, Auto-Enable, `schedule_loop` → `dispatch_job_background`, conversion bridge не ставят работу.
+2. **Завершение принятого** — `_RUNNING`, WE queues, executor futures, sender дожимаются или durable-handoff; не freeze очереди.
+3. **Stop** — выйти из `run_polling`, остановить schedule thread, join worker, shutdown executor, stop sender. Сейчас у mixed **нет** этих API (`schedule_loop` = `while True`; worker daemon; sender без production stop).
+4. **Anti-restart** — replicas=0 / stop **этого** service UUID и проверка, что контейнер не поднимается (Cutover § anti-restart). Isolated seal шага 4 **не** делает.
+
+Пока шага 1 нет, «подождать idle и убить контейнер» рвёт Save — не штатный переход.
+
+**Будущий scope (не TASK-25, не первый `/run_wallet`):** рычаг допуска на **legacy mixed** (`JOB_ACCEPT` или эквивалент в `schedule_loop` / mixed handlers / ingest / Auto-Enable). Правка общего `request_job` без default-unbound заденет isolated и тесты — отдельно проектировать. **Сейчас не реализовывать.**
+
+Нерешённые вопросы остановки mixed:
+
+- Где ставить mixed-gate, чтобы не сломать unbound-тесты и не считать isolated seal достаточным.
+- Как наблюдать idle без join API (логи `job_started` — слабый сигнал).
+- Доказанный anti-restart на service UUID Test.
+- Длина drain при нескольких WE-профилях.
+- Нужен ли durable inbox, если окно объявляет потерю только *непринятых* updates.
+
 ---
 
 ## Оценка оставшейся работы (диапазоны, не дата)
 
-Оценка **инженерной ёмкости**, не календарный дедлайн. Календарь = ёмкость × (ревью Draft-цепочки + окно Railway + WAIT на UNKNOWN). Не обещать дату.
+Ёмкость по **категориям**, не календарный дедлайн. Строки не складывать в одну цифру «до F»: разработка ≠ проверка ≠ интеграция ≠ ожидание внешних ≠ окно. Прежние **15–35 инж.-дней** смешивали категории и **сняты**.
 
-| Блок | Разработка | Проверка | Эксплуатационное окно |
-|------|------------|----------|------------------------|
-| TASK-25 code: примитив + `/run_wallet` | **1–2** инж.-дня | **0.5–1** день Event/barrier | **0** (не выпуск) |
-| Допуск остальных путей выпуска (A), вкл. ingest + internal Auto-Enable | **3–6** дн. | **2–4** дн. | 0 |
-| Stop API worker/executor/sender + drain (B) | **4–8** дн. | **2–4** дн. | 0 до serve |
-| Serve + сигналы (C), без live cutover | **2–4** дн. | **1–2** дн. sandbox + 1 не-prod token | не prod |
-| Конфиг/состояние/runbook (D) | **1–3** дн. docs/ops | **1–2** дн. сверка Railway | входит в F |
-| Интеграция (E) | поддержка фиксов **1–3** дн. | **2–5** дн. сценариев | опционально staging |
-| Переключение (F) | runbook **0.5–1** дн. | dry-run стопа **0.5–1** дн. | **2–6 часов** стены + запас на неизвестный Save |
-| Цепочка merge #4…N + retarget | не feature-работа | **1–3** дн. на сверку diff после каждого retarget | restart Test при каждом merge в `test_main` — **отдельные** окна, не F |
+| Строка | Разработка | Проверка (unit/barrier) | Интеграция | Внешние ожидания | Экспл. окно |
+|--------|------------|-------------------------|------------|------------------|--------------|
+| TASK-25: примитив + `/run_wallet` | **1–2** дн. | **0.5–1** дн. | 0 | review PR | **0** |
+| A: остальные пути состава | **3–6** | **2–4** | 0 | — | 0 |
+| B: isolated drain/stop API | **4–8** | **2–4** | 0 | — | 0 |
+| Mixed stop (будущий legacy-scope) | **3–6** | **2–4** | 0 | anti-restart Railway | 0 до F |
+| C: serve/сигналы | **2–4** | **1–2** sandbox | не-prod token **1–2** | Windows SIGTERM UNKNOWN | не prod |
+| D: конфиг/runbook | **1–3** | сверка Railway **1–2** | 0 | pin SHA / restart policy UNKNOWN | в F |
+| E: интеграционные сценарии | фиксы **1–3** | — | **2–5** | кабинет/токен ops | staging опц. |
+| F: переключение | runbook **0.5–1** | dry-run стопа **0.5–1** | — | idle mixed, anti-restart | **2–6 ч** стены |
+| Merge #4…N + retarget | 0 feature | сверка diff **1–3** на каждый retarget | — | очередь review + **restart Test** на каждый merge в `test_main` | отдельные окна, не F |
 
-**Сумма до готовности F (разработка+проверка, один инженер, без ожидания UNKNOWN):** примерно **15–35** инж.-дней. Не переводить в дату. Два инженера сужают календарь не линейно (ревью, один token, одно окно).
+Суммы **только разработки** (TASK-25+A+B+C+D+E-фиксы+F, **без** mixed-legacy): **12.5–27** инж.-дней.  
+С mixed-legacy stop: **15.5–33** разработки.  
+Проверка barrier/unit (TASK-25+A+B+C+D+F, без E): **7–14**.  
+Интеграция E: **2–5** (+ не-prod C **1–2**).  
+Внешнее: review, Railway anti-restart, retarget, UNKNOWN — **не** входят в суммы разработки.  
+Окно F: **2–6 часов**, не дни разработки.
 
-Критический путь: **A (все пути) → B (stop API) → C (serve) → E → F**. TASK-25 `/run_wallet` на критическом пути только как первый камень A. Merge-цепочка может **блокировать календарь** раньше F, если каждый merge = restart mixed.
+Критический путь перехода: mixed-stop **или** доказанный idle+anti-restart (хуже) **параллельно** isolated **A → B → C → E → F**. Isolated `/run_wallet` — только первый камень A. Isolated `seal` **не** заменяет mixed-stop.
 
 ### Допущения
 
-- Один isolated процесс Antares; mixed gate не ослабляют.
+- Один isolated процесс Antares **в репозитории Test** (Draft PR/worktree); отдельный репозиторий не создаём; mixed gate не ослабляют.
 - Состав выпуска = таблица выше, без вырезания WE.
 - PTB 22.8, SimpleUpdateProcessor, без JobQueue extra, пока extra не войдёт отдельным решением.
 - Прогоны остаются привязаны к SHA; новый code не «наследует» 15/96 как покрытие допуска.
@@ -519,12 +559,14 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 ### Нерешённые блокеры перехода (сейчас)
 
 - Нет кода допуска (даже `/run_wallet`).
-- Нет допуска на ingest, прямых ops, schedules, internal enqueue.
-- Нет production stop worker/sender/executor.
+- Нет допуска на ingest, прямых ops, schedules, internal enqueue (isolated A).
+- Isolated `seal` **не** останавливает mixed.
+- Нет mixed-рычага «прекратить приём → дожать → stop» (будущий legacy-scope, не TASK-25).
+- Нет production stop worker/sender/executor (isolated и mixed).
 - Нет isolated serve/polling.
 - Anti-restart mixed **не доказан**.
 - Durable inbox нет (переход без него только с объявленной потерей непринятых updates).
-- Ни один Draft PR линейки не слит.
+- Ни один Draft PR линейки не слит. Реорганизация **остаётся в репозитории Test** (Draft PR/worktree); отдельный репозиторий Antares **не** создаём.
 
 ---
 
@@ -534,7 +576,8 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 
 1. После review TASK-25: code примитива + `/run_wallet` (узкий scope). Остальные пути — обходы до этапа A.
 2. Затем code допуска остальных путей состава выпуска (A), не «заодно» serve.
-3. Stop API (B) и serve (C) — отдельные PR.
-4. Raccoon/WR isolated — после первого перехода Antares, не вместо него.
+3. Stop API isolated (B) и serve (C) — отдельные PR.
+4. Mixed stop (прекращение приёма → drain → stop → anti-restart) — **отдельный будущий scope**, не первый code TASK-25.
+5. Raccoon/WR isolated — после первого перехода Antares, не вместо него.
 
 Устарело как «следующий code»: split `script_jobs` (сделан в TASK-15 Draft) и «кода сборки нет» (TASK-16 Draft).

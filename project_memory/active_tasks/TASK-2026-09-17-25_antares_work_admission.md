@@ -59,3 +59,4 @@ runtime/тесты TASK-25; live polling; sender stop; worker join; executor shu
 | 2026-09-21 | контракт допуска подготовлен к review; Draft PR #28 |
 | 2026-09-21 | уточнены состояния bind/closed, атомарный submit, stop vs seal, узкий `/run_wallet` scope |
 | 2026-09-21 | MIGRATION: статусы Draft/sandbox/выпуск; план перехода A–F; оценка диапазонами; Accepted/reply/submit; loop vs `call_soon_threadsafe`; TASK-25 не закрыт |
+| 2026-09-21 | review плана: TASK-04 прогоны 94@493c776 + 1+1@443ba70; оценка по категориям вместо 15–35; остановка mixed ≠ isolated seal; репозиторий по-прежнему Test |
