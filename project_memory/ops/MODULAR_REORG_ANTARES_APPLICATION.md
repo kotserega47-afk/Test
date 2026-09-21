@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | PROPOSED (только документы; runtime не менялся; к review, не «review пройден») |
+| **Статус** | план review пройден (HEAD `777a52f…`); runtime не менялся; pytest не запускался; merge нет |
 | **База** | закрытие TASK-20 `5bed1b0308775a769481409e18e20644b181967d` (принятый review HEAD `8b42e4daadbdcdd71a0843170d859ea98d190208`) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) шаг 2 после локального snapshot |
 | **PTB (обследован)** | `python-telegram-bot` **22.8** (Cursor, Python 3.12.10: `telegram.__version__`); `requirements.txt` закрепляет `>=20.7`, не pin 22.8 |
@@ -19,7 +19,7 @@
 | Файл (PTB 22.8) | Что закреплено |
 |-----------------|----------------|
 | `telegram/ext/_applicationbuilder.py` | `token()` только сохраняет строку; `build()` собирает `ExtBot` + два `HTTPXRequest` + `Updater` + default `JobQueue`; **не** вызывает `initialize` / `start` / polling |
-| `telegram/request/_httpxrequest.py` | `httpx.AsyncClient` создаётся в `__init__` (`_build_client`); HTTP к Telegram в `do_request`; `shutdown()` → `aclose()` |
+| `telegram/request/_httpxrequest.py` | `httpx.AsyncClient` создаётся в `__init__` (`_build_client`); HTTP к Telegram в `do_request`; `HTTPXRequest.shutdown()` внутри вызывает `httpx.AsyncClient.aclose()`. Метода `HTTPXRequest.aclose()` **нет** |
 | `telegram/_bot.py` | `initialize()` → `BaseRequest.initialize` + **`get_me`** (проверка token сетью); `shutdown()` **no-op**, если `_requests_initialized` ложно |
 | `telegram/ext/_application.py` | `initialize` / `start` / `stop` / `shutdown` / `add_handler` / `run_polling`; `shutdown()` **no-op**, если не `_initialized` |
 | `telegram/ext/_jobqueue.py` | `JobQueue()` создаёт `AsyncIOScheduler`; `.start()` только из `Application.start()` |
@@ -80,8 +80,8 @@ Idle `httpx.AsyncClient` после `build()` — ресурс процесса,
 | `Updater.start_polling` / `run_polling` | initialize + polling + start | **нет** |
 | `Application.stop` / `Updater.stop` | только после start/polling | **нет** (нечего останавливать) |
 | `Application.shutdown` | `bot.shutdown` и т.д. **только если `_initialized`** | **не вызывать как cleanup** после одного `build()` |
-| `Bot.shutdown` | `HTTPXRequest.shutdown` **только если `_requests_initialized`** | то же |
-| процесс exit | ОС забирает fd/клиенты | **да** — завершение после диагностики |
+| `Bot.shutdown` | вызывает `HTTPXRequest.shutdown()` (там `AsyncClient.aclose()`) **только если `_requests_initialized`** | то же |
+| процесс exit | ОС забирает fd/клиенты | **да** — граница для **одноразовой диагностики**, не graceful shutdown сервиса |
 
 `run_polling` порядок (докстринг `_application.py` ~758–769): `initialize` → `post_init` → `Updater.start_polling` → `start` → … → `Updater.stop` → `stop` → `post_stop` → `shutdown`. Isolated этот путь **не** входит.
 
@@ -97,11 +97,11 @@ Lifecycle TASK-19 писал: «shutdown если initialize был». На PTB 
 
 Поэтому **нельзя** обещать `Application.shutdown()` / `Bot.shutdown()` как закрытие httpx после build-only: официальный путь cleanup **требует** initialize, а initialize — сеть и проверка token.
 
-`HTTPXRequest.shutdown()` (`_httpxrequest.py` 234–240) **умеет** `aclose()` без initialize. Это **не** публичный контракт Application. Вызывать `app.bot.request.shutdown()` в этом срезе **не** требуется и **не** входит в минимальный code: нет гарантии стабильного атрибута на всех `>=20.7`; это обход PTB lifecycle.
+`HTTPXRequest.shutdown()` (`_httpxrequest.py` 234–240) закрывает внутренний `httpx.AsyncClient` через **`client.aclose()`**, в том числе без `Bot.initialize`. Это метод `HTTPXRequest.shutdown`, не `HTTPXRequest.aclose()` (такого API нет). Это **не** публичный контракт Application. Вызывать `app.bot.request.shutdown()` в этом срезе **не** требуется и **не** входит в минимальный code: нет гарантии стабильного атрибута на всех `>=20.7`; это обход PTB lifecycle.
 
-**Контракт освобождения для build-only:** не `initialize` ради shutdown; не `Application.shutdown()` как обязательный шаг; процесс **завершается** после диагностики (как boot/run TASK-18/20). Предупреждение httpx «unclosed client» при GC — **UNKNOWN**; не делать из него success criterion; не запускать event loop только чтобы `aclose`.
+**Контракт освобождения для build-only диагностики:** не `initialize` ради shutdown; не `Application.shutdown()` как обязательный шаг. Завершение процесса — граница освобождения **только** для одноразовой диагностики, **не** graceful shutdown живого сервиса. Предупреждение httpx «unclosed client» при GC — **UNKNOWN**; не делать из него success criterion; не запускать event loop только чтобы `aclose`.
 
-Иной порядок (прямой `HTTPXRequest.aclose`) — отдельное решение **после** исходников будущей версии, не этот docs PR и не первый application code.
+Иной порядок (вызов `HTTPXRequest.shutdown()` → внутренний `AsyncClient.aclose()` без initialize) — отдельное решение **после** исходников будущей версии, не этот docs PR и не первый application code.
 
 ---
 
@@ -166,7 +166,7 @@ Pytest в этом docs PR **не** требуется и **не** запуск�
 
 ## 9. Out of scope
 
-`initialize` / polling / worker / schedules / sender; прямой `HTTPXRequest.shutdown`; смена `requirements.txt`; mixed `main()`; `JOB_ACCEPT`; Railway; cutover; merge/retarget/deploy; исходное дерево Test; живой token.
+`initialize` / polling / worker / schedules / sender; обход через `HTTPXRequest.shutdown()` / внутренний `AsyncClient.aclose()`; смена `requirements.txt`; mixed `main()`; `JOB_ACCEPT`; Railway; cutover; merge/retarget/deploy; исходное дерево Test; живой token.
 
 ---
 
@@ -174,6 +174,6 @@ Pytest в этом docs PR **не** требуется и **не** запуск�
 
 1. Совпадает ли PTB на Railway с 22.8, или только `>=20.7` — **UNKNOWN**.
 2. Будет ли httpx warning unclosed client при exit после `build()` — **UNKNOWN** до code.
-3. Нужен ли когда-либо прямой `HTTPXRequest.aclose` без initialize — **не в этом срезе**; источники не дают Application API.
+3. Нужен ли когда-либо `HTTPXRequest.shutdown()` (внутренний `AsyncClient.aclose()`) без initialize — **не в этом срезе**; у Application такого пути нет, метода `HTTPXRequest.aclose()` нет.
 4. Точный текст success-строки `run` после Application — code PR (правило: одна строка, только в конце).
 5. Remote workbook / stale reuse перед сервисом — по-прежнему отдельное решение (LIFECYCLE § 4.3).

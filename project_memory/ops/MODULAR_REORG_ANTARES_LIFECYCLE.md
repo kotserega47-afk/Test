@@ -6,7 +6,7 @@
 | **База** | закрытие TASK-18 `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0` (review HEAD `2c6eeac34940f70413be70da35ddbc81e720ec83`; тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`) |
 | **План entry** | [MODULAR_REORG_ANTARES_ENTRYPOINT.md](MODULAR_REORG_ANTARES_ENTRYPOINT.md) § 3–4 |
 | **Сборка** | [MODULAR_REORG_ANTARES_ASSEMBLY.md](MODULAR_REORG_ANTARES_ASSEMBLY.md) |
-| **Application без polling** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) — TASK-21, к review |
+| **Application без polling** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) — TASK-21, review пройден (`777a52f…`) |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
 Это обследование **исходников** на SHA закрытия TASK-18; diagnostic `run` добавлен TASK-20 (не выпущен). Живой workbook, Railway env и production-настройки **не** читались. Неизвестное — **UNKNOWN**. Polling, worker, schedules и sender **не** стартуют. Runtime, `rules_provider` и mixed gate в docs TASK-19/21 **не** менять.
@@ -233,7 +233,7 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 | assemble | AccessRules/logger; частичный `JOB_REGISTRY` возможен при ошибке после bind — TASK-16: неуспех не считать сборкой | **запрет run**; проверка файла и snapshot **не** вызываются |
 | нет/не файл `RULES_XLSX_PATH` | сборка ok | явный отказ **до** snapshot; нет Dropbox/`_RULES_LOCAL` |
 | snapshot / publish reject | сборка + local file | exit ≠ 0; **нет** успешной диагностики; Application/threads **не** создавать |
-| Application.build / add_handler | snapshot ok; Application может существовать | **не** `Application.shutdown()` после одного `build()` (no-op без initialize — PTB 22.8). Не initialize ради cleanup. Процесс exit. Не стартовать polling/schedule. См. APPLICATION.md |
+| Application.build / add_handler | snapshot ok; Application может существовать | **не** `Application.shutdown()` после одного `build()` (no-op без initialize — PTB 22.8). Не initialize ради cleanup. Процесс exit — только одноразовая диагностика, не graceful shutdown сервиса. Не стартовать polling/schedule. См. APPLICATION.md |
 | worker start | Application без polling | worker сейчас no-op; при появлении start — join если API есть, иначе log «нет stop» |
 | schedule thread | polling ещё нет | нужен stop event **до** start thread; не стартовать thread без event, если этот PR вводит loop |
 | polling | все предыдущие | выход из `run_polling`; затем обратный порядок **только** для API, которые уже есть |
@@ -251,7 +251,7 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 | `JOB_REGISTRY` / handlers bind | `assemble_antares` | нет unbind | — | не clear() при отказе (уже TASK-16) |
 | Local workbook path | env `RULES_XLSX_PATH` после dotenv | — | конструктор AccessRules путь **не** хранит | проверить файл **до** snapshot |
 | Workbook snapshot | `AccessRules.get_snapshot` / `get_snapshot_v2` | cache `invalidate` | подтверждение Dropbox freshness | только local file на этом подэтапе |
-| PTB `Application` | `Application.builder().token().concurrent_updates(True).build()` | `stop`/`shutdown` только после initialize; mixed не вызывает | обёртка isolated | создавать **после** snapshot; build-only → процесс exit, **не** initialize |
+| PTB `Application` | `Application.builder().token().concurrent_updates(True).build()` | `stop`/`shutdown` только после initialize; mixed не вызывает | обёртка isolated | создавать **после** snapshot; build-only диагностика → процесс exit (**не** graceful shutdown сервиса), **не** initialize |
 | Polling / getUpdates | `run_polling` | выход из polling / `updater.stop` | Isolated не стартует | не в первом code PR |
 | Sender loop + thread + queue + `Bot` | **import** `telegram_bot` | **нет** | stop/join/drain | не импортировать на `run` prefix; stop — отдельный PR **после** появления API |
 | Job executor | lazy `get_job_executor` | `_reset_job_executor_for_tests` only | production shutdown | не dispatch на первом `run` prefix; позже вынести shutdown из test helper |
