@@ -34,11 +34,11 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-21 Application без запуска | план принят: после local snapshot — `Application.build()` + handlers; без initialize/polling; review пройден (Draft PR #24, HEAD `777a52f…`); GPT читал контракт, pytest не запускал; runtime не менялся | **нет** |
 | TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; review пройден (Draft PR #25, HEAD `d9592ff…`; 81 passed / 33 boot Cursor 3.12.10, PTB 22.8, httpx 0.28.1; job-queue extra нет); GPT код/diff, наборы не запускал; процесс exit ≠ graceful shutdown; **не выпущено** | **нет** |
 | TASK-23 start/stop plan | контракт ручного async initialize/start/stop; не `run_polling`; review пройден (Draft PR #26, HEAD `6540a36…`); закрытие `94951c6…`; runtime не менялся | **нет** |
-| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox; historical 91/10 (`e737281`), 94/13 (`d842912`); к review, **не закрыт** | **нет** |
+| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox; review пройден (Draft PR #27, HEAD `34ef7af…`; 15/96 Cursor 3.12.10, PTB 22.8, httpx 0.28.1); GPT код/diff, наборы не запускал; historical 91/10 `e737281`, 94/13 `d842912`; SimpleUpdateProcessor/Updater, без persistence/JobQueue extra; boot/run без helper; serve/polling нет; **не выпущено**; stop бизнес-потоков не готов | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | TASK-24 к review (helper реализован, не выпущен); serve/polling отдельно | — |
+| Следующая | TASK-25: контракт допуска работы (docs); TASK-24 review пройден, не выпущен | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 

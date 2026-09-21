@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-24 |
-| **Статус** | review (к GPT; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-23 (PR #26, review `6540a36ebe19408e76e8e8b9f1cbc20116c64d97`, закрытие `94951c6ff4b3e9137f81151fac81e6fe2739e77a`), `modules/antares/application_lifecycle.py` |
 | **PR** | Draft [#27](https://github.com/deniskotdavydov1991-wq/Test/pull/27) `feat/task-2026-09-17-24-antares-ptb-lifecycle`, base `feat/task-2026-09-17-23-antares-startstop` |
@@ -15,7 +15,7 @@ Production helper `run_ptb_lifecycle` поддерживает только Appl
 
 Снимки ресурсов в sandbox пишутся **внутри** loop до `asyncio.run`.
 
-Review **ещё не пройден**. PR #27 остаётся Draft. TASK-24 **не** закрыт.
+Review **пройден** на HEAD `34ef7af…`. GPT читал diff/контракт, наборы **не** запускал. Cursor: **15 / 96 passed** (Python 3.12.10, PTB 22.8, httpx 0.28.1). Поддержка helper: SimpleUpdateProcessor, Updater, без persistence и JobQueue extra. Boot/`run` helper **не** вызывают. Serve/polling **нет**. Lifecycle **не выпущен**. Полноценный stop бизнес-потоков **не** готов. PR #27 остаётся Draft. Допуск работы — TASK-25.
 
 ---
 
@@ -51,9 +51,9 @@ PTB internals localized in the helper (не global monkeypatch production): `App
 - [x] Состояние ресурсов снято внутри loop до `asyncio.run`
 - [x] Отмена во время cleanup не пропускает remaining steps; CancelledError виден caller
 - [x] Неподдерживаемый JobQueue/processor — отказ до initialize
-- [ ] GPT review
+- [x] GPT review HEAD `34ef7af…`: код/diff; 15/96 Cursor; GPT наборы не запускал; не выпущено
 - [ ] merge/deploy (намеренно открыто)
-- [ ] закрытие TASK-24 (не в этом шаге)
+- [ ] TASK-25 контракт допуска работы (отдельное задание)
 
 ---
 
@@ -134,8 +134,8 @@ GPT этот набор **не** запускал.
 
 | Кто | Что |
 |-----|-----|
-| Cursor | sandbox lifecycle + прежний boot/run + parser/gate |
-| GPT | ещё не ревьюил |
+| Cursor | 15 passed lifecycle + 96 с boot/parser/gate на HEAD `34ef7af…` (Python 3.12.10, PTB 22.8, httpx 0.28.1) |
+| GPT | Код/diff HEAD `34ef7af…`; тесты не запускал |
 
 ---
 
@@ -151,3 +151,4 @@ live polling; SIGINT/SIGTERM; drain хвоста очереди; публичн�
 |------|---------|
 | 2026-09-21 | helper + sandbox subprocess; Draft PR #27; к review |
 | 2026-09-21 | shield удерживается до конца одной cleanup-задачи; double-cancel и cancel во время initialize-cleanup |
+| 2026-09-21 | GPT review HEAD `34ef7af…`: 15/96 Cursor; GPT наборы не запускал; не выпущено; stop бизнес-потоков не готов |
