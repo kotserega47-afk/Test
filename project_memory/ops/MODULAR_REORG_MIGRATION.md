@@ -38,7 +38,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-22 build-only | код, PR #25, review `d9592ff…` | Cursor **81 passed** / **33 boot**, 3.12.10, PTB 22.8, httpx 0.28.1; GPT набор не запускал | **нет** |
 | TASK-23 start/stop plan | docs, PR #26, close `94951c6…` | pytest не запускался | **нет** |
 | TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
-| TASK-25 допуск | **только docs**, PR #28; code **нет** | pytest не требуется | **нет** |
+| TASK-25 допуск | docs, review пройден, PR #28, HEAD `eda7144…`; 1д=8ч; mixed-stop проверка 2–4д отдельно; cutover **не** к исполнению | pytest не требовался | **нет** |
+| Следующая | TASK-26: WorkAdmission + isolated `/run_wallet` | — | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -54,7 +55,7 @@ Draft PR #4…#28 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**Следующий code (не этот PR):** примитив допуска + `/run_wallet` (WORK_ADMISSION.md § 7). Не serve, не полный переход.
+**Следующий code:** TASK-26 — примитив допуска + `/run_wallet`. Не serve, не полный переход, не mixed-stop.
 
 ---
 
@@ -339,7 +340,7 @@ PID-файлы `{STATE_DIR}/locks/*.lock` и in-memory locks Platform **не к�
 3. Новый: единственный ACTIVE на токене; затем `JOB_ACCEPT=1`.
 4. Запись: old deployment id, new deployment id, время передачи.
 
-Пока `JOB_ACCEPT` нет, шаг 1 заменяется согласованным stop только после idle (хуже; не штатный путь после появления флага).
+Пока рычага прекращения приёма нет, **idle + stop не штатный путь**: idle при открытых входах подвержен гонке (новый `submit`/`put` после «уже idle»). Isolated `seal` этого не закрывает. Не считать cutover-план готовым к исполнению.
 
 ### Откат
 
@@ -515,7 +516,7 @@ Isolated `WorkAdmission` живёт в процессе `python -m apps.antares`
 
 ## Оценка оставшейся работы (диапазоны, не дата)
 
-Ёмкость по **категориям**, не календарный дедлайн. Строки не складывать в одну цифру «до F»: разработка ≠ проверка ≠ интеграция ≠ ожидание внешних ≠ окно. Прежние **15–35 инж.-дней** смешивали категории и **сняты**.
+Ёмкость по **категориям**, не календарный дедлайн. **1 инженерный день = 8 человеко-часов.** Строки не складывать в одну цифру «до F». Прежние **15–35 инж.-дней** смешивали категории и **сняты**. Общий cutover-план **не** готов к исполнению.
 
 | Строка | Разработка | Проверка (unit/barrier) | Интеграция | Внешние ожидания | Экспл. окно |
 |--------|------------|-------------------------|------------|------------------|--------------|
@@ -526,17 +527,18 @@ Isolated `WorkAdmission` живёт в процессе `python -m apps.antares`
 | C: serve/сигналы | **2–4** | **1–2** sandbox | не-prod token **1–2** | Windows SIGTERM UNKNOWN | не prod |
 | D: конфиг/runbook | **1–3** | сверка Railway **1–2** | 0 | pin SHA / restart policy UNKNOWN | в F |
 | E: интеграционные сценарии | фиксы **1–3** | — | **2–5** | кабинет/токен ops | staging опц. |
-| F: переключение | runbook **0.5–1** | dry-run стопа **0.5–1** | — | idle mixed, anti-restart | **2–6 ч** стены |
+| F: переключение | runbook **0.5–1** | dry-run стопа **0.5–1** | — | anti-restart после **закрытых** входов mixed | **2–6 ч** стены |
 | Merge #4…N + retarget | 0 feature | сверка diff **1–3** на каждый retarget | — | очередь review + **restart Test** на каждый merge в `test_main` | отдельные окна, не F |
 
-Суммы **только разработки** (TASK-25+A+B+C+D+E-фиксы+F, **без** mixed-legacy): **12.5–27** инж.-дней.  
-С mixed-legacy stop: **15.5–33** разработки.  
-Проверка barrier/unit (TASK-25+A+B+C+D+F, без E): **7–14**.  
+Суммы **только разработки** (TASK-25+A+B+C+D+E-фиксы+F, **без** mixed-legacy): **12.5–27** инж.-дней (100–216 ч).  
+С mixed-legacy stop: **15.5–33** разработки (124–264 ч).  
+Проверка barrier/unit isolated: **7–14** (56–112 ч).  
+Проверка mixed-stop: **2–4** инж.-дня (**16–32 ч**) — **отдельная** строка, не внутри isolated `/run_wallet`.  
 Интеграция E: **2–5** (+ не-prod C **1–2**).  
 Внешнее: review, Railway anti-restart, retarget, UNKNOWN — **не** входят в суммы разработки.  
 Окно F: **2–6 часов**, не дни разработки.
 
-Критический путь перехода: mixed-stop **или** доказанный idle+anti-restart (хуже) **параллельно** isolated **A → B → C → E → F**. Isolated `/run_wallet` — только первый камень A. Isolated `seal` **не** заменяет mixed-stop.
+Критический путь перехода: **прекращение приёма mixed** → drain → stop → anti-restart **параллельно** isolated **A → B → C → E → F**. Isolated `/run_wallet` — только первый камень A. Isolated `seal` **не** заменяет mixed-stop. **Idle без закрытых входов не замена** шагу прекращения приёма: новые постановки гоняются с «уже idle». Cutover-план **не** к исполнению.
 
 ### Допущения
 

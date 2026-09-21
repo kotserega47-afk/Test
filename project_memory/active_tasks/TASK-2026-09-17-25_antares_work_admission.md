@@ -3,13 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-25 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-24 (PR #27, review `34ef7af33cc112d369e0c9ee860d66954268ce8c`, закрытие `364976424b1818e37a76bc0b1d10cb254e4479de`), `ops/MODULAR_REORG_ANTARES_WORK_ADMISSION.md` |
 | **PR** | Draft [#28](https://github.com/deniskotdavydov1991-wq/Test/pull/28) `feat/task-2026-09-17-25-antares-work-admission`, base `feat/task-2026-09-17-24-antares-ptb-lifecycle` |
 | **Риск** | low: только документы |
 
-Контракт допуска **к review, не закрыт**. Уточнены состояния unbound vs bound/closed, атомарный submit, узкий первый code scope. Runtime **не** менялся. Pytest **не** запускался. Допуск **не** реализован.
+Контракт допуска **закрыт по review** на HEAD `eda7144…`. GPT review узкого контракта: `/run_wallet` first, mixed unbound, атомарный submit. Runtime в TASK-25 **не** менялся. Pytest **не** запускался. Допуск **не** реализован (TASK-26).
+
+**1 инженерный день = 8 человеко-часов.** Проверка mixed-stop: **2–4** инж.-дня отдельно (не внутри isolated `/run_wallet`). Idle без закрытых входов **не** замена прекращению приёма (гонка). Общий cutover-план **не** готов к исполнению. PR #28 остаётся Draft. Реализация — TASK-26.
 
 ---
 
@@ -31,8 +33,8 @@
 - [x] `request_antares_stop`: `seal()` затем `stop.set()` в loop-thread; другой поток — `seal` + `call_soon_threadsafe`
 - [x] Accepted: сбой reply не отменяет submit; сбой submit не Accepted
 - [x] Узкий первый code: примитив + `/run_wallet`; переход Antares — отдельный план в MIGRATION.md, не этот code
-- [ ] реализация допуска (отдельное задание; **не** начинать, пока review)
-- [ ] закрытие TASK-25 (намеренно открыто)
+- [x] GPT review HEAD `eda7144…`: узкий контракт прочитан; 1 инж.-день = 8 ч; mixed-stop проверка 2–4 дня отдельно; idle без закрытых входов не замена; cutover-план не к исполнению; runtime не менялся
+- [ ] реализация допуска (TASK-26)
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -41,8 +43,8 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Обследование исходников на закрытии TASK-24 `3649764…`; pytest не требовался |
-| GPT | ещё не ревьюил |
+| Cursor | Документы допуска и план перехода; pytest не требовался |
+| GPT | Узкий контракт HEAD `eda7144…`; pytest не запускал; runtime не менялся |
 
 ---
 
@@ -60,3 +62,4 @@ runtime/тесты TASK-25; live polling; sender stop; worker join; executor shu
 | 2026-09-21 | уточнены состояния bind/closed, атомарный submit, stop vs seal, узкий `/run_wallet` scope |
 | 2026-09-21 | MIGRATION: статусы Draft/sandbox/выпуск; план перехода A–F; оценка диапазонами; Accepted/reply/submit; loop vs `call_soon_threadsafe`; TASK-25 не закрыт |
 | 2026-09-21 | review плана: TASK-04 прогоны 94@493c776 + 1+1@443ba70; оценка по категориям вместо 15–35; остановка mixed ≠ isolated seal; репозиторий по-прежнему Test |
+| 2026-09-21 | GPT review HEAD `eda7144…`: узкий контракт принят; 1д=8ч; mixed-stop 2–4д проверки отдельно; idle без закрытых входов не замена; cutover не к исполнению |
