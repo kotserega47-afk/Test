@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,6 +14,12 @@ from telegram.ext import ContextTypes
 from core.job_runner import Actor, get_status
 from core.lock_status import get_lock_status_for_job_types
 from core.tg_command_dispatch import guard_or_deny, run_job_async
+from modules.antares.work_admission import (
+    ADMISSION_CLOSED_REPLY,
+    AdmissionAccepted,
+    await_admitted_future,
+    bound_admission,
+)
 
 ANTARES_STATUS_JOB_TYPES: tuple[str, ...] = (
     "wallet",
@@ -71,7 +79,50 @@ async def _run_antares_command(update: Update, command: str, job_type: str) -> N
 
 
 async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_antares_command(update, "run_wallet", "wallet")
+    admission = bound_admission()
+    if admission is None:
+        await _run_antares_command(update, "run_wallet", "wallet")
+        return
+
+    rules, logger = _require_bound()
+    if not await guard_or_deny(update, "run_wallet", rules):
+        return
+
+    actor = Actor(
+        kind="tg",
+        chat_id=int(update.effective_chat.id),
+        user_id=int(update.effective_user.id),
+    )
+    try:
+        outcome = admission.submit_job_if_open("wallet", actor)
+    except Exception:
+        logger.exception("isolated /run_wallet submit failed")
+        await update.message.reply_text("❌ Ошибка при постановке.\nХвост трейса:")
+        await update.message.reply_text(traceback.format_exc()[-3500:])
+        return
+
+    if not isinstance(outcome, AdmissionAccepted):
+        await update.message.reply_text(ADMISSION_CLOSED_REPLY)
+        return
+
+    try:
+        await update.message.reply_text("🚀 Запускаю: wallet")
+    except Exception:
+        logger.exception("isolated /run_wallet reply after accept failed")
+
+    try:
+        job_id = await await_admitted_future(outcome.future, logger)
+        await update.message.reply_text(f"✅ Принято: wallet\njob_id={job_id}")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        err = traceback.format_exc()
+        logger.exception("❌ TG job error: %s", "wallet")
+        try:
+            await update.message.reply_text("❌ Ошибка при выполнении.\nХвост трейса:")
+            await update.message.reply_text(err[-3500:])
+        except Exception:
+            logger.exception("isolated /run_wallet error reply failed")
 
 
 async def cmd_run_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

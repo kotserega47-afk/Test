@@ -50,6 +50,8 @@ from typing import Any
 
 from telegram.ext._baseupdateprocessor import SimpleUpdateProcessor
 
+from modules.antares.work_admission import WorkAdmission, bind_antares_admission
+
 _POLLING_NOT_IMPLEMENTED = (
     "run_ptb_lifecycle(enable_polling=True) is not implemented; "
     "rejecting before initialize"
@@ -269,18 +271,30 @@ async def run_ptb_lifecycle(
     *,
     stop: asyncio.Event,
     enable_polling: bool = False,
+    admission: WorkAdmission | None = None,
 ) -> PtbLifecycleResult:
     """Run initialize/start, wait for ``stop``, then stop/shutdown.
 
     ``enable_polling=True`` and unsupported Application graphs raise
     ``ValueError`` before ``initialize``.
+
+    If ``admission`` is given it is bound before ``initialize`` and opened
+    after a successful ``start``. ``boot``/``run`` omit it. A public serve
+    is not implemented here.
     """
 
+    if admission is not None:
+        bind_antares_admission(admission)
+
     if enable_polling:
+        if admission is not None:
+            admission.seal()
         raise ValueError(_POLLING_NOT_IMPLEMENTED)
 
     unsupported = unsupported_application_reasons(app)
     if unsupported:
+        if admission is not None:
+            admission.seal()
         raise ValueError(
             "run_ptb_lifecycle supports Application with SimpleUpdateProcessor, "
             "present Updater, no persistence, and no JobQueue extra; "
@@ -291,11 +305,16 @@ async def run_ptb_lifecycle(
     try:
         await app.initialize()
         await app.start()
+        if admission is not None:
+            admission.open()
         await stop.wait()
     except asyncio.CancelledError as exc:
         primary = exc
     except Exception as exc:
         primary = exc
+
+    if admission is not None:
+        admission.seal()
 
     actions, leftover, errors, cancelled = await _await_cleanup(app)
     if cancelled is not None:
