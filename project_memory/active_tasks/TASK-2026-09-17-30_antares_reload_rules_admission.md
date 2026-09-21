@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-29 (PR #32, review `71fce3b9eb4f621164799dd8ed379140fd3ebf5a`, закрытие `d3eecc0bb9dd5d069d1a4f1b169026303fdff393`) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-30-antares-reload-rules-admission`, base `feat/task-2026-09-17-29-antares-registry-replay-admission` |
+| **PR** | Draft [#33](https://github.com/deniskotdavydov1991-wq/Test/pull/33) `feat/task-2026-09-17-30-antares-reload-rules-admission`, base `feat/task-2026-09-17-29-antares-registry-replay-admission` |
 | **Риск** | medium: isolated `/reload_rules` уходит в общий job executor; `AccessRules` / `rules_provider` без lock — прежняя гонка чтения/записи snapshot |
 
 Isolated `/reload_rules`: bind → ACL → `submit_if_open(get_job_executor(), _reload_bound_rules, bound AccessRules)` → наблюдение Future до первого await → прежний ответ. Стартового «Запускаю» нет. Mixed/unbound — прежний sync в callback. `request_job` / новый `job_type` не используются. Provider и mixed **не** переписывались. Перенос **не** выпущен.
@@ -67,4 +67,4 @@ ingest, schedules, самостоятельные новые постановк�
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | isolated `/reload_rules` admission; статус **review** |
+| 2026-09-21 | isolated `/reload_rules` admission; Draft PR #33; статус **review** |
