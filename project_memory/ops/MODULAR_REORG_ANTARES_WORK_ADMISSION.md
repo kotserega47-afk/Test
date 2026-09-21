@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 `08132f2…`; export/Auto-Enable — TASK-28 review `f0bd06bf157f4b377ad7648410605ee67841835f` (не выпущено); cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-28 close `a81aa69…`; isolated `/registry_replay` — TASK-29 (этот PR, не выпущено); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -264,14 +264,14 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- `/registry_replay`, `/reload_rules`
+- `/reload_rules`
 - document ingest → `queue.put`
 - mixed `schedule_loop` / `dispatch_job_background`
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`
 
-Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — isolated TASK-28 (`submit_if_open` + существующий `get_job_executor()`, не `request_job`). Mixed unbound: dispatch через `run_job_async`; прямые ops через `run_in_executor(None, ...)`. Допуск внешнего Auto-Enable **не** защищает последующий `enqueue_auto_enable_batch`. Успех TASK-27/28 **не** есть глобальный запрет новой работы.
+Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29 (`submit_if_open` + `replay_pending_outbox_records` в общем executor; mixed — sync в callback). Допуск внешнего replay **не** защищает внутренние шаги outbox/БД и не есть drain. Успех TASK-27…29 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 

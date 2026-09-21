@@ -211,14 +211,15 @@ async def cmd_registry_health(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admission = bound_admission()
     rules, logger = _require_bound()
     if not await guard_or_deny(update, "registry_replay", rules):
         return
     from integrations.wallet_editor_registry import replay_pending_outbox_records
 
-    await update.message.reply_text("🔄 Replaying pending/failed registry outbox...")
-    try:
-        result = replay_pending_outbox_records()
+    start_text = "🔄 Replaying pending/failed registry outbox..."
+
+    def _summary(result) -> str:
         lines = [
             "Registry outbox replay",
             f"attempted: {result.attempted}",
@@ -230,10 +231,50 @@ async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append("")
             lines.append("errors:")
             lines.extend(f"- {err}" for err in result.errors[:10])
-        await update.message.reply_text("\n".join(lines))
+        return "\n".join(lines)
+
+    if admission is None:
+        # Mixed/unbound: replay stays synchronous on the event-loop thread.
+        await update.message.reply_text(start_text)
+        try:
+            result = replay_pending_outbox_records()
+            await update.message.reply_text(_summary(result))
+        except Exception as e:
+            logger.exception("cmd_registry_replay failed")
+            await update.message.reply_text(f"❌ /registry_replay failed: {type(e).__name__}: {e}")
+        return
+
+    # Isolated change: replay used to run on the event-loop thread; now it is
+    # submitted to the shared job executor via submit_if_open (not request_job).
+    admitted = await _admit_direct_work(
+        update,
+        logger,
+        work="registry_replay",
+        fn=replay_pending_outbox_records,
+        start_text=start_text,
+    )
+    if admitted is None:
+        return
+    try:
+        result = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.exception("cmd_registry_replay failed")
-        await update.message.reply_text(f"❌ /registry_replay failed: {type(e).__name__}: {e}")
+        try:
+            await update.message.reply_text(
+                f"❌ /registry_replay failed: {type(e).__name__}: {e}"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated %s error reply failed", "registry_replay")
+        return
+    try:
+        await update.message.reply_text(_summary(result))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("isolated %s result reply failed", "registry_replay")
 
 
 async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

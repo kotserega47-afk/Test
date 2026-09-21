@@ -907,11 +907,13 @@ def test_stop_from_other_thread_without_loop_errors_and_stays_sealed() -> None:
 _EXPORT_START = "📤 Building registry export from PostgreSQL..."
 _PLAN_START = "🧩 Строю WalletEditor Auto-Enable plan (plan-only)..."
 _RUN_START = "🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)..."
+_REPLAY_START = "🔄 Replaying pending/failed registry outbox..."
 _BUILDER = (
     "integrations.wallet_editor_registry_db.registry_export_builder.build_registry_export_from_postgres"
 )
 _PLAN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable_plan"
 _RUN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable"
+_REPLAY = "integrations.wallet_editor_registry.replay_pending_outbox_records"
 _FORMAT = (
     "integrations.wallet_editor_registry_db.registry_export_builder.format_registry_export_summary"
 )
@@ -988,9 +990,14 @@ def _forbid_direct_business(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         calls.append("run")
         raise AssertionError("run_auto_enable must not run")
 
+    def _replay(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append("replay")
+        raise AssertionError("replay_pending_outbox_records must not run")
+
     monkeypatch.setattr(_BUILDER, _builder)
     monkeypatch.setattr(_PLAN_ORCH, _plan)
     monkeypatch.setattr(_RUN_ORCH, _run)
+    monkeypatch.setattr(_REPLAY, _replay)
     return calls
 
 
@@ -1183,6 +1190,7 @@ def test_isolated_auto_enable_run_exact_callable_and_args(
         (handlers.cmd_registry_export, "registry_export", _EXPORT_START),
         (handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_START),
         (handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_START),
+        (handlers.cmd_registry_replay, "registry_replay", _REPLAY_START),
     ],
 )
 def test_isolated_direct_closed_sealed_no_start(
@@ -1227,6 +1235,7 @@ def test_isolated_direct_closed_sealed_no_start(
         (handlers.cmd_registry_export, "registry_export", _EXPORT_START),
         (handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_START),
         (handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_START),
+        (handlers.cmd_registry_replay, "registry_replay", _REPLAY_START),
     ],
 )
 def test_isolated_direct_acl_deny_no_submit(
@@ -1502,3 +1511,260 @@ def test_isolated_auto_enable_result_branches(monkeypatch: pytest.MonkeyPatch) -
         monkeypatch.setattr(_RUN_ORCH, lambda actor, *, manual, _r=result: _r)
         asyncio.run(handlers.cmd_auto_enable_run(update, MagicMock()))
         assert update._replies[-1] == expected
+
+
+def _replay_result(**overrides) -> SimpleNamespace:
+    base = dict(attempted=4, synced=2, failed=1, skipped=1, errors=("e1", "e2"))
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_isolated_replay_open_submit_before_reply_exact_callable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    order: list[str] = []
+    off_loop: list[bool] = []
+    result = _replay_result()
+    _forbid_request_job(monkeypatch)
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+
+    def _replay():
+        order.append("replay")
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+        return result
+
+    orig_submit = WorkAdmission.submit_if_open
+
+    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        order.append("submit")
+        return orig_submit(self, *args, **kwargs)
+
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _submit)
+    monkeypatch.setattr(_REPLAY, _replay)
+    _open_bound()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        order.append("reply")
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+    asyncio.run(handlers.cmd_registry_replay(update, MagicMock()))
+    from integrations.wallet_editor_registry import replay_pending_outbox_records
+
+    assert order[0] == "submit"
+    assert order.index("submit") < order.index("reply")
+    assert "replay" in order
+    assert order.index("submit") < order.index("replay")
+    assert recorded[0]["executor"] is executor
+    assert recorded[0]["fn"] is replay_pending_outbox_records
+    assert recorded[0]["args"] == ()
+    assert recorded[0]["kwargs"] == {}
+    assert off_loop == [True]
+    assert update._replies[0] == _REPLAY_START
+    assert update._replies[-1] == (
+        "Registry outbox replay\nattempted: 4\nsynced: 2\nfailed: 1\nskipped: 1\n"
+        "\nerrors:\n- e1\n- e2"
+    )
+
+
+def test_isolated_replay_empty_errors_and_truncate(monkeypatch: pytest.MonkeyPatch) -> None:
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(MagicMock())
+    empty = _replay_result(attempted=1, synced=1, failed=0, skipped=0, errors=())
+    monkeypatch.setattr(_REPLAY, lambda: empty)
+    update = _update()
+    asyncio.run(handlers.cmd_registry_replay(update, MagicMock()))
+    assert update._replies[-1] == "Registry outbox replay\nattempted: 1\nsynced: 1\nfailed: 0\nskipped: 0"
+    assert "errors:" not in update._replies[-1]
+    errors = tuple(f"err-{i}" for i in range(12))
+    monkeypatch.setattr(_REPLAY, lambda: _replay_result(attempted=12, synced=0, failed=12, skipped=0, errors=errors))
+    update2 = _update()
+    asyncio.run(handlers.cmd_registry_replay(update2, MagicMock()))
+    body = update2._replies[-1]
+    assert "- err-0" in body
+    assert "- err-9" in body
+    assert "- err-10" not in body
+    assert body.count("- err-") == 10
+
+
+def test_isolated_replay_submit_error_not_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "modules.antares.handlers.get_job_executor",
+        lambda: SimpleNamespace(
+            submit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("executor down"))
+        ),
+    )
+    _forbid_request_job(monkeypatch)
+    business = []
+    monkeypatch.setattr(_REPLAY, lambda: business.append("replay") or (_ for _ in ()).throw(AssertionError()))
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(logger)
+    update = _update()
+    asyncio.run(handlers.cmd_registry_replay(update, MagicMock()))
+    logger.exception.assert_any_call("isolated %s submit failed", "registry_replay")
+    assert any("Ошибка при постановке" in text for text in update._replies)
+    assert all(_REPLAY_START not in text for text in update._replies)
+    assert business == []
+
+
+def test_isolated_replay_finishes_after_seal(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    result = _replay_result()
+
+    def _replay():
+        started.set()
+        assert release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(_REPLAY, _replay)
+    _forbid_request_job(monkeypatch)
+    admission = _open_bound()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+
+    async def _run() -> None:
+        task = asyncio.create_task(handlers.cmd_registry_replay(update, MagicMock()))
+        await asyncio.to_thread(started.wait, 5)
+        admission.seal()
+        release.set()
+        await task
+
+    asyncio.run(_run())
+    assert started.is_set()
+    assert admission.state is AdmissionState.SEALED
+    assert update._replies[0] == _REPLAY_START
+    assert "attempted: 4" in update._replies[-1]
+
+
+def test_isolated_replay_seal_before_submit(monkeypatch: pytest.MonkeyPatch) -> None:
+    start_cmd = threading.Event()
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
+    admission = _open_bound()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    result: dict[str, object] = {}
+
+    def _run() -> None:
+        assert start_cmd.wait(timeout=5)
+        asyncio.run(handlers.cmd_registry_replay(update, MagicMock()))
+        result["replies"] = list(update._replies)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    admission.seal()
+    start_cmd.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert submits == []
+    assert business == []
+    assert result["replies"] == [ADMISSION_CLOSED_REPLY]
+
+
+def test_isolated_replay_reply_cancel_observes_late_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    release = threading.Event()
+
+    def _replay():
+        assert release.wait(timeout=5)
+        raise RuntimeError("accepted replay boom")
+
+    orig_watch = watch_admitted_future
+
+    def _watch(future, logger_obj, **kwargs):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, **kwargs)
+        captured["admitted"] = admitted
+        return admitted
+
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _capture_submit_if_open(captured))
+    monkeypatch.setattr(_REPLAY, _replay)
+    monkeypatch.setattr("modules.antares.handlers.watch_admitted_future", _watch)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(logger)
+    update = _update()
+    entered_reply = asyncio.Event()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        if _REPLAY_START in text:
+            entered_reply.set()
+            await asyncio.Event().wait()
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
+        task = asyncio.create_task(handlers.cmd_registry_replay(update, MagicMock()))
+        await asyncio.wait_for(entered_reply.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        future = captured["future"]
+        assert future.cancelled() is False
+        release.set()
+        with pytest.raises(RuntimeError, match="accepted replay boom"):
+            await asyncio.to_thread(future.result, 5)
+        admitted = captured.pop("admitted")
+        assert admitted._done.wait(timeout=5)
+        holders = [admitted, task]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
+
+    asyncio.run(_run())
+    assert len(_work_fail_logs(logger)) == 1
+    assert all(
+        not (call.args and call.args[0] == "cmd_registry_replay failed")
+        for call in logger.exception.call_args_list
+    )
+
+
+def test_unbound_replay_stays_on_loop_without_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    order: list[str] = []
+    off_loop: list[bool] = []
+    result = _replay_result()
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+
+    def _replay():
+        order.append("replay")
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+        return result
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        order.append("reply")
+        update._replies.append(text)
+
+    monkeypatch.setattr(_REPLAY, _replay)
+    handlers.bind_rules(_allow_direct("registry_replay"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+    asyncio.run(handlers.cmd_registry_replay(update, MagicMock()))
+    assert recorded == []
+    assert executor is get_job_executor()
+    assert off_loop == [False]
+    assert order[0] == "reply"
+    assert order[1] == "replay"
+    assert order[2] == "reply"
+    assert update._replies[0] == _REPLAY_START
+    assert "attempted: 4" in update._replies[-1]
