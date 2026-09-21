@@ -48,7 +48,7 @@
 | [TASK-2026-09-17-17](TASK-2026-09-17-17_antares_entrypoint.md) | План isolated Antares entrypoint: review пройден, merge нет (PR #20) |
 | [TASK-2026-09-17-18](TASK-2026-09-17-18_antares_boot.md) | Isolated Antares boot без polling: review пройден (`2c6eeac…`), не выпущен, merge нет (PR #21) |
 | [TASK-2026-09-17-19](TASK-2026-09-17-19_antares_lifecycle.md) | Контракт lifecycle: review пройден (`b76a377…`), runtime не менялся, merge нет (PR #22) |
-| [TASK-2026-09-17-20](TASK-2026-09-17-20_antares_local_rules.md) | Диагностический `run` по локальному workbook: к review, merge нет (PR #23) |
+| [TASK-2026-09-17-20](TASK-2026-09-17-20_antares_local_rules.md) | Диагностический `run` по локальному workbook: review пройден (`8b42e4d…`), не выпущен, merge нет (PR #23) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
