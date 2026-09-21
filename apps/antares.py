@@ -44,17 +44,30 @@ def _local_workbook_path() -> Path:
     return path
 
 
-def _print_boot_ok(assembled) -> None:
+def _handler_counts(assembled) -> tuple[int, int]:
     from telegram.ext import CommandHandler, MessageHandler
-
-    from core.job_runner import JOB_REGISTRY
 
     n_cmd = sum(1 for handler in assembled.handlers if isinstance(handler, CommandHandler))
     n_doc = sum(1 for handler in assembled.handlers if isinstance(handler, MessageHandler))
+    return n_cmd, n_doc
+
+
+def _print_boot_ok(assembled) -> None:
+    from core.job_runner import JOB_REGISTRY
+
+    n_cmd, n_doc = _handler_counts(assembled)
     job_keys = ",".join(sorted(JOB_REGISTRY))
     print(
         f"{_BOOT_OK} commands={n_cmd} document={n_doc} "
         f"jobs={len(JOB_REGISTRY)} keys={job_keys}"
+    )
+
+
+def _print_run_ok(assembled, snap) -> None:
+    n_cmd, n_doc = _handler_counts(assembled)
+    print(
+        f"{_RUN_OK} local_rules source={snap.source} "
+        f"commands={n_cmd} document={n_doc} handlers={len(assembled.handlers)}"
     )
 
 
@@ -81,25 +94,40 @@ def _boot_prefix():
         _fail(f"antares assembly failed: {exc}")
     except Exception as exc:
         _fail(f"antares assembly failed: {type(exc).__name__}: {exc}")
-    return assembled, rules
+    return assembled, rules, token
 
 
-def _run_local_rules(rules) -> None:
+def _snapshot_local_rules(rules):
     _local_workbook_path()
     try:
-        snap = rules.get_snapshot(force_sync=True)
+        return rules.get_snapshot(force_sync=True)
     except Exception as exc:
         _fail(f"antares local rules failed: {type(exc).__name__}: {exc}")
-    print(f"{_RUN_OK} local_rules source={snap.source}")
+
+
+def _build_and_attach(assembled, token: str) -> None:
+    from telegram.ext import Application
+
+    try:
+        app = Application.builder().token(token).concurrent_updates(True).build()
+    except Exception as exc:
+        _fail(f"antares application build failed: {type(exc).__name__}: {exc}")
+    try:
+        for handler in assembled.handlers:
+            app.add_handler(handler)
+    except Exception as exc:
+        _fail(f"antares handler attach failed: {type(exc).__name__}: {exc}")
 
 
 def main() -> None:
     mode = _command(sys.argv[1:])
-    assembled, rules = _boot_prefix()
+    assembled, rules, token = _boot_prefix()
     if mode == "boot":
         _print_boot_ok(assembled)
         return
-    _run_local_rules(rules)
+    snap = _snapshot_local_rules(rules)
+    _build_and_attach(assembled, token)
+    _print_run_ok(assembled, snap)
 
 
 if __name__ == "__main__":

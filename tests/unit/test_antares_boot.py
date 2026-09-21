@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -9,6 +10,12 @@ from tests.unit.antares_boot_child_runner import run_antares_boot
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SYNTHETIC_XLSX = _ROOT / "tests" / "rules_v2" / "c5" / "workbooks" / "baseline_prod_synthetic.xlsx"
+_EXPECTED_CMDS = json.loads(
+    (_ROOT / "tests" / "fixtures" / "behavior_baseline" / "expected_antares_tg_commands.json").read_text(
+        encoding="utf-8"
+    )
+)["commands"]
+_PTB_TOKEN = "123456:AA-TEST-antares-build-only"
 
 _SUCCESS_KEYS = (
     "download",
@@ -63,9 +70,78 @@ def _assert_run_snapshot_order(result) -> None:
     assert "rules_download_attempted" not in _event_kinds(result), result.events
 
 
+def _assert_handlers_identity(result) -> None:
+    assembled = _events_of(result, "assembly_handlers")
+    assert assembled, result.events
+    assembled_handlers = assembled[0]["handlers"]
+    added = _events_of(result, "handler_added")
+    assert [item["handler_id"] for item in added] == [
+        item["handler_id"] for item in assembled_handlers
+    ], (assembled_handlers, added)
+    assert len(added) == 18, added
+    commands = []
+    documents = []
+    for item in added:
+        assert item.get("group") == 0, item
+        if item.get("class") == "CommandHandler":
+            commands.extend(item.get("commands") or [])
+        elif item.get("class") == "MessageHandler":
+            documents.append(item)
+        else:
+            raise AssertionError(item)
+    assert commands == _EXPECTED_CMDS, commands
+    assert len(documents) == 1, documents
+    assert "Document.ALL" in str(documents[0].get("filters", "")), documents[0]
+    assert documents[0].get("callback") == (
+        "modules.antares.document_ingest.handle_wallet_editor_document"
+    )
+    assert [item.get("callback") for item in added] == [
+        item.get("callback") for item in assembled_handlers
+    ]
+
+
+def _assert_successful_application(result) -> None:
+    _assert_no_forbidden(result)
+    _assert_no_lifecycle(result)
+    _assert_run_snapshot_order(result)
+    kinds = _event_kinds(result)
+    assert kinds.index("snapshot_called") < kinds.index("application_build_called"), result.events
+    assert "application_build_ok" in kinds, result.events
+    added = _events_of(result, "handler_added")
+    build_at = _first_event_index(result, "application_build_ok")
+    first_add = kinds.index("handler_added")
+    assert build_at < first_add, result.events
+    _assert_handlers_identity(result)
+    success_lines = [line for line in result.stdout.splitlines() if line.startswith("antares run ok")]
+    assert len(success_lines) == 1, result.stdout
+    assert "handlers=18" in success_lines[0]
+    assert "commands=17" in success_lines[0]
+    assert "document=1" in success_lines[0]
+    assert "antares boot ok" not in result.stdout
+    assert _PTB_TOKEN not in result.stdout
+    assert _PTB_TOKEN not in result.stderr
+
+
+def _assert_no_application(result) -> None:
+    kinds = _event_kinds(result)
+    assert "application_build_called" not in kinds, result.events
+    assert "application_build_ok" not in kinds, result.events
+    assert "handler_added" not in kinds, result.events
+    assert "handler_add_attempt" not in kinds, result.events
+
+
+def _assert_no_lifecycle(result) -> None:
+    forbidden = _events_of(result, "forbidden_lifecycle")
+    assert forbidden == [], forbidden
+    combined = result.stdout + result.stderr
+    assert "InvalidToken" not in combined
+
+
 def _assert_boot_isolation(result) -> None:
     _assert_no_forbidden(result)
     _assert_no_workbook_io(result)
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
 
 
 def _event_kinds(result) -> list[str]:
@@ -88,7 +164,7 @@ def _assert_not_false_refusal(result) -> None:
 
 
 def test_boot_rejects_unset_profile() -> None:
-    result = _run(dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"})
+    result = _run(dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN})
     assert result.returncode == 2, result.stderr + result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_boot_isolation(result)
@@ -98,7 +174,7 @@ def test_boot_rejects_unset_profile() -> None:
 def test_boot_rejects_blank_profile(value: str) -> None:
     result = _run(
         process_env={"PROJECT_PROFILE": value},
-        dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
     )
     assert result.returncode == 2, result.stderr + result.stdout
     assert "antares boot ok" not in result.stdout
@@ -108,7 +184,7 @@ def test_boot_rejects_blank_profile(value: str) -> None:
 @pytest.mark.parametrize("value", ["raccoon", "wr", "not-a-profile", "Antares"])
 def test_boot_rejects_foreign_or_unknown_profile(value: str) -> None:
     result = _run(
-        process_env={"PROJECT_PROFILE": value, "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        process_env={"PROJECT_PROFILE": value, "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
     )
     assert result.returncode == 2, result.stderr + result.stdout
     assert "antares boot ok" not in result.stdout
@@ -117,7 +193,7 @@ def test_boot_rejects_foreign_or_unknown_profile(value: str) -> None:
 
 def test_boot_profile_only_in_dotenv_exits_2() -> None:
     result = _run(
-        dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
     )
     assert result.returncode == 2, result.stderr + result.stdout
     assert "PROJECT_PROFILE" in result.stderr
@@ -126,7 +202,7 @@ def test_boot_profile_only_in_dotenv_exits_2() -> None:
 
 def test_boot_accepts_parser_normalized_antares() -> None:
     result = _run(
-        process_env={"PROJECT_PROFILE": "  antares  ", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        process_env={"PROJECT_PROFILE": "  antares  ", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert "antares boot ok" in result.stdout
@@ -142,7 +218,7 @@ def test_boot_accepts_parser_normalized_antares() -> None:
 def test_boot_rejects_empty_token_after_dotenv(token: str) -> None:
     result = _run(
         process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": token},
-        dotenv_lines={"TELEGRAM_BOT_TOKEN": "from-file-should-not-override"},
+        dotenv_lines={"TELEGRAM_BOT_TOKEN": "123456:from-file-should-not-override"},
     )
     assert result.returncode == 1, result.stderr + result.stdout
     assert "antares boot ok" not in result.stdout
@@ -152,7 +228,7 @@ def test_boot_rejects_empty_token_after_dotenv(token: str) -> None:
 def test_boot_dotenv_supplies_token_when_process_has_none() -> None:
     result = _run(
         process_env={"PROJECT_PROFILE": "antares"},
-        dotenv_lines={"TELEGRAM_BOT_TOKEN": "sandbox-from-file"},
+        dotenv_lines={"TELEGRAM_BOT_TOKEN": "123456:sandbox-from-file"},
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert "antares boot ok" in result.stdout
@@ -164,7 +240,7 @@ def test_boot_dotenv_supplies_token_when_process_has_none() -> None:
 def test_boot_process_env_wins_over_dotenv_token() -> None:
     result = _run(
         process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "   "},
-        dotenv_lines={"TELEGRAM_BOT_TOKEN": "sandbox-from-file"},
+        dotenv_lines={"TELEGRAM_BOT_TOKEN": "123456:sandbox-from-file"},
     )
     assert result.returncode != 0, result.stdout
     assert "antares boot ok" not in result.stdout
@@ -172,7 +248,7 @@ def test_boot_process_env_wins_over_dotenv_token() -> None:
 
 
 def test_boot_success_seven_jobs_and_handlers() -> None:
-    result = _run(process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"})
+    result = _run(process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN})
     assert result.returncode == 0, result.stderr + result.stdout
     assert "antares boot ok commands=17 document=1 jobs=7" in result.stdout
     for key in _SUCCESS_KEYS:
@@ -182,7 +258,7 @@ def test_boot_success_seven_jobs_and_handlers() -> None:
 
 def test_boot_refuses_polluted_registry() -> None:
     result = _run(
-        process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
         pollute_registry=True,
     )
     assert result.returncode != 0, result.stdout
@@ -200,7 +276,7 @@ def test_boot_refuses_polluted_registry() -> None:
 
 def test_boot_refuses_incompatible_bind() -> None:
     result = _run(
-        process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+        process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
         pollute_bind=True,
     )
     assert result.returncode != 0, result.stdout
@@ -219,7 +295,7 @@ def test_boot_refuses_incompatible_bind() -> None:
 
 
 def test_boot_process_exits_after_success() -> None:
-    result = _run(process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"})
+    result = _run(process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN})
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.returncode == 0
     _assert_boot_isolation(result)
@@ -228,7 +304,7 @@ def test_boot_process_exits_after_success() -> None:
 def _run_ok_env(**kwargs):
     process_env = {
         "PROJECT_PROFILE": "antares",
-        "TELEGRAM_BOT_TOKEN": "sandbox-token",
+        "TELEGRAM_BOT_TOKEN": _PTB_TOKEN,
         **(kwargs.pop("process_env", None) or {}),
     }
     return _run(process_env=process_env, **kwargs)
@@ -314,10 +390,7 @@ def test_run_success_reads_synthetic_local_xlsx() -> None:
 
     result = _run_ok_env(setup=setup, argv=["run"])
     assert result.returncode == 0, result.stderr + result.stdout
-    assert "antares run ok local_rules source=" in result.stdout
-    assert "antares boot ok" not in result.stdout
-    _assert_no_forbidden(result)
-    _assert_run_snapshot_order(result)
+    _assert_successful_application(result)
 
 
 def test_run_dotenv_supplies_rules_path_when_process_has_none() -> None:
@@ -328,13 +401,12 @@ def test_run_dotenv_supplies_rules_path_when_process_has_none() -> None:
         result = run_antares_boot(
             sandbox,
             argv=["run"],
-            process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": "sandbox-token"},
+            process_env={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN},
             dotenv_lines={"RULES_XLSX_PATH": str(dest)},
             pop_env=("RULES_XLSX_PATH",),
         )
     assert result.returncode == 0, result.stderr + result.stdout
-    assert "antares run ok local_rules source=" in result.stdout
-    _assert_no_forbidden(result)
+    _assert_successful_application(result)
     assert "snapshot_called" in _event_kinds(result)
     assert "rules_download_attempted" not in _event_kinds(result)
 
@@ -350,7 +422,7 @@ def test_run_process_env_rules_path_wins_over_dotenv() -> None:
             argv=["run"],
             process_env={
                 "PROJECT_PROFILE": "antares",
-                "TELEGRAM_BOT_TOKEN": "sandbox-token",
+                "TELEGRAM_BOT_TOKEN": _PTB_TOKEN,
                 "RULES_XLSX_PATH": str(missing),
             },
             dotenv_lines={"RULES_XLSX_PATH": str(good)},
@@ -361,6 +433,8 @@ def test_run_process_env_rules_path_wins_over_dotenv() -> None:
     _assert_no_forbidden(result)
     _assert_no_workbook_io(result)
     assert "not an existing file" in result.stderr
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
 
 
 def test_run_empty_rules_path_skips_snapshot() -> None:
@@ -421,6 +495,8 @@ def test_run_corrupt_xlsx_no_success_line() -> None:
     assert "snapshot_called" in _event_kinds(result)
     assert "rules_download_attempted" not in _event_kinds(result)
     assert "antares local rules failed:" in result.stderr
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
 
 
 def test_run_publish_policy_reject_no_success_line() -> None:
@@ -454,6 +530,8 @@ def test_run_publish_policy_reject_no_success_line() -> None:
     assert failed[0].get("exc_name") == "ContractPublishRejected"
     assert "ValueError" not in result.stderr
     assert "rules download blocked" not in result.stderr
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
 
 
 @pytest.mark.parametrize(
@@ -476,6 +554,8 @@ def test_run_assembly_conflict_skips_snapshot(pollute: dict[str, bool], reason: 
     refused = _refusal_reasons(result)
     assert refused, result.events
     assert any(reason in item for item in refused), refused
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
 
 
 def test_unknown_arguments_exit_nonzero() -> None:
@@ -487,5 +567,55 @@ def test_unknown_arguments_exit_nonzero() -> None:
     _assert_no_forbidden(result)
     assert "assembly_called" not in _event_kinds(result)
     _assert_no_workbook_io(result)
+    _assert_no_application(result)
+    _assert_no_lifecycle(result)
+
+
+def test_run_injected_build_failure_is_specific() -> None:
+    def setup(sandbox: Path) -> None:
+        _accepted_local_xlsx(sandbox / "rules.xlsx")
+
+    result = _run_ok_env(setup=setup, argv=["run"], fail_build=True)
+    assert result.returncode != 0, result.stdout
+    assert "antares run ok" not in result.stdout
+    assert "antares boot ok" not in result.stdout
+    _assert_no_forbidden(result)
+    _assert_run_snapshot_order(result)
+    kinds = _event_kinds(result)
+    assert kinds.index("snapshot_called") < kinds.index("application_build_called"), result.events
+    assert "application_build_injected_failure" in kinds, result.events
+    assert "application_build_ok" not in kinds, result.events
+    assert "handler_added" not in kinds, result.events
+    _assert_no_lifecycle(result)
+    assert "antares application build failed: RuntimeError: injected application build failure" in result.stderr
+    assert "InvalidToken" not in result.stderr
+    assert "blocked in antares boot harness" not in result.stderr or "injected application build failure" in result.stderr
+
+
+def test_run_injected_add_handler_failure_after_real_adds() -> None:
+    def setup(sandbox: Path) -> None:
+        _accepted_local_xlsx(sandbox / "rules.xlsx")
+
+    result = _run_ok_env(setup=setup, argv=["run"], fail_add_handler=True)
+    assert result.returncode != 0, result.stdout
+    assert "antares run ok" not in result.stdout
+    assert "antares boot ok" not in result.stdout
+    _assert_no_forbidden(result)
+    _assert_run_snapshot_order(result)
+    assert "application_build_ok" in _event_kinds(result), result.events
+    added = _events_of(result, "handler_added")
+    assert len(added) == 3, added
+    injected = _events_of(result, "handler_add_injected_failure")
+    assert injected, result.events
+    assert injected[0].get("added_before") == 3
+    attempts = _events_of(result, "handler_add_attempt")
+    assert len(attempts) == 4, attempts
+    assembled = _events_of(result, "assembly_handlers")[0]["handlers"]
+    assert [item["handler_id"] for item in added] == [
+        item["handler_id"] for item in assembled[:3]
+    ]
+    _assert_no_lifecycle(result)
+    assert "antares handler attach failed: RuntimeError: injected add_handler failure" in result.stderr
+    assert "InvalidToken" not in result.stderr
 
 

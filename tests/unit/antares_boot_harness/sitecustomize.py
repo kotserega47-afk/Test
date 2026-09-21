@@ -43,10 +43,16 @@ _WRAP_AFTER_LOAD = frozenset(
         "http.client",
         "integrations.dropbox_watcher",
         "integrations.wallet_editor_registry_db.connection",
+        "telegram.ext._applicationbuilder",
+        "telegram.ext._application",
+        "telegram.ext._updater",
+        "telegram.ext._jobqueue",
+        "telegram.ext._extbot",
+        "telegram._bot",
     }
 )
 
-_injected = {"registry": False, "bind": False, "assemble": False}
+_injected = {"registry": False, "bind": False, "assemble": False, "add_ok": 0}
 _orig_create_connection = socket.create_connection
 
 
@@ -154,6 +160,48 @@ class _AfterLoadFinder(importlib.abc.MetaPathFinder):
         return None
 
 
+def _handler_payload(handler, *, group: object | None = None) -> dict:
+    callback = getattr(handler, "callback", None)
+    commands = sorted(str(item) for item in (getattr(handler, "commands", None) or ()))
+    payload = {
+        "handler_id": id(handler),
+        "class": type(handler).__name__,
+        "commands": commands,
+        "callback": (
+            f"{callback.__module__}.{callback.__qualname__}" if callback is not None else None
+        ),
+        "filters": str(getattr(handler, "filters", "") or ""),
+    }
+    if group is not None:
+        payload["group"] = group
+    return payload
+
+
+def _reject_lifecycle(method: str, *, is_async: bool):
+    message = f"{method} blocked in antares boot harness"
+
+    if is_async:
+
+        async def _async(*_a, **_k):
+            _event("forbidden_lifecycle", method=method)
+            raise RuntimeError(message)
+
+        return _async
+
+    def _sync(*_a, **_k):
+        _event("forbidden_lifecycle", method=method)
+        raise RuntimeError(message)
+
+    return _sync
+
+
+def _wrap_lifecycle(module: types.ModuleType, class_name: str, method: str, *, is_async: bool) -> None:
+    cls = getattr(module, class_name, None)
+    if cls is None or not hasattr(cls, method):
+        return
+    setattr(cls, method, _reject_lifecycle(f"{class_name}.{method}", is_async=is_async))
+
+
 def _blocked(kind: str, message: str):
     def _raise(*_a, **_k):
         _event("blocked_external", boundary=kind)
@@ -183,10 +231,15 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             def _observe(*args, **kwargs):
                 _event("assembly_called")
                 try:
-                    return orig(*args, **kwargs)
+                    result = orig(*args, **kwargs)
                 except module.AntaresAssemblyError as exc:
                     _event("assembly_refused", reason=str(exc))
                     raise
+                _event(
+                    "assembly_handlers",
+                    handlers=[_handler_payload(handler) for handler in result.handlers],
+                )
+                return result
 
             _observe.__name__ = orig.__name__
             _observe.__qualname__ = orig.__qualname__
@@ -281,6 +334,57 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             "registry_db.connection.connect",
             "postgres connect blocked in antares boot harness",
         )
+    elif name == "telegram.ext._applicationbuilder":
+        orig_build = module.ApplicationBuilder.build
+
+        def _observe_build(self):
+            _event("application_build_called")
+            if os.environ.get("ANTARES_BOOT_FAIL_BUILD") == "1":
+                _event("application_build_injected_failure")
+                raise RuntimeError("injected application build failure")
+            app = orig_build(self)
+            _event("application_build_ok")
+            return app
+
+        module.ApplicationBuilder.build = _observe_build
+    elif name == "telegram.ext._application":
+        orig_add = module.Application.add_handler
+
+        def _observe_add(self, handler, group=None, **kwargs):
+            if group is None:
+                group = getattr(module, "DEFAULT_GROUP", 0)
+            payload = _handler_payload(handler, group=group)
+            _event("handler_add_attempt", **payload)
+            if os.environ.get("ANTARES_BOOT_FAIL_ADD_HANDLER") == "1" and _injected["add_ok"] >= 3:
+                _event("handler_add_injected_failure", added_before=_injected["add_ok"])
+                raise RuntimeError("injected add_handler failure")
+            if kwargs:
+                orig_add(self, handler, group=group, **kwargs)
+            else:
+                orig_add(self, handler, group)
+            _injected["add_ok"] += 1
+            _event("handler_added", **payload)
+            return None
+
+        module.Application.add_handler = _observe_add
+        _wrap_lifecycle(module, "Application", "initialize", is_async=True)
+        _wrap_lifecycle(module, "Application", "start", is_async=True)
+        _wrap_lifecycle(module, "Application", "stop", is_async=True)
+        _wrap_lifecycle(module, "Application", "shutdown", is_async=True)
+        _wrap_lifecycle(module, "Application", "run_polling", is_async=False)
+        _wrap_lifecycle(module, "Application", "run_webhook", is_async=False)
+    elif name == "telegram.ext._updater":
+        _wrap_lifecycle(module, "Updater", "start_polling", is_async=True)
+        _wrap_lifecycle(module, "Updater", "start_webhook", is_async=True)
+    elif name == "telegram.ext._jobqueue":
+        _wrap_lifecycle(module, "JobQueue", "start", is_async=True)
+    elif name == "telegram.ext._extbot":
+        _wrap_lifecycle(module, "ExtBot", "initialize", is_async=True)
+        _wrap_lifecycle(module, "ExtBot", "get_me", is_async=True)
+    elif name == "telegram._bot":
+        _wrap_lifecycle(module, "Bot", "initialize", is_async=True)
+        _wrap_lifecycle(module, "Bot", "get_me", is_async=True)
+        _wrap_lifecycle(module, "Bot", "shutdown", is_async=True)
 
 
 def _blocked_create_connection(*args, **kwargs):

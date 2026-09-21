@@ -85,6 +85,8 @@ def run_antares_boot(
     dotenv_lines: dict[str, str] | None = None,
     pollute_registry: bool = False,
     pollute_bind: bool = False,
+    fail_build: bool = False,
+    fail_add_handler: bool = False,
     workbook: Path | None = None,
     pop_env: tuple[str, ...] = (),
 ) -> BootRun:
@@ -107,6 +109,10 @@ def run_antares_boot(
         extra["ANTARES_BOOT_POLLUTE_REGISTRY"] = "1"
     if pollute_bind:
         extra["ANTARES_BOOT_POLLUTE_BIND"] = "1"
+    if fail_build:
+        extra["ANTARES_BOOT_FAIL_BUILD"] = "1"
+    if fail_add_handler:
+        extra["ANTARES_BOOT_FAIL_ADD_HANDLER"] = "1"
     env = isolated_child_env(
         sandbox,
         pythonpath=str(HARNESS),
