@@ -36,7 +36,8 @@
 | Кто | Что |
 |-----|-----|
 | Cursor | реализация: admission+handlers+job_dispatch **55 passed**; lifecycle+boot **48 passed**; 3.12.10, PTB 22.8, httpx 0.28.1 |
-| Cursor | review-fix от HEAD `137fa6396b80d62702bae26b81f837bad86cfbe3`: `py -3.12 -m pytest tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py tests/test_job_dispatch.py` **61 passed**; `tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py` **52 passed**; 3.12.10, PTB 22.8, httpx 0.28.1 |
+| Cursor | review-fix от HEAD `137fa6396b80d62702bae26b81f837bad86cfbe3`: `py -3.12 -m pytest tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py tests/test_job_dispatch.py` **61 passed**; `tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py` **52 passed**; 3.12.10, PTB 22.8, httpx 0.28.1. SHA этого прогона: `6b9fa4d26e726f20e8c9ec30898ebc2ce56820e4` |
+| Cursor | unhandled asyncio.Future: база `6b9fa4d26e726f20e8c9ec30898ebc2ce56820e4`; `AdmittedJob` хранит ошибку в `_take()`, внутренний Future только notify без `set_exception`; `py -3.12 -m pytest tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py tests/test_job_dispatch.py` **62 passed** (exit 0); `py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py` **52 passed** (exit 0) |
 | GPT | ещё не ревьюил |
 
 Границы: `request_job` в unit-тестах — функция с Event; live Telegram/кабинеты/WE worker не запускались.
@@ -67,3 +68,4 @@ py -3.12 -m pytest tests/test_scheduler_dispatch.py::test_schedule_loop_calls_di
 |------|---------|
 | 2026-09-21 | реализация WorkAdmission + isolated `/run_wallet`; Draft PR #29 |
 | 2026-09-21 | review-fix: observe Accepted Future сразу; stop без fallback `Event.set`; усиление тестов; статус **review** |
+| 2026-09-21 | unhandled asyncio.Future: результат только через `_take()`; notify без `set_exception`; статус **review** |

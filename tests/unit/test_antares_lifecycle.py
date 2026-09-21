@@ -326,15 +326,15 @@ def _first(result, kind: str) -> dict:
 def _admission_before_cleanup(result) -> None:
     kinds = _kinds(result)
     assert "admission_created" in kinds
-    assert "ptb_cleanup_application" in kinds
     cleanup_idx = kinds.index("ptb_cleanup_application")
-    seal_idx = max(i for i, kind in enumerate(kinds) if kind == "admission_state")
-    # last admission_state at or before cleanup must be sealed
-    before = [item for item in result.events[: cleanup_idx + 1] if item.get("kind") == "admission_state"]
-    assert before, result.events
-    assert before[-1].get("state") == "sealed"
+    seal_idx = next(
+        i
+        for i, item in enumerate(result.events)
+        if item.get("kind") == "admission_state" and item.get("at") == "seal"
+    )
+    assert seal_idx < cleanup_idx, result.events
+    assert result.events[seal_idx].get("state") == "sealed"
     assert result.events[cleanup_idx].get("admission_state") == "sealed"
-    assert seal_idx <= cleanup_idx or kinds[seal_idx] == "admission_state"
 
 
 def test_admission_whoami_closed_then_open_then_sealed() -> None:

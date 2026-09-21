@@ -127,21 +127,17 @@ class AdmittedJob:
                 self._done.set()
             if log_now:
                 self._logger.exception("admitted wallet job failed")
-            self._publish(None, exc)
+            self._notify()
             return
         with self._lock:
             self._result = value
             self._done.set()
-        self._publish(value, None)
+        self._notify()
 
-    def _publish(self, value, exc: BaseException | None) -> None:
+    def _notify(self) -> None:
         def _set() -> None:
-            if self._af.done():
-                return
-            if exc is not None:
-                self._af.set_exception(exc)
-            else:
-                self._af.set_result(value)
+            if not self._af.done():
+                self._af.set_result(None)
 
         try:
             self._loop.call_soon_threadsafe(_set)
@@ -167,10 +163,13 @@ class AdmittedJob:
 
     async def wait(self):
         try:
-            if self._loop.is_closed() or (self._done.is_set() and not self._af.done()):
+            if self._done.is_set():
+                return self._take()
+            if self._loop.is_closed():
                 await asyncio.to_thread(self._done.wait)
                 return self._take()
-            return await self._af
+            await self._af
+            return self._take()
         except asyncio.CancelledError:
             raise
 

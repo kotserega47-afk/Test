@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -99,6 +100,55 @@ def _job_fail_logs(logger: MagicMock) -> list[object]:
         for call in logger.exception.call_args_list
         if call.args and call.args[0] == "admitted wallet job failed"
     ]
+
+
+def _capture_asyncio_errors(loop: asyncio.AbstractEventLoop) -> list:
+    bucket: list = []
+
+    def _handler(_loop, context):  # noqa: ANN001
+        bucket.append(context)
+
+    loop.set_exception_handler(_handler)
+    return bucket
+
+
+async def _drain_scheduled(loop: asyncio.AbstractEventLoop) -> None:
+    ready = loop.create_future()
+    loop.call_soon(ready.set_result, None)
+    await ready
+
+
+async def _assert_no_unhandled_asyncio(
+    loop: asyncio.AbstractEventLoop,
+    bucket: list,
+    holders: list,
+) -> None:
+    await _drain_scheduled(loop)
+    holders.clear()
+    gc.collect()
+    await _drain_scheduled(loop)
+    assert bucket == [], bucket
+
+
+def _capture_submit(captured: dict[str, object]):
+    orig_submit = WorkAdmission.submit_job_if_open
+
+    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        out = orig_submit(self, *args, **kwargs)
+        if isinstance(out, AdmissionAccepted):
+            captured["future"] = out.future
+        return out
+
+    return _submit
+
+
+def _capture_watch(captured: dict[str, object], orig_watch):
+    def _watch(future, logger_obj):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj)
+        captured["admitted"] = admitted
+        return admitted
+
+    return _watch
 
 
 def test_transitions_and_idempotent_seal() -> None:
@@ -417,25 +467,42 @@ def test_reply_failure_does_not_cancel_accepted(monkeypatch: pytest.MonkeyPatch)
     assert _job_fail_logs(logger) == []
 
 
+def test_watch_after_future_already_failed() -> None:
+    future: Future = Future()
+    future.set_exception(RuntimeError("already failed"))
+    logger = MagicMock()
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
+        admitted = watch_admitted_future(future, logger)
+        with pytest.raises(RuntimeError, match="already failed"):
+            await admitted.wait()
+        holders = [admitted]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
+
+    asyncio.run(_run())
+    assert future.cancelled() is False
+    assert len(_job_fail_logs(logger)) == 1
+
+
 def test_cancel_during_first_reply_observes_later_job_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
     release = threading.Event()
-    orig_submit = WorkAdmission.submit_job_if_open
-
-    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
-        out = orig_submit(self, *args, **kwargs)
-        if isinstance(out, AdmissionAccepted):
-            captured["future"] = out.future
-        return out
 
     def _job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
         assert release.wait(timeout=5)
         raise RuntimeError("accepted job boom")
 
-    monkeypatch.setattr(WorkAdmission, "submit_job_if_open", _submit)
+    monkeypatch.setattr(WorkAdmission, "submit_job_if_open", _capture_submit(captured))
     monkeypatch.setattr("modules.antares.work_admission.request_job", _job)
+    monkeypatch.setattr(
+        "modules.antares.handlers.watch_admitted_future",
+        _capture_watch(captured, watch_admitted_future),
+    )
     _open_bound()
     logger = MagicMock()
     handlers.bind_rules(_allow_wallet())
@@ -452,6 +519,8 @@ def test_cancel_during_first_reply_observes_later_job_error(
     update.message.reply_text = AsyncMock(side_effect=_reply)
 
     async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
         task = asyncio.create_task(handlers.cmd_run_wallet(update, MagicMock()))
         await asyncio.wait_for(entered_reply.wait(), timeout=5)
         task.cancel()
@@ -459,9 +528,15 @@ def test_cancel_during_first_reply_observes_later_job_error(
             await task
         future = captured["future"]
         assert future.cancelled() is False
+        assert loop.is_running()
         release.set()
         with pytest.raises(RuntimeError, match="accepted job boom"):
-            future.result(timeout=5)
+            await asyncio.to_thread(future.result, 5)
+        admitted = captured.pop("admitted")
+        assert admitted._done.wait(timeout=5)
+        holders = [admitted, task]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
 
     asyncio.run(_run())
     assert len(_job_fail_logs(logger)) == 1
@@ -479,31 +554,11 @@ def test_cancel_during_future_wait_does_not_duplicate_job_error(
     captured: dict[str, object] = {}
     started = threading.Event()
     release = threading.Event()
-    orig_submit = WorkAdmission.submit_job_if_open
-
-    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
-        out = orig_submit(self, *args, **kwargs)
-        if isinstance(out, AdmissionAccepted):
-            captured["future"] = out.future
-        return out
-
-    def _job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
-        started.set()
-        assert release.wait(timeout=5)
-        raise RuntimeError("wait-cancel job boom")
-
-    monkeypatch.setattr(WorkAdmission, "submit_job_if_open", _submit)
-    monkeypatch.setattr("modules.antares.work_admission.request_job", _job)
-    _open_bound()
-    logger = MagicMock()
-    handlers.bind_rules(_allow_wallet())
-    handlers.bind_logger(logger)
-    update = _update()
-    entered_wait = asyncio.Event()
     orig_watch = watch_admitted_future
 
     def _watch(future, logger_obj):  # noqa: ANN001
         admitted = orig_watch(future, logger_obj)
+        captured["admitted"] = admitted
         orig_wait = admitted.wait
 
         async def _wait():
@@ -513,9 +568,24 @@ def test_cancel_during_future_wait_does_not_duplicate_job_error(
         admitted.wait = _wait  # type: ignore[method-assign]
         return admitted
 
+    def _job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
+        started.set()
+        assert release.wait(timeout=5)
+        raise RuntimeError("wait-cancel job boom")
+
+    monkeypatch.setattr(WorkAdmission, "submit_job_if_open", _capture_submit(captured))
+    monkeypatch.setattr("modules.antares.work_admission.request_job", _job)
     monkeypatch.setattr("modules.antares.handlers.watch_admitted_future", _watch)
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_wallet())
+    handlers.bind_logger(logger)
+    update = _update()
+    entered_wait = asyncio.Event()
 
     async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
         task = asyncio.create_task(handlers.cmd_run_wallet(update, MagicMock()))
         await asyncio.wait_for(entered_wait.wait(), timeout=5)
         await asyncio.to_thread(started.wait, 5)
@@ -525,9 +595,15 @@ def test_cancel_during_future_wait_does_not_duplicate_job_error(
             await task
         future = captured["future"]
         assert future.cancelled() is False
+        assert loop.is_running()
         release.set()
         with pytest.raises(RuntimeError, match="wait-cancel job boom"):
-            future.result(timeout=5)
+            await asyncio.to_thread(future.result, 5)
+        admitted = captured.pop("admitted")
+        assert admitted._done.wait(timeout=5)
+        holders = [admitted, task]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
 
     asyncio.run(_run())
     assert len(_job_fail_logs(logger)) == 1
@@ -549,11 +625,18 @@ def test_admitted_result_survives_closed_loop(monkeypatch: pytest.MonkeyPatch) -
     )
     assert isinstance(outcome, AdmissionAccepted)
     logger = MagicMock()
+    first_bucket: list = []
 
     async def _attach():
-        return watch_admitted_future(outcome.future, logger)
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
+        first_bucket.append(bucket)
+        admitted = watch_admitted_future(outcome.future, logger)
+        await _drain_scheduled(loop)
+        return admitted
 
     admitted = asyncio.run(_attach())
+    assert first_bucket[0] == []
     assert started.wait(timeout=5)
     release.set()
     with pytest.raises(RuntimeError, match="late job boom"):
@@ -563,12 +646,20 @@ def test_admitted_result_survives_closed_loop(monkeypatch: pytest.MonkeyPatch) -
     assert "late job boom" in str(admitted.job_error)
     assert admitted.future.cancelled() is False
 
-    async def _wait_stored():
+    async def _wait_stored(job):
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
         with pytest.raises(RuntimeError, match="late job boom"):
-            await admitted.wait()
+            await job.wait()
+        holders = [job]
+        del job
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
 
-    asyncio.run(_wait_stored())
+    asyncio.run(_wait_stored(admitted))
+    admitted = None
+    gc.collect()
     assert len(_job_fail_logs(logger)) == 1
+    assert first_bucket[0] == []
 
 
 def test_helper_bind_open_seal_on_initialize_error() -> None:
