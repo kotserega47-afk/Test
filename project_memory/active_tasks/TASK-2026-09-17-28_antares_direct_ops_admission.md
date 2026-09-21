@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-27 (PR #30, review `a84e9cd48095232d901d7b12ee499d3db61407d0`, закрытие `08132f26310d1a99c3f7f6f2f5ea32c76f1edef4`) |
-| **PR** | Draft (открывается этим PR) `feat/task-2026-09-17-28-antares-direct-ops-admission`, base `feat/task-2026-09-17-27-antares-dispatch-admission` |
+| **PR** | Draft [#31](https://github.com/deniskotdavydov1991-wq/Test/pull/31) `feat/task-2026-09-17-28-antares-direct-ops-admission`, base `feat/task-2026-09-17-27-antares-dispatch-admission` |
 | **Риск** | medium: isolated прямые executor-операции делят `get_job_executor()` с dispatch; mixed unbound без изменений |
 
 Isolated `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` через generic `submit_if_open` (явный executor + callable), не jobs и не `request_job`. Mixed/unbound: прежний `run_in_executor(None, ...)`. Внутренний `enqueue_auto_enable_batch` остаётся обходом. Serve/polling **нет**. `JOB_ACCEPT` **нет**. PR Draft. Не выпущено.
