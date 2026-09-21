@@ -238,16 +238,30 @@ def _raise_with_cleanup(
 
 async def _await_cleanup(app: Any) -> tuple[list[str], tuple[str, ...], list[BaseException], BaseException | None]:
     cleanup_task = asyncio.create_task(_cleanup_application(app), name="ptb-lifecycle-cleanup")
-    cancelled: BaseException | None = None
-    try:
-        actions, leftover, errors = await asyncio.shield(cleanup_task)
-    except asyncio.CancelledError as cancel:
-        cancelled = cancel
-        if not cleanup_task.done():
-            actions, leftover, errors = await cleanup_task
-        else:
-            actions, leftover, errors = cleanup_task.result()
-    return actions, leftover, errors, cancelled
+    caller_cancel: BaseException | None = None
+    caller_cancels: list[BaseException] = []
+    cleanup_task.ptb_caller_cancels = caller_cancels
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError as cancel:
+            if cleanup_task.cancelled():
+                break
+            caller_cancel = cancel
+            caller_cancels.append(cancel)
+
+    if cleanup_task.cancelled():
+        leftover = inspect_application_leftover(app)
+        inner: BaseException | None = None
+        try:
+            cleanup_task.result()
+        except asyncio.CancelledError as exc:
+            inner = exc
+        errors: list[BaseException] = [inner] if inner is not None else []
+        return [], leftover, errors, caller_cancel
+
+    actions, leftover, errors = cleanup_task.result()
+    return actions, leftover, errors, caller_cancel
 
 
 async def run_ptb_lifecycle(

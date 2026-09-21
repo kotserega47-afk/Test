@@ -36,6 +36,7 @@ _WRAP_AFTER_LOAD = frozenset(
         "core.rules_v2.contract_publish",
         "modules.antares.handlers",
         "modules.antares.assembly",
+        "modules.antares.application_lifecycle",
         "dropbox",
         "psycopg",
         "psycopg2",
@@ -258,6 +259,16 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
             module.assemble_antares = _observe
             _injected["assemble"] = True
+    elif name == "modules.antares.application_lifecycle":
+        orig_cleanup = module._cleanup_application
+        runs = {"n": 0}
+
+        async def _count_cleanup(app):
+            runs["n"] += 1
+            _event("ptb_cleanup_application", n=runs["n"])
+            return await orig_cleanup(app)
+
+        module._cleanup_application = _count_cleanup
     elif name == "core.access_rules":
         orig_snap = module.AccessRules.get_snapshot
 
@@ -377,6 +388,14 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         async def _observe_stop(self):
             _event("application_stop_called")
+            if _scenario() == "double_cancel_cleanup":
+                from cleanup_gate import gates
+
+                entered, release = gates()
+                entered.set()
+                _event("cleanup_hold_entered", boundary="application.stop")
+                await release.wait()
+                _event("cleanup_hold_released", boundary="application.stop")
             await orig_stop(self)
             _event("application_stop_ok")
 
@@ -418,7 +437,7 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         async def _observe_h_init(self):
             _event("httpx_initialize_called")
-            if _scenario() in {"fail_requests", "fail_requests_and_cleanup"}:
+            if _scenario() in {"fail_requests", "fail_requests_and_cleanup", "cancel_during_initialize_cleanup"}:
                 _event("httpx_initialize_injected_failure")
                 raise RuntimeError("injected HTTPXRequest.initialize failure")
             await orig_h_init(self)
@@ -430,6 +449,20 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         async def _observe_h_shut(self):
             _event("httpx_shutdown_called")
+            if _scenario() == "cancel_during_initialize_cleanup":
+                from cleanup_gate import gates
+
+                entered, release = gates()
+                if not entered.is_set():
+                    entered.set()
+                    _event("cleanup_hold_entered", boundary="HTTPXRequest.shutdown")
+                    await release.wait()
+                    _event("cleanup_hold_released", boundary="HTTPXRequest.shutdown")
+                if _httpx_shutdown_fail_obj["obj"] is None:
+                    _httpx_shutdown_fail_obj["obj"] = self
+                if self is _httpx_shutdown_fail_obj["obj"]:
+                    _event("httpx_shutdown_injected_failure")
+                    raise RuntimeError("injected HTTPXRequest.shutdown failure")
             if _scenario() == "fail_requests_and_cleanup":
                 if _httpx_shutdown_fail_obj["obj"] is None:
                     _httpx_shutdown_fail_obj["obj"] = self

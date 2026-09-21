@@ -72,35 +72,25 @@ PTB internals localized in the helper (не global monkeypatch production): `App
 
 job-queue extra: **нет** (`APS_AVAILABLE is False`). Ветки JobQueue extra **не** заявляются проверенными. `requirements.txt` не менялся.
 
-```
-py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py -q --tb=short
-```
+Исторические границы:
+- `e737281` / `e039e25`: **91 / 10** passed
+- `d842912`: **94 / 13** passed
 
-**91 passed, 0 failed, 0 skipped, exit 0.**
-
-Только lifecycle:
+Текущий lifecycle:
 
 ```
 py -3.12 -m pytest tests/unit/test_antares_lifecycle.py -q --tb=short
 ```
 
-Историческая граница (HEAD `e737281` / код `e039e25`): **91 passed** (10 lifecycle + boot/parser/gate), exit 0. Не переносить эти числа на текущий helper без этой границы.
+**15 passed, 0 failed, 0 skipped, exit 0.**
 
-Текущий прогон lifecycle:
-
-```
-py -3.12 -m pytest tests/unit/test_antares_lifecycle.py -q --tb=short
-```
-
-**13 passed, 0 failed, 0 skipped, exit 0.**
-
-Regression (lifecycle + boot/run + parser/gate):
+Regression:
 
 ```
 py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py -q --tb=short
 ```
 
-**94 passed, 0 failed, 0 skipped, exit 0.**
+**96 passed, 0 failed, 0 skipped, exit 0.**
 
 ### Таблица очистки (факт subprocess, in-loop до выхода из asyncio.run)
 
@@ -117,6 +107,8 @@ py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_
 | `callback_error` | нет (helper) | `app.stop`, `app.shutdown` | закрыты | 0; error handler |
 | `cancel` | CancelledError | `app.stop`, `app.shutdown` | закрыты; fetcher done | 2 |
 | `cancel_during_cleanup` | CancelledError (`cancelled_during_cleanup`) | `app.stop` и `app.shutdown` не пропущены | закрыты | 2 |
+| `double_cancel_cleanup` | CancelledError; два cancel на одном cleanup | один `_cleanup_application`; stop/shutdown после hold | `[True, True]`; fetcher/cleanup done | 2 |
+| `cancel_during_initialize_cleanup` | initialize RuntimeError + cancel | ExceptionGroup shutdown; cancelled_during_cleanup | `[False, True]` | 2 |
 | `fail_cleanup_only` | RuntimeError shutdown до orig | fallback `get_updates_request.shutdown` + `request.shutdown` | `[True, True]` | 2 |
 
 Поддерживаемый состав: `SimpleUpdateProcessor`, Updater есть, persistence нет, JobQueue extra нет. Иное — явный отказ. Extra **не** проверен.
@@ -158,4 +150,4 @@ live polling; SIGINT/SIGTERM; drain хвоста очереди; публичн�
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | helper + sandbox subprocess; Draft PR #27; к review |
-| 2026-09-21 | staged fallback shutdown, in-loop snapshot, cancel-during-cleanup; TASK-24 не закрыт |
+| 2026-09-21 | shield удерживается до конца одной cleanup-задачи; double-cancel и cancel во время initialize-cleanup |

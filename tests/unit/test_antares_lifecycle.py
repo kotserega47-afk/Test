@@ -224,6 +224,55 @@ def test_cancel_during_cleanup_still_finishes_remaining_steps() -> None:
     assert "antares lifecycle ok" not in result.stdout
 
 
+def _cleanup_run_ns(result) -> list[int]:
+    return [int(item["n"]) for item in result.events if item.get("kind") == "ptb_cleanup_application"]
+
+
+def test_double_cancel_during_held_cleanup() -> None:
+    result = _run("double_cancel_cleanup")
+    assert result.returncode == 2, result.stderr + result.stdout
+    _assert_isolated(result)
+    kinds = _kinds(result)
+    assert "cleanup_hold_entered" in kinds
+    assert "first_cancel" in kinds
+    assert "first_cancel_consumed" in kinds
+    assert "second_cancel" in kinds
+    assert "second_cancel_delivered" in kinds
+    assert "cleanup_hold_released" in kinds
+    assert _cleanup_run_ns(result) == [1], result.events
+    assert result.report.get("exc_type") == "CancelledError"
+    assert result.report.get("cancelled_during_cleanup") is True
+    actions = result.report.get("cleanup_actions") or []
+    assert "app.stop" in actions
+    assert "app.shutdown" in actions
+    _assert_in_loop_clean(result)
+    live = _in_loop(result)
+    assert live.get("fetcher_done") is True
+    assert "ptb-lifecycle-cleanup" not in (live.get("ptb_unfinished_tasks") or [])
+    assert "antares lifecycle ok" not in result.stdout
+
+
+def test_cancel_during_initialize_cleanup_keeps_primary() -> None:
+    result = _run("cancel_during_initialize_cleanup")
+    assert result.returncode == 2, result.stderr + result.stdout
+    _assert_isolated(result)
+    kinds = _kinds(result)
+    assert "httpx_initialize_injected_failure" in kinds
+    assert "cleanup_hold_entered" in kinds
+    assert "cancelling_initialize_cleanup" in kinds
+    assert _cleanup_run_ns(result) == [1], result.events
+    assert result.report.get("exc_type") == "RuntimeError"
+    assert "injected HTTPXRequest.initialize failure" in str(result.report.get("exc"))
+    assert result.report.get("cancelled_during_cleanup") is True
+    assert result.report.get("cause_type") == "ExceptionGroup"
+    errors = result.report.get("cleanup_errors") or []
+    assert any("injected HTTPXRequest.shutdown failure" in str(item) for item in errors), errors
+    live = _in_loop(result)
+    assert live.get("httpx_closed") == [False, True], live
+    assert live.get("app_running") is False, live
+    assert "antares lifecycle ok" not in result.stdout
+
+
 def test_cleanup_only_error_still_closes_httpx() -> None:
     result = _run("fail_cleanup_only")
     assert result.returncode == 2, result.stderr + result.stdout

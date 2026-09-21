@@ -213,13 +213,64 @@ async def _run_helper(app, *, enable_polling: bool) -> object:
         _event("cancelling_during_cleanup")
         task.cancel()
 
+    async def _wait_pred(pred, *, timeout: float = 10.0) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if pred():
+                return
+            await asyncio.sleep(0)
+        raise TimeoutError("timed out waiting for cancel state")
+
+    def _named_cleanup() -> asyncio.Task | None:
+        for item in asyncio.all_tasks():
+            if item.get_name() == "ptb-lifecycle-cleanup":
+                return item
+        return None
+
+    async def _double_cancel_cleanup():
+        from cleanup_gate import gates
+
+        await _wait_event("cleanup_hold_entered")
+        _event("first_cancel")
+        task.cancel()
+        await _wait_pred(
+            lambda: len(getattr(_named_cleanup(), "ptb_caller_cancels", ()) or ()) >= 1
+        )
+        _event("first_cancel_consumed", n=len(getattr(_named_cleanup(), "ptb_caller_cancels", ())))
+        task.cancel()
+        _event("second_cancel")
+        await _wait_pred(
+            lambda: len(getattr(_named_cleanup(), "ptb_caller_cancels", ()) or ()) >= 2
+        )
+        _event("second_cancel_delivered", n=len(getattr(_named_cleanup(), "ptb_caller_cancels", ())))
+        _, release = gates()
+        release.set()
+
+    async def _cancel_during_initialize_cleanup():
+        from cleanup_gate import gates
+
+        await _wait_event("cleanup_hold_entered")
+        _event("cancelling_initialize_cleanup")
+        task.cancel()
+        await _wait_pred(
+            lambda: len(getattr(_named_cleanup(), "ptb_caller_cancels", ()) or ()) >= 1
+        )
+        _event("initialize_cleanup_cancel_delivered")
+        _, release = gates()
+        release.set()
+
     helpers: list[asyncio.Task] = []
-    if scenario in {"whoami", "callback_error", "fail_cleanup_only", "cancel_during_cleanup"}:
+    if scenario in {"whoami", "callback_error", "fail_cleanup_only", "cancel_during_cleanup", "double_cancel_cleanup"}:
         helpers.append(asyncio.create_task(_feed_whoami(), name="sandbox-feed-whoami"))
     if scenario == "cancel":
         helpers.append(asyncio.create_task(_cancel_after_start(), name="sandbox-cancel"))
     if scenario == "cancel_during_cleanup":
         helpers.append(asyncio.create_task(_cancel_during_cleanup(), name="sandbox-cancel-cleanup"))
+    if scenario == "double_cancel_cleanup":
+        helpers.append(asyncio.create_task(_double_cancel_cleanup(), name="sandbox-double-cancel"))
+    if scenario == "cancel_during_initialize_cleanup":
+        helpers.append(asyncio.create_task(_cancel_during_initialize_cleanup(), name="sandbox-cancel-init-cleanup"))
 
     async def _lifecycle():
         return await run_ptb_lifecycle(app, stop=stop, enable_polling=enable_polling)
@@ -322,6 +373,8 @@ def main() -> None:
         "fail_start": "RuntimeError",
         "cancel": "CancelledError",
         "cancel_during_cleanup": "CancelledError",
+        "double_cancel_cleanup": "CancelledError",
+        "cancel_during_initialize_cleanup": "RuntimeError",
         "callback_error": None,
         "fail_cleanup_only": "RuntimeError",
         "unsupported_job_queue": "ValueError",

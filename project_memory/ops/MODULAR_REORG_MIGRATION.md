@@ -34,7 +34,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-21 Application без запуска | план принят: после local snapshot — `Application.build()` + handlers; без initialize/polling; review пройден (Draft PR #24, HEAD `777a52f…`); GPT читал контракт, pytest не запускал; runtime не менялся | **нет** |
 | TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; review пройден (Draft PR #25, HEAD `d9592ff…`; 81 passed / 33 boot Cursor 3.12.10, PTB 22.8, httpx 0.28.1; job-queue extra нет); GPT код/diff, наборы не запускал; процесс exit ≠ graceful shutdown; **не выпущено** | **нет** |
 | TASK-23 start/stop plan | контракт ручного async initialize/start/stop; не `run_polling`; review пройден (Draft PR #26, HEAD `6540a36…`); закрытие `94951c6…`; runtime не менялся | **нет** |
-| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox; historical 91/10 (`e737281`); current 94/13 Cursor 3.12.10, PTB 22.8; JobQueue extra нет; к review, **не закрыт** | **нет** |
+| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox; historical 91/10 (`e737281`), 94/13 (`d842912`); к review, **не закрыт** | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
