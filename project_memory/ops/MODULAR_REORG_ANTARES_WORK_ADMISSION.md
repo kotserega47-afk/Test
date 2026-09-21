@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; runtime `/run_wallet` — TASK-26 review `960bf69516434cb7882de96263a78dfdf1ac8e1f` (не выпущено); cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 review `a84e9cd48095232d901d7b12ee499d3db61407d0` (не выпущено); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -271,7 +271,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_job_if_open`
 
-Шесть TG dispatch-команд (`/run_wallet`, `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh`) — isolated путь TASK-27; mixed unbound по-прежнему `run_job_async`.
+Шесть TG dispatch-команд (`/run_wallet`, `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh`) — isolated путь TASK-27 (review `a84e9cd…`); mixed unbound по-прежнему `run_job_async`. Успех TASK-27 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 

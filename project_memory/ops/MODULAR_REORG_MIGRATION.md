@@ -40,8 +40,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
 | TASK-25 допуск | docs, review пройден, PR #28, HEAD `eda7144…`; 1д=8ч; mixed-stop проверка 2–4д отдельно; cutover **не** к исполнению | pytest не требовался | **нет** |
 | TASK-26 run_wallet admission | код, PR #29, review `960bf69516434cb7882de96263a78dfdf1ac8e1f`, close `f3ed9e24c23322bc2a53c8f92efb2321aa6cdbba`; защищён только `/run_wallet`; **не выпущено** | Cursor **62** / **52 passed**, exit 0; GPT код/тесты + минимальный `AdmittedJob` Python **3.12.14** PASS; GPT полные pytest **не** запускал | **нет** |
-| TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft PR #30; **не выпущено** | Cursor **90** (admission/handlers/dispatch/inventory/registration) / **52** lifecycle+boot, exit 0 | **нет** |
-| Следующая | ingest / прямые registry-ops / schedules; mixed-stop отдельно; serve отдельно | — |
+| TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft PR #30, review `a84e9cd48095232d901d7b12ee499d3db61407d0`; mixed/unbound без изменений; глобального запрета новой работы нет; **не выпущено** | Cursor **90** / **52 passed**, exit 0; GPT код/diff, эти pytest **не** запускал | **нет** |
+| Следующая | прямые registry/Auto-Enable ops (не jobs); ingest / schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -57,7 +57,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**Следующий code после TASK-27:** ingest / прямые registry-ops / schedules. Не serve, не полный переход, не mixed-stop.
+**Следующий code после TASK-27:** прямые registry/Auto-Enable ops (не `request_job`); ingest / schedules отдельно. Не serve, не полный переход, не mixed-stop.
 
 ---
 
