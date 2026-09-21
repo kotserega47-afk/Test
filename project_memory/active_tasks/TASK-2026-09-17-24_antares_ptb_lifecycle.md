@@ -6,7 +6,7 @@
 | **Статус** | review (к GPT; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-23 (PR #26, review `6540a36ebe19408e76e8e8b9f1cbc20116c64d97`, закрытие `94951c6ff4b3e9137f81151fac81e6fe2739e77a`), `modules/antares/application_lifecycle.py` |
-| **PR** | Draft (номер после публикации) `feat/task-2026-09-17-24-antares-ptb-lifecycle`, base `feat/task-2026-09-17-23-antares-startstop` |
+| **PR** | Draft [#27](https://github.com/deniskotdavydov1991-wq/Test/pull/27) `feat/task-2026-09-17-24-antares-ptb-lifecycle`, base `feat/task-2026-09-17-23-antares-startstop` |
 | **Риск** | medium: реальный PTB initialize/start/stop/shutdown в sandbox без live Telegram |
 
 Production helper `run_ptb_lifecycle(app, *, stop, enable_polling=False)` исполняет initialize → start → ожидание `stop` → stop → shutdown. Caller владеет Application и loop. Boot и диагностический `run` helper **не** вызывают. Публичный serve **не** добавлен. `enable_polling=True` отклоняется **до** initialize. Polling-ветка не реализована.
@@ -114,4 +114,4 @@ live polling; SIGINT/SIGTERM; drain хвоста очереди; публичн�
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | helper + sandbox subprocess; Draft PR; к review |
+| 2026-09-21 | helper + sandbox subprocess; Draft PR #27; к review |
