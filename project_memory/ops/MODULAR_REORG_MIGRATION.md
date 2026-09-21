@@ -42,8 +42,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-26 run_wallet admission | код, PR #29, review `960bf69516434cb7882de96263a78dfdf1ac8e1f`, close `f3ed9e24c23322bc2a53c8f92efb2321aa6cdbba`; защищён только `/run_wallet`; **не выпущено** | Cursor **62** / **52 passed**, exit 0; GPT код/тесты + минимальный `AdmittedJob` Python **3.12.14** PASS; GPT полные pytest **не** запускал | **нет** |
 | TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft PR #30, review `a84e9cd48095232d901d7b12ee499d3db61407d0`, close `08132f26310d1a99c3f7f6f2f5ea32c76f1edef4`; mixed/unbound без изменений; глобального запрета новой работы нет; **не выпущено** | Cursor **90** / **52 passed**, exit 0; GPT код/diff, эти pytest **не** запускал | **нет** |
 | TASK-28 direct ops admission | isolated export/plan/run; Draft PR #31, review `f0bd06bf157f4b377ad7648410605ee67841835f`, close `a81aa69a416b3ad03708bd5515ec135c12f0e896`; отказ смотрит `handlers` executor; orchestrator изолирован; internal enqueue — обход; **не выпущено** | Cursor **120** / **21 passed** на review HEAD; **52** lifecycle/boot — исторический прогон на `a5836de…`; GPT исходники, pytest **не** запускал | **нет** |
-| TASK-29 registry replay admission | isolated `/registry_replay` через `submit_if_open` + общий executor; mixed sync в callback; внутренние шаги replay — обход; **не выпущено** | Cursor **129** (admission/handlers/dispatch/inventory/registration/export) / **52** lifecycle+boot, exit 0; наборы не суммировать | **нет** |
-| Следующая | ingest / schedules / reload; mixed-stop отдельно; serve отдельно | — |
+| TASK-29 registry replay admission | isolated `/registry_replay`; Draft PR #32, review `71fce3b9eb4f621164799dd8ed379140fd3ebf5a`; mixed sync в callback; внутренние шаги принятого replay — продолжение операции; drain ≠ обход допуска; **не выпущено** | Cursor **129** / **52 passed**, 3.12.10, exit 0; GPT код/diff, pytest **не** запускал | **нет** |
+| Следующая | `/reload_rules` admission; ingest / schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -59,7 +59,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**Следующий code после TASK-29:** ingest / schedules / reload. Не serve, не полный переход, не mixed-stop.
+**Следующий code после TASK-29:** `/reload_rules` admission. Ingest / schedules отдельно. Не serve, не полный переход, не mixed-stop.
 
 ---
 

@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-28 close `a81aa69…`; isolated `/registry_replay` — TASK-29 (этот PR, не выпущено); cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-29 review `71fce3b…`, закрытие этим docs-коммитом; `/reload_rules` — TASK-30; cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -271,7 +271,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`
 
-Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29 (`submit_if_open` + `replay_pending_outbox_records` в общем executor; mixed — sync в callback). Допуск внешнего replay **не** защищает внутренние шаги outbox/БД и не есть drain. Успех TASK-27…29 **не** есть глобальный запрет новой работы.
+Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29 (`submit_if_open` + `replay_pending_outbox_records` в общем executor; mixed — sync в callback). Внутренние шаги уже принятого replay — продолжение операции. Самостоятельные новые постановки (internal enqueue и т.п.) — отдельные входы. Drain — ожидание завершения принятого, не «обход допуска». Успех TASK-27…29 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 
