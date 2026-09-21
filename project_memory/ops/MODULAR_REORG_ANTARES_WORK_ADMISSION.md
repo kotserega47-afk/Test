@@ -270,7 +270,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`
 
-Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29. `/reload_rules` — isolated TASK-30 (`submit_if_open` + `_reload_bound_rules` на том же bound `AccessRules` в общем executor; mixed — sync в callback). `AccessRules` / `rules_provider` без lock; isolated **не** объявляет thread safety. Успех TASK-27…30 **не** есть глобальный запрет новой работы.
+Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29. `/reload_rules` — isolated TASK-30 (`submit_if_open` + `_reload_bound_rules` на том же bound `AccessRules` в общем executor; mixed — sync в callback). Атомарная замена одной ссылки **не** согласует `_last_v2_*` и indexes; очередь/lock только вокруг reload **не** покрывает readers, которые её обходят. Гонка воспроизведена тестами `test_repro_*`; mixed не оправдывает её. Успех TASK-27…30 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 
