@@ -13,18 +13,21 @@ def _kinds(result) -> list[str]:
     return [str(item.get("kind")) for item in result.events]
 
 
-def _run(scenario: str):
+def _run(scenario: str, *, admission: bool = False):
     with tempfile.TemporaryDirectory() as tmp:
         sandbox = Path(tmp)
         workbook = _accepted_local_xlsx(sandbox / "rules.xlsx")
+        process_env = {
+            "PROJECT_PROFILE": "antares",
+            "TELEGRAM_BOT_TOKEN": _PTB_TOKEN,
+        }
+        if admission:
+            process_env["ANTARES_LC_ADMISSION"] = "1"
         return run_antares_lifecycle(
             sandbox,
             scenario=scenario,
             workbook=workbook,
-            process_env={
-                "PROJECT_PROFILE": "antares",
-                "TELEGRAM_BOT_TOKEN": _PTB_TOKEN,
-            },
+            process_env=process_env,
         )
 
 
@@ -311,3 +314,80 @@ def test_unsupported_processor_rejected_before_initialize() -> None:
     assert "application_initialize_called" not in kinds
     assert result.report.get("exc_type") == "ValueError"
     assert "processor=" in str(result.report.get("exc"))
+
+
+def _first(result, kind: str) -> dict:
+    for item in result.events:
+        if item.get("kind") == kind:
+            return item
+    raise AssertionError(f"missing event {kind}: {result.events}")
+
+
+def _admission_before_cleanup(result) -> None:
+    kinds = _kinds(result)
+    assert "admission_created" in kinds
+    assert "ptb_cleanup_application" in kinds
+    cleanup_idx = kinds.index("ptb_cleanup_application")
+    seal_idx = max(i for i, kind in enumerate(kinds) if kind == "admission_state")
+    # last admission_state at or before cleanup must be sealed
+    before = [item for item in result.events[: cleanup_idx + 1] if item.get("kind") == "admission_state"]
+    assert before, result.events
+    assert before[-1].get("state") == "sealed"
+    assert result.events[cleanup_idx].get("admission_state") == "sealed"
+    assert seal_idx <= cleanup_idx or kinds[seal_idx] == "admission_state"
+
+
+def test_admission_whoami_closed_then_open_then_sealed() -> None:
+    result = _run("whoami", admission=True)
+    assert result.returncode == 0, result.stderr + result.stdout
+    _assert_isolated(result)
+    assert _first(result, "application_initialize_called").get("admission_state") == "bound_closed"
+    assert _first(result, "application_start_called").get("admission_state") == "bound_closed"
+    assert _first(result, "application_start_ok").get("admission_state") == "bound_closed"
+    opens = [
+        item
+        for item in result.events
+        if item.get("kind") == "admission_state" and item.get("at") == "open"
+    ]
+    assert opens and opens[0].get("state") == "open"
+    _admission_before_cleanup(result)
+    assert "antares lifecycle ok scenario=whoami leftover=0" in result.stdout
+
+
+def test_admission_fail_requests_stays_closed_then_seals() -> None:
+    result = _run("fail_requests", admission=True)
+    assert result.returncode == 2, result.stderr + result.stdout
+    _assert_isolated(result)
+    assert _first(result, "application_initialize_called").get("admission_state") == "bound_closed"
+    kinds = _kinds(result)
+    assert "application_start_ok" not in kinds
+    assert not any(item.get("at") == "open" for item in result.events if item.get("kind") == "admission_state")
+    _admission_before_cleanup(result)
+
+
+def test_admission_fail_start_stays_closed_then_seals() -> None:
+    result = _run("fail_start", admission=True)
+    assert result.returncode == 2, result.stderr + result.stdout
+    _assert_isolated(result)
+    assert _first(result, "application_initialize_ok").get("admission_state") == "bound_closed"
+    assert _first(result, "application_start_called").get("admission_state") == "bound_closed"
+    kinds = _kinds(result)
+    assert "application_start_ok" not in kinds
+    assert not any(item.get("at") == "open" for item in result.events if item.get("kind") == "admission_state")
+    _admission_before_cleanup(result)
+
+
+def test_admission_cancel_opens_then_seals_before_cleanup() -> None:
+    result = _run("cancel", admission=True)
+    assert result.returncode == 2, result.stderr + result.stdout
+    _assert_isolated(result)
+    assert _first(result, "application_initialize_called").get("admission_state") == "bound_closed"
+    assert _first(result, "application_start_called").get("admission_state") == "bound_closed"
+    opens = [
+        item
+        for item in result.events
+        if item.get("kind") == "admission_state" and item.get("at") == "open"
+    ]
+    assert opens and opens[0].get("state") == "open"
+    _admission_before_cleanup(result)
+    assert result.report.get("exc_type") == "CancelledError"

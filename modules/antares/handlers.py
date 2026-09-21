@@ -17,8 +17,8 @@ from core.tg_command_dispatch import guard_or_deny, run_job_async
 from modules.antares.work_admission import (
     ADMISSION_CLOSED_REPLY,
     AdmissionAccepted,
-    await_admitted_future,
     bound_admission,
+    watch_admitted_future,
 )
 
 ANTARES_STATUS_JOB_TYPES: tuple[str, ...] = (
@@ -105,24 +105,34 @@ async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(ADMISSION_CLOSED_REPLY)
         return
 
+    admitted = watch_admitted_future(outcome.future, logger)
     try:
         await update.message.reply_text("🚀 Запускаю: wallet")
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        logger.exception("isolated /run_wallet reply after accept failed")
+        logger.exception("isolated /run_wallet start reply failed")
 
     try:
-        job_id = await await_admitted_future(outcome.future, logger)
+        job_id = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        try:
+            await update.message.reply_text("❌ Ошибка при выполнении.\nХвост трейса:")
+            await update.message.reply_text(traceback.format_exc()[-3500:])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated /run_wallet error reply failed")
+        return
+
+    try:
         await update.message.reply_text(f"✅ Принято: wallet\njob_id={job_id}")
     except asyncio.CancelledError:
         raise
     except Exception:
-        err = traceback.format_exc()
-        logger.exception("❌ TG job error: %s", "wallet")
-        try:
-            await update.message.reply_text("❌ Ошибка при выполнении.\nХвост трейса:")
-            await update.message.reply_text(err[-3500:])
-        except Exception:
-            logger.exception("isolated /run_wallet error reply failed")
+        logger.exception("isolated /run_wallet result reply failed")
 
 
 async def cmd_run_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

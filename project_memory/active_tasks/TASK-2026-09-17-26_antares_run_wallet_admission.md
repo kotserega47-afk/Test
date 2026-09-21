@@ -35,10 +35,23 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | `py -3.12 -m pytest` admission+handlers+job_dispatch **55 passed**; lifecycle+boot **48 passed**; 3.12.10, PTB 22.8, httpx 0.28.1 |
+| Cursor | реализация: admission+handlers+job_dispatch **55 passed**; lifecycle+boot **48 passed**; 3.12.10, PTB 22.8, httpx 0.28.1 |
+| Cursor | review-fix от HEAD `137fa6396b80d62702bae26b81f837bad86cfbe3`: `py -3.12 -m pytest tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py tests/test_job_dispatch.py` **61 passed**; `tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py` **52 passed**; 3.12.10, PTB 22.8, httpx 0.28.1 |
 | GPT | ещё не ревьюил |
 
-Границы: `request_job` заменён тестовой функцией с Event; live Telegram/кабинеты/WE worker не запускались. `test_schedule_loop_calls_dispatch_job_background` падает на закрытии TASK-25 тем же расхождением (два тика) — **не** регрессия TASK-26.
+Границы: `request_job` в unit-тестах — функция с Event; live Telegram/кабинеты/WE worker не запускались.
+
+**Новые проверки:** cancel `/run_wallet` на первом reply + ошибка принятого job (Future не cancelled, job error ровно 1); cancel во время wait; submit перед первым reply; executor `max_workers=1` (request_job после seal); stop из loop-thread / чужого потока с loop / без loop; initialize vs start failure; subprocess Application+admission (closed / open / sealed до cleanup); restore handlers `_rules`/`_logger`.
+
+**Прежняя регрессия:** admission+handlers+dispatch и lifecycle/boot без admission.
+
+Известное падение scheduler **не чинилось**:
+
+```
+py -3.12 -m pytest tests/test_scheduler_dispatch.py::test_schedule_loop_calls_dispatch_job_background -q --tb=short
+```
+
+на закрытии TASK-25 `a33df9c653422da5948e75178131de6fcd870a5b` и на исходном HEAD TASK-26 `137fa6396b80d62702bae26b81f837bad86cfbe3`: **1 failed** (два тика `wallet` вместо одного).
 
 ---
 
@@ -53,3 +66,4 @@
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | реализация WorkAdmission + isolated `/run_wallet`; Draft PR #29 |
+| 2026-09-21 | review-fix: observe Accepted Future сразу; stop без fallback `Event.set`; усиление тестов; статус **review** |

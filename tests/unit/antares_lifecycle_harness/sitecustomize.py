@@ -37,6 +37,7 @@ _WRAP_AFTER_LOAD = frozenset(
         "modules.antares.handlers",
         "modules.antares.assembly",
         "modules.antares.application_lifecycle",
+        "modules.antares.work_admission",
         "dropbox",
         "psycopg",
         "psycopg2",
@@ -74,6 +75,19 @@ def _ready_path() -> str:
 
 def _scenario() -> str:
     return (os.environ.get("ANTARES_LC_SCENARIO") or "whoami").strip()
+
+
+def _admission_state() -> str | None:
+    mod = sys.modules.get("modules.antares.work_admission")
+    if mod is None:
+        return None
+    getter = getattr(mod, "bound_admission", None)
+    if getter is None:
+        return None
+    admission = getter()
+    if admission is None:
+        return None
+    return admission.state.value
 
 
 def _write_json(path: str, payload: object) -> None:
@@ -259,13 +273,37 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
             module.assemble_antares = _observe
             _injected["assemble"] = True
+    elif name == "modules.antares.work_admission":
+        orig_bind = module.WorkAdmission._bind_instance
+        orig_open = module.WorkAdmission.open
+        orig_seal = module.WorkAdmission.seal
+
+        def _observe_bind(self):
+            orig_bind(self)
+            _event("admission_state", at="bind", state=self.state.value)
+
+        def _observe_open(self):
+            orig_open(self)
+            _event("admission_state", at="open", state=self.state.value)
+
+        def _observe_seal(self):
+            orig_seal(self)
+            _event("admission_state", at="seal", state=self.state.value)
+
+        module.WorkAdmission._bind_instance = _observe_bind
+        module.WorkAdmission.open = _observe_open
+        module.WorkAdmission.seal = _observe_seal
     elif name == "modules.antares.application_lifecycle":
         orig_cleanup = module._cleanup_application
         runs = {"n": 0}
 
         async def _count_cleanup(app):
             runs["n"] += 1
-            _event("ptb_cleanup_application", n=runs["n"])
+            _event(
+                "ptb_cleanup_application",
+                n=runs["n"],
+                admission_state=_admission_state(),
+            )
             return await orig_cleanup(app)
 
         module._cleanup_application = _count_cleanup
@@ -354,7 +392,7 @@ def _after_load(name: str, module: types.ModuleType) -> None:
         orig_init = module.Application.initialize
 
         async def _observe_init(self):
-            _event("application_initialize_called")
+            _event("application_initialize_called", admission_state=_admission_state())
             try:
                 await orig_init(self)
             except Exception as exc:
@@ -362,25 +400,38 @@ def _after_load(name: str, module: types.ModuleType) -> None:
                     "application_initialize_failed",
                     exc_name=type(exc).__name__,
                     initialized=_flag_app(self),
+                    admission_state=_admission_state(),
                 )
                 raise
-            _event("application_initialize_ok", initialized=_flag_app(self))
+            _event(
+                "application_initialize_ok",
+                initialized=_flag_app(self),
+                admission_state=_admission_state(),
+            )
 
         module.Application.initialize = _observe_init
 
         orig_start = module.Application.start
 
         async def _observe_start(self):
-            _event("application_start_called")
+            _event("application_start_called", admission_state=_admission_state())
             if _scenario() == "fail_start":
                 _event("application_start_injected_failure")
                 raise RuntimeError("injected application start failure")
             try:
                 await orig_start(self)
             except Exception as exc:
-                _event("application_start_failed", exc_name=type(exc).__name__)
+                _event(
+                    "application_start_failed",
+                    exc_name=type(exc).__name__,
+                    admission_state=_admission_state(),
+                )
                 raise
-            _event("application_start_ok", running=bool(getattr(self, "running", False)))
+            _event(
+                "application_start_ok",
+                running=bool(getattr(self, "running", False)),
+                admission_state=_admission_state(),
+            )
 
         module.Application.start = _observe_start
 

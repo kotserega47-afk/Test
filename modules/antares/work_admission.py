@@ -8,7 +8,6 @@ import logging
 import threading
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Callable
 
 from core.job_dispatch import get_job_executor
 from core.job_runner import Actor, request_job
@@ -30,6 +29,10 @@ class AdmissionState(enum.Enum):
 
 class AdmissionTransitionError(RuntimeError):
     """Illegal bind/open/seal transition."""
+
+
+class AdmissionStopError(RuntimeError):
+    """Stop requested from a non-loop thread without an owner loop."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,86 @@ class WorkAdmission:
             return AdmissionAccepted(future)
 
 
+class AdmittedJob:
+    """Observe an accepted Future immediately; do not cancel it with the waiter."""
+
+    def __init__(self, future: Future, logger: object, loop: asyncio.AbstractEventLoop) -> None:
+        self.future = future
+        self._logger = logger
+        self._loop = loop
+        self._af: asyncio.Future = loop.create_future()
+        self._lock = threading.Lock()
+        self._job_logged = False
+        self._error: BaseException | None = None
+        self._result = None
+        self._done = threading.Event()
+        future.add_done_callback(self._on_done)
+
+    def _on_done(self, cf: Future) -> None:
+        try:
+            value = cf.result()
+        except Exception as exc:
+            with self._lock:
+                self._error = exc
+                log_now = not self._job_logged
+                self._job_logged = True
+                self._done.set()
+            if log_now:
+                self._logger.exception("admitted wallet job failed")
+            self._publish(None, exc)
+            return
+        with self._lock:
+            self._result = value
+            self._done.set()
+        self._publish(value, None)
+
+    def _publish(self, value, exc: BaseException | None) -> None:
+        def _set() -> None:
+            if self._af.done():
+                return
+            if exc is not None:
+                self._af.set_exception(exc)
+            else:
+                self._af.set_result(value)
+
+        try:
+            self._loop.call_soon_threadsafe(_set)
+        except RuntimeError:
+            pass
+
+    @property
+    def job_error(self) -> BaseException | None:
+        with self._lock:
+            return self._error
+
+    def job_logged(self) -> bool:
+        with self._lock:
+            return self._job_logged
+
+    def _take(self):
+        with self._lock:
+            if not self._done.is_set():
+                raise RuntimeError("admitted job is not finished")
+            if self._error is not None:
+                raise self._error
+            return self._result
+
+    async def wait(self):
+        try:
+            if self._loop.is_closed() or (self._done.is_set() and not self._af.done()):
+                await asyncio.to_thread(self._done.wait)
+                return self._take()
+            return await self._af
+        except asyncio.CancelledError:
+            raise
+
+
+def watch_admitted_future(future: Future, logger: object) -> AdmittedJob:
+    """Attach observation before any await on the caller."""
+
+    return AdmittedJob(future, logger, asyncio.get_running_loop())
+
+
 def bound_admission() -> WorkAdmission | None:
     return _bound
 
@@ -123,61 +206,20 @@ def request_antares_stop(
     *,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    """Seal first, then wake the lifecycle Event on the loop thread."""
+    """Seal first, then wake ``stop`` on the owner loop thread only."""
 
     admission.seal()
-    target = loop
-    running: asyncio.AbstractEventLoop | None
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:
         running = None
-    if target is None:
-        target = running
-    if running is not None and running is target:
+    if running is not None:
+        if loop is not None and loop is not running:
+            raise AdmissionStopError("request_antares_stop loop is not the running loop")
         stop.set()
         return
-    if target is not None:
-        target.call_soon_threadsafe(stop.set)
-        return
-    stop.set()
-
-
-def observe_admitted_future(future: Future, logger: object) -> Callable[[Future], None]:
-    def _done(cf: Future) -> None:
-        try:
-            cf.result()
-        except Exception:
-            logger.exception("admitted job failed after waiter stopped")
-
-    return _done
-
-
-async def await_admitted_future(future: Future, logger: object):
-    """Wait for an accepted concurrent Future without cancelling it."""
-
-    loop = asyncio.get_running_loop()
-    af: asyncio.Future = loop.create_future()
-
-    def _done(cf: Future) -> None:
-        if af.done():
-            observe_admitted_future(cf, logger)(cf)
-            return
-        try:
-            af.set_result(cf.result())
-        except Exception as exc:
-            af.set_exception(exc)
-
-    def _schedule(cf: Future) -> None:
-        try:
-            loop.call_soon_threadsafe(_done, cf)
-        except RuntimeError:
-            observe_admitted_future(cf, logger)(cf)
-
-    future.add_done_callback(_schedule)
-    try:
-        return await af
-    except asyncio.CancelledError:
-        if not future.done():
-            future.add_done_callback(observe_admitted_future(future, logger))
-        raise
+    if loop is None:
+        raise AdmissionStopError(
+            "request_antares_stop from a non-loop thread requires owner loop"
+        )
+    loop.call_soon_threadsafe(stop.set)

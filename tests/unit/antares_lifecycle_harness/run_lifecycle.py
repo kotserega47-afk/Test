@@ -273,7 +273,18 @@ async def _run_helper(app, *, enable_polling: bool) -> object:
         helpers.append(asyncio.create_task(_cancel_during_initialize_cleanup(), name="sandbox-cancel-init-cleanup"))
 
     async def _lifecycle():
-        return await run_ptb_lifecycle(app, stop=stop, enable_polling=enable_polling)
+        admission = None
+        if os.environ.get("ANTARES_LC_ADMISSION", "").strip() == "1":
+            from modules.antares.work_admission import WorkAdmission
+
+            admission = WorkAdmission()
+            _event("admission_created")
+        return await run_ptb_lifecycle(
+            app,
+            stop=stop,
+            enable_polling=enable_polling,
+            admission=admission,
+        )
 
     task = asyncio.create_task(_lifecycle(), name="sandbox-run_ptb_lifecycle")
     helper_exc: BaseException | None = None
