@@ -2,13 +2,14 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | план review пройден (HEAD `b76a377…`); runtime не менялся; сервисный lifecycle не реализован; merge нет |
+| **Статус** | план review пройден (HEAD `b76a377…`); diagnostic `run` реализован в TASK-20 (не выпущен); сервисный lifecycle не реализован; merge нет |
 | **База** | закрытие TASK-18 `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0` (review HEAD `2c6eeac34940f70413be70da35ddbc81e720ec83`; тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`) |
 | **План entry** | [MODULAR_REORG_ANTARES_ENTRYPOINT.md](MODULAR_REORG_ANTARES_ENTRYPOINT.md) § 3–4 |
 | **Сборка** | [MODULAR_REORG_ANTARES_ASSEMBLY.md](MODULAR_REORG_ANTARES_ASSEMBLY.md) |
+| **Application без polling** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) — TASK-21, к review |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Это обследование **исходников** на SHA закрытия TASK-18. Живой workbook, Railway env и production-настройки **не** читались. Неизвестное — **UNKNOWN**. Isolated `python -m apps.antares` сейчас только boot: сборка и **exit 0**. Polling, worker, schedules и sender **не** стартуют. Этот документ — контракт будущего **run** и остановки; runtime, `rules_provider` и mixed gate в TASK-19 **не** менять.
+Это обследование **исходников** на SHA закрытия TASK-18; diagnostic `run` добавлен TASK-20 (не выпущен). Живой workbook, Railway env и production-настройки **не** читались. Неизвестное — **UNKNOWN**. Polling, worker, schedules и sender **не** стартуют. Runtime, `rules_provider` и mixed gate в docs TASK-19/21 **не** менять.
 
 ---
 
@@ -35,21 +36,22 @@
 | Команда | Поведение | Когда |
 |---------|-----------|--------|
 | `python -m apps.antares` (без аргументов) или явный `boot` | **как TASK-18**: сборка, диагностика, **exit 0**; workbook **не** читается; Application/sender/worker/schedules/polling **нет** | сохранить сразу, не ломать |
-| `python -m apps.antares run` | **первый code PR:** тот же prefix + проверка **существующего локального** `.xlsx` + snapshot; снова **exit 0**. Не сервис. | первый code PR |
+| `python -m apps.antares run` | TASK-20: prefix + локальный `.xlsx` + snapshot + exit 0. Не сервис. | реализован, не выпущен |
+| `python -m apps.antares run` (следующий code) | после успешного snapshot: `Application.build()` + Antares handlers; без initialize/polling; exit 0 | TASK-21 code (не этот docs) |
 | поздний `run` (после этого подэтапа) | snapshot → Application → worker → filtered schedules → polling | отдельные code PR |
 | иной argv | отказ, exit ≠ 0, без run | первый code PR |
 
 Idle без polling **не** вводить. Успешный boot и успешный первый `run` **завершают** процесс.
 
-Поздние шаги живого сервиса (ENTRYPOINT § 4), **не** первый code PR и **не** этот docs PR:
+Поздние шаги живого сервиса (ENTRYPOINT § 4):
 
-1. локальная проверка workbook (этот подэтап)
-2. Application + Antares handlers
+1. локальная проверка workbook — TASK-20, не выпущено
+2. Application + Antares handlers без polling — [APPLICATION](MODULAR_REORG_ANTARES_APPLICATION.md) (docs TASK-21; code отдельно)
 3. worker (lazy как сейчас допустимо)
 4. schedule thread **с фильтром семи keys до dispatch**
 5. polling
 
-Удалённый источник workbook и допустимость stale reuse **перед настоящим запуском сервиса** — отдельное будущее решение (§ 4.3). В первый code PR **не** входят.  
+Удалённый источник workbook и допустимость stale reuse **перед настоящим запуском сервиса** — отдельное будущее решение (§ 4.3). В TASK-21 docs/code **не** входят.  
 
 ---
 
@@ -231,7 +233,7 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 | assemble | AccessRules/logger; частичный `JOB_REGISTRY` возможен при ошибке после bind — TASK-16: неуспех не считать сборкой | **запрет run**; проверка файла и snapshot **не** вызываются |
 | нет/не файл `RULES_XLSX_PATH` | сборка ok | явный отказ **до** snapshot; нет Dropbox/`_RULES_LOCAL` |
 | snapshot / publish reject | сборка + local file | exit ≠ 0; **нет** успешной диагностики; Application/threads **не** создавать |
-| Application.build / add_handler | snapshot ok; Application может существовать | если объект создан — вызвать доступный `shutdown` если уже initialize; иначе процесс exit. Не стартовать polling/schedule |
+| Application.build / add_handler | snapshot ok; Application может существовать | **не** `Application.shutdown()` после одного `build()` (no-op без initialize — PTB 22.8). Не initialize ради cleanup. Процесс exit. Не стартовать polling/schedule. См. APPLICATION.md |
 | worker start | Application без polling | worker сейчас no-op; при появлении start — join если API есть, иначе log «нет stop» |
 | schedule thread | polling ещё нет | нужен stop event **до** start thread; не стартовать thread без event, если этот PR вводит loop |
 | polling | все предыдущие | выход из `run_polling`; затем обратный порядок **только** для API, которые уже есть |
@@ -249,7 +251,7 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 | `JOB_REGISTRY` / handlers bind | `assemble_antares` | нет unbind | — | не clear() при отказе (уже TASK-16) |
 | Local workbook path | env `RULES_XLSX_PATH` после dotenv | — | конструктор AccessRules путь **не** хранит | проверить файл **до** snapshot |
 | Workbook snapshot | `AccessRules.get_snapshot` / `get_snapshot_v2` | cache `invalidate` | подтверждение Dropbox freshness | только local file на этом подэтапе |
-| PTB `Application` | `Application.builder().token().build()`; `run_polling` | PTB `stop`/`shutdown`; mixed не вызывает | обёртка isolated | создавать **после** snapshot; на ошибке после build — `shutdown` если initialize был |
+| PTB `Application` | `Application.builder().token().concurrent_updates(True).build()` | `stop`/`shutdown` только после initialize; mixed не вызывает | обёртка isolated | создавать **после** snapshot; build-only → процесс exit, **не** initialize |
 | Polling / getUpdates | `run_polling` | выход из polling / `updater.stop` | Isolated не стартует | не в первом code PR |
 | Sender loop + thread + queue + `Bot` | **import** `telegram_bot` | **нет** | stop/join/drain | не импортировать на `run` prefix; stop — отдельный PR **после** появления API |
 | Job executor | lazy `get_job_executor` | `_reset_job_executor_for_tests` only | production shutdown | не dispatch на первом `run` prefix; позже вынести shutdown из test helper |
@@ -307,9 +309,9 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 - Смешанный `scheduler.py` + `PROJECT_PROFILE=antares` → exit 2.
 - Неизвестный argv → отказ.
 
-Почему это минимальный законченный кусок: отделяет boot от `run` и фиксирует источник правил без владения потоками и без смены `rules_provider`. Следующие code PR: Application+handlers без polling; polling+stop PTB; worker; schedules с фильтром **и** stop event; **отдельно** — remote source / stale reuse (§ 4.3).
+Почему это минимальный законченный кусок: отделяет boot от `run` и фиксирует источник правил без владения потоками и без смены `rules_provider`. Следующий code: Application+handlers без polling ([APPLICATION](MODULAR_REORG_ANTARES_APPLICATION.md)); далее polling+stop PTB; worker; schedules с фильтром **и** stop event; **отдельно** — remote source / stale reuse (§ 4.3).
 
-Не включать в первый code PR: изменение общей политики `rules_provider`; mixed gate; `JOB_ACCEPT`; Railway; cutover; sender shutdown; split `job_runner`; отдельный prod `STATE_DIR`; живой Telegram/Dropbox; Application.
+Не включать в code TASK-20: изменение общей политики `rules_provider`; mixed gate; `JOB_ACCEPT`; Railway; cutover; sender shutdown; split `job_runner`; отдельный prod `STATE_DIR`; живой Telegram/Dropbox; Application.
 
 ---
 
@@ -344,9 +346,7 @@ Workbook: **синтетический** sandbox `.xlsx` (как C5 baseline / c
 | R8 | sender / mixed `tg_commands` / raccoon | не импортировались |
 | R9 | mixed `scheduler.py` + `antares` | exit 2 (без изменений) |
 
-Позже (не первый code PR): отказ после Application.build; shutdown; filter schedules; второй polling.
-
-Docs-only TASK-19: pytest **не** требуется.
+Позже (code после TASK-20): отказ после Application.build; состав handlers; filter schedules; polling — см. APPLICATION.md. Pytest в docs TASK-19/21 **не** требуется.
 
 ---
 
