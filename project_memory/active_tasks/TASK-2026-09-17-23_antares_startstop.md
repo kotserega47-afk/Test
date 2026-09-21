@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; **не** «пройден»; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-22 (PR #25, review `d9592ff0a04480433d18455726ca7f66f76d09bf`, закрытие `8a3fd5a2fb6d4738997b5463bebd8392e8db4f90`), `ops/MODULAR_REORG_ANTARES_STARTSTOP.md` |
-| **PR** | Draft (создаётся) `feat/task-2026-09-17-23-antares-startstop`, base `feat/task-2026-09-17-22-antares-application-build` |
+| **PR** | Draft [#26](https://github.com/deniskotdavydov1991-wq/Test/pull/26) `feat/task-2026-09-17-23-antares-startstop`, base `feat/task-2026-09-17-22-antares-application-build` |
 | **Риск** | low: только документы |
 
 Контракт initialize / start / остановки **подготовлен к review**. Runtime не менялся. Boot и диагностический `run` сохраняются. Live polling в `run` **не** добавляется. Выбран **ручной async** lifecycle, не `run_polling`. Pytest **не** запускался. Статус: не «review пройден».
@@ -54,4 +54,4 @@ runtime/тесты TASK-23; live Telegram; смена `run`; mixed gate; schedul
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | контракт start/stop подготовлен к review |
+| 2026-09-21 | контракт start/stop подготовлен к review; Draft PR #26 |
