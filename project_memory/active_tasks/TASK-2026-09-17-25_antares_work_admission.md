@@ -9,7 +9,7 @@
 | **PR** | Draft [#28](https://github.com/deniskotdavydov1991-wq/Test/pull/28) `feat/task-2026-09-17-25-antares-work-admission`, base `feat/task-2026-09-17-24-antares-ptb-lifecycle` |
 | **Риск** | low: только документы |
 
-Контракт допуска новой работы isolated Antares **подготовлен к review**. Runtime **не** менялся. Pytest **не** запускался. Допуск **не** реализован. PTB lifecycle TASK-24 **не выпущен**.
+Контракт допуска **к review, не закрыт**. Уточнены состояния unbound vs bound/closed, атомарный submit, узкий первый code scope. Runtime **не** менялся. Pytest **не** запускался. Допуск **не** реализован.
 
 ---
 
@@ -23,15 +23,15 @@
 
 - [x] Карта: TG update → callback; dispatch → `request_job`; прямые registry/Auto-Enable; ingest → worker; будущие schedules и внутренний re-enqueue
 - [x] Допуск не сведён к `JOB_REGISTRY`
-- [x] Владелец: isolated process; unbound default; open после start; seal навсегда на этот запуск
-- [x] Слои: новые updates / начало callback / постановка / уже принятая работа
-- [x] `try_accept` + enqueue под lock; несинхронизированный bool недостаточен
-- [x] Closed replies ≠ ACL и ≠ busy/unknown job
-- [x] Нет обещания cancel running jobs
-- [x] Mixed unbound без изменения поведения
-- [x] Нет production `JOB_ACCEPT` env в этом контракте
-- [x] Один будущий code этап; polling/sender/worker join/executor shutdown — отдельные зависимости
+- [x] Четыре состояния: unbound / bound/closed / open / sealed; isolated bind до initialize; ошибка start ≠ unbound
+- [x] Единица принятия: `executor.submit` под коротким lock; не lock через await/reply/весь job; не обёртка вокруг `dispatch_job_async`
+- [x] «Запускаю» после успешного submit на первом пути (явная смена порядка)
+- [x] Первый code: примитив + только `/run_wallet`; прочие пути — явные обходы
+- [x] Внутренний Auto-Enable/job re-enqueue — следующий этап, не глобальный запрет
+- [x] `request_antares_stop`: `seal()` затем `stop.set()`; `Event.set()` сам не закрывает допуск
+- [x] Гонка: seal победил / принятие победило (Future = D); bound/closed и mixed отдельно
 - [ ] реализация допуска (отдельное задание)
+- [ ] закрытие TASK-25 (намеренно открыто)
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -56,3 +56,4 @@ runtime/тесты TASK-25; live polling; sender stop; worker join; executor shu
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | контракт допуска подготовлен к review; Draft PR #28 |
+| 2026-09-21 | уточнены состояния bind/closed, атомарный submit, stop vs seal, узкий `/run_wallet` scope |
