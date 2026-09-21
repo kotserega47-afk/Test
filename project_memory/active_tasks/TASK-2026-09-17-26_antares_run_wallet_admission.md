@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-25 (PR #28, review `eda7144…`, закрытие `a33df9c653422da5948e75178131de6fcd870a5b`), `modules/antares/work_admission.py` |
-| **PR** | Draft (номер после создания) `feat/task-2026-09-17-26-antares-run-wallet-admission`, base `feat/task-2026-09-17-25-antares-work-admission` |
+| **PR** | Draft [#29](https://github.com/deniskotdavydov1991-wq/Test/pull/29) `feat/task-2026-09-17-26-antares-run-wallet-admission`, base `feat/task-2026-09-17-25-antares-work-admission` |
 | **Риск** | medium: isolated `/run_wallet` + helper bind/open/seal; mixed unbound без изменений |
 
 Реализованы `WorkAdmission` и isolated `/run_wallet`. Остальные команды, ingest, scheduler, mixed gate, sender/worker stop **не** менялись. Serve/polling **нет**. `JOB_ACCEPT` env **нет**. PR Draft. Не выпущено.
@@ -52,4 +52,4 @@
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | реализация WorkAdmission + isolated `/run_wallet`; к review |
+| 2026-09-21 | реализация WorkAdmission + isolated `/run_wallet`; Draft PR #29 |
