@@ -50,7 +50,7 @@
 | [TASK-2026-09-17-19](TASK-2026-09-17-19_antares_lifecycle.md) | Контракт lifecycle: review пройден (`b76a377…`), runtime не менялся, merge нет (PR #22) |
 | [TASK-2026-09-17-20](TASK-2026-09-17-20_antares_local_rules.md) | Диагностический `run` по локальному workbook: review пройден (`8b42e4d…`), не выпущен, merge нет (PR #23) |
 | [TASK-2026-09-17-21](TASK-2026-09-17-21_antares_application.md) | Контракт Application + handlers без polling: review пройден (`777a52f…`), runtime не менялся, merge нет (PR #24) |
-| [TASK-2026-09-17-22](TASK-2026-09-17-22_antares_application_build.md) | Isolated `run` Application build-only: к review, не выпущено, merge нет (PR #25) |
+| [TASK-2026-09-17-22](TASK-2026-09-17-22_antares_application_build.md) | Isolated `run` Application build-only: review пройден (`d9592ff…`), не выпущено, merge нет (PR #25) |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

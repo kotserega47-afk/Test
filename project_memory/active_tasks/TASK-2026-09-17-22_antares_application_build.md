@@ -3,15 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-22 |
-| **Статус** | review (к review; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-21 (PR #24, review `777a52f0e65bdc546185e45b023431c0c9c3d3c5`, закрытие `c83d3d6648c0d557fbe7bacf583c5e36b7ec1294`), `ops/MODULAR_REORG_ANTARES_APPLICATION.md` |
 | **PR** | Draft [#25](https://github.com/deniskotdavydov1991-wq/Test/pull/25) `feat/task-2026-09-17-22-antares-application-build`, base `feat/task-2026-09-17-21-antares-application` |
 | **Риск** | medium: isolated `run` строит реальный PTB Application без сети |
 
-После успешного локального snapshot `python -m apps.antares run` строит `Application` и вешает `assembled.handlers`, затем печатает одну диагностику и **завершает процесс**. Boot без argv сохранён. initialize/start/get_me/polling/JobQueue.start **не** вызываются. Sender/worker/schedules **нет**. Не выпущено. **К review**, не «review пройден».
+После успешного локального snapshot `python -m apps.antares run` строит `Application` и вешает `assembled.handlers`, затем печатает одну диагностику и **завершает процесс**. Boot без argv сохранён. initialize/start/get_me/polling/JobQueue.start **не** вызываются. Sender/worker/schedules **нет**. Review **пройден** на HEAD `d9592ff…`. GPT смотрел код/diff, наборы **не** запускал. **Реализовано, не выпущено.** PR #25 остаётся Draft.
 
-Завершение процесса — граница ресурсов только для одноразовой диагностики, не graceful shutdown сервиса.
+Завершение процесса — граница ресурсов только для одноразовой диагностики, **не** graceful shutdown сервиса.
 
 ---
 
@@ -39,8 +39,9 @@
 - [x] Отказ сборки/пути/snapshot не достигает build
 - [x] Отказ build / add_handler: конкретная причина, нет success, процесс завершается
 - [x] Нет initialize/start/get_me/polling/JobQueue.start/shutdown ради lifecycle
-- [ ] GPT review (ещё не пройден)
+- [x] GPT review HEAD `d9592ff…`: код/diff; наборы не запускал; блокирующих нет
 - [ ] merge/deploy (намеренно открыто)
+- [ ] TASK-23 контракт initialize/polling/stop (отдельное задание)
 
 ---
 
@@ -60,7 +61,7 @@ py -3.12 -m pytest tests/unit/test_antares_boot.py tests/unit/test_project_profi
 py -3.12 -m pytest tests/unit/test_antares_boot.py -q --tb=line -W default
 ```
 
-**33 passed, 0 failed, 0 skipped, exit 0.** Новых ResourceWarning / httpx unclosed client на успешном `run` **не** было. В stderr ребёнка — прежний fail-closed лог WalletEditor ingest (`WALLET_EDITOR_ALLOWED_CHAT_IDS` пуст); предупреждения глобально не глушились.
+**33 passed, 0 failed, 0 skipped, exit 0.** Флаг `-W default` действовал на **родительский** pytest, не передавался в дочерний `python -m apps.antares`. Им **нельзя** заявлять проверку `ResourceWarning` / httpx unclosed client в ребёнке. В stderr успешного `run` (отдельный захват Cursor) был прежний fail-closed лог WalletEditor ingest (`WALLET_EDITOR_ALLOWED_CHAT_IDS` пуст). Предупреждения глобально не глушились. Дополнительный прогон ради закрытия **не** делался.
 
 GPT этот набор **не** запускал.
 
@@ -71,7 +72,7 @@ GPT этот набор **не** запускал.
 | Кто | Что |
 |-----|-----|
 | Cursor | 81 passed (33 boot/run + parser/gate) на этом PR |
-| GPT | ещё не ревьюил |
+| GPT | Код/diff HEAD `d9592ff…`; тесты не запускал |
 
 ---
 
@@ -86,3 +87,4 @@ initialize/polling; worker; schedules; sender; `requirements.txt`; mixed gate; R
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | Application build-only реализован; Draft PR #25; к review |
+| 2026-09-21 | GPT review HEAD `d9592ff…`: код принят, не выпущен; 81/33 passed Cursor; GPT наборы не запускал; процесс exit ≠ graceful shutdown |
