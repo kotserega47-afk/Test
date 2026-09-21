@@ -6,7 +6,7 @@
 | **Survey** | [MODULAR_REORG_SURVEY.md](MODULAR_REORG_SURVEY.md) |
 | **ADR** | [MODULAR_REORG_ADR.md](MODULAR_REORG_ADR.md) |
 | **Допуск** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
-| **Первый переход Antares** | § «Конечный план первого перехода» ниже; не путать с первым code scope TASK-25 (`/run_wallet` only) |
+| **Первый переход Antares** | § «Конечный план первого перехода» ниже; не путать с первым code scope TASK-26 (`/run_wallet` only, review `960bf69…`) |
 
 Merge/deploy **намеренно** не входят в TASK-01…25. Merge в `test_main` может перезапустить Test — см. § Автодеплой.
 
@@ -39,8 +39,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-23 start/stop plan | docs, PR #26, close `94951c6…` | pytest не запускался | **нет** |
 | TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
 | TASK-25 допуск | docs, review пройден, PR #28, HEAD `eda7144…`; 1д=8ч; mixed-stop проверка 2–4д отдельно; cutover **не** к исполнению | pytest не требовался | **нет** |
-| TASK-26 run_wallet admission | `WorkAdmission` + isolated `/run_wallet`; Draft PR #29; **не выпущено** | **нет** |
-| Следующая | остальные пути допуска (A); mixed-stop отдельно; serve отдельно | — |
+| TASK-26 run_wallet admission | код, PR #29, review `960bf69516434cb7882de96263a78dfdf1ac8e1f`; защищён только `/run_wallet`; **не выпущено** | Cursor **62** / **52 passed**, exit 0; GPT код/тесты + минимальный `AdmittedJob` Python **3.12.14** PASS; GPT полные pytest **не** запускал | **нет** |
+| Следующая | остальные Antares dispatch-команды (TASK-27); mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -56,7 +56,7 @@ Draft PR #4…#29 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**Следующий code после TASK-26:** остальные пути допуска (A). Не serve, не полный переход, не mixed-stop.
+**Следующий code после закрытия TASK-26:** остальные Antares dispatch-команды (TASK-27). Не serve, не полный переход, не mixed-stop.
 
 ---
 

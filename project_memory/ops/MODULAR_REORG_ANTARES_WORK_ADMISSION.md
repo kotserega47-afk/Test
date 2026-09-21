@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | review пройден (только документы; runtime не менялся; pytest не запускался; реализация — TASK-26; cutover-план **не** к исполнению) |
+| **Статус** | контракт TASK-25 закрыт; runtime `/run_wallet` — TASK-26 review `960bf69516434cb7882de96263a78dfdf1ac8e1f` (не выпущено); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
