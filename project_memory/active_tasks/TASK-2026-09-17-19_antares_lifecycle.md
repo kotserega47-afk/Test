@@ -3,13 +3,14 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-19 |
-| **Статус** | review (ожидает GPT; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-18 (PR #21, review `2c6eeac34940f70413be70da35ddbc81e720ec83`, закрытие `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0`, тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`), `ops/MODULAR_REORG_ANTARES_LIFECYCLE.md`, `ops/MODULAR_REORG_ANTARES_ENTRYPOINT.md` § 4 |
 | **PR** | Draft [#22](https://github.com/deniskotdavydov1991-wq/Test/pull/22) `feat/task-2026-09-17-19-antares-lifecycle`, base `feat/task-2026-09-17-18-antares-boot` |
+| **HEAD (принятый review)** | `b76a377bacc437e72b066f4ccb12f7fc29557b7c` |
 | **Риск** | low: только документы |
 
-Контракт запуска и остановки isolated Antares **уточнён, к review**. Runtime, `rules_provider`, mixed gate, Railway и профили **не** менялись. `python -m apps.antares` остаётся boot exit 0. Первый будущий `run` — диагностика локального workbook с завершением процесса. Polling, worker, schedules, sender, `JOB_ACCEPT` и cutover **не** реализованы. Review **не** отмечать пройденным.
+Контракт запуска и остановки isolated Antares **принят**. Runtime, `rules_provider`, mixed gate, Railway и профили **не** менялись. Pytest **не** запускался. Настоящий lifecycle сервиса (Application, polling, worker, schedules, sender) **не** реализован. Review **пройден** на HEAD `b76a377…`. PR #22 остаётся Draft. Реализация диагностического `run` — TASK-20.
 
 Опора: принятый план entrypoint TASK-17 и фактический boot TASK-18.
 
@@ -33,9 +34,9 @@
 - [x] Отдельное будущее решение: remote source и stale reuse до запуска сервиса
 - [x] Таблица start/stop ресурсов; фильтр семи keys — не первый code
 - [x] Контракт subprocess-тестов (sandbox audit/identity)
-- [ ] GPT review (ещё не пройден)
-- [ ] merge/deploy (намеренно открыто)
-- [ ] code PR argv + local snapshot (отдельное задание)
+- [x] GPT review HEAD `b76a377…`: план принят; runtime не менялся; тесты не запускал
+- [ ] merge/deploy PR #22 (намеренно открыто)
+- [ ] code PR argv + local snapshot / TASK-20 (отдельное задание)
 
 ---
 
@@ -44,7 +45,7 @@
 | Кто | Что |
 |-----|-----|
 | Cursor | Документы по исходникам; pytest **не** требовался |
-| GPT | review плана **ещё не** пройден |
+| GPT | Проверил план HEAD `b76a377…`. Тесты **не** запускал. |
 
 ---
 
@@ -60,3 +61,4 @@ runtime/тесты TASK-19; реализация `run` в этом PR; смен�
 |------|---------|
 | 2026-09-20 | контракт lifecycle подготовлен к review; Draft PR #22 |
 | 2026-09-21 | уточнён первый подэтап: local `RULES_XLSX_PATH`, пределы `force_sync`/`STRICT`, тесты sandbox; review не пройден |
+| 2026-09-21 | GPT review HEAD `b76a377…`: план принят; runtime не менялся; pytest не запускался; сервисный lifecycle не реализован |

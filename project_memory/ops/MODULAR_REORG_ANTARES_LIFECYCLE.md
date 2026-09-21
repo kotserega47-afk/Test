@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | PROPOSED (только документы; runtime не менялся) |
+| **Статус** | план review пройден (HEAD `b76a377…`); runtime не менялся; сервисный lifecycle не реализован; merge нет |
 | **База** | закрытие TASK-18 `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0` (review HEAD `2c6eeac34940f70413be70da35ddbc81e720ec83`; тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`) |
 | **План entry** | [MODULAR_REORG_ANTARES_ENTRYPOINT.md](MODULAR_REORG_ANTARES_ENTRYPOINT.md) § 3–4 |
 | **Сборка** | [MODULAR_REORG_ANTARES_ASSEMBLY.md](MODULAR_REORG_ANTARES_ASSEMBLY.md) |
