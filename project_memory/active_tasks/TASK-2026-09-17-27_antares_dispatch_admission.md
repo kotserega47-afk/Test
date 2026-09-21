@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-26 (PR #29, review `960bf69516434cb7882de96263a78dfdf1ac8e1f`, закрытие `f3ed9e24c23322bc2a53c8f92efb2321aa6cdbba`) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-27-antares-dispatch-admission`, base `feat/task-2026-09-17-26-antares-run-wallet-admission` |
+| **PR** | Draft [#30](https://github.com/deniskotdavydov1991-wq/Test/pull/30) `feat/task-2026-09-17-27-antares-dispatch-admission`, base `feat/task-2026-09-17-26-antares-run-wallet-admission` |
 | **Риск** | medium: isolated шесть dispatch-команд через общий admission; mixed unbound без изменений |
 
 Один общий isolated-путь для `/run_wallet`, `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh`. Registry/Auto-Enable/reload, ingest, schedules, internal enqueue **не** подключены. Serve/polling **нет**. `JOB_ACCEPT` **нет**. PR Draft. Не выпущено.

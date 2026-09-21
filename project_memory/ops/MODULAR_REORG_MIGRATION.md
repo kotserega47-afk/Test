@@ -40,7 +40,7 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
 | TASK-25 допуск | docs, review пройден, PR #28, HEAD `eda7144…`; 1д=8ч; mixed-stop проверка 2–4д отдельно; cutover **не** к исполнению | pytest не требовался | **нет** |
 | TASK-26 run_wallet admission | код, PR #29, review `960bf69516434cb7882de96263a78dfdf1ac8e1f`, close `f3ed9e24c23322bc2a53c8f92efb2321aa6cdbba`; защищён только `/run_wallet`; **не выпущено** | Cursor **62** / **52 passed**, exit 0; GPT код/тесты + минимальный `AdmittedJob` Python **3.12.14** PASS; GPT полные pytest **не** запускал | **нет** |
-| TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft; **не выпущено** | Cursor **90** (admission/handlers/dispatch/inventory/registration) / **52** lifecycle+boot, exit 0 | **нет** |
+| TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft PR #30; **не выпущено** | Cursor **90** (admission/handlers/dispatch/inventory/registration) / **52** lifecycle+boot, exit 0 | **нет** |
 | Следующая | ingest / прямые registry-ops / schedules; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
