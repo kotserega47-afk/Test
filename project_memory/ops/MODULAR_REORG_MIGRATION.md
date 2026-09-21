@@ -33,15 +33,16 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-20 local rules diagnostic | `python -m apps.antares run`: local xlsx + snapshot + exit 0; boot сохранён; review пройден (Draft PR #23, HEAD `8b42e4d…`; 78 passed `cd23a7a…`, 31 passed `8b42e4d…` Cursor 3.12.10); GPT код/diff, наборы не запускал; Application/polling нет; **не выпущено** | **нет** |
 | TASK-21 Application без запуска | план принят: после local snapshot — `Application.build()` + handlers; без initialize/polling; review пройден (Draft PR #24, HEAD `777a52f…`); GPT читал контракт, pytest не запускал; runtime не менялся | **нет** |
 | TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; review пройден (Draft PR #25, HEAD `d9592ff…`; 81 passed / 33 boot Cursor 3.12.10, PTB 22.8, httpx 0.28.1; job-queue extra нет); GPT код/diff, наборы не запускал; процесс exit ≠ graceful shutdown; **не выпущено** | **нет** |
-| TASK-23 start/stop plan | контракт ручного async initialize/start/stop; не `run_polling`; review пройден (Draft PR #26, HEAD `6540a36…`); GPT читал контракт, pytest не запускал; runtime не менялся; сервисный lifecycle не реализован | **нет** |
+| TASK-23 start/stop plan | контракт ручного async initialize/start/stop; не `run_polling`; review пройден (Draft PR #26, HEAD `6540a36…`); закрытие `94951c6…`; runtime не менялся | **нет** |
+| TASK-24 PTB lifecycle | `run_ptb_lifecycle` + sandbox queue `/whoami`; 91 passed Cursor 3.12.10, PTB 22.8, httpx 0.28.1; job-queue extra нет; к review; boot/run без helper | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | TASK-24: sandbox PTB lifecycle helper (code); план TASK-23 review пройден, не выпущен | — |
+| Следующая | TASK-24 к review (helper реализован, не выпущен); serve/polling отдельно | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 / #23 / #24 / #25 / #26 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 / #23 / #24 / #25 / #26 / TASK-24 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 
