@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; не принято; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-30 Draft PR #33 HEAD `1eefc54720ccd036451f7c3c0e7dadaedf6efb98` (**не** закрыт); [MODULAR_REORG_RULES_PUBLISH_GENERATION.md](../ops/MODULAR_REORG_RULES_PUBLISH_GENERATION.md) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-31-rules-publish-generation`, base `feat/task-2026-09-17-30-antares-reload-rules-admission` |
+| **PR** | Draft [#34](https://github.com/deniskotdavydov1991-wq/Test/pull/34) `feat/task-2026-09-17-31-rules-publish-generation`, base `feat/task-2026-09-17-30-antares-reload-rules-admission` |
 | **Риск** | low в этом PR (только docs); будущий code — high: общий `rules_provider` + `AccessRules` для mixed/Antares/Raccoon/WR |
 
 Контракт согласованной публикации snapshot/decision/stat/indexes и производного `AccessRules` снимка. Runtime **не** менялся. Pytest **не** требовался. Не «принято». TASK-30 остаётся blocked на review до code этого контракта.
