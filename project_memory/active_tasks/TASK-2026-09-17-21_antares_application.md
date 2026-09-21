@@ -6,7 +6,8 @@
 | **Статус** | review (подготовлено; **не** «пройден»; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-20 (PR #23, review `8b42e4daadbdcdd71a0843170d859ea98d190208`, закрытие `5bed1b0308775a769481409e18e20644b181967d`), `ops/MODULAR_REORG_ANTARES_APPLICATION.md`, `ops/MODULAR_REORG_ANTARES_LIFECYCLE.md` |
-| **PR** | Draft (создаётся этим заданием) `feat/task-2026-09-17-21-antares-application`, base `feat/task-2026-09-17-20-antares-local-rules` |
+| **PR** | Draft [#24](https://github.com/deniskotdavydov1991-wq/Test/pull/24) `feat/task-2026-09-17-21-antares-application`, base `feat/task-2026-09-17-20-antares-local-rules` |
+| **HEAD (к review)** | `5ced7cda2aa31d524a29b0188213dfbee15b67e5` |
 | **Риск** | low: только документы |
 
 Контракт следующего code: после успешного локального snapshot построить Telegram `Application` и повесить Antares handlers **без** initialize/start/polling. Runtime, mixed gate, Railway **не** менялись. Pytest **не** запускался. Application в процессе **не** создаётся этим PR. Статус: **подготовлено к review**, не «review пройден».
@@ -55,4 +56,4 @@ runtime/тесты TASK-21; реализация Application в этом PR; ini
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | контракт Application без запуска подготовлен к review |
+| 2026-09-21 | контракт Application без запуска подготовлен к review; Draft PR #24 |
