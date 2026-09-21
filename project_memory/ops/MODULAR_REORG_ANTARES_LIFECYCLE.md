@@ -6,7 +6,8 @@
 | **База** | закрытие TASK-18 `d1d11e308c1abc9b0a5ee4531c3249559b16c5a0` (review HEAD `2c6eeac34940f70413be70da35ddbc81e720ec83`; тесты `0603eb9ac42c3c04b282df6b38ed804b62db7307`) |
 | **План entry** | [MODULAR_REORG_ANTARES_ENTRYPOINT.md](MODULAR_REORG_ANTARES_ENTRYPOINT.md) § 3–4 |
 | **Сборка** | [MODULAR_REORG_ANTARES_ASSEMBLY.md](MODULAR_REORG_ANTARES_ASSEMBLY.md) |
-| **Application без polling** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) — TASK-21, review пройден (`777a52f…`) |
+| **Application без polling** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) — TASK-21/22, review пройден (`d9592ff…`), build-only не выпущен |
+| **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) — TASK-23, к review; ручной async, не `run_polling` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
 Это обследование **исходников** на SHA закрытия TASK-18; diagnostic `run` добавлен TASK-20 (не выпущен). Живой workbook, Railway env и production-настройки **не** читались. Неизвестное — **UNKNOWN**. Polling, worker, schedules и sender **не** стартуют. Runtime, `rules_provider` и mixed gate в docs TASK-19/21 **не** менять.
@@ -46,10 +47,11 @@ Idle без polling **не** вводить. Успешный boot и успеш
 Поздние шаги живого сервиса (ENTRYPOINT § 4):
 
 1. локальная проверка workbook — TASK-20, не выпущено
-2. Application + Antares handlers без polling — [APPLICATION](MODULAR_REORG_ANTARES_APPLICATION.md) (docs TASK-21; code отдельно)
-3. worker (lazy как сейчас допустимо)
-4. schedule thread **с фильтром семи keys до dispatch**
-5. polling
+2. Application + Antares handlers без polling — TASK-22, не выпущено
+3. Sandbox initialize/start/process_update/stop — [STARTSTOP](MODULAR_REORG_ANTARES_STARTSTOP.md) (docs TASK-23; code отдельно; **не** live polling)
+4. `serve` + getUpdates — после sandbox; не менять argv `run`
+5. worker / sender stop API и допуск заданий — до заявления graceful shutdown
+6. schedule thread **с фильтром семи keys до dispatch**
 
 Удалённый источник workbook и допустимость stale reuse **перед настоящим запуском сервиса** — отдельное будущее решение (§ 4.3). В TASK-21 docs/code **не** входят.  
 
