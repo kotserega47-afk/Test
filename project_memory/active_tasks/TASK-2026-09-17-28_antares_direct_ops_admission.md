@@ -35,6 +35,7 @@ Isolated `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` через 
 | Кто | Что |
 |-----|-----|
 | Cursor | `py -3.12 -m pytest tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py tests/test_job_dispatch.py tests/test_behavior_baseline_inventory.py tests/test_behavior_baseline_registration.py tests/unit/test_tg_registry_export.py` **120 passed**, exit 0; `tests/unit/test_wallet_editor_auto_enable_orchestrator.py -k cmd_auto_enable` **15 passed**, 6 deselected; `tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py` **52 passed**, exit 0; 3.12.10 |
+| Cursor | review-fix доказательств отказа: admission/handlers/dispatch/inventory/registration/export **120 passed**, exit 0; полный `test_wallet_editor_auto_enable_orchestrator.py` **21 passed**, exit 0. lifecycle/boot **не** перезапускались (production не менялся; **52 passed** на `a5836de…`) |
 | GPT | ещё не ревьюил |
 
 ---
@@ -50,3 +51,4 @@ registry replay, reload, ingest, schedules, internal Auto-Enable enqueue, drain/
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | isolated direct ops admission; Draft PR; статус **review** |
+| 2026-09-21 | review-fix: отказ допуска смотрит фактический `handlers` executor.submit; orchestrator изолирует STATE_DIR; TASK-28 не закрыт |

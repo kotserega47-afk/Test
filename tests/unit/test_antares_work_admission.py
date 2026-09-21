@@ -973,6 +973,41 @@ def _forbid_request_job(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("core.job_runner.request_job", _boom)
 
 
+def _forbid_direct_business(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+
+    def _builder(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append("builder")
+        raise AssertionError("build_registry_export_from_postgres must not run")
+
+    def _plan(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append("plan")
+        raise AssertionError("run_auto_enable_plan must not run")
+
+    def _run(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append("run")
+        raise AssertionError("run_auto_enable must not run")
+
+    monkeypatch.setattr(_BUILDER, _builder)
+    monkeypatch.setattr(_PLAN_ORCH, _plan)
+    monkeypatch.setattr(_RUN_ORCH, _run)
+    return calls
+
+
+def _observe_used_executor_submit(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Record submit on the executor handlers actually pass into admission."""
+
+    submits: list = []
+    executor = get_job_executor()
+
+    def _submit(fn, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        submits.append({"fn": fn, "args": args, "kwargs": kwargs})
+        raise AssertionError("executor.submit must not run for rejected direct ops")
+
+    monkeypatch.setattr(executor, "submit", _submit)
+    return submits
+
+
 def _wrap_job_executor_submit(monkeypatch: pytest.MonkeyPatch, recorded: list):
     executor = get_job_executor()
     orig = executor.submit
@@ -1154,10 +1189,8 @@ def test_isolated_direct_closed_sealed_no_start(
     monkeypatch: pytest.MonkeyPatch, callback, command, start
 ) -> None:
     _forbid_request_job(monkeypatch)
-    monkeypatch.setattr(
-        "modules.antares.work_admission.get_job_executor",
-        lambda: SimpleNamespace(submit=lambda *a, **k: (_ for _ in ()).throw(AssertionError())),
-    )
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
     handlers.bind_rules(_allow_direct(command))
     handlers.bind_logger(MagicMock())
     closed = WorkAdmission()
@@ -1168,8 +1201,12 @@ def test_isolated_direct_closed_sealed_no_start(
     assert update._replies == [ADMISSION_CLOSED_REPLY]
     update.message.reply_document.assert_not_awaited()
     assert all(start not in text for text in update._replies)
+    assert submits == []
+    assert business == []
 
     reset_antares_admission_for_tests()
+    _reset_job_executor_for_tests()
+    submits2 = _observe_used_executor_submit(monkeypatch)
     sealed = WorkAdmission()
     bind_antares_admission(sealed)
     sealed.open()
@@ -1179,6 +1216,9 @@ def test_isolated_direct_closed_sealed_no_start(
     asyncio.run(callback(update2, MagicMock()))
     assert update2._replies == [ADMISSION_CLOSED_REPLY]
     update2.message.reply_document.assert_not_awaited()
+    assert all(start not in text for text in update2._replies)
+    assert submits2 == []
+    assert business == []
 
 
 @pytest.mark.parametrize(
@@ -1192,11 +1232,9 @@ def test_isolated_direct_closed_sealed_no_start(
 def test_isolated_direct_acl_deny_no_submit(
     monkeypatch: pytest.MonkeyPatch, callback, command, start
 ) -> None:
-    submitted: list[int] = []
-    monkeypatch.setattr(
-        "modules.antares.work_admission.get_job_executor",
-        lambda: SimpleNamespace(submit=lambda *a, **k: submitted.append(1)),
-    )
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
     _open_bound()
 
     class _Empty:
@@ -1209,7 +1247,9 @@ def test_isolated_direct_acl_deny_no_submit(
     update.message.reply_document = AsyncMock()
     asyncio.run(callback(update, MagicMock()))
     assert update._replies == [deny_message("unknown_command", {})]
-    assert submitted == []
+    update.message.reply_document.assert_not_awaited()
+    assert submits == []
+    assert business == []
     assert all(start not in text for text in update._replies)
 
 
@@ -1342,20 +1382,14 @@ def test_isolated_direct_seal_before_handler_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start_cmd = threading.Event()
-    submitted = threading.Event()
-
-    def _submit(*args, **kwargs):  # noqa: ANN002, ANN003
-        submitted.set()
-        raise AssertionError("sealed handler must not submit")
-
-    monkeypatch.setattr(
-        "modules.antares.work_admission.get_job_executor",
-        lambda: SimpleNamespace(submit=_submit),
-    )
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
     admission = _open_bound()
     handlers.bind_rules(_allow_direct("auto_enable_run"))
     handlers.bind_logger(MagicMock())
     update = _update()
+    update.message.reply_document = AsyncMock()
     result: dict[str, object] = {}
 
     def _run() -> None:
@@ -1369,8 +1403,11 @@ def test_isolated_direct_seal_before_handler_submit(
     start_cmd.set()
     thread.join(timeout=5)
     assert not thread.is_alive()
-    assert submitted.is_set() is False
+    assert submits == []
+    assert business == []
     assert result["replies"] == [ADMISSION_CLOSED_REPLY]
+    assert all(_RUN_START not in text for text in result["replies"])
+    update.message.reply_document.assert_not_awaited()
 
 
 def test_unbound_direct_ops_keep_default_executor(

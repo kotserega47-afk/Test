@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,7 +25,30 @@ from integrations.wallet_editor_auto_enable_eligibility import (
     split_batches,
 )
 from integrations.wallet_editor_auto_enable_settings import AutoEnableSettings
+from integrations.wallet_editor_registry_db.connection import DatabaseNotConfiguredError
 from integrations.wallet_editor_registry_lifecycle import STATUS_K_VKLUCHENIYU
+
+
+@pytest.fixture(autouse=True)
+def _isolate_auto_enable_local_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Keep orchestrator tests off the working outbox and away from PG/network."""
+
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.connection.get_database_url",
+        lambda: None,
+    )
+
+    @contextmanager
+    def _blocked_connect(*, for_mirror: bool = False):
+        raise DatabaseNotConfiguredError("DATABASE_URL is not set")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry_db.connection.connect",
+        _blocked_connect,
+    )
 
 
 def _enabled_settings(**overrides) -> AutoEnableSettings:
