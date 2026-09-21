@@ -32,7 +32,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-19 Antares lifecycle plan | контракт start/stop; первый code = argv `run` + локальный `RULES_XLSX_PATH` + snapshot + exit 0; `force_sync`/`STRICT` не свежесть; review пройден (Draft PR #22, HEAD `b76a377…`); runtime/`rules_provider` не менялись; pytest не запускался; сервисный lifecycle **не** реализован | **нет** |
 | TASK-20 local rules diagnostic | `python -m apps.antares run`: local xlsx + snapshot + exit 0; boot сохранён; review пройден (Draft PR #23, HEAD `8b42e4d…`; 78 passed `cd23a7a…`, 31 passed `8b42e4d…` Cursor 3.12.10); GPT код/diff, наборы не запускал; Application/polling нет; **не выпущено** | **нет** |
 | TASK-21 Application без запуска | план принят: после local snapshot — `Application.build()` + handlers; без initialize/polling; review пройден (Draft PR #24, HEAD `777a52f…`); GPT читал контракт, pytest не запускал; runtime не менялся | **нет** |
-| TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; к review; **не выпущено** | **нет** |
+| TASK-22 Application build-only | `run`: snapshot → `Application.build()` + assembled.handlers; boot сохранён; без initialize/polling; к review (Draft PR #25); **не выпущено** | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
@@ -40,7 +40,7 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 / #23 / #24 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 / #23 / #24 / #25 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 

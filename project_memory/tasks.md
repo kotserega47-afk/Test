@@ -296,7 +296,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-19** | **review** | Plan Antares lifecycle; review passed (HEAD `b76a377`); runtime unchanged; service lifecycle not implemented; **not merged** | Draft PR #22 |
 | **TASK-2026-09-17-20** | **review** | Isolated `run`: local workbook snapshot + exit 0; review passed (HEAD `8b42e4d`); **not released / not merged** | Draft PR #23 |
 | **TASK-2026-09-17-21** | **review** | Plan Application + handlers without polling; review passed (HEAD `777a52f`); runtime unchanged; pytest not run; **not merged** | Draft PR #24 |
-| **TASK-2026-09-17-22** | **review** | Isolated `run` builds Application + handlers without polling; prepared for review; **not released / not merged** | Draft PR (this branch) |
+| **TASK-2026-09-17-22** | **review** | Isolated `run` builds Application + handlers without polling; prepared for review; **not released / not merged** | Draft PR #25 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

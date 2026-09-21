@@ -6,7 +6,7 @@
 | **Статус** | review (к review; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-21 (PR #24, review `777a52f0e65bdc546185e45b023431c0c9c3d3c5`, закрытие `c83d3d6648c0d557fbe7bacf583c5e36b7ec1294`), `ops/MODULAR_REORG_ANTARES_APPLICATION.md` |
-| **PR** | Draft (создаётся) `feat/task-2026-09-17-22-antares-application-build`, base `feat/task-2026-09-17-21-antares-application` |
+| **PR** | Draft [#25](https://github.com/deniskotdavydov1991-wq/Test/pull/25) `feat/task-2026-09-17-22-antares-application-build`, base `feat/task-2026-09-17-21-antares-application` |
 | **Риск** | medium: isolated `run` строит реальный PTB Application без сети |
 
 После успешного локального snapshot `python -m apps.antares run` строит `Application` и вешает `assembled.handlers`, затем печатает одну диагностику и **завершает процесс**. Boot без argv сохранён. initialize/start/get_me/polling/JobQueue.start **не** вызываются. Sender/worker/schedules **нет**. Не выпущено. **К review**, не «review пройден».
@@ -85,4 +85,4 @@ initialize/polling; worker; schedules; sender; `requirements.txt`; mixed gate; R
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | Application build-only реализован; к review |
+| 2026-09-21 | Application build-only реализован; Draft PR #25; к review |
