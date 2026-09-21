@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-24 (PR #27, review `34ef7af33cc112d369e0c9ee860d66954268ce8c`, закрытие `364976424b1818e37a76bc0b1d10cb254e4479de`), `ops/MODULAR_REORG_ANTARES_WORK_ADMISSION.md` |
-| **PR** | Draft (номер после создания) `feat/task-2026-09-17-25-antares-work-admission`, base `feat/task-2026-09-17-24-antares-ptb-lifecycle` |
+| **PR** | Draft [#28](https://github.com/deniskotdavydov1991-wq/Test/pull/28) `feat/task-2026-09-17-25-antares-work-admission`, base `feat/task-2026-09-17-24-antares-ptb-lifecycle` |
 | **Риск** | low: только документы |
 
 Контракт допуска новой работы isolated Antares **подготовлен к review**. Runtime **не** менялся. Pytest **не** запускался. Допуск **не** реализован. PTB lifecycle TASK-24 **не выпущен**.
@@ -55,4 +55,4 @@ runtime/тесты TASK-25; live polling; sender stop; worker join; executor shu
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-21 | контракт допуска подготовлен к review; ветка от закрытия TASK-24 |
+| 2026-09-21 | контракт допуска подготовлен к review; Draft PR #28 |
