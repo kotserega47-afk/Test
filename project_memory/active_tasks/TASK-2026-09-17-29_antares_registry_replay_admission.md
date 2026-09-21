@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-28 (PR #31, review `f0bd06bf157f4b377ad7648410605ee67841835f`, закрытие `a81aa69a416b3ad03708bd5515ec135c12f0e896`) |
-| **PR** | Draft (открывается этим PR) `feat/task-2026-09-17-29-antares-registry-replay-admission`, base `feat/task-2026-09-17-28-antares-direct-ops-admission` |
+| **PR** | Draft [#32](https://github.com/deniskotdavydov1991-wq/Test/pull/32) `feat/task-2026-09-17-29-antares-registry-replay-admission`, base `feat/task-2026-09-17-28-antares-direct-ops-admission` |
 | **Риск** | medium: isolated `/registry_replay` уходит в общий job executor; mixed остаётся sync в callback |
 
 Isolated `/registry_replay` через `submit_if_open(get_job_executor(), replay_pending_outbox_records)`. Не job `wallet_editor_registry_replay` и не `request_job`. Mixed/unbound: прежний синхронный вызов в event loop. Внутренние действия replay и drain **не** закрыты. PR Draft. Не выпущено.
