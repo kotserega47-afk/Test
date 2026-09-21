@@ -5,9 +5,9 @@
 | **Статус** | контракт **подготовлен к review**, не принят, runtime **не** менялся |
 | **База** | TASK-30 HEAD `1eefc54720ccd036451f7c3c0e7dadaedf6efb98` (Draft PR #33, TASK-30 **не** закрыт) |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
-| **Repro исходного дефекта** | `test_repro_stale_access_rules_publish_after_reload`, `test_repro_provider_indexes_stat_tears_from_stale_publisher` на том SHA |
+| **Repro исходного дефекта** | `test_repro_*` на SHA `1eefc54` (история дефекта, не будущий safety-критерий) |
 
-Этот документ — **будущий code scope**. Смысл strict/shadow/legacy и stale-reuse **не** менять здесь. Live credentials, merge, deploy, исходное Test — вне scope.
+Этот документ — **будущий code scope**. Смысл strict/shadow/legacy и provider stale-reuse **не** менять. Live credentials, merge, deploy, исходное Test, закрытие TASK-30 — вне scope.
 
 ---
 
@@ -23,242 +23,333 @@
 
 `core/access_rules.py` `get_snapshot`: каждый вызов заново зовёт `get_snapshot_v2` + `build_indexes`, затем может заменить `self._snap`. Старый reader, закончивший сборку позже reload, откатывает `_snap`.
 
-`mtime`/`size` файла (`_stat_key`) и `meta.updated_at` **не** номер поколения: два compute могут увидеть один stat; stale writer всё равно может опубликовать позже.
+`mtime`/`size` файла (`_stat_key`) и `meta.updated_at` **не** номер поколения.
 
-TASK-30 isolated `/reload_rules` **заблокирован** этим дефектом: допуск команды не делает snapshot согласованным.
+Пара `get_snapshot_v2()` + `get_indexes_v2()` даже после «атомарного» PublishedState может разъехаться между двумя вызовами.
+
+TASK-30 isolated `/reload_rules` **заблокирован** этим дефектом.
 
 ---
 
 ## 1. Единое опубликованное поколение
 
-Один объект (имя code PR; поля обязательны по смыслу):
+Один неизменяемый объект **PublishedState** (имя code PR):
 
 | Поле | Смысл |
 |------|--------|
-| `generation` | монотонный `int` процесса, **не** stat файла, **не** timestamp |
-| `attempt_id` | монотонный id compute, который **выиграл** commit |
+| `generation` | значение process-local **`publish_seq` на момент этого commit** |
+| `attempt_id` | id compute, который выиграл commit |
 | `snapshot` | `RulesSnapshotV2` |
-| `decision` | тот же `SnapshotPublishDecision`, что породил snapshot |
-| `workbook` | path + `stat_key` как **атрибут** поколения, не его идентичность |
-| `indexes` | `RulesIndexes`, построенные **из этого** snapshot |
+| `decision` | тот же `SnapshotPublishDecision` |
+| `workbook` | path + `stat_key` **атрибут** поколения, не его идентичность |
+| `indexes` | `RulesIndexes`, построенные **в том же compute** из этого snapshot (eager, без lazy subset-update) |
 | `policy_mode` | `legacy` / `strict` / `shadow` на момент commit |
 
-Публикация — **одно** присваивание ссылки на этот объект (или замена целиком под lock). Запрещено обновлять subset полей у уже видимого поколения.
+Публикация — **одно** присваивание ссылки на новый объект. Запрещено менять поля уже видимого поколения.
 
-Чтение: reader копирует ссылку на объект под lock и дальше работает с ней без lock. Поля одного поколения согласованы между собой.
+### 1.1 Счётчик `publish_seq` (анти-ABA)
 
-`invalidate_rules_v2_cache` / проигрыш commit / ошибка publish: поколение либо прежнее (ссылка не менялась), либо пустое после явного invalidate — не смесь v1 snapshot + v2 indexes.
+Отдельный process-local счётчик успешных публикаций:
 
-Workbook TTL (`_last_rules_wb`, `_last_rules_sync_ts`) — **материал** для compute, не замена `generation`. Смена файла без commit не считается опубликованным поколением.
+- стартует с 0 в процессе;
+- **никогда не сбрасывается** при `invalidate_rules_v2_cache` / пустом PublishedState;
+- каждая **успешная** публикация: `publish_seq += 1`, новый объект несёт это значение как `generation`.
 
----
+Invalidate **очищает ссылку** PublishedState (`None` / empty). Следующий commit получает `generation = 2, 3, …`, **не** повторный `1`.
 
-## 2. AccessRules и поколение provider
+Неверно: `start_generation = 0` при empty, затем `generation = start_generation+1` → после invalidate снова `1` (ABA: старый reader с `generation==1` может принять чужое новое состояние за «то же»).
 
-`AccessRules._snap` — производный ACL-снимок. Он обязан хранить `provider_generation` того PublishedState, из которого собран.
-
-Протокол `get_snapshot(force_sync=)`:
-
-1. Под lock provider: при `force_sync=False` и кэше hit — взять PublishedState.
-2. Compute (force или miss) — § 3, вне lock.
-3. Собрать производный `Snapshot` **из того же** PublishedState (snapshot + indexes поколения). Не звать второй независимый `get_snapshot_v2`.
-4. Под lock AccessRules: записать `self._snap` **только если** `provider_generation` всё ещё равен поколению, из которого сборка. Иначе **не** откатывать `_snap`.
-
-Старый reader **может** вернуть своему вызывающему согласованный старый производный snapshot (локальная переменная). Он **не** имеет права сделать этот объект новым `self._snap` / новым PublishedState, если поколение уже ушло.
-
-`AccessRules.invalidate`: только сброс производного `_snap` (как сейчас: provider cache сам не чистится). Это **не** успешный reload. Открытое решение: должен ли invalidate ещё bump'ать `latest_attempt`, чтобы in-flight производная сборка не записала `_snap` — **да, локально на экземпляре** (`_snap_epoch++`); provider generation не обязан меняться (совместимость с сегодняшним `invalidate` без `invalidate_rules_v2_cache`).
+`latest_attempt` и `invalidate_epoch` — отдельные счётчики стартов compute / invalidate; они тоже не обнуляются. `mtime`/`stat` их не заменяют.
 
 ---
 
-## 3. Readers / writers / invalidate
+## 2. Согласованный read API
 
-| Роль | Символы сейчас | В протоколе |
-|------|----------------|-------------|
-| Publish writer | `get_snapshot_v2` (cache miss / `force_sync=True`) | единственный commit PublishedState |
-| Index writer | `get_indexes_v2` | **не** отдельный writer: indexes живут на поколении; miss indexes при готовом snapshot — compute indexes **для этой** ссылки, commit только если generation не сменился |
-| Invalidate provider | `invalidate_rules_v2_cache`, `config_manager.clear_rules_caches` | bump `latest_attempt` + `invalidate_epoch`; drop PublishedState |
-| Invalidate derived | `AccessRules.invalidate` | bump instance epoch; `_snap = None` |
-| Readers | `get_snapshot_v2(False)` hit; `get_indexes_v2(False)` hit; `AccessRules.get_snapshot(False)` при совпадении generation; `get_rules_snapshot` (материал); `job_runner.request_job`; `core/schedules.py`; `integrations/telegram_routes.py`; WE settings/auto-enable/registry; analyzers wallet/hourly/conversion; reporters hourly | читают ссылку поколения или материал workbook |
-| Reload | `handlers._reload_bound_rules` | `AccessRules.invalidate` → `get_snapshot(force_sync=True)` → при **успешном commit нового поколения** `request_scheduler_clocks_reset` |
+**Не обещаем**, что два независимых вызова `get_snapshot_v2()` и `get_indexes_v2()` относятся к одному поколению. Каждый вызов сам по себе читает актуальное PublishedState в свой момент; между ними возможен чужой commit.
 
-ACL `check_access` → `get_snapshot()` без `force_sync`: reader, не reload.
+Единый accessor (имя code PR, например `get_published_state()`):
 
-`WorkAdmission` lock **не** участвует в этом протоколе и **не** держится на I/O или compute правил.
+- под lock копирует **ссылку** на PublishedState (или инициирует compute по §5);
+- возвращает один объект: snapshot + decision + workbook + indexes + `generation`.
+
+Существующие `get_snapshot_v2` / `get_indexes_v2` / `get_rules_snapshot` остаются. Их контракт после исправления: каждый возвращает поле **какого-то** поколения на момент вызова, без пары. Callers, которым нужна согласованная пара, **обязаны** перейти на единый accessor.
+
+### 2.1 Callers, которым нужна пара (входят в будущий code scope)
+
+Сейчас два вызова подряд:
+
+| Файл | Вызовы |
+|------|--------|
+| `integrations/wallet_editor_registry_settings.py` | `get_snapshot_v2` + `get_indexes_v2` |
+| `integrations/wallet_editor_registry_refresh.py` | то же |
+| `integrations/wallet_editor_auto_enable_settings.py` | то же |
+| `integrations/wallet_editor_auto_enable.py` | то же |
+| `analyzers/wallet_analyzer.py` | то же (несколько мест) |
+| `analyzers/hourly_analyzer.py` | то же |
+| `core/access_rules.py` | `get_snapshot_v2` + свой `build_indexes` — перейти на PublishedState.indexes, не второй независимый load |
+
+### 2.2 Callers одного поля (не обещать пару)
+
+| Файл | Что берут |
+|------|-----------|
+| `core/schedules.py`, `integrations/telegram_routes.py`, `integrations/conversion_fingerprint.py`, `analyzers/conversion.py`, `reporters/hourly_reporter.py`, `reporters/hourly_render_model.py` | snapshot |
+| `core/job_runner.py` | `get_rules_snapshot` затем отдельно `get_snapshot_v2` (fingerprint) — **два поколения возможны**; если нужен один — accessor; иначе оставить как есть с явной пометкой «не пара» |
+| `core/config_manager.py`, `integrations/wallet_editor_partner_resolve.py`, `analyzers/raccoon_*`, `analyzers/payout_config_loader.py`, `core/rules_v2/ops_rules_validate_summary.py` | workbook path / `get_rules_snapshot` |
+
+`get_indexes_v2` после исправления: `return get_published_state(...).indexes` (один snapshot на этот вызов, не склеенный с предыдущим `get_snapshot_v2` у caller).
 
 ---
 
-## 4. Точка успешной публикации и успешный reload
+## 3. AccessRules: generation + instance epoch, без окна
 
-**Успешный commit поколения:** под lock выполнена замена PublishedState на новый объект; `generation` строго больше предыдущего (или первое после пустого кэша).
+Держать **только** instance lock недостаточно: provider может сменить PublishedState между проверкой и записью `_snap`.
 
-**Успешный `/reload_rules`:**
+Порядок блокировок **всегда** `provider lock → instance lock`. Никогда наоборот. Provider lock не держат на I/O/compute. Admission lock не участвует.
 
-1. Допуск (TASK-30) принял работу.
-2. `invalidate` производного `_snap`.
-3. `get_snapshot(force_sync=True)` **закончился commit'ом** нового поколения (после возможных внутренних discard+retry — открытое решение § 8).
-4. Возвращённый `AccessRules` snapshot имеет тот же `provider_generation`.
-5. Только тогда `request_scheduler_clocks_reset(reason="reload_rules")`.
+`AccessRules` поля: `_snap`, `_snap_epoch` (instance). `invalidate()`: под instance lock `_snap_epoch += 1`, `_snap = None`. Provider `publish_seq` не трогает.
 
-Не успех: отказ допуска; исключение snapshot/publish policy; все попытки force discard без нового commit. Тогда **нет** reset и нет ответа «перечитан». Откат `AccessRules.invalidate` **не** обещается (как TASK-30).
+### 3.1 Начало вызова (следующий reader)
 
----
+Под **provider затем instance**:
 
-## 5. Compute вне lock: защита от устаревшей публикации
+- если `_snap is not None` и `_snap.provider_generation == published.generation` и epoch совпал с текущим `_snap_epoch` — **reuse** `_snap`;
+- иначе reuse запрещён (поколение ушло или invalidate).
 
-Одного RLock на присваиваниях **мало**: между download/parse и записью другой поток уже мог опубликовать новее.
+Пустой published / miss / `force_sync=True` → compute §5, без instance lock на время compute.
 
-Протокол attempt:
+### 3.2 CAS записи `_snap` после сборки
+
+Зафиксировать в начале вызова `start_epoch = _snap_epoch` (короткий instance lock или вместе с 3.1). Собрать производный `D` из PublishedState `P` (локально). Затем:
 
 ```text
+lock provider
+  current = published          # ссылка
+  lock instance
+    if _snap_epoch != start_epoch:
+        do_not_store           # invalidate во время сборки
+    elif current is None or current.generation != P.generation:
+        do_not_store           # provider ушёл вперёд
+    else:
+        _snap = D              # D.provider_generation == P.generation
+  unlock instance
+unlock provider
+return D                       # вызывающему этой инвокации всегда согласованный D из P
+```
+
+Старый reader **возвращает** свой `D` (v1), даже если `do_not_store`. Он **не** записывает v1 поверх нового `_snap`.
+
+Окно «проверил generation без provider lock, потом записал» **запрещено**.
+
+---
+
+## 4. Provider outcome vs команда reload
+
+Публичный `get_snapshot_v2` / `get_indexes_v2` / `get_rules_snapshot` сохраняют типы и **legacy force / stale reuse** как сейчас: нет исключения → возвращается snapshot (в т.ч. stale). Смысл policy не менять.
+
+Внутренний результат compute (метаданные, не обязательно новый публичный enum снаружи модуля):
+
+| Код | Когда | PublishedState | Поколение |
+|-----|--------|----------------|-----------|
+| `fresh_commit` | этот attempt выиграл CAS и опубликовал | новый объект | `publish_seq` вырос |
+| `existing` | cache hit **или** проигрыш attempt, но уже есть поколение **новее** `observed_generation` на старте | без изменения этим attempt | не выросло этим attempt |
+| `stale_reuse` | legacy: build/load fail, отдан **прошлый** PublishedState | тот же объект | **не** выросло |
+| `rejected` | `ContractPublishRejected` / policy запретила publish | без commit | не выросло |
+| `conflict_exhausted` | проигрыш attempt и более поздний attempt тоже не опубликовал (упал / discard / invalidate), исчерпаны попытки | как до вызова | не выросло |
+
+`existing` при проигрыше force, если чужой attempt уже сделал `fresh_commit`, — это **не** stale_reuse.
+
+### 4.1 Команда `/reload_rules`
+
+Смешанный (mixed) callback **не** менять молча: как сейчас — нет исключения из `get_snapshot(force_sync=True)` ⇒ reset + «перечитан», в том числе на **stale_reuse**. Исключение ⇒ warning, без reset.
+
+Isolated (и только он) отличает исходы через метаданные `get_snapshot` / узкий helper рядом с `_reload_bound_rules` (не ломая публичный provider):
+
+| Исход provider | Isolated reset | Isolated ответ |
+|----------------|----------------|----------------|
+| `fresh_commit` | да | «перечитан», source нового поколения |
+| `existing` (поколение > чем после invalidate / старта команды) | да | «перечитан», source **того** поколения (чужой выигравший force) |
+| `stale_reuse` | **нет** | warning: не новый commit, правила не сброшены как reload |
+| `rejected` / `conflict_exhausted` | нет | warning как ошибка перечитывания |
+
+Mixed **не** получает эту развилку в TASK-31 code, пока отдельно не решат выровнять. Не обещать, что isolated и mixed одинаково трактуют stale.
+
+Откат `AccessRules.invalidate` при ошибке **не** обещается.
+
+---
+
+## 5. Compute вне lock (attempt)
+
+```text
+observed_generation = published.generation if published else None
+# None — пусто, это НЕ «0 для следующего generation»
+
 under lock:
   my_attempt = ++latest_attempt
   start_epoch = invalidate_epoch
-  start_generation = published.generation or 0
 unlock
-compute (download to staging, evaluate, build indexes, optional audit payload)
+
+compute:
+  capture workbook (§6)
+  evaluate + eager build_indexes
+  buffer audit payload (attempt id)
+
 under lock:
-  if my_attempt != latest_attempt: discard   # более новый compute/invalidate стартовал
-  if start_epoch != invalidate_epoch: discard
-  if published.generation != start_generation and not force_sync_intent: ...
-  # force: публиковать только если мы всё ещё «последний стартовавший»
-  commit PublishedState(generation=start_generation+1, attempt_id=my_attempt, ...)
-  promote staging workbook / identity only here
+  if invalidate_epoch != start_epoch: discard
+  if my_attempt != latest_attempt: discard
+  else:
+    publish_seq += 1
+    published = PublishedState(generation=publish_seq, attempt_id=my_attempt, ...)
+    # память — source of truth in-process
 unlock
+
+if discarded: audit discard; cleanup staging; see §4 for caller
+if committed: short file protocol §6; audit commit
 ```
 
-`mtime`/`stat` сверяют «тот ли файл мы разбирали», но **не** заменяют `my_attempt`.
+`generation` нового объекта **всегда** `publish_seq` после инкремента, никогда `observed_generation+1` с подстановкой 0.
 
-### Два одновременных `force_sync=True`
+Проигравший attempt **не** публикует и **не** откатывает `published`.
 
-Оба берут разные `attempt_id`. Побеждает **последний стартовавший**, если он дошёл до commit первым или единственным.
+### 5.1 Два force, обратный финиш
 
-Порядок завершения **обратный** старту: ранний compute, финишировавший позже, **discard**. Он не откатывает уже опубликованное новое состояние.
+Побеждает последний **стартовавший**, который прошёл CAS (`my_attempt == latest_attempt`). Ранний финишировавший позже — discard.
 
-Проигравший force: **не** success reload. Поведение для вызывающего — открытое решение § 8 (один внутренний retry vs ошибка vs wait на победителя и вернуть его snapshot, если generation уже новый и `force_sync` удовлетворён «есть поколение строго новее start»).
+### 5.2 Проигрыш force, когда поздний attempt тоже упал
 
-Рекомендация контракта (к review, не принято): проигравший `force_sync` **не** публикует; если PublishedState.generation > start_generation, вернуть **уже опубликованное** новое поколение (цель force — свежий snapshot, не обязательно «мой» compute). Если поколение не выросло (оба проиграли из-за invalidate), ошибка или повтор — § 8.
+Нет `existing` с выросшим поколением. Caller получает `conflict_exhausted` после **конечных** повторов (§5.4), не бесконечный цикл. Состояние — прежний PublishedState (если invalidate его не снёс). Isolated: без reset. Публичный provider, если вызывали `get_snapshot_v2(force_sync=True)`: сохранить текущую semantics ошибки (исключение, если нечего вернуть) или прежний snapshot только там, где policy и сегодня так делает — **не** выдавать stale_reuse за fresh.
 
-### Invalidate во время compute
+### 5.3 Invalidate во время compute
 
-`invalidate_rules_v2_cache`: `invalidate_epoch++`, `latest_attempt++`, PublishedState = empty. In-flight commit видит смену epoch/attempt → discard. Disk staging **не** promote. Identity **не** save.
+`invalidate_rules_v2_cache`: `invalidate_epoch++`, `latest_attempt++`, `published = None`. `publish_seq` **не** трогать. Staging не promote, identity не save, audit **discard**.
 
-`AccessRules.invalidate` во время производного compute: instance epoch++; сборка может вернуть локальный snap вызывающему, но не пишет `_snap`.
+### 5.4 Конечные конфликты
 
-### Ошибка нового reload / publish policy
-
-`ContractPublishRejected` и прочие ошибки compute: **нет** commit, **нет** promote workbook, **нет** identity save, **нет** clocks reset. Действует текущая policy:
-
-- **legacy:** blocking contract → reject; build/load fail при наличии прошлого snapshot → **stale reuse прошлого PublishedState** (не новое поколение, не чужие indexes).
-- **strict:** `publish_allowed=False` → reject, кэш не подменяем смесью.
-- **shadow:** как сейчас в `evaluate_snapshot_publish` / `get_snapshot_v2` (не менять смысл).
-
-Проигравший/ошибочный compute не должен «починить» кэш частичной записью.
+Цикл force: не более **3** полных attempt на один публичный вызов `force_sync=True` (включая первый). Policy `rejected` **не** ретраить. После 3 discard/conflict → `conflict_exhausted` / ошибка как сбой snapshot. Не `while True`.
 
 ---
 
-## 6. Побочные эффекты на диске (не только globals)
+## 6. Один протокол памяти и файлов
 
-| Эффект | Сейчас | Контракт |
-|--------|--------|----------|
-| Download | `_download_rules_workbook_atomic`: `.part` → `replace(_RULES_LOCAL)` внутри `get_rules_snapshot`, до C4 commit | Каждому attempt — **свой** staging файл. `replace` в канонический cache path **только на выигравшем commit**. Проигравший удаляет staging. |
-| Local `RULES_XLSX_PATH` file | `_try_local_workbook_path` читает чужой файл in place | Не заменять пользовательский workbook. Staging только для cache Dropbox (`_RULES_LOCAL`). |
-| Audit | `try_append_publish_audit_trail` внутри `get_snapshot_v2` до/вокруг policy | Не держать publish-lock. Либо буфер и append **после** commit с `attempt_id`, либо append с пометкой attempt и игнор для discard (предпочтение: **после** commit, чтобы устаревший compute не писал «успешный publish»). Открытое решение, если audit сегодня нужен и при reject. |
-| Identity | `_try_save_identity_registry_after_publish` при `publish_allowed` | Только победитель commit. `suppress_identity_registry_save` без изменений. Ошибка save по-прежнему ignored, **не** откатывает in-memory поколение. |
-| `clear_rules_caches` | чистит pandas-кэши + `invalidate_rules_v2_cache` | Остаётся invalidate provider поколения. |
+**Не обещаем** атомарность in-memory поколения и нескольких файлов. Источник истины **в процессе** — ссылка PublishedState. Диск — best-effort с токеном `(generation, attempt_id)`.
 
-Устаревший compute **не** имеет права `replace` канонический `rules.xlsx` кэша и **не** имеет права `save_identity_registry` поверх более нового commit.
+Обычные ошибки (`OSError` replace/save) ≠ аварийный kill процесса. Kill: следующее поднятие процесса заново читает канонические файлы; in-memory поколения нет.
+
+### 6.1 Порядок (выбран один)
+
+1. **Compute:** материал только в **staging/capture**, канон `_RULES_LOCAL` и identity canonical **не** трогать.
+2. **CAS + память** под lock (§5).
+3. **После unlock, токен commit'а:**
+   - workbook: `replace` канона из staging **только если** повторная короткая проверка `published.attempt_id == my_attempt`; иначе удалить staging.
+   - identity: писать во **temp с generation в имени/заголовке**; короткая проверка того же attempt; затем replace канона. Если attempt уже не победитель — temp удалить, канон не трогать.
+4. Ошибка `replace` workbook: память **не** откатывать; `workbook.path` поколения остаётся на **живом staging**; залогировать; promote можно не ретраить в этом вызове. Reader этого поколения читает staging path из PublishedState, не обязательно канон.
+5. Ошибка identity save: как сейчас ignored для in-memory; канон identity не частично писать (только complete temp+replace).
+
+Обратный порядок identity: старый победитель не имеет права replace канона, если `published.attempt_id` уже другой — проверка **сразу перед** replace, не только перед началом I/O.
+
+### 6.2 Локальный `RULES_XLSX_PATH`
+
+Пользовательский файл **не** заменяем. На старте attempt: **копия байт** (или copy в staging). Parse только копии. Правка файла пользователем во время parse не входит в это поколение.
+
+Публичный `get_rules_snapshot`:
+
+- hit PublishedState: вернуть workbook **этого** поколения (`stat_key` с capture; `local_path` для env-файла может остаться путём пользователя ради совместимости — тогда в контракте явно: повторное чтение path **не** гарантирует то же поколение);
+- Dropbox cache: `local_path` = канон **или** staging, что записано в PublishedState после шага 6.1;
+- miss: прежняя логика TTL/download, но download только в attempt-staging, promote по §6.1.
+
+Не обещать, что `get_rules_snapshot().local_path` всегда канон `_RULES_LOCAL`.
+
+### 6.3 Audit
+
+Сохранить запись **отказов** (reject), как сейчас по смыслу. Различать в payload: `attempt` / `reject` / `discard` / `commit`. Discard и commit не путать с reject. I/O audit вне publish-lock; discard не помечается как commit.
 
 ---
 
-## 7. Вложенные вызовы и lock (без deadlock)
-
-Потоки lock:
+## 7. Locks (без deadlock)
 
 | Lock | Держит | Не держит |
 |------|--------|-----------|
-| Provider publish lock (RLock допустим только если один и тот же поток читает hit внутри `get_indexes_v2` → `get_snapshot_v2`) | чтение ссылки PublishedState; `++latest_attempt`; commit; invalidate | download, zip/xlsx parse, `evaluate_snapshot_publish`, `build_indexes`, audit I/O, identity I/O, Telegram, admission |
-| AccessRules instance lock | чтение/запись `_snap` + instance epoch | provider compute, admission |
-| Admission lock | только `submit_if_open` | всё выше |
+| Provider | чтение/замена ссылки published; `++latest_attempt` / `++publish_seq`; invalidate; короткая проверка перед file replace | download, parse, evaluate, `build_indexes`, audit I/O, identity body write, Telegram, admission |
+| Instance AccessRules | `_snap`, `_snap_epoch`; вложен **только** когда provider lock уже взят | provider compute |
+| Admission | только `submit_if_open` | всё выше |
 
-Порядок, если когда-либо оба нужны: **не** брать provider lock, уже держа AccessRules lock, если provider может снова взять AccessRules — сейчас AccessRules вызывает provider, значит: AccessRules lock **после** возврата из provider, либо не держать AccessRules lock на время `get_snapshot_v2`.
+`get_indexes_v2` не берёт второй lock на hit: один published pointer.
 
-Рекомендация: `get_snapshot` не держит instance lock во время provider call. Схема: provider → локальный derived → короткий instance lock для CAS `_snap`.
-
-`get_indexes_v2` → `get_snapshot_v2`: при cache hit — тот же поток, без второго lock (или RLock). При miss — не держать lock на compute.
-
-Не вводить lock `WorkAdmission` в provider.
+Eager indexes: `build_indexes` в compute **до** commit, в объекте сразу полный набор. Lazy subset-update **запрещён** в первом исправлении.
 
 ---
 
-## 8. Open decisions (не «принято»)
+## 8. Закрытые решения (больше не open)
 
-1. Проигравший `force_sync`: вернуть чужой более новый PublishedState vs один retry vs ошибка.
-2. Писать ли audit при reject (как сейчас) или только после commit.
-3. Eager indexes всегда в том же compute, что snapshot, vs lazy indexes на том же объекте поколения (CAS только indexes-поля **запрещён** — только новый объект или одно поле indexes до первой публикации наружу; lazy допустим, если indexes заполняются на копии до публикации ссылки **или** отдельным CAS «indexes is None → set», без смены snapshot).
-4. Нужен ли bump `latest_attempt` на `AccessRules.invalidate` в provider (скорее нет; только instance epoch).
-5. Сколько retry на discard при непрерывном invalidate (рекомендация: конечное N, затем ошибка как сейчас snapshot fail).
-
-Смысл policy modes — **не** open: не менять.
+| Тема | Решение |
+|------|---------|
+| Indexes | Eager, неизменяемый PublishedState |
+| Audit | Отказы пишем; различаем attempt/reject/discard/commit |
+| Проигрыш + падение позднего attempt | `conflict_exhausted`, без commit и isolated reset |
+| Постоянные конфликты | ≤ 3 attempt на force-вызов, затем ошибка |
+| `AccessRules.invalidate` | только instance epoch; не `publish_seq` |
+| Проигравший force при чужом `fresh_commit` | provider `existing`; isolated reset да; mixed без изменений API |
+| Isolated vs stale_reuse | isolated **не** считает успехом reload; mixed **сохраняет** нынешний успех без исключения |
 
 ---
 
 ## 9. Влияние на mixed и прочих callers
 
-Правка `rules_provider` + `AccessRules` общая для **mixed / isolated Antares / Raccoon / WR**, кто импортирует эти модули.
+Правка общая для mixed / isolated / Raccoon / WR через `rules_provider` + `AccessRules`.
 
-| Caller | Файл | Эффект |
-|--------|------|--------|
-| Isolated `/reload_rules` | `modules/antares/handlers.py` `_reload_bound_rules` | success = commit поколения; иначе без reset |
-| Mixed `/reload_rules` | тот же callback, sync | та же семантика commit |
-| Jobs | `core/job_runner.py` `get_rules_snapshot` + `get_snapshot_v2(False)` | реже torn fingerprint; чуть сериализованные hit |
-| Schedules | `core/schedules.py` | чтение поколения |
-| WE | `wallet_editor_*_settings.py` snapshot+indexes подряд | должны видеть одно поколение |
-| Analyzers / conversion / hourly reporters | `analyzers/*`, `reporters/hourly_*` | hit согласован; force_sync в analyzer — тот же attempt-протокол |
-| `telegram_routes.py` | routing | reader |
-| `clear_rules_caches` | `config_manager.py` | invalidate поколения |
-
-Timing: commit сериализован; compute параллелен. Это **меняет** гонки (цель) и может сдвинуть latency force reload при конкуренции. Не меняет CLI/API `force_sync=`.
-
-Не реализовывать Raccoon/WR отдельно в этом code; они получат поведение «бесплатно» через общие модули — это нужно явно принять на review.
+Публичный force/stale **как сейчас**. Isolated команда — отдельная метаданных-развилка (§4.1). Callers из §2.1 **меняются** на единый accessor (иначе пара не обещана).
 
 ---
 
 ## 10. Матрица будущих проверок
 
-Существующие `test_repro_*` на TASK-30 **сохранить** как доказательство исходного дефекта (ожидание torn/stale). В code TASK-31 **не** считать зелёный repro исправлением: либо пометить historical, либо заменить **копии** на `test_gen_*` с ожиданием согласованности (repro-файлы не перекрашивать в safety без смены assert).
+`test_repro_*` на `1eefc54` — **историческое** доказательство дефекта. После code TASK-31 активный набор — `test_gen_*` / обновлённые provider-тесты: **безопасность**, не assert torn/stale как «правильно». Repro не перекрашивать в safety, не оставлять их единственным зелёным критерием.
 
-Будущие проверки (реальный executor/provider cache; workbook/Dropbox/PG/Telegram/identity — sandbox; запись только в tmp):
+Запись только sandbox/tmp. Нет live Dropbox/PG/Telegram.
 
-| # | Сценарий | Ожидание после TASK-31 |
-|---|----------|-------------------------|
-| G1 | Старый AccessRules reader заканчивается после нового reload | `_snap.generation` = новое; локальный return старого reader может быть v1, но не записан в instance |
-| G2 | Старые indexes заканчиваются после смены поколения | PublishedState.indexes от того же snapshot, что decision; нет v1 indexes + v2 stat |
-| G3 | Два force reload, обратный порядок завершения | опубликован attempt с большим `attempt_id`; ранний discard; нет отката |
-| G4 | `invalidate_rules_v2_cache` во время compute | discard; нет promote файла; нет identity |
-| G5 | Ошибка publish / `ContractPublishRejected` | нет commit, нет clocks reset, нет «перечитан»; stale reuse только по **действующей** policy |
-| G6 | source/stat/snapshot/decision/indexes | все с одного PublishedState |
-| G7 | Следующий reader после успеха | видит новое поколение без `force_sync` |
-| G8 | Нет deadlock | barrier/Event как TASK-30; admission lock не на compute |
-| G9 | Closed/ACL deny reload | нет force commit (как TASK-30) |
+| # | Сценарий | Ожидание |
+|---|----------|----------|
+| G1 | Старый AccessRules reader после нового reload | instance `_snap` = новое поколение; локальный return старого может быть v1 и не записан |
+| G2 | Старые indexes после смены поколения | indexes только вместе с snapshot того PublishedState |
+| G3 | Два force, обратный финиш | больший `attempt_id` / новый `publish_seq`; ранний discard |
+| G4 | invalidate во время compute | discard; нет promote; нет identity; `publish_seq` не сброшен |
+| G5 | `rejected` | нет commit, isolated без reset |
+| G6 | одно PublishedState | source/stat/snapshot/decision/indexes |
+| G7 | следующий reader | reuse только при том же `generation` |
+| G8 | нет deadlock | Event/barrier; admission не на compute |
+| G9 | closed/ACL deny | нет force commit |
+| G10 | invalidate → новая публикация | `generation` **не** повторяет прежнее значение (не ABA `1`) |
+| G11 | два последовательных read API | пара старых вызовов может разъехаться; accessor — одно поколение |
+| G12 | смена provider во время CAS AccessRules | `do_not_store`; следующий reader не reuse устаревший `_snap` |
+| G13 | `replace` workbook fail | память жива; staging path; канон мог остаться старым |
+| G14 | обратный порядок identity save | канон identity от победившего attempt |
+| G15 | правка локального xlsx во время parse | поколение = capture, не live file |
+| G16 | legacy `stale_reuse` vs isolated reload | provider отдаёт старое без нового `publish_seq`; isolated без reset; mixed без молчаливой смены |
 
 ---
 
-## 11. Точные файлы будущего code scope
+## 11. Файлы будущего code scope
 
-Менять:
+**Обязательно:**
 
-- `core/rules_provider.py` — PublishedState, attempt/epoch, staging download, commit, indexes на поколении
-- `core/access_rules.py` — привязка `_snap` к `generation`, CAS, не откат
-- `tests/unit/test_antares_work_admission.py` — `test_gen_*`; repro оставить
-- `tests/rules_v2/test_rules_provider_*.py` / `test_contract_publish_c4.py` — cache hit/invalidate без смены policy
-- docs: эта страница, карточка TASK-31, ссылка с TASK-30
+- `core/rules_provider.py` — `publish_seq`, PublishedState, attempt CAS, staging, `get_published_state()`, eager indexes, audit kinds, `get_rules_snapshot` совместимость
+- `core/access_rules.py` — epoch, порядок lock, CAS §3
+- `modules/antares/handlers.py` — **только** isolated ветка `_reload_bound_rules` / чтение метаданных исхода; mixed callback без молчаливой смены
+- callers пары §2.1:  
+  `integrations/wallet_editor_registry_settings.py`  
+  `integrations/wallet_editor_registry_refresh.py`  
+  `integrations/wallet_editor_auto_enable_settings.py`  
+  `integrations/wallet_editor_auto_enable.py`  
+  `analyzers/wallet_analyzer.py`  
+  `analyzers/hourly_analyzer.py`
+- тесты: новые `test_gen_*` в `tests/unit/test_antares_work_admission.py` и `tests/rules_v2/test_rules_provider_*.py` / `test_contract_publish_c4.py`; historical repro не как safety
+- docs: эта страница, карточка TASK-31
 
-Не менять в этом code (если не вылезет вынужденно из PublishedState): `evaluate_snapshot_publish` смысл, `handlers` admission, `WorkAdmission`, mixed gate, ingest, schedules loop, Railway.
+**Не в этом code:** смысл `evaluate_snapshot_publish`, mixed reload semantics, `WorkAdmission`, ingest, schedules loop, Railway, live credentials.
 
-Возможный узкий хвост: `handlers._reload_bound_rules` только если нужно явно отличить «вернулся snapshot, но commit не наш» — предпочтительно спрятать в `get_snapshot(force_sync=True)`.
+`core/job_runner.py` — только если решим, что fingerprint обязан быть той же парой; иначе пометка «не пара» без обязательного изменения.
 
 ---
 
 ## 12. Вне scope
 
-Production runtime в **этом** docs PR. Merge/retarget/deploy. Закрытие TASK-30. Смена base PR #33. Исправление policy semantics. Отдельный Antares-only fork provider (запрещён: сломает смысл общей правки). Live Dropbox credentials.
+Runtime **этого** docs PR. Merge/retarget/deploy. Закрытие TASK-30 / смена PR #33. Смена C4 policy. Antares-only fork provider.

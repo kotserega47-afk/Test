@@ -15,22 +15,19 @@
 
 ## Goal
 
-Зафиксировать поколение публикации, CAS после compute вне lock, диск/identity, lock без deadlock и матрицу проверок — без смены strict/shadow/legacy.
+Зафиксировать поколение (`publish_seq`), единый read accessor, CAS AccessRules без окна, файловый протокол и раздельные исходы provider vs `/reload_rules` — без смены public provider/legacy и без runtime в этом PR.
 
 ---
 
 ## Success Criteria
 
-- [x] Единый PublishedState: snapshot, decision, workbook/stat как атрибут, indexes, монотонный `generation` ≠ file stat
-- [x] AccessRules CAS к `provider_generation`; старый reader не откатывает опубликованное
-- [x] Readers/writers/invalidate перечислены по исходникам
-- [x] Успешный reload = commit нового поколения, затем clocks reset
-- [x] Attempt/epoch: два force, invalidate во время compute, ошибка publish
-- [x] Staging workbook + identity только у победителя commit
-- [x] Admission lock не на I/O/compute; порядок lock без deadlock
-- [x] Policy semantics не менять; влияние на mixed/callers честно
-- [x] Матрица G1–G9; repro TASK-30 сохранить как дефект
-- [x] Файлы будущего code и open decisions
+- [x] `publish_seq` монотонен; invalidate не обнуляет (анти-ABA)
+- [x] Единый accessor PublishedState; пара старых вызовов не обещана; callers пары в code scope
+- [x] AccessRules CAS: provider lock → instance lock; следующий reader проверяет generation
+- [x] Один протокол память-затем-диск; ошибки replace/identity; capture локального xlsx; `get_rules_snapshot`
+- [x] Provider `fresh_commit`/`existing`/`stale_reuse`/`rejected`/`conflict_exhausted` отдельно от isolated/mixed reload
+- [x] Eager indexes; audit kinds; проигрыш+падение позднего attempt; ≤3 force attempt
+- [x] Матрица G1–G16; historical repro ≠ safety
 - [ ] GPT review; принятие контракта; code; merge/deploy
 
 ---
@@ -55,3 +52,4 @@ Runtime; закрытие TASK-30; смена PR #33; ingest; schedules; serve; 
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | контракт публикации поколений; статус **review (не принято)** |
+| 2026-09-21 | уточнение: publish_seq, accessor, CAS, диск, force/policy, закрытые решения |
