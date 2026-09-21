@@ -39,7 +39,7 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-23 start/stop plan | docs, PR #26, close `94951c6…` | pytest не запускался | **нет** |
 | TASK-24 PTB helper | код, PR #27, review `34ef7af…`, close `3649764…` | Cursor **15 / 96 passed** на `34ef7af…`; historical **91/10** `e737281`/`e039e25`, **94/13** `d842912` — границы harness, не «ещё +N тестов к 15»; GPT код/diff, наборы не запускал | **нет** |
 | TASK-25 допуск | docs, review пройден, PR #28, HEAD `eda7144…`; 1д=8ч; mixed-stop проверка 2–4д отдельно; cutover **не** к исполнению | pytest не требовался | **нет** |
-| TASK-26 run_wallet admission | `WorkAdmission` + isolated `/run_wallet`; к review, **не выпущено** | **нет** |
+| TASK-26 run_wallet admission | `WorkAdmission` + isolated `/run_wallet`; Draft PR #29; **не выпущено** | **нет** |
 | Следующая | остальные пути допуска (A); mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
