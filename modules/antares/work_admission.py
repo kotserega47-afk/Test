@@ -104,10 +104,17 @@ class WorkAdmission:
 class AdmittedJob:
     """Observe an accepted Future immediately; do not cancel it with the waiter."""
 
-    def __init__(self, future: Future, logger: object, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        future: Future,
+        logger: object,
+        loop: asyncio.AbstractEventLoop,
+        job_type: str,
+    ) -> None:
         self.future = future
         self._logger = logger
         self._loop = loop
+        self._job_type = job_type
         self._af: asyncio.Future = loop.create_future()
         self._lock = threading.Lock()
         self._job_logged = False
@@ -126,7 +133,7 @@ class AdmittedJob:
                 self._job_logged = True
                 self._done.set()
             if log_now:
-                self._logger.exception("admitted wallet job failed")
+                self._logger.exception("admitted %s job failed", self._job_type)
             self._notify()
             return
         with self._lock:
@@ -174,10 +181,10 @@ class AdmittedJob:
             raise
 
 
-def watch_admitted_future(future: Future, logger: object) -> AdmittedJob:
+def watch_admitted_future(future: Future, logger: object, *, job_type: str) -> AdmittedJob:
     """Attach observation before any await on the caller."""
 
-    return AdmittedJob(future, logger, asyncio.get_running_loop())
+    return AdmittedJob(future, logger, asyncio.get_running_loop(), job_type)
 
 
 def bound_admission() -> WorkAdmission | None:

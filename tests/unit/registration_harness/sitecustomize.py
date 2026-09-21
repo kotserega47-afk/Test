@@ -86,7 +86,10 @@ _INTERNAL_STUB_ATTRS: dict[str, dict] = {
         "check_access": lambda *a, **k: True,
         "deny_message": lambda *a, **k: "",
     },
-    "core.job_dispatch": {"dispatch_job_async": _blocked_internal},
+    "core.job_dispatch": {
+        "dispatch_job_async": _blocked_internal,
+        "get_job_executor": _blocked_internal,
+    },
     "core.lock_status": {
         "KNOWN_JOB_TYPES": (),
         "get_lock_status_for_job_types": lambda *a, **k: {},

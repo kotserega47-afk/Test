@@ -264,13 +264,14 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh` — `run_job_async`
 - `/registry_replay`, `/registry_export`, `/auto_enable_plan`, `/auto_enable_run`, `/reload_rules`
 - document ingest → `queue.put`
 - mixed `schedule_loop` / `dispatch_job_background`
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_job_if_open`
+
+Шесть TG dispatch-команд (`/run_wallet`, `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh`) — isolated путь TASK-27; mixed unbound по-прежнему `run_job_async`.
 
 ### 7.2 Внутренние постановки — следующий этап
 
@@ -335,7 +336,7 @@ loop.call_soon_threadsafe(stop.set)   # не stop.set() напрямую
 | `/run_wallet` open | submit + (после lock) «Запускаю»; нет «Запускаю» при Rejected |
 | submit бросил | не Accepted; Future нет; sealed/open как до вызова |
 | Accepted, затем reply упал | Future жив; job не отменяют |
-| `/run_hourly` (первый этап) | **без** gate — документированный обход, тест что путь ещё не через `submit_job_if_open` |
+| `/run_hourly` (после TASK-27) | isolated: тот же `submit_job_if_open`, что `/run_wallet` |
 
 Не sleep-as-sync. Не обещать, что hourly/ingest/auto-enable batch закрыты.
 

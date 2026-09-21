@@ -72,20 +72,16 @@ def _require_bound() -> tuple[object, object]:
 
 
 async def _run_antares_command(update: Update, command: str, job_type: str) -> None:
-    rules, logger = _require_bound()
-    if not await guard_or_deny(update, command, rules):
-        return
-    await run_job_async(update, job_type, logger)
-
-
-async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admission = bound_admission()
     if admission is None:
-        await _run_antares_command(update, "run_wallet", "wallet")
+        rules, logger = _require_bound()
+        if not await guard_or_deny(update, command, rules):
+            return
+        await run_job_async(update, job_type, logger)
         return
 
     rules, logger = _require_bound()
-    if not await guard_or_deny(update, "run_wallet", rules):
+    if not await guard_or_deny(update, command, rules):
         return
 
     actor = Actor(
@@ -94,9 +90,9 @@ async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         user_id=int(update.effective_user.id),
     )
     try:
-        outcome = admission.submit_job_if_open("wallet", actor)
+        outcome = admission.submit_job_if_open(job_type, actor)
     except Exception:
-        logger.exception("isolated /run_wallet submit failed")
+        logger.exception("isolated %s submit failed", job_type)
         await update.message.reply_text("❌ Ошибка при постановке.\nХвост трейса:")
         await update.message.reply_text(traceback.format_exc()[-3500:])
         return
@@ -105,13 +101,13 @@ async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(ADMISSION_CLOSED_REPLY)
         return
 
-    admitted = watch_admitted_future(outcome.future, logger)
+    admitted = watch_admitted_future(outcome.future, logger, job_type=job_type)
     try:
-        await update.message.reply_text("🚀 Запускаю: wallet")
+        await update.message.reply_text(f"🚀 Запускаю: {job_type}")
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("isolated /run_wallet start reply failed")
+        logger.exception("isolated %s start reply failed", job_type)
 
     try:
         job_id = await admitted.wait()
@@ -124,15 +120,19 @@ async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("isolated /run_wallet error reply failed")
+            logger.exception("isolated %s error reply failed", job_type)
         return
 
     try:
-        await update.message.reply_text(f"✅ Принято: wallet\njob_id={job_id}")
+        await update.message.reply_text(f"✅ Принято: {job_type}\njob_id={job_id}")
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("isolated /run_wallet result reply failed")
+        logger.exception("isolated %s result reply failed", job_type)
+
+
+async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_antares_command(update, "run_wallet", "wallet")
 
 
 async def cmd_run_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

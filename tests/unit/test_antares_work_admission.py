@@ -46,22 +46,38 @@ def _reset_admission() -> None:
     handlers._logger = prev_logger
 
 
-def _allow_wallet() -> SimpleNamespace:
+_DISPATCH_CMDS = (
+    (handlers.cmd_run_wallet, "run_wallet", "wallet", "jid-wallet"),
+    (handlers.cmd_run_hourly, "run_hourly", "hourly", "jid-hourly"),
+    (handlers.cmd_run_download, "run_download", "download", "jid-download"),
+    (handlers.cmd_run_rate, "run_rate", "rate", "jid-rate"),
+    (
+        handlers.cmd_operator_wallets_ready,
+        "operator_wallets_ready",
+        "script_job:operator_wallets_ready",
+        "jid-operator-wallets-ready",
+    ),
+    (
+        handlers.cmd_wallet_editor_refresh,
+        "wallet_editor_refresh",
+        "wallet_editor_registry_refresh",
+        "jid-wallet-editor-refresh",
+    ),
+)
+
+
+def _allow_dispatch() -> SimpleNamespace:
+    commands = {
+        command: CommandRule(
+            required_level=1,
+            allow_private=True,
+            allow_groups=True,
+            enabled=True,
+        )
+        for _cb, command, _job, _jid in _DISPATCH_CMDS
+    }
     rules = SimpleNamespace(
-        commands_map={
-            "run_wallet": CommandRule(
-                required_level=1,
-                allow_private=True,
-                allow_groups=True,
-                enabled=True,
-            ),
-            "run_hourly": CommandRule(
-                required_level=1,
-                allow_private=True,
-                allow_groups=True,
-                enabled=True,
-            ),
-        },
+        commands_map=commands,
         access_map={("private", 22): 1, (11, 22): 1},
     )
 
@@ -98,7 +114,7 @@ def _job_fail_logs(logger: MagicMock) -> list[object]:
     return [
         call
         for call in logger.exception.call_args_list
-        if call.args and call.args[0] == "admitted wallet job failed"
+        if call.args and call.args[0] == "admitted %s job failed"
     ]
 
 
@@ -143,8 +159,8 @@ def _capture_submit(captured: dict[str, object]):
 
 
 def _capture_watch(captured: dict[str, object], orig_watch):
-    def _watch(future, logger_obj):  # noqa: ANN001
-        admitted = orig_watch(future, logger_obj)
+    def _watch(future, logger_obj, *, job_type):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, job_type=job_type)
         captured["admitted"] = admitted
         return admitted
 
@@ -310,15 +326,22 @@ def test_occupied_single_worker_starts_request_job_after_seal(
     assert outcome.future.result(timeout=5) == "jid-after-worker"
 
 
-def test_isolated_wallet_order_acl_and_hourly_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("callback,command,job_type,job_id", _DISPATCH_CMDS)
+def test_isolated_open_submit_before_reply_and_actor(
+    monkeypatch: pytest.MonkeyPatch,
+    callback,
+    command,
+    job_type,
+    job_id,
+) -> None:
     recorded: dict[str, object] = {}
     order: list[str] = []
 
-    def _job(job_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
-        recorded["job_type"] = job_type
+    def _job(submitted_type: str, actor: Actor, *, force_rules_sync: bool = False) -> str:
+        recorded["job_type"] = submitted_type
         recorded["actor"] = actor
         recorded["force"] = force_rules_sync
-        return "jid-wallet"
+        return job_id
 
     orig_submit = WorkAdmission.submit_job_if_open
 
@@ -329,7 +352,7 @@ def test_isolated_wallet_order_acl_and_hourly_bypass(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("modules.antares.work_admission.request_job", _job)
     monkeypatch.setattr(WorkAdmission, "submit_job_if_open", _submit)
     _open_bound()
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(MagicMock())
     update = _update()
 
@@ -338,60 +361,66 @@ def test_isolated_wallet_order_acl_and_hourly_bypass(monkeypatch: pytest.MonkeyP
         update._replies.append(text)
 
     update.message.reply_text = AsyncMock(side_effect=_reply)
-
-    async def _run() -> None:
-        await handlers.cmd_run_wallet(update, MagicMock())
-
-    asyncio.run(_run())
+    asyncio.run(callback(update, MagicMock()))
     assert order[0] == "submit"
-    assert "reply" in order
     assert order.index("submit") < order.index("reply")
-    assert recorded["job_type"] == "wallet"
+    assert recorded["job_type"] == job_type
     actor = recorded["actor"]
     assert isinstance(actor, Actor)
     assert actor.kind == "tg"
     assert actor.chat_id == 11
     assert actor.user_id == 22
     assert recorded["force"] is False
-    assert update._replies[0] == "🚀 Запускаю: wallet"
-    assert update._replies[1] == "✅ Принято: wallet\njob_id=jid-wallet"
-
-    hourly = _update()
-
-    async def _hourly() -> None:
-        with patch(
-            "core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock
-        ) as dispatch:
-            dispatch.return_value = "jid-hourly"
-            await handlers.cmd_run_hourly(hourly, MagicMock())
-            dispatch.assert_awaited_once()
-            assert dispatch.await_args.args[0] == "hourly"
-
-    asyncio.run(_hourly())
-    assert hourly._replies[0] == "🚀 Запускаю: hourly"
+    assert update._replies[0] == f"🚀 Запускаю: {job_type}"
+    assert update._replies[1] == f"✅ Принято: {job_type}\njob_id={job_id}"
 
 
-def test_isolated_closed_no_zapuskayu(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("callback,command,job_type,_jid", _DISPATCH_CMDS)
+def test_isolated_closed_and_sealed_no_zapuskayu(
+    monkeypatch: pytest.MonkeyPatch,
+    callback,
+    command,
+    job_type,
+    _jid,
+) -> None:
     monkeypatch.setattr(
         "modules.antares.work_admission.get_job_executor",
         lambda: SimpleNamespace(submit=lambda *a, **k: (_ for _ in ()).throw(AssertionError())),
     )
-    admission = WorkAdmission()
-    bind_antares_admission(admission)
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(MagicMock())
+
+    closed = WorkAdmission()
+    bind_antares_admission(closed)
     update = _update()
-    asyncio.run(handlers.cmd_run_wallet(update, MagicMock()))
+    asyncio.run(callback(update, MagicMock()))
     assert update._replies == [ADMISSION_CLOSED_REPLY]
 
+    reset_antares_admission_for_tests()
+    sealed = WorkAdmission()
+    bind_antares_admission(sealed)
+    sealed.open()
+    sealed.seal()
+    update2 = _update()
+    asyncio.run(callback(update2, MagicMock()))
+    assert update2._replies == [ADMISSION_CLOSED_REPLY]
 
-def test_isolated_acl_deny_no_submit(monkeypatch: pytest.MonkeyPatch) -> None:
+
+@pytest.mark.parametrize("callback,command,job_type,_jid", _DISPATCH_CMDS)
+def test_isolated_acl_deny_no_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    callback,
+    command,
+    job_type,
+    _jid,
+) -> None:
     submitted = []
     monkeypatch.setattr(
         "modules.antares.work_admission.get_job_executor",
         lambda: SimpleNamespace(submit=lambda *a, **k: submitted.append(1)),
     )
     _open_bound()
+
     class _Empty:
         def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
             return SimpleNamespace(commands_map={}, access_map={})
@@ -399,32 +428,36 @@ def test_isolated_acl_deny_no_submit(monkeypatch: pytest.MonkeyPatch) -> None:
     handlers.bind_rules(_Empty())
     handlers.bind_logger(MagicMock())
     update = _update()
-    asyncio.run(handlers.cmd_run_wallet(update, MagicMock()))
+    asyncio.run(callback(update, MagicMock()))
     assert update._replies == [deny_message("unknown_command", {})]
     assert submitted == []
     assert all("Запускаю" not in text for text in update._replies)
 
 
-def test_unbound_wallet_keeps_legacy_order() -> None:
+@pytest.mark.parametrize("callback,command,job_type,job_id", _DISPATCH_CMDS)
+def test_unbound_keeps_legacy_order(callback, command, job_type, job_id) -> None:
     update = _update()
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(MagicMock())
 
-    async def _dispatch(job_type: str, actor: Actor) -> str:
-        assert update._replies == ["🚀 Запускаю: wallet"]
-        return "legacy-id"
+    async def _dispatch(submitted_type: str, actor: Actor) -> str:
+        assert update._replies == [f"🚀 Запускаю: {submitted_type}"]
+        assert submitted_type == job_type
+        assert actor.kind == "tg"
+        return job_id
 
     async def _run() -> None:
         with patch(
             "core.tg_command_dispatch.dispatch_job_async", side_effect=_dispatch
         ) as dispatch:
-            await handlers.cmd_run_wallet(update, MagicMock())
+            await callback(update, MagicMock())
             dispatch.assert_awaited_once()
+            assert dispatch.await_args.args[0] == job_type
 
     asyncio.run(_run())
     assert update._replies == [
-        "🚀 Запускаю: wallet",
-        "✅ Принято: wallet\njob_id=legacy-id",
+        f"🚀 Запускаю: {job_type}",
+        f"✅ Принято: {job_type}\njob_id={job_id}",
     ]
 
 
@@ -440,7 +473,7 @@ def test_reply_failure_does_not_cancel_accepted(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("modules.antares.work_admission.request_job", _job)
     _open_bound()
     logger = MagicMock()
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(logger)
     update = _update()
     boom = {"n": 0}
@@ -463,8 +496,26 @@ def test_reply_failure_does_not_cancel_accepted(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(_run())
     assert started.is_set()
     assert any("jid-live" in text for text in update._replies)
-    logger.exception.assert_any_call("isolated /run_wallet start reply failed")
+    logger.exception.assert_any_call("isolated %s start reply failed", "wallet")
     assert _job_fail_logs(logger) == []
+
+
+def test_isolated_submit_error_logs_job_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "modules.antares.work_admission.get_job_executor",
+        lambda: SimpleNamespace(
+            submit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("executor down"))
+        ),
+    )
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_dispatch())
+    handlers.bind_logger(logger)
+    update = _update()
+    asyncio.run(handlers.cmd_run_hourly(update, MagicMock()))
+    logger.exception.assert_any_call("isolated %s submit failed", "hourly")
+    assert any("Ошибка при постановке" in text for text in update._replies)
+    assert all("Запускаю" not in text for text in update._replies)
 
 
 def test_watch_after_future_already_failed() -> None:
@@ -475,7 +526,7 @@ def test_watch_after_future_already_failed() -> None:
     async def _run() -> None:
         loop = asyncio.get_running_loop()
         bucket = _capture_asyncio_errors(loop)
-        admitted = watch_admitted_future(future, logger)
+        admitted = watch_admitted_future(future, logger, job_type="wallet")
         with pytest.raises(RuntimeError, match="already failed"):
             await admitted.wait()
         holders = [admitted]
@@ -505,7 +556,7 @@ def test_cancel_during_first_reply_observes_later_job_error(
     )
     _open_bound()
     logger = MagicMock()
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(logger)
     update = _update()
     entered_reply = asyncio.Event()
@@ -543,7 +594,7 @@ def test_cancel_during_first_reply_observes_later_job_error(
     start_logs = [
         call
         for call in logger.exception.call_args_list
-        if call.args and call.args[0] == "isolated /run_wallet start reply failed"
+        if call.args and call.args[0] == "isolated %s start reply failed"
     ]
     assert start_logs == []
 
@@ -556,8 +607,8 @@ def test_cancel_during_future_wait_does_not_duplicate_job_error(
     release = threading.Event()
     orig_watch = watch_admitted_future
 
-    def _watch(future, logger_obj):  # noqa: ANN001
-        admitted = orig_watch(future, logger_obj)
+    def _watch(future, logger_obj, *, job_type):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, job_type=job_type)
         captured["admitted"] = admitted
         orig_wait = admitted.wait
 
@@ -578,7 +629,7 @@ def test_cancel_during_future_wait_does_not_duplicate_job_error(
     monkeypatch.setattr("modules.antares.handlers.watch_admitted_future", _watch)
     _open_bound()
     logger = MagicMock()
-    handlers.bind_rules(_allow_wallet())
+    handlers.bind_rules(_allow_dispatch())
     handlers.bind_logger(logger)
     update = _update()
     entered_wait = asyncio.Event()
@@ -631,7 +682,7 @@ def test_admitted_result_survives_closed_loop(monkeypatch: pytest.MonkeyPatch) -
         loop = asyncio.get_running_loop()
         bucket = _capture_asyncio_errors(loop)
         first_bucket.append(bucket)
-        admitted = watch_admitted_future(outcome.future, logger)
+        admitted = watch_admitted_future(outcome.future, logger, job_type="wallet")
         await _drain_scheduled(loop)
         return admitted
 
