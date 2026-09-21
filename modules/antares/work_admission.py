@@ -79,6 +79,20 @@ class WorkAdmission:
                 raise AdmissionTransitionError("seal requires a bound admission")
             self._state = AdmissionState.SEALED
 
+    def submit_if_open(
+        self,
+        executor,
+        fn,
+        /,
+        *args,
+        **kwargs,
+    ) -> AdmissionAccepted | AdmissionRejected:
+        with self._lock:
+            if self._state is not AdmissionState.OPEN:
+                return AdmissionRejected(self._state)
+            future = executor.submit(fn, *args, **kwargs)
+            return AdmissionAccepted(future)
+
     def submit_job_if_open(
         self,
         job_type: str,
@@ -86,19 +100,13 @@ class WorkAdmission:
         *,
         force_rules_sync: bool = False,
     ) -> AdmissionAccepted | AdmissionRejected:
-        with self._lock:
-            if self._state is not AdmissionState.OPEN:
-                return AdmissionRejected(self._state)
-            try:
-                future = get_job_executor().submit(
-                    request_job,
-                    job_type,
-                    actor,
-                    force_rules_sync=force_rules_sync,
-                )
-            except Exception:
-                raise
-            return AdmissionAccepted(future)
+        return self.submit_if_open(
+            get_job_executor(),
+            request_job,
+            job_type,
+            actor,
+            force_rules_sync=force_rules_sync,
+        )
 
 
 class AdmittedJob:
@@ -109,12 +117,15 @@ class AdmittedJob:
         future: Future,
         logger: object,
         loop: asyncio.AbstractEventLoop,
-        job_type: str,
+        label: str,
+        *,
+        kind: str,
     ) -> None:
         self.future = future
         self._logger = logger
         self._loop = loop
-        self._job_type = job_type
+        self._label = label
+        self._kind = kind
         self._af: asyncio.Future = loop.create_future()
         self._lock = threading.Lock()
         self._job_logged = False
@@ -133,7 +144,10 @@ class AdmittedJob:
                 self._job_logged = True
                 self._done.set()
             if log_now:
-                self._logger.exception("admitted %s job failed", self._job_type)
+                if self._kind == "job":
+                    self._logger.exception("admitted %s job failed", self._label)
+                else:
+                    self._logger.exception("admitted %s work failed", self._label)
             self._notify()
             return
         with self._lock:
@@ -181,10 +195,22 @@ class AdmittedJob:
             raise
 
 
-def watch_admitted_future(future: Future, logger: object, *, job_type: str) -> AdmittedJob:
+def watch_admitted_future(
+    future: Future,
+    logger: object,
+    *,
+    job_type: str | None = None,
+    work: str | None = None,
+) -> AdmittedJob:
     """Attach observation before any await on the caller."""
 
-    return AdmittedJob(future, logger, asyncio.get_running_loop(), job_type)
+    if (job_type is None) == (work is None):
+        raise TypeError("watch_admitted_future requires exactly one of job_type or work")
+    if job_type is not None:
+        return AdmittedJob(
+            future, logger, asyncio.get_running_loop(), job_type, kind="job"
+        )
+    return AdmittedJob(future, logger, asyncio.get_running_loop(), work, kind="work")
 
 
 def bound_admission() -> WorkAdmission | None:

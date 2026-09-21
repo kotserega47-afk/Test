@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 review `a84e9cd48095232d901d7b12ee499d3db61407d0` (не выпущено); cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; runtime шесть dispatch — TASK-27 `08132f2…`; прямые ops — TASK-28 (этот PR, не выпущено); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -264,14 +264,14 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- `/registry_replay`, `/registry_export`, `/auto_enable_plan`, `/auto_enable_run`, `/reload_rules`
+- `/registry_replay`, `/reload_rules`
 - document ingest → `queue.put`
 - mixed `schedule_loop` / `dispatch_job_background`
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2
-- прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_job_if_open`
+- прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`
 
-Шесть TG dispatch-команд (`/run_wallet`, `/run_hourly`, `/run_download`, `/run_rate`, `/operator_wallets_ready`, `/wallet_editor_refresh`) — isolated путь TASK-27 (review `a84e9cd…`); mixed unbound по-прежнему `run_job_async`. Успех TASK-27 **не** есть глобальный запрет новой работы.
+Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — isolated TASK-28 (`submit_if_open` + существующий `get_job_executor()`, не `request_job`). Mixed unbound: dispatch через `run_job_async`; прямые ops через `run_in_executor(None, ...)`. Допуск внешнего Auto-Enable **не** защищает последующий `enqueue_auto_enable_batch`. Успех TASK-27/28 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 

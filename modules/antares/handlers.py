@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from core.job_dispatch import get_job_executor
 from core.job_runner import Actor, get_status
 from core.lock_status import get_lock_status_for_job_types
 from core.tg_command_dispatch import guard_or_deny, run_job_async
@@ -131,6 +132,43 @@ async def _run_antares_command(update: Update, command: str, job_type: str) -> N
         logger.exception("isolated %s result reply failed", job_type)
 
 
+async def _admit_direct_work(
+    update: Update,
+    logger: object,
+    *,
+    work: str,
+    fn,
+    args: tuple = (),
+    kwargs: dict | None = None,
+    start_text: str,
+):
+    admission = bound_admission()
+    assert admission is not None
+    try:
+        outcome = admission.submit_if_open(
+            get_job_executor(),
+            fn,
+            *args,
+            **(kwargs or {}),
+        )
+    except Exception:
+        logger.exception("isolated %s submit failed", work)
+        await update.message.reply_text("❌ Ошибка при постановке.\nХвост трейса:")
+        await update.message.reply_text(traceback.format_exc()[-3500:])
+        return None
+    if not isinstance(outcome, AdmissionAccepted):
+        await update.message.reply_text(ADMISSION_CLOSED_REPLY)
+        return None
+    admitted = watch_admitted_future(outcome.future, logger, work=work)
+    try:
+        await update.message.reply_text(start_text)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("isolated %s start reply failed", work)
+    return admitted
+
+
 async def cmd_run_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_antares_command(update, "run_wallet", "wallet")
 
@@ -199,6 +237,7 @@ async def cmd_registry_replay(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admission = bound_admission()
     rules, logger = _require_bound()
     if not await guard_or_deny(update, "registry_export", rules):
         return
@@ -208,21 +247,15 @@ async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Registry export failed: chat_id unavailable")
         return
 
-    import asyncio
-
     from telegram import InputFile
     from integrations.wallet_editor_registry_db.registry_export_builder import (
         build_registry_export_from_postgres,
         format_registry_export_summary,
     )
 
-    await update.message.reply_text("📤 Building registry export from PostgreSQL...")
-    try:
-        loop = asyncio.get_running_loop()
-        artifact = await loop.run_in_executor(
-            None,
-            build_registry_export_from_postgres,
-        )
+    start_text = "📤 Building registry export from PostgreSQL..."
+
+    async def _deliver(artifact) -> None:
         summary_text = format_registry_export_summary(artifact.summary)
         with artifact.path.open("rb") as export_file:
             await update.message.reply_document(
@@ -231,17 +264,56 @@ async def cmd_registry_export(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         if len(summary_text) > 1024:
             await update.message.reply_text(summary_text)
+
+    if admission is None:
+        await update.message.reply_text(start_text)
+        try:
+            loop = asyncio.get_running_loop()
+            artifact = await loop.run_in_executor(
+                None,
+                build_registry_export_from_postgres,
+            )
+            await _deliver(artifact)
+        except Exception as e:
+            logger.exception("cmd_registry_export failed")
+            await update.message.reply_text(f"❌ Registry export failed: {e}")
+        return
+
+    admitted = await _admit_direct_work(
+        update,
+        logger,
+        work="registry_export",
+        fn=build_registry_export_from_postgres,
+        start_text=start_text,
+    )
+    if admitted is None:
+        return
+    try:
+        artifact = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        try:
+            await update.message.reply_text(f"❌ Registry export failed: {e}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated %s error reply failed", "registry_export")
+        return
+    try:
+        await _deliver(artifact)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("cmd_registry_export failed")
         await update.message.reply_text(f"❌ Registry export failed: {e}")
 
 
 async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admission = bound_admission()
     rules, logger = _require_bound()
     if not await guard_or_deny(update, "auto_enable_plan", rules):
         return
-
-    import asyncio
 
     from integrations.wallet_editor_auto_enable import run_auto_enable_plan
 
@@ -250,14 +322,9 @@ async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYP
         chat_id=int(update.effective_chat.id),
         user_id=int(update.effective_user.id),
     )
-    await update.message.reply_text("🧩 Строю WalletEditor Auto-Enable plan (plan-only)...")
+    start_text = "🧩 Строю WalletEditor Auto-Enable plan (plan-only)..."
 
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_auto_enable_plan(actor, manual=True),
-        )
+    async def _reply_plan(result) -> None:
         if result.skipped_reason == "disabled":
             await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
         elif result.skipped_reason == "error":
@@ -266,17 +333,59 @@ async def cmd_auto_enable_plan(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(
                 f"✅ Plan-only report sent={result.sent}. Antares/registry unchanged."
             )
+
+    if admission is None:
+        await update.message.reply_text(start_text)
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_auto_enable_plan(actor, manual=True),
+            )
+            await _reply_plan(result)
+        except Exception as e:
+            logger.exception("cmd_auto_enable_plan failed")
+            await update.message.reply_text(f"❌ /auto_enable_plan failed: {type(e).__name__}: {e}")
+        return
+
+    admitted = await _admit_direct_work(
+        update,
+        logger,
+        work="auto_enable_plan",
+        fn=run_auto_enable_plan,
+        args=(actor,),
+        kwargs={"manual": True},
+        start_text=start_text,
+    )
+    if admitted is None:
+        return
+    try:
+        result = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.exception("cmd_auto_enable_plan failed")
-        await update.message.reply_text(f"❌ /auto_enable_plan failed: {type(e).__name__}: {e}")
+        try:
+            await update.message.reply_text(
+                f"❌ /auto_enable_plan failed: {type(e).__name__}: {e}"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated %s error reply failed", "auto_enable_plan")
+        return
+    try:
+        await _reply_plan(result)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("isolated %s result reply failed", "auto_enable_plan")
 
 
 async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admission = bound_admission()
     rules, logger = _require_bound()
     if not await guard_or_deny(update, "auto_enable_run", rules):
         return
-
-    import asyncio
 
     from integrations.wallet_editor_auto_enable import run_auto_enable
 
@@ -285,14 +394,9 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
         chat_id=int(update.effective_chat.id),
         user_id=int(update.effective_user.id),
     )
-    await update.message.reply_text("🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)...")
+    start_text = "🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)..."
 
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_auto_enable(actor, manual=True),
-        )
+    async def _reply_run(result) -> None:
         if result.skipped_reason == "disabled":
             await update.message.reply_text("ℹ️ Auto-Enable disabled (job_params enabled=0).")
         elif result.skipped_reason == "error":
@@ -305,9 +409,52 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 f"✅ Auto-Enable execution finished. Telegram report sent={result.sent}"
             )
+
+    if admission is None:
+        await update.message.reply_text(start_text)
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_auto_enable(actor, manual=True),
+            )
+            await _reply_run(result)
+        except Exception as e:
+            logger.exception("cmd_auto_enable_run failed")
+            await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
+        return
+
+    admitted = await _admit_direct_work(
+        update,
+        logger,
+        work="auto_enable_run",
+        fn=run_auto_enable,
+        args=(actor,),
+        kwargs={"manual": True},
+        start_text=start_text,
+    )
+    if admitted is None:
+        return
+    try:
+        result = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.exception("cmd_auto_enable_run failed")
-        await update.message.reply_text(f"❌ /auto_enable_run failed: {type(e).__name__}: {e}")
+        try:
+            await update.message.reply_text(
+                f"❌ /auto_enable_run failed: {type(e).__name__}: {e}"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated %s error reply failed", "auto_enable_run")
+        return
+    try:
+        await _reply_run(result)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("isolated %s result reply failed", "auto_enable_run")
 
 
 def _observation_enabled() -> bool:

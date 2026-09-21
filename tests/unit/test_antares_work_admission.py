@@ -4,8 +4,11 @@ import asyncio
 import gc
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -28,6 +31,10 @@ from modules.antares.work_admission import (
     request_antares_stop,
     reset_antares_admission_for_tests,
     watch_admitted_future,
+)
+from integrations.wallet_editor_registry_db.registry_export_builder import (
+    RegistryExportArtifact,
+    RegistryExportSummary,
 )
 
 
@@ -158,9 +165,21 @@ def _capture_submit(captured: dict[str, object]):
     return _submit
 
 
+def _capture_submit_if_open(captured: dict[str, object]):
+    orig_submit = WorkAdmission.submit_if_open
+
+    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        out = orig_submit(self, *args, **kwargs)
+        if isinstance(out, AdmissionAccepted):
+            captured["future"] = out.future
+        return out
+
+    return _submit
+
+
 def _capture_watch(captured: dict[str, object], orig_watch):
-    def _watch(future, logger_obj, *, job_type):  # noqa: ANN001
-        admitted = orig_watch(future, logger_obj, job_type=job_type)
+    def _watch(future, logger_obj, **kwargs):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, **kwargs)
         captured["admitted"] = admitted
         return admitted
 
@@ -883,3 +902,566 @@ def test_stop_from_other_thread_without_loop_errors_and_stays_sealed() -> None:
         assert stop.is_set() is False
 
     asyncio.run(_run())
+
+
+_EXPORT_START = "📤 Building registry export from PostgreSQL..."
+_PLAN_START = "🧩 Строю WalletEditor Auto-Enable plan (plan-only)..."
+_RUN_START = "🧩 Запускаю WalletEditor Auto-Enable (fresh plan + execution)..."
+_BUILDER = (
+    "integrations.wallet_editor_registry_db.registry_export_builder.build_registry_export_from_postgres"
+)
+_PLAN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable_plan"
+_RUN_ORCH = "integrations.wallet_editor_auto_enable.run_auto_enable"
+_FORMAT = (
+    "integrations.wallet_editor_registry_db.registry_export_builder.format_registry_export_summary"
+)
+_MSK = ZoneInfo("Europe/Moscow")
+
+
+def _allow_direct(*commands: str) -> SimpleNamespace:
+    commands_map = {
+        command: CommandRule(
+            required_level=1,
+            allow_private=True,
+            allow_groups=True,
+            enabled=True,
+        )
+        for command in commands
+    }
+    rules = SimpleNamespace(
+        commands_map=commands_map,
+        access_map={("private", 22): 1, (11, 22): 1},
+    )
+
+    class _Rules:
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            return rules
+
+    return _Rules()
+
+
+def _export_artifact(tmp_path: Path) -> RegistryExportArtifact:
+    export_path = tmp_path / "wallet_editor_export_sandbox.xlsx"
+    export_path.write_bytes(b"fake-xlsx")
+    summary = RegistryExportSummary(
+        all_results_rows=42,
+        runs_rows=7,
+        hold_rows=2,
+        otlezka_rows=3,
+        last_manual_sync_at="2026-07-01T12:00:00+03:00",
+        snapshot_hash_short="abc123def456",
+        manual_sync_degraded=False,
+        generated_at=datetime(2026, 7, 1, 12, 0, 0, tzinfo=_MSK).isoformat(),
+        filename=export_path.name,
+    )
+    return RegistryExportArtifact(path=export_path, filename=export_path.name, summary=summary)
+
+
+def _work_fail_logs(logger: MagicMock) -> list[object]:
+    return [
+        call
+        for call in logger.exception.call_args_list
+        if call.args and call.args[0] == "admitted %s work failed"
+    ]
+
+
+def _forbid_request_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("request_job must not run for direct ops")
+
+    monkeypatch.setattr("modules.antares.work_admission.request_job", _boom)
+    monkeypatch.setattr("core.job_runner.request_job", _boom)
+
+
+def _wrap_job_executor_submit(monkeypatch: pytest.MonkeyPatch, recorded: list):
+    executor = get_job_executor()
+    orig = executor.submit
+
+    def _submit(fn, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        recorded.append({"fn": fn, "args": args, "kwargs": kwargs, "executor": executor})
+        return orig(fn, *args, **kwargs)
+
+    monkeypatch.setattr(executor, "submit", _submit)
+    return executor
+
+
+def test_generic_submit_if_open_uses_given_executor() -> None:
+    admission = _open_bound()
+    seen: list[object] = []
+
+    def _fn(value: int, *, flag: bool) -> str:
+        seen.append((value, flag))
+        return "direct-ok"
+
+    class _Exec:
+        def submit(self, fn, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            future: Future = Future()
+            future.set_result(fn(*args, **kwargs))
+            seen.append("submitted")
+            return future
+
+    outcome = admission.submit_if_open(_Exec(), _fn, 7, flag=True)
+    assert isinstance(outcome, AdmissionAccepted)
+    assert outcome.future.result() == "direct-ok"
+    assert seen == [(7, True), "submitted"]
+
+
+def test_seal_wins_generic_submit_if_open() -> None:
+    submitted = threading.Event()
+    start_submit = threading.Event()
+    result: dict[str, object] = {}
+
+    class _Exec:
+        def submit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            submitted.set()
+            raise AssertionError("seal won; submit must not run")
+
+    admission = _open_bound()
+
+    def _try_submit() -> None:
+        assert start_submit.wait(timeout=5)
+        result["outcome"] = admission.submit_if_open(_Exec(), lambda: 1)
+
+    thread = threading.Thread(target=_try_submit)
+    thread.start()
+    admission.seal()
+    start_submit.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert submitted.is_set() is False
+    assert isinstance(result["outcome"], AdmissionRejected)
+
+
+def test_generic_accept_may_finish_after_seal() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def _work() -> str:
+        started.set()
+        assert release.wait(timeout=5)
+        return "after-seal"
+
+    admission = _open_bound()
+    outcome = admission.submit_if_open(get_job_executor(), _work)
+    assert isinstance(outcome, AdmissionAccepted)
+    admission.seal()
+    release.set()
+    assert outcome.future.result(timeout=5) == "after-seal"
+    assert started.wait(timeout=5)
+
+
+def test_isolated_export_open_submit_before_reply_exact_callable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = _export_artifact(tmp_path)
+    recorded: list = []
+    order: list[str] = []
+    _forbid_request_job(monkeypatch)
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+    monkeypatch.setattr(_BUILDER, lambda: artifact)
+    _open_bound()
+    handlers.bind_rules(_allow_direct("registry_export"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    update.message.reply_document = AsyncMock()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        order.append("reply")
+        update._replies.append(text)
+
+    orig_submit = WorkAdmission.submit_if_open
+
+    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        order.append("submit")
+        return orig_submit(self, *args, **kwargs)
+
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _submit)
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+    asyncio.run(handlers.cmd_registry_export(update, MagicMock()))
+    assert order[0] == "submit"
+    assert order.index("submit") < order.index("reply")
+    assert update._replies[0] == _EXPORT_START
+    assert recorded and recorded[0]["executor"] is executor
+    from integrations.wallet_editor_registry_db.registry_export_builder import (
+        build_registry_export_from_postgres,
+    )
+
+    assert recorded[0]["fn"] is build_registry_export_from_postgres
+    assert recorded[0]["args"] == ()
+    assert recorded[0]["kwargs"] == {}
+    update.message.reply_document.assert_awaited()
+
+
+def test_isolated_auto_enable_plan_exact_callable_and_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    result = SimpleNamespace(skipped_reason=None, sent=True)
+    _forbid_request_job(monkeypatch)
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+    monkeypatch.setattr(_PLAN_ORCH, lambda actor, *, manual: result)
+    monkeypatch.setattr(_RUN_ORCH, lambda *a, **k: (_ for _ in ()).throw(AssertionError("run")))
+    _open_bound()
+    handlers.bind_rules(_allow_direct("auto_enable_plan"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    asyncio.run(handlers.cmd_auto_enable_plan(update, MagicMock()))
+    from integrations.wallet_editor_auto_enable import run_auto_enable_plan
+
+    assert recorded[0]["executor"] is executor
+    assert recorded[0]["fn"] is run_auto_enable_plan
+    actor = recorded[0]["args"][0]
+    assert isinstance(actor, Actor)
+    assert actor.kind == "tg"
+    assert actor.chat_id == 11
+    assert actor.user_id == 22
+    assert recorded[0]["kwargs"] == {"manual": True}
+    assert update._replies[0] == _PLAN_START
+    assert update._replies[-1] == "✅ Plan-only report sent=True. Antares/registry unchanged."
+
+
+def test_isolated_auto_enable_run_exact_callable_and_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    result = SimpleNamespace(skipped_reason=None, phase="executed", sent=True)
+    _forbid_request_job(monkeypatch)
+    _wrap_job_executor_submit(monkeypatch, recorded)
+    monkeypatch.setattr(_RUN_ORCH, lambda actor, *, manual: result)
+    monkeypatch.setattr(_PLAN_ORCH, lambda *a, **k: (_ for _ in ()).throw(AssertionError("plan")))
+    _open_bound()
+    handlers.bind_rules(_allow_direct("auto_enable_run"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    asyncio.run(handlers.cmd_auto_enable_run(update, MagicMock()))
+    from integrations.wallet_editor_auto_enable import run_auto_enable
+
+    assert recorded[0]["fn"] is run_auto_enable
+    assert recorded[0]["kwargs"] == {"manual": True}
+    assert update._replies[0] == _RUN_START
+    assert update._replies[-1] == "✅ Auto-Enable execution finished. Telegram report sent=True"
+
+
+@pytest.mark.parametrize(
+    "callback,command,start",
+    [
+        (handlers.cmd_registry_export, "registry_export", _EXPORT_START),
+        (handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_START),
+        (handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_START),
+    ],
+)
+def test_isolated_direct_closed_sealed_no_start(
+    monkeypatch: pytest.MonkeyPatch, callback, command, start
+) -> None:
+    _forbid_request_job(monkeypatch)
+    monkeypatch.setattr(
+        "modules.antares.work_admission.get_job_executor",
+        lambda: SimpleNamespace(submit=lambda *a, **k: (_ for _ in ()).throw(AssertionError())),
+    )
+    handlers.bind_rules(_allow_direct(command))
+    handlers.bind_logger(MagicMock())
+    closed = WorkAdmission()
+    bind_antares_admission(closed)
+    update = _update()
+    update.message.reply_document = AsyncMock()
+    asyncio.run(callback(update, MagicMock()))
+    assert update._replies == [ADMISSION_CLOSED_REPLY]
+    update.message.reply_document.assert_not_awaited()
+    assert all(start not in text for text in update._replies)
+
+    reset_antares_admission_for_tests()
+    sealed = WorkAdmission()
+    bind_antares_admission(sealed)
+    sealed.open()
+    sealed.seal()
+    update2 = _update()
+    update2.message.reply_document = AsyncMock()
+    asyncio.run(callback(update2, MagicMock()))
+    assert update2._replies == [ADMISSION_CLOSED_REPLY]
+    update2.message.reply_document.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "callback,command,start",
+    [
+        (handlers.cmd_registry_export, "registry_export", _EXPORT_START),
+        (handlers.cmd_auto_enable_plan, "auto_enable_plan", _PLAN_START),
+        (handlers.cmd_auto_enable_run, "auto_enable_run", _RUN_START),
+    ],
+)
+def test_isolated_direct_acl_deny_no_submit(
+    monkeypatch: pytest.MonkeyPatch, callback, command, start
+) -> None:
+    submitted: list[int] = []
+    monkeypatch.setattr(
+        "modules.antares.work_admission.get_job_executor",
+        lambda: SimpleNamespace(submit=lambda *a, **k: submitted.append(1)),
+    )
+    _open_bound()
+
+    class _Empty:
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            return SimpleNamespace(commands_map={}, access_map={})
+
+    handlers.bind_rules(_Empty())
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    update.message.reply_document = AsyncMock()
+    asyncio.run(callback(update, MagicMock()))
+    assert update._replies == [deny_message("unknown_command", {})]
+    assert submitted == []
+    assert all(start not in text for text in update._replies)
+
+
+def test_isolated_direct_submit_error_not_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "modules.antares.handlers.get_job_executor",
+        lambda: SimpleNamespace(
+            submit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("executor down"))
+        ),
+    )
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_direct("auto_enable_plan"))
+    handlers.bind_logger(logger)
+    update = _update()
+    asyncio.run(handlers.cmd_auto_enable_plan(update, MagicMock()))
+    logger.exception.assert_any_call("isolated %s submit failed", "auto_enable_plan")
+    assert any("Ошибка при постановке" in text for text in update._replies)
+    assert all(_PLAN_START not in text for text in update._replies)
+
+
+def test_isolated_export_reply_failure_does_not_cancel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    artifact = _export_artifact(tmp_path)
+
+    def _build():
+        started.set()
+        assert release.wait(timeout=5)
+        return artifact
+
+    monkeypatch.setattr(_BUILDER, _build)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_direct("registry_export"))
+    handlers.bind_logger(logger)
+    update = _update()
+    update.message.reply_document = AsyncMock()
+    boom = {"n": 0}
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        boom["n"] += 1
+        if boom["n"] == 1:
+            raise RuntimeError("telegram down")
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+
+    async def _run() -> None:
+        task = asyncio.create_task(handlers.cmd_registry_export(update, MagicMock()))
+        await asyncio.to_thread(started.wait, 5)
+        assert started.is_set()
+        release.set()
+        await task
+
+    asyncio.run(_run())
+    update.message.reply_document.assert_awaited()
+    logger.exception.assert_any_call("isolated %s start reply failed", "registry_export")
+    assert _work_fail_logs(logger) == []
+
+
+def test_isolated_plan_late_error_logged_once_no_unhandled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    release = threading.Event()
+
+    def _plan(actor, *, manual):  # noqa: ANN001
+        assert release.wait(timeout=5)
+        raise RuntimeError("accepted plan boom")
+
+    orig_watch = watch_admitted_future
+
+    def _watch(future, logger_obj, **kwargs):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, **kwargs)
+        captured["admitted"] = admitted
+        return admitted
+
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _capture_submit_if_open(captured))
+    monkeypatch.setattr(_PLAN_ORCH, _plan)
+    monkeypatch.setattr("modules.antares.handlers.watch_admitted_future", _watch)
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_allow_direct("auto_enable_plan"))
+    handlers.bind_logger(logger)
+    update = _update()
+    entered_reply = asyncio.Event()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        if _PLAN_START in text:
+            entered_reply.set()
+            await asyncio.Event().wait()
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
+        task = asyncio.create_task(handlers.cmd_auto_enable_plan(update, MagicMock()))
+        await asyncio.wait_for(entered_reply.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        future = captured["future"]
+        assert future.cancelled() is False
+        release.set()
+        with pytest.raises(RuntimeError, match="accepted plan boom"):
+            await asyncio.to_thread(future.result, 5)
+        admitted = captured.pop("admitted")
+        assert admitted._done.wait(timeout=5)
+        holders = [admitted, task]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
+
+    asyncio.run(_run())
+    assert len(_work_fail_logs(logger)) == 1
+    assert all(
+        not (call.args and call.args[0] == "cmd_auto_enable_plan failed")
+        for call in logger.exception.call_args_list
+    )
+
+
+def test_isolated_direct_seal_before_handler_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_cmd = threading.Event()
+    submitted = threading.Event()
+
+    def _submit(*args, **kwargs):  # noqa: ANN002, ANN003
+        submitted.set()
+        raise AssertionError("sealed handler must not submit")
+
+    monkeypatch.setattr(
+        "modules.antares.work_admission.get_job_executor",
+        lambda: SimpleNamespace(submit=_submit),
+    )
+    admission = _open_bound()
+    handlers.bind_rules(_allow_direct("auto_enable_run"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    result: dict[str, object] = {}
+
+    def _run() -> None:
+        assert start_cmd.wait(timeout=5)
+        asyncio.run(handlers.cmd_auto_enable_run(update, MagicMock()))
+        result["replies"] = list(update._replies)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    admission.seal()
+    start_cmd.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert submitted.is_set() is False
+    assert result["replies"] == [ADMISSION_CLOSED_REPLY]
+
+
+def test_unbound_direct_ops_keep_default_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = _export_artifact(tmp_path)
+    seen: list[object] = []
+    handlers.bind_rules(_allow_direct("registry_export", "auto_enable_plan"))
+    handlers.bind_logger(MagicMock())
+
+    orig = asyncio.BaseEventLoop.run_in_executor
+
+    def _rie(self, executor, func, *args):  # noqa: ANN001, ANN002
+        seen.append(executor)
+        return orig(self, executor, func, *args)
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "run_in_executor", _rie)
+    monkeypatch.setattr(_BUILDER, lambda: artifact)
+    monkeypatch.setattr(
+        _PLAN_ORCH,
+        lambda actor, *, manual: SimpleNamespace(skipped_reason=None, sent=True),
+    )
+    update = _update()
+    update.message.reply_document = AsyncMock()
+    asyncio.run(handlers.cmd_registry_export(update, MagicMock()))
+    asyncio.run(handlers.cmd_auto_enable_plan(update, MagicMock()))
+    assert seen
+    assert all(item is None for item in seen)
+    assert update._replies[0] == _EXPORT_START
+
+
+def test_isolated_export_filename_caption_and_closed_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = _export_artifact(tmp_path)
+    monkeypatch.setattr(_BUILDER, lambda: artifact)
+    monkeypatch.setattr(_FORMAT, lambda summary: "s" * 1025)
+    _open_bound()
+    handlers.bind_rules(_allow_direct("registry_export"))
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    captured: dict[str, object] = {}
+    opened: list[object] = []
+    real_open = Path.open
+
+    def _tracking_open(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        handle = real_open(self, *args, **kwargs)
+        if self == artifact.path:
+            opened.append(handle)
+        return handle
+
+    async def _capture(**kwargs):  # noqa: ANN003
+        document = kwargs["document"]
+        captured["filename"] = document.filename
+        captured["caption"] = kwargs["caption"]
+
+    update.message.reply_document = AsyncMock(side_effect=_capture)
+    with patch.object(Path, "open", _tracking_open):
+        asyncio.run(handlers.cmd_registry_export(update, MagicMock()))
+    assert captured["filename"] == artifact.filename
+    assert captured["caption"] == "s" * 1024
+    assert update._replies[-1] == "s" * 1025
+    assert opened
+    assert all(handle.closed for handle in opened)
+
+
+def test_isolated_auto_enable_result_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    _open_bound()
+    handlers.bind_rules(_allow_direct("auto_enable_plan", "auto_enable_run"))
+    handlers.bind_logger(MagicMock())
+    plan_cases = [
+        (SimpleNamespace(skipped_reason="disabled"), "ℹ️ Auto-Enable disabled (job_params enabled=0)."),
+        (SimpleNamespace(skipped_reason="error"), "⚠️ Auto-Enable plan failed. См. route-отчёт."),
+    ]
+    for result, expected in plan_cases:
+        update = _update()
+        monkeypatch.setattr(_PLAN_ORCH, lambda actor, *, manual, _r=result: _r)
+        asyncio.run(handlers.cmd_auto_enable_plan(update, MagicMock()))
+        assert update._replies[-1] == expected
+    run_cases = [
+        (
+            SimpleNamespace(skipped_reason=None, phase="plan-only"),
+            "ℹ️ Execution blocked by settings (dry_run=1). Plan-only report sent.",
+        ),
+        (
+            SimpleNamespace(skipped_reason=None, phase="executed", sent=False),
+            "✅ Auto-Enable execution finished. Telegram report sent=False",
+        ),
+    ]
+    for result, expected in run_cases:
+        update = _update()
+        monkeypatch.setattr(_RUN_ORCH, lambda actor, *, manual, _r=result: _r)
+        asyncio.run(handlers.cmd_auto_enable_run(update, MagicMock()))
+        assert update._replies[-1] == expected

@@ -55,7 +55,8 @@
 | [TASK-2026-09-17-24](TASK-2026-09-17-24_antares_ptb_lifecycle.md) | Sandbox PTB lifecycle helper: review пройден (`34ef7af…`), закрытие `3649764…`, 15/96 Cursor, не выпущено, merge нет (PR #27) |
 | [TASK-2026-09-17-25](TASK-2026-09-17-25_antares_work_admission.md) | Контракт допуска: review пройден (`eda7144…`), закрытие `a33df9c…`, merge нет (PR #28) |
 | [TASK-2026-09-17-26](TASK-2026-09-17-26_antares_run_wallet_admission.md) | WorkAdmission + isolated `/run_wallet`: review пройден (`960bf69…`), Cursor 62/52, GPT код/тесты + AdmittedJob 3.12.14 PASS, не выпущено, merge нет (PR #29) |
-| [TASK-2026-09-17-27](TASK-2026-09-17-27_antares_dispatch_admission.md) | Isolated admission для шести dispatch-команд: review пройден (`a84e9cd…`), Cursor 90/52, GPT код/diff без этих pytest, не выпущено, merge нет (PR #30) |
+| [TASK-2026-09-17-27](TASK-2026-09-17-27_antares_dispatch_admission.md) | Isolated admission для шести dispatch-команд: review пройден (`a84e9cd…`), закрытие `08132f2…`, Cursor 90/52, GPT код/diff без этих pytest, не выпущено, merge нет (PR #30) |
+| [TASK-2026-09-17-28](TASK-2026-09-17-28_antares_direct_ops_admission.md) | Isolated допуск прямых executor-операций export/Auto-Enable: к review, не выпущено, merge нет |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
