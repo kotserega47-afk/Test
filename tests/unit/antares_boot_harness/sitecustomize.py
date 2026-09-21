@@ -33,6 +33,7 @@ _WRAP_AFTER_LOAD = frozenset(
         "core.job_runner",
         "core.access_rules",
         "core.rules_provider",
+        "core.rules_v2.contract_publish",
         "modules.antares.handlers",
         "modules.antares.assembly",
         "dropbox",
@@ -196,9 +197,32 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         def _observe_snapshot(self, force_sync: bool = False):
             _event("snapshot_called", force_sync=bool(force_sync))
-            return orig_snap(self, force_sync=force_sync)
+            try:
+                return orig_snap(self, force_sync=force_sync)
+            except Exception as exc:
+                _event(
+                    "snapshot_failed",
+                    exc_type=f"{type(exc).__module__}.{type(exc).__name__}",
+                    exc_name=type(exc).__name__,
+                )
+                raise
 
         module.AccessRules.get_snapshot = _observe_snapshot
+    elif name == "core.rules_v2.contract_publish":
+        orig_eval = module.evaluate_snapshot_publish
+
+        def _observe_publish(*args, **kwargs):
+            decision = orig_eval(*args, **kwargs)
+            _event(
+                "publish_evaluated",
+                publish_allowed=bool(decision.publish_allowed),
+                has_blocking_contract=bool(decision.has_blocking_contract),
+                blocking_issue_codes=list(decision.blocking_issue_codes),
+                policy_mode=decision.policy_mode,
+            )
+            return decision
+
+        module.evaluate_snapshot_publish = _observe_publish
     elif name == "core.rules_provider":
         def _blocked_download(*_a, **_k):
             _event("rules_download_attempted")
@@ -206,6 +230,27 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         module._download_rules_workbook_atomic = _blocked_download
         module.download_file = _blocked_download
+
+        orig_v2 = module.get_snapshot_v2
+
+        def _observe_snapshot_v2(*, force_sync: bool = False):
+            try:
+                return orig_v2(force_sync=force_sync)
+            except Exception as exc:
+                if type(exc).__name__ == "ContractPublishRejected":
+                    decision = getattr(exc, "decision", None)
+                    codes = list(getattr(decision, "blocking_issue_codes", ()) or []) if decision is not None else []
+                    _event(
+                        "publish_rejected",
+                        exc_type=f"{type(exc).__module__}.{type(exc).__name__}",
+                        exc_name=type(exc).__name__,
+                        blocking_issue_codes=codes,
+                        policy_mode=getattr(decision, "policy_mode", None) if decision is not None else None,
+                        force_sync=bool(force_sync),
+                    )
+                raise
+
+        module.get_snapshot_v2 = _observe_snapshot_v2
     elif name == "dropbox":
         module.Dropbox = _blocked("dropbox.Dropbox", "Dropbox client blocked in antares boot harness")
     elif name in {"psycopg", "psycopg2"}:

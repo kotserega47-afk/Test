@@ -43,6 +43,26 @@ def _assert_no_workbook_io(result) -> None:
     assert "rules_download_attempted" not in kinds, result.events
 
 
+def _events_of(result, kind: str) -> list[dict]:
+    return [item for item in result.events if item.get("kind") == kind]
+
+
+def _first_event_index(result, kind: str) -> int:
+    kinds = _event_kinds(result)
+    assert kind in kinds, result.events
+    return kinds.index(kind)
+
+
+def _assert_run_snapshot_order(result) -> None:
+    assembly_at = _first_event_index(result, "assembly_called")
+    snapshot_at = _first_event_index(result, "snapshot_called")
+    assert assembly_at < snapshot_at, result.events
+    snap_events = _events_of(result, "snapshot_called")
+    assert snap_events, result.events
+    assert snap_events[0].get("force_sync") is True, snap_events
+    assert "rules_download_attempted" not in _event_kinds(result), result.events
+
+
 def _assert_boot_isolation(result) -> None:
     _assert_no_forbidden(result)
     _assert_no_workbook_io(result)
@@ -297,8 +317,7 @@ def test_run_success_reads_synthetic_local_xlsx() -> None:
     assert "antares run ok local_rules source=" in result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_no_forbidden(result)
-    assert "snapshot_called" in _event_kinds(result)
-    assert "rules_download_attempted" not in _event_kinds(result)
+    _assert_run_snapshot_order(result)
 
 
 def test_run_dotenv_supplies_rules_path_when_process_has_none() -> None:
@@ -415,20 +434,48 @@ def test_run_publish_policy_reject_no_success_line() -> None:
     assert "antares run ok" not in result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_no_forbidden(result)
-    assert "snapshot_called" in _event_kinds(result)
-    assert "rules_download_attempted" not in _event_kinds(result)
-    assert "antares local rules failed:" in result.stderr
+    _assert_run_snapshot_order(result)
+    assert "antares local rules failed: ContractPublishRejected:" in result.stderr
+    assert "RULE_EMPTY_JOBS" in result.stderr
+    rejected = _events_of(result, "publish_rejected")
+    assert rejected, result.events
+    assert rejected[0].get("exc_name") == "ContractPublishRejected"
+    assert "core.rules_v2.contract_publish.ContractPublishRejected" in str(
+        rejected[0].get("exc_type", "")
+    ) or str(rejected[0].get("exc_type", "")).endswith("ContractPublishRejected")
+    assert "RULE_EMPTY_JOBS" in list(rejected[0].get("blocking_issue_codes") or [])
+    assert rejected[0].get("policy_mode") == "strict"
+    evaluated = _events_of(result, "publish_evaluated")
+    assert evaluated, result.events
+    assert evaluated[-1].get("publish_allowed") is False
+    assert "RULE_EMPTY_JOBS" in list(evaluated[-1].get("blocking_issue_codes") or [])
+    failed = _events_of(result, "snapshot_failed")
+    assert failed, result.events
+    assert failed[0].get("exc_name") == "ContractPublishRejected"
+    assert "ValueError" not in result.stderr
+    assert "rules download blocked" not in result.stderr
 
 
-def test_run_assembly_conflict_skips_snapshot() -> None:
-    result = _run_ok_env(argv=["run"], pollute_registry=True)
+@pytest.mark.parametrize(
+    ("pollute", "reason"),
+    [
+        ({"pollute_registry": True}, "foreign keys"),
+        ({"pollute_bind": True}, "different AccessRules"),
+    ],
+)
+def test_run_assembly_conflict_skips_snapshot(pollute: dict[str, bool], reason: str) -> None:
+    result = _run_ok_env(argv=["run"], **pollute)
     assert result.returncode != 0, result.stdout
     assert "antares run ok" not in result.stdout
     assert "antares boot ok" not in result.stdout
     _assert_no_forbidden(result)
     _assert_no_workbook_io(result)
     assert "antares assembly failed:" in result.stderr
-    assert "foreign keys" in result.stderr
+    assert reason in result.stderr
+    assert "assembly_called" in _event_kinds(result)
+    refused = _refusal_reasons(result)
+    assert refused, result.events
+    assert any(reason in item for item in refused), refused
 
 
 def test_unknown_arguments_exit_nonzero() -> None:
