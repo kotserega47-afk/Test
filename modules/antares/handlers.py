@@ -140,7 +140,7 @@ async def _admit_direct_work(
     fn,
     args: tuple = (),
     kwargs: dict | None = None,
-    start_text: str,
+    start_text: str | None = None,
 ):
     admission = bound_admission()
     assert admission is not None
@@ -160,6 +160,8 @@ async def _admit_direct_work(
         await update.message.reply_text(ADMISSION_CLOSED_REPLY)
         return None
     admitted = watch_admitted_future(outcome.future, logger, work=work)
+    if start_text is None:
+        return admitted
     try:
         await update.message.reply_text(start_text)
     except asyncio.CancelledError:
@@ -763,23 +765,67 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.exception("rules_validate_audit: tg manual_validate hook failed (ignored)")
 
 
+def _reload_bound_rules(rules: object):
+    from core.scheduler_clocks_control import request_scheduler_clocks_reset
+
+    rules.invalidate()
+    snap = rules.get_snapshot(force_sync=True)
+    request_scheduler_clocks_reset(reason="reload_rules")
+    return snap
+
+
 async def cmd_reload_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from core.scheduler_clocks_control import request_scheduler_clocks_reset
 
-    rules, _logger = _require_bound()
+    admission = bound_admission()
+    rules, logger = _require_bound()
     if not await guard_or_deny(update, "reload_rules", rules):
         return
 
-    rules.invalidate()
+    if admission is None:
+        # Mixed/unbound: keep the previous synchronous reload on the callback thread.
+        rules.invalidate()
+        try:
+            snap = rules.get_snapshot(force_sync=True)
+            request_scheduler_clocks_reset(reason="reload_rules")
+            await update.message.reply_text(
+                f"♻️ rules snapshot перечитан.\n"
+                f"source: {snap.source}"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
+        return
+
+    admitted = await _admit_direct_work(
+        update,
+        logger,
+        work="reload_rules",
+        fn=_reload_bound_rules,
+        args=(rules,),
+    )
+    if admitted is None:
+        return
     try:
-        snap = rules.get_snapshot(force_sync=True)
-        request_scheduler_clocks_reset(reason="reload_rules")
+        snap = await admitted.wait()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        try:
+            await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("isolated %s error reply failed", "reload_rules")
+        return
+    try:
         await update.message.reply_text(
             f"♻️ rules snapshot перечитан.\n"
             f"source: {snap.source}"
         )
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Не смог перечитать rules.xlsx: {e}")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("isolated %s result reply failed", "reload_rules")
 
 
 def get_antares_handlers():

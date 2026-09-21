@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import inspect
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,7 +14,15 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from core.access_guard import deny_message
-from core.access_rules import CommandRule
+from core.access_rules import AccessRules, CommandRule
+from core.rules_v2.models import (
+    AccessRule,
+    CommandDef,
+    CommandPolicy,
+    MetaInfo,
+    RoleDef,
+    RulesSnapshotV2,
+)
 from core.job_dispatch import _reset_job_executor_for_tests, get_job_executor
 from core.job_runner import Actor
 from modules.antares import handlers
@@ -933,10 +942,19 @@ def _allow_direct(*commands: str) -> SimpleNamespace:
     rules = SimpleNamespace(
         commands_map=commands_map,
         access_map={("private", 22): 1, (11, 22): 1},
+        source="snapshot_v2:test",
     )
 
     class _Rules:
+        def __init__(self) -> None:
+            self.invalidate_calls = 0
+            self.snapshot_force: list[bool] = []
+
+        def invalidate(self) -> None:
+            self.invalidate_calls += 1
+
         def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            self.snapshot_force.append(force_sync)
             return rules
 
     return _Rules()
@@ -994,10 +1012,18 @@ def _forbid_direct_business(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         calls.append("replay")
         raise AssertionError("replay_pending_outbox_records must not run")
 
+    def _clocks(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append("clocks_reset")
+        raise AssertionError("request_scheduler_clocks_reset must not run")
+
     monkeypatch.setattr(_BUILDER, _builder)
     monkeypatch.setattr(_PLAN_ORCH, _plan)
     monkeypatch.setattr(_RUN_ORCH, _run)
     monkeypatch.setattr(_REPLAY, _replay)
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        _clocks,
+    )
     return calls
 
 
@@ -1768,3 +1794,588 @@ def test_unbound_replay_stays_on_loop_without_executor(
     assert order[2] == "reply"
     assert update._replies[0] == _REPLAY_START
     assert "attempted: 4" in update._replies[-1]
+
+
+_RELOAD_OK = "♻️ rules snapshot перечитан.\nsource: snapshot_v2:test"
+_RELOAD_FAIL = "xlsx boom"
+
+
+def _reload_v2(*, version: str, updated_at: datetime, allow_run_wallet: bool) -> RulesSnapshotV2:
+    roles = {"level_1": RoleDef(role_key="level_1", role_level=1, display_name="L1")}
+    commands = {
+        "reload_rules": CommandDef(
+            command_key="reload_rules",
+            command_text="reload_rules",
+            job_key=None,
+            display_name="reload_rules",
+            enabled=True,
+        ),
+    }
+    policies = {
+        "reload_rules": CommandPolicy(
+            command_key="reload_rules",
+            min_role_key="level_1",
+            allow_private=True,
+            allow_groups=True,
+            enabled=True,
+        ),
+    }
+    if allow_run_wallet:
+        commands["run_wallet"] = CommandDef(
+            command_key="run_wallet",
+            command_text="run_wallet",
+            job_key=None,
+            display_name="run_wallet",
+            enabled=True,
+        )
+        policies["run_wallet"] = CommandPolicy(
+            command_key="run_wallet",
+            min_role_key="level_1",
+            allow_private=True,
+            allow_groups=True,
+            enabled=True,
+        )
+    return RulesSnapshotV2(
+        meta=MetaInfo(ruleset_version=version, updated_at=updated_at, updated_by="test"),
+        roles=roles,
+        commands=commands,
+        command_policies=policies,
+        access_rules=[
+            AccessRule(chat_id="private", user_id="22", role_key="level_1", enabled=True),
+        ],
+    )
+
+
+def test_access_rules_and_provider_have_no_cache_lock() -> None:
+    import core.access_rules as access_rules
+    import core.rules_provider as rules_provider
+
+    rules_src = inspect.getsource(access_rules.AccessRules)
+    provider_src = inspect.getsource(rules_provider)
+    invalidate_src = inspect.getsource(access_rules.AccessRules.invalidate)
+    assert "Lock" not in rules_src
+    assert "RLock" not in rules_src
+    assert "threading.Lock" not in provider_src
+    assert "RLock" not in provider_src
+    assert "invalidate_rules_v2_cache" not in invalidate_src
+
+
+def test_isolated_reload_closed_sealed_no_mutate(monkeypatch: pytest.MonkeyPatch) -> None:
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
+    rules = _allow_direct("reload_rules")
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    closed = WorkAdmission()
+    bind_antares_admission(closed)
+    update = _update()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert update._replies == [ADMISSION_CLOSED_REPLY]
+    assert True not in rules.snapshot_force
+    assert rules.invalidate_calls == 0
+    assert submits == []
+    assert business == []
+    assert all("Запускаю" not in text for text in update._replies)
+    assert all("♻️" not in text for text in update._replies)
+
+    reset_antares_admission_for_tests()
+    _reset_job_executor_for_tests()
+    submits2 = _observe_used_executor_submit(monkeypatch)
+    sealed = WorkAdmission()
+    bind_antares_admission(sealed)
+    sealed.open()
+    sealed.seal()
+    update2 = _update()
+    asyncio.run(handlers.cmd_reload_rules(update2, MagicMock()))
+    assert update2._replies == [ADMISSION_CLOSED_REPLY]
+    assert True not in rules.snapshot_force
+    assert rules.invalidate_calls == 0
+    assert submits2 == []
+    assert business == []
+
+
+def test_isolated_reload_acl_deny_snapshot_is_not_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
+    _open_bound()
+
+    class _Empty:
+        def __init__(self) -> None:
+            self.invalidate_calls = 0
+            self.snapshot_force: list[bool] = []
+
+        def invalidate(self) -> None:
+            self.invalidate_calls += 1
+            raise AssertionError("invalidate must not run on ACL deny")
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            self.snapshot_force.append(force_sync)
+            return SimpleNamespace(commands_map={}, access_map={})
+
+    rules = _Empty()
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert update._replies == [deny_message("unknown_command", {})]
+    assert submits == []
+    assert business == []
+    assert rules.invalidate_calls == 0
+    assert True not in rules.snapshot_force
+    assert False in rules.snapshot_force
+    assert all("♻️" not in text for text in update._replies)
+
+
+def test_isolated_reload_submit_error_does_not_mutate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "modules.antares.handlers.get_job_executor",
+        lambda: SimpleNamespace(
+            submit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("executor down"))
+        ),
+    )
+    _forbid_request_job(monkeypatch)
+    clocks: list[str] = []
+
+    def _clocks(*args, **kwargs):  # noqa: ANN002, ANN003
+        clocks.append("reset")
+        raise AssertionError("reset must not run when submit fails")
+
+    monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
+    _open_bound()
+    logger = MagicMock()
+    rules = _allow_direct("reload_rules")
+    handlers.bind_rules(rules)
+    handlers.bind_logger(logger)
+    update = _update()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    logger.exception.assert_any_call("isolated %s submit failed", "reload_rules")
+    assert any("Ошибка при постановке" in text for text in update._replies)
+    assert rules.invalidate_calls == 0
+    assert True not in rules.snapshot_force
+    assert clocks == []
+    assert all("Запускаю" not in text for text in update._replies)
+
+
+def test_isolated_reload_open_order_identity_no_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    order: list[object] = []
+    off_loop: list[bool] = []
+    _forbid_request_job(monkeypatch)
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+
+    def _clocks(*, reason: str = "manual_reload") -> None:
+        order.append(("reset", reason))
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+
+    orig_submit = WorkAdmission.submit_if_open
+
+    def _submit(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        order.append("submit")
+        return orig_submit(self, *args, **kwargs)
+
+    class _Rules:
+        def __init__(self) -> None:
+            self.invalidate_calls = 0
+
+        def invalidate(self) -> None:
+            self.invalidate_calls += 1
+            order.append("invalidate")
+            off_loop.append(threading.current_thread() is not threading.main_thread())
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            order.append(("snapshot", force_sync))
+            return SimpleNamespace(
+                commands_map={
+                    "reload_rules": CommandRule(
+                        required_level=1,
+                        allow_private=True,
+                        allow_groups=True,
+                        enabled=True,
+                    )
+                },
+                access_map={("private", 22): 1, (11, 22): 1},
+                source="snapshot_v2:test",
+            )
+
+    rules = _Rules()
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _submit)
+    monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
+    _open_bound()
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    update = _update()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        order.append("reply")
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert order[0] == ("snapshot", False)
+    assert order.index("submit") < order.index("invalidate")
+    assert order.index("submit") < order.index("reply")
+    assert order[order.index("invalidate") : order.index("invalidate") + 3] == [
+        "invalidate",
+        ("snapshot", True),
+        ("reset", "reload_rules"),
+    ]
+    assert recorded[0]["executor"] is executor
+    assert recorded[0]["fn"] is handlers._reload_bound_rules
+    assert recorded[0]["args"] == (rules,)
+    assert recorded[0]["kwargs"] == {}
+    assert handlers._rules is rules
+    assert True in off_loop
+    assert update._replies == [_RELOAD_OK]
+    assert all("Запускаю" not in text for text in update._replies)
+
+
+def test_isolated_reload_snapshot_failure_skips_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clocks: list[str] = []
+
+    def _clocks(*args, **kwargs):  # noqa: ANN002, ANN003
+        clocks.append("reset")
+
+    class _Rules:
+        def __init__(self) -> None:
+            self.invalidate_calls = 0
+
+        def invalidate(self) -> None:
+            self.invalidate_calls += 1
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            if force_sync:
+                raise RuntimeError(_RELOAD_FAIL)
+            return SimpleNamespace(
+                commands_map={
+                    "reload_rules": CommandRule(
+                        required_level=1,
+                        allow_private=True,
+                        allow_groups=True,
+                        enabled=True,
+                    )
+                },
+                access_map={("private", 22): 1, (11, 22): 1},
+                source="snapshot_v2:old",
+            )
+
+    monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    logger = MagicMock()
+    rules = _Rules()
+    handlers.bind_rules(rules)
+    handlers.bind_logger(logger)
+    update = _update()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert rules.invalidate_calls == 1
+    assert clocks == []
+    assert update._replies == [f"⚠️ Не смог перечитать rules.xlsx: {_RELOAD_FAIL}"]
+    assert len(_work_fail_logs(logger)) == 1
+
+
+def test_isolated_reload_finishes_after_seal(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class _Rules:
+        def invalidate(self) -> None:
+            started.set()
+            assert release.wait(timeout=5)
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            return SimpleNamespace(
+                commands_map={
+                    "reload_rules": CommandRule(
+                        required_level=1,
+                        allow_private=True,
+                        allow_groups=True,
+                        enabled=True,
+                    )
+                },
+                access_map={("private", 22): 1, (11, 22): 1},
+                source="snapshot_v2:test",
+            )
+
+    _forbid_request_job(monkeypatch)
+    admission = _open_bound()
+    handlers.bind_rules(_Rules())
+    handlers.bind_logger(MagicMock())
+    update = _update()
+
+    async def _run() -> None:
+        task = asyncio.create_task(handlers.cmd_reload_rules(update, MagicMock()))
+        await asyncio.to_thread(started.wait, 5)
+        admission.seal()
+        release.set()
+        await task
+
+    asyncio.run(_run())
+    assert started.is_set()
+    assert admission.state is AdmissionState.SEALED
+    assert update._replies == [_RELOAD_OK]
+
+
+def test_isolated_reload_seal_before_submit(monkeypatch: pytest.MonkeyPatch) -> None:
+    start_cmd = threading.Event()
+    _forbid_request_job(monkeypatch)
+    business = _forbid_direct_business(monkeypatch)
+    submits = _observe_used_executor_submit(monkeypatch)
+    admission = _open_bound()
+    rules = _allow_direct("reload_rules")
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    update = _update()
+    result: dict[str, object] = {}
+
+    def _run() -> None:
+        assert start_cmd.wait(timeout=5)
+        asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+        result["replies"] = list(update._replies)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    admission.seal()
+    start_cmd.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert submits == []
+    assert business == []
+    assert rules.invalidate_calls == 0
+    assert result["replies"] == [ADMISSION_CLOSED_REPLY]
+
+
+def test_isolated_reload_wait_cancel_observes_late_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    started = threading.Event()
+    release = threading.Event()
+
+    class _Rules:
+        def invalidate(self) -> None:
+            started.set()
+            assert release.wait(timeout=5)
+            raise RuntimeError("accepted reload boom")
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            return SimpleNamespace(
+                commands_map={
+                    "reload_rules": CommandRule(
+                        required_level=1,
+                        allow_private=True,
+                        allow_groups=True,
+                        enabled=True,
+                    )
+                },
+                access_map={("private", 22): 1, (11, 22): 1},
+                source="snapshot_v2:test",
+            )
+
+    orig_watch = watch_admitted_future
+
+    def _watch(future, logger_obj, **kwargs):  # noqa: ANN001
+        admitted = orig_watch(future, logger_obj, **kwargs)
+        captured["admitted"] = admitted
+        return admitted
+
+    monkeypatch.setattr(WorkAdmission, "submit_if_open", _capture_submit_if_open(captured))
+    monkeypatch.setattr("modules.antares.handlers.watch_admitted_future", _watch)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    logger = MagicMock()
+    handlers.bind_rules(_Rules())
+    handlers.bind_logger(logger)
+    update = _update()
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        bucket = _capture_asyncio_errors(loop)
+        task = asyncio.create_task(handlers.cmd_reload_rules(update, MagicMock()))
+        await asyncio.to_thread(started.wait, 5)
+        assert started.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        future = captured["future"]
+        assert future.cancelled() is False
+        release.set()
+        with pytest.raises(RuntimeError, match="accepted reload boom"):
+            await asyncio.to_thread(future.result, 5)
+        admitted = captured.pop("admitted")
+        assert admitted._done.wait(timeout=5)
+        holders = [admitted, task]
+        del admitted
+        await _assert_no_unhandled_asyncio(loop, bucket, holders)
+
+    asyncio.run(_run())
+    assert len(_work_fail_logs(logger)) == 1
+    assert all(
+        not (call.args and call.args[0] == "cmd_reload_rules failed")
+        for call in logger.exception.call_args_list
+    )
+
+
+def test_unbound_reload_stays_on_loop_without_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list = []
+    order: list[object] = []
+    off_loop: list[bool] = []
+    executor = _wrap_job_executor_submit(monkeypatch, recorded)
+
+    def _clocks(*, reason: str = "manual_reload") -> None:
+        order.append(("reset", reason))
+        off_loop.append(threading.current_thread() is not threading.main_thread())
+
+    class _Rules:
+        def invalidate(self) -> None:
+            order.append("invalidate")
+            off_loop.append(threading.current_thread() is not threading.main_thread())
+
+        def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
+            order.append(("snapshot", force_sync))
+            return SimpleNamespace(
+                commands_map={
+                    "reload_rules": CommandRule(
+                        required_level=1,
+                        allow_private=True,
+                        allow_groups=True,
+                        enabled=True,
+                    )
+                },
+                access_map={("private", 22): 1, (11, 22): 1},
+                source="snapshot_v2:test",
+            )
+
+    monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
+    handlers.bind_rules(_Rules())
+    handlers.bind_logger(MagicMock())
+    update = _update()
+
+    async def _reply(text: str, *args, **kwargs):  # noqa: ANN002, ANN003
+        order.append("reply")
+        update._replies.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=_reply)
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert recorded == []
+    assert executor is get_job_executor()
+    assert off_loop == [False, False]
+    assert order == [
+        ("snapshot", False),
+        "invalidate",
+        ("snapshot", True),
+        ("reset", "reload_rules"),
+        "reply",
+    ]
+    assert update._replies == [_RELOAD_OK]
+    assert all("Запускаю" not in text for text in update._replies)
+
+
+def test_isolated_reload_real_access_rules_next_caller_sees_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deny_v2 = _reload_v2(
+        version="deny",
+        updated_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+        allow_run_wallet=False,
+    )
+    allow_v2 = _reload_v2(
+        version="allow",
+        updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
+        allow_run_wallet=True,
+    )
+    source = {"current": deny_v2}
+
+    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+        return source["current"]
+
+    monkeypatch.setattr("core.access_rules.get_snapshot_v2", _load_v2)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    rules = AccessRules()
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    clocks: list[str] = []
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        lambda *, reason="manual_reload": clocks.append(reason),
+    )
+    before = rules.get_snapshot()
+    assert "run_wallet" not in before.commands_map
+    source["current"] = allow_v2
+    update = _update()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    assert handlers._rules is rules
+    after = rules.get_snapshot()
+    assert after is not before
+    assert "run_wallet" in after.commands_map
+    assert after.source == "snapshot_v2:allow"
+    assert clocks == ["reload_rules"]
+    assert update._replies == ["♻️ rules snapshot перечитан.\nsource: snapshot_v2:allow"]
+
+
+def test_isolated_reload_overlap_is_not_a_thread_safety_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlapping get_snapshot vs force reload can last-write-win on AccessRules._snap.
+
+    Passing this test does not mean AccessRules or rules_provider are thread-safe.
+    """
+    v1 = _reload_v2(
+        version="v1",
+        updated_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+        allow_run_wallet=False,
+    )
+    v2 = _reload_v2(
+        version="v2",
+        updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
+        allow_run_wallet=True,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+        if force_sync:
+            entered.set()
+            assert release.wait(timeout=5)
+            return v2
+        return v1
+
+    monkeypatch.setattr("core.access_rules.get_snapshot_v2", _load_v2)
+    _forbid_request_job(monkeypatch)
+    _open_bound()
+    rules = AccessRules()
+    handlers.bind_rules(rules)
+    handlers.bind_logger(MagicMock())
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        lambda **kwargs: None,
+    )
+    update = _update()
+    overlap: dict[str, object] = {}
+
+    def _reader() -> None:
+        assert entered.wait(timeout=5)
+        overlap["mid"] = rules.get_snapshot().source
+        release.set()
+
+    reader = threading.Thread(target=_reader)
+    reader.start()
+    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
+    reader.join(timeout=5)
+    assert not reader.is_alive()
+    final = rules.get_snapshot().source
+    assert final in {"snapshot_v2:v1", "snapshot_v2:v2"}
+    assert overlap["mid"] in {"snapshot_v2:v1", "snapshot_v2:v2"}
+    assert handlers._rules is rules
