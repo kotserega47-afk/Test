@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | PROPOSED (только документы; runtime не менялся; к review, не «review пройден») |
+| **Статус** | review пройден (только документы; runtime не менялся; pytest не запускался; сервисный lifecycle не реализован) |
 | **База** | закрытие TASK-22 `8a3fd5a2fb6d4738997b5463bebd8392e8db4f90` (принятый review HEAD `d9592ff0a04480433d18455726ca7f66f76d09bf`) |
 | **Application build-only** | [MODULAR_REORG_ANTARES_APPLICATION.md](MODULAR_REORG_ANTARES_APPLICATION.md) |
 | **Lifecycle обзор** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |

@@ -3,13 +3,13 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-23 |
-| **Статус** | review (подготовлено; **не** «пройден»; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-22 (PR #25, review `d9592ff0a04480433d18455726ca7f66f76d09bf`, закрытие `8a3fd5a2fb6d4738997b5463bebd8392e8db4f90`), `ops/MODULAR_REORG_ANTARES_STARTSTOP.md` |
 | **PR** | Draft [#26](https://github.com/deniskotdavydov1991-wq/Test/pull/26) `feat/task-2026-09-17-23-antares-startstop`, base `feat/task-2026-09-17-22-antares-application-build` |
 | **Риск** | low: только документы |
 
-Контракт initialize / start / остановки **подготовлен к review**. Runtime не менялся. Boot и диагностический `run` сохраняются. Выбран **ручной async helper** (`initialize` → `start` → `start_polling` только у будущего serve). Sandbox исполняет **тот же** helper без polling, через `update_queue`. Pytest **не** запускался. Не «review пройден».
+Контракт initialize / start / остановки **принят**. Runtime не менялся. Pytest **не** запускался. Сервисный lifecycle **не** реализован. Review **пройден** на HEAD `6540a36…`. GPT читал контракт. PR #26 остаётся Draft. Реализация sandbox helper — TASK-24.
 
 ---
 
@@ -30,9 +30,9 @@
 - [x] Stop event vs cancel vs SIGINT vs SIGTERM; sandbox только event+cancel; asyncio.run ≠ SIGTERM
 - [x] Initialize по трём стадиям; Bot.shutdown не покрывает все компоненты
 - [x] do_request синтетика для getMe; JobQueue extra не в scope проверки
-- [ ] GPT review (ещё не пройден)
+- [x] GPT review HEAD `6540a36…`: контракт прочитан; pytest не запускался; runtime не менялся; сервисный lifecycle не реализован
 - [ ] merge/deploy (намеренно открыто)
-- [ ] sandbox + helper code (отдельное задание)
+- [ ] TASK-24 sandbox helper (отдельное задание)
 
 ---
 
@@ -41,7 +41,7 @@
 | Кто | Что |
 |-----|-----|
 | Cursor | Документы по PTB 22.8 и коду на закрытии TASK-22; pytest не требовался |
-| GPT | ещё не ревьюил |
+| GPT | Прочитал контракт HEAD `6540a36…`. Pytest не запускал. Runtime не менялся. |
 
 ---
 
@@ -57,3 +57,4 @@ runtime/тесты TASK-23; live Telegram; смена `run`; mixed gate; schedul
 |------|---------|
 | 2026-09-21 | контракт start/stop подготовлен к review; Draft PR #26 |
 | 2026-09-21 | уточнён исполнимый контракт: один порядок, production helper, очередь, staged initialize |
+| 2026-09-21 | GPT review HEAD `6540a36…`: план принят; runtime не менялся; pytest не запускался; lifecycle не реализован |
