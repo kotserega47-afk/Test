@@ -30,14 +30,15 @@ Merge/deploy **намеренно** не входят в TASK-2026-09-17-01/02/0
 | TASK-17 Antares entrypoint plan | план isolated `python -m apps.antares`; review пройден (Draft PR #20, HEAD `ed3cbaf…`); runtime не менялся | **нет** |
 | TASK-18 Antares boot | `python -m apps.antares` assemble + exit 0; без sender/polling/worker/schedules; review пройден (Draft PR #21, HEAD `2c6eeac…`; тесты `0603eb9…`, 79 passed Cursor 3.12.10); GPT код/diff, набор не запускал; исторический 85 passed с ограничением fake-append; закрытие docs `d1d11e3…`; **не выпущено** | **нет** |
 | TASK-19 Antares lifecycle plan | контракт start/stop; первый code = argv `run` + локальный `RULES_XLSX_PATH` + snapshot + exit 0; `force_sync`/`STRICT` не свежесть; review пройден (Draft PR #22, HEAD `b76a377…`); runtime/`rules_provider` не менялись; pytest не запускался; сервисный lifecycle **не** реализован | **нет** |
+| TASK-20 local rules diagnostic | `python -m apps.antares run`: local xlsx + snapshot + exit 0; boot без argv сохранён; Application/polling нет; к review | **нет** |
 | Модули проектов | пакеты `modules/*`; 17 CommandHandler + Document.ALL в `modules.antares.handlers`; ingest owner `modules.antares.document_ingest`, mixed re-export `integrations.wallet_editor_tg` | — |
 | Рабочий режим | **legacy mixed** (unset / пустой / whitespace `PROJECT_PROFILE`) | prod без этих PR |
 | Явные профили | `antares` / `raccoon` / `wr` на mixed entry **отклоняются** (после выката TASK-03) | не в prod |
-| Следующая | TASK-20: argv `run` + local xlsx + snapshot, без Application/polling; план TASK-19 review пройден, не выпущен | — |
+| Следующая | TASK-20 диагностический `run` (к review); план TASK-19 review пройден, не выпущен | — |
 
 Проверка тестов TASK-02: GPT — **18** тестов на `acfb9958…` в изолированной директории (полный набор проекта не запускался). TASK-02/03 вместе: **41 passed**, Python **3.13.14**, прогон **Cursor**. GPT смотрел diff PR #6, набор 41 **не** перезапускал.
 
-Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 **пока не сливать**.
+Draft PR #4 / #5 / #6 / #7 / #8 / #9 / #10 / #11 / #12 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #20 / #21 / #22 и Draft PR TASK-20 **пока не сливать**.
 
 Перед выпуском отдельно: автодеплой Test; активные задания; **нет непустого `PROJECT_PROFILE`** у сервиса Test (иначе после TASK-03 процесс не стартует).
 

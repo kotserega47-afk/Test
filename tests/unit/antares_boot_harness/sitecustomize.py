@@ -31,6 +31,8 @@ _FORBIDDEN_EXACT = frozenset(
 _WRAP_AFTER_LOAD = frozenset(
     {
         "core.job_runner",
+        "core.access_rules",
+        "core.rules_provider",
         "modules.antares.handlers",
         "modules.antares.assembly",
         "dropbox",
@@ -189,6 +191,21 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             _observe.__qualname__ = orig.__qualname__
             module.assemble_antares = _observe
             _injected["assemble"] = True
+    elif name == "core.access_rules":
+        orig_snap = module.AccessRules.get_snapshot
+
+        def _observe_snapshot(self, force_sync: bool = False):
+            _event("snapshot_called", force_sync=bool(force_sync))
+            return orig_snap(self, force_sync=force_sync)
+
+        module.AccessRules.get_snapshot = _observe_snapshot
+    elif name == "core.rules_provider":
+        def _blocked_download(*_a, **_k):
+            _event("rules_download_attempted")
+            raise RuntimeError("rules download blocked in antares boot harness")
+
+        module._download_rules_workbook_atomic = _blocked_download
+        module.download_file = _blocked_download
     elif name == "dropbox":
         module.Dropbox = _blocked("dropbox.Dropbox", "Dropbox client blocked in antares boot harness")
     elif name in {"psycopg", "psycopg2"}:
@@ -206,6 +223,14 @@ def _after_load(name: str, module: types.ModuleType) -> None:
         del orig_connect
     elif name == "integrations.dropbox_watcher":
         module._get_dbx = _blocked("dropbox_watcher._get_dbx", "Dropbox client blocked in antares boot harness")
+        orig_download = module.download_file
+
+        def _blocked_watcher_download(*_a, **_k):
+            _event("rules_download_attempted")
+            raise RuntimeError("dropbox_watcher.download_file blocked in antares boot harness")
+
+        module.download_file = _blocked_watcher_download
+        del orig_download
     elif name == "integrations.wallet_editor_registry_db.connection":
         module.connect = _blocked(
             "registry_db.connection.connect",

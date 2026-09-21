@@ -80,10 +80,13 @@ def _read_required_json_list(path: Path, *, label: str) -> list:
 def run_antares_boot(
     sandbox: Path,
     *,
+    argv: list[str] | None = None,
     process_env: dict[str, str] | None = None,
     dotenv_lines: dict[str, str] | None = None,
     pollute_registry: bool = False,
     pollute_bind: bool = False,
+    workbook: Path | None = None,
+    pop_env: tuple[str, ...] = (),
 ) -> BootRun:
     tree = sandbox / "tree"
     _copy_boot_tree(tree)
@@ -96,6 +99,9 @@ def run_antares_boot(
         "ANTARES_BOOT_EVENTS_LOG": str(events_log),
         "ANTARES_BOOT_HARNESS_READY": str(ready),
         "TELEGRAM_CHAT_ID_ANALIZ": "antares-boot-harness",
+        "RULES_VALIDATE_AUDIT_JSONL": str(sandbox / "rules_validate_audit.jsonl"),
+        "RULES_IDENTITY_REGISTRY_PATH": str(sandbox / "rules_identity_registry.v1.json"),
+        "RULES_IDENTITY_SAVE": "0",
     }
     if pollute_registry:
         extra["ANTARES_BOOT_POLLUTE_REGISTRY"] = "1"
@@ -108,9 +114,16 @@ def run_antares_boot(
     )
     if process_env:
         env.update(process_env)
+    if workbook is not None:
+        dest = Path(env.get("RULES_XLSX_PATH") or (sandbox / "rules.xlsx"))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(workbook, dest)
+    for key in pop_env:
+        env.pop(key, None)
+    cmd = [sys.executable, "-m", "apps.antares", *(argv or [])]
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "apps.antares"],
+            cmd,
             cwd=str(tree),
             env=env,
             capture_output=True,

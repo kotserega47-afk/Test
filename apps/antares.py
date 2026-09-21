@@ -13,13 +13,52 @@ from core.project_profile_boot import enforce_antares_isolated_profile
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ENV_PATH = _REPO_ROOT / ".env"
 
+_BOOT_OK = "antares boot ok"
+_RUN_OK = "antares run ok"
+
 
 def _fail(message: str, code: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(code)
 
 
-def main() -> None:
+def _command(argv: list[str]) -> str:
+    if not argv or argv == ["boot"]:
+        return "boot"
+    if argv == ["run"]:
+        return "run"
+    _fail("unknown antares argument(s): " + " ".join(argv))
+
+
+def _local_workbook_path() -> Path:
+    """Match ``rules_provider._try_local_workbook_path`` normalization; refuse otherwise."""
+
+    raw = (os.getenv("RULES_XLSX_PATH") or "").strip()
+    if not raw:
+        _fail("RULES_XLSX_PATH is not set")
+    path = Path(raw).expanduser().resolve()
+    if path.suffix.lower() != ".xlsx":
+        _fail(f"RULES_XLSX_PATH must be a .xlsx file: {raw}")
+    if not path.is_file():
+        _fail(f"RULES_XLSX_PATH is not an existing file: {path}")
+    return path
+
+
+def _print_boot_ok(assembled) -> None:
+    from telegram.ext import CommandHandler, MessageHandler
+
+    from core.job_runner import JOB_REGISTRY
+
+    n_cmd = sum(1 for handler in assembled.handlers if isinstance(handler, CommandHandler))
+    n_doc = sum(1 for handler in assembled.handlers if isinstance(handler, MessageHandler))
+    job_keys = ",".join(sorted(JOB_REGISTRY))
+    print(
+        f"{_BOOT_OK} commands={n_cmd} document={n_doc} "
+        f"jobs={len(JOB_REGISTRY)} keys={job_keys}"
+    )
+
+
+def _boot_prefix():
     enforce_antares_isolated_profile()
     load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
@@ -42,18 +81,25 @@ def main() -> None:
         _fail(f"antares assembly failed: {exc}")
     except Exception as exc:
         _fail(f"antares assembly failed: {type(exc).__name__}: {exc}")
+    return assembled, rules
 
-    from telegram.ext import CommandHandler, MessageHandler
 
-    from core.job_runner import JOB_REGISTRY
+def _run_local_rules(rules) -> None:
+    _local_workbook_path()
+    try:
+        snap = rules.get_snapshot(force_sync=True)
+    except Exception as exc:
+        _fail(f"antares local rules failed: {type(exc).__name__}: {exc}")
+    print(f"{_RUN_OK} local_rules source={snap.source}")
 
-    n_cmd = sum(1 for handler in assembled.handlers if isinstance(handler, CommandHandler))
-    n_doc = sum(1 for handler in assembled.handlers if isinstance(handler, MessageHandler))
-    job_keys = ",".join(sorted(JOB_REGISTRY))
-    print(
-        f"antares boot ok commands={n_cmd} document={n_doc} "
-        f"jobs={len(JOB_REGISTRY)} keys={job_keys}"
-    )
+
+def main() -> None:
+    mode = _command(sys.argv[1:])
+    assembled, rules = _boot_prefix()
+    if mode == "boot":
+        _print_boot_ok(assembled)
+        return
+    _run_local_rules(rules)
 
 
 if __name__ == "__main__":
