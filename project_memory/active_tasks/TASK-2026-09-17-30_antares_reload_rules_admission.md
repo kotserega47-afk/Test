@@ -49,7 +49,7 @@ Lock только в `/reload_rules` недостаточен. Очередь т
 
 Mixed: тот же lock в `rules_provider` сериализует и loop-reload, и job-readers — это изменение timing для всех профилей, не только isolated Antares.
 
-**Блокер TASK-30:** правка кэша — cross-cutting `rules_provider` + `AccessRules` (Antares/Raccoon/WR), с I/O вне секции и регрессией mixed. Отдельный scope: атомарный publish-struct (stat+snapshot+decision+indexes) под одним RLock; callers не меняют API `force_sync`. Широкая переработка в этом PR не делается.
+**Блокер TASK-30 (review не закрывать этим):** согласованная публикация — [TASK-2026-09-17-31](TASK-2026-09-17-31_rules_publish_generation.md) / [MODULAR_REORG_RULES_PUBLISH_GENERATION.md](../ops/MODULAR_REORG_RULES_PUBLISH_GENERATION.md). Контракт TASK-31 **не принят**. Code provider в TASK-30 **не** делается. Зелёные `test_repro_*` — доказательство дефекта, не исправление.
 
 ---
 
@@ -74,7 +74,7 @@ Mixed: тот же lock в `rules_provider` сериализует и loop-reloa
 
 ## Out Of Scope
 
-ingest, schedules, самостоятельные новые постановки, drain, serve, mixed-stop, merge, retarget, deploy, исходное Test, Raccoon/Windrose, перенос `docs/modular-reorg-project-contract`, lock/rewrite `rules_provider`.
+ingest, schedules, самостоятельные новые постановки, drain, serve, mixed-stop, merge, retarget, deploy, исходное Test, Raccoon/Windrose, перенос `docs/modular-reorg-project-contract`, **code** `rules_provider` (контракт — TASK-31).
 
 ---
 
@@ -84,3 +84,4 @@ ingest, schedules, самостоятельные новые постановк�
 |------|---------|
 | 2026-09-21 | isolated `/reload_rules` admission; Draft PR #33; статус **review** |
 | 2026-09-21 | уточнение конкурентного контракта: ACL/force_sync, repro stale `_snap` и torn indexes; provider не чинится |
+| 2026-09-21 | зависимость от TASK-31 (публикация поколений); TASK-30 не закрыт |
