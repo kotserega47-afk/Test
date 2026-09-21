@@ -9,9 +9,13 @@
 | **PR** | Draft [#27](https://github.com/deniskotdavydov1991-wq/Test/pull/27) `feat/task-2026-09-17-24-antares-ptb-lifecycle`, base `feat/task-2026-09-17-23-antares-startstop` |
 | **Риск** | medium: реальный PTB initialize/start/stop/shutdown в sandbox без live Telegram |
 
-Production helper `run_ptb_lifecycle(app, *, stop, enable_polling=False)` исполняет initialize → start → ожидание `stop` → stop → shutdown. Caller владеет Application и loop. Boot и диагностический `run` helper **не** вызывают. Публичный serve **не** добавлен. `enable_polling=True` отклоняется **до** initialize. Polling-ветка не реализована.
+Production helper `run_ptb_lifecycle` поддерживает только Application с `SimpleUpdateProcessor`, присутствующим Updater, без persistence и без JobQueue extra. Иное отклоняется `ValueError` до initialize. JobQueue extra **не** проверен.
 
-Review **ещё не пройден**. PR остаётся Draft. **Не выпущено.**
+Если `Application.shutdown` падает, helper **не** повторяет его целиком: закрывает оставшиеся running-флаги и открытые HTTPX-клиенты по отдельности. Ошибка одного `request.shutdown` не отменяет второй. Cleanup исполняется в shielded-задаче; отмена во время cleanup не пропускает шаги, caller видит `CancelledError`.
+
+Снимки ресурсов в sandbox пишутся **внутри** loop до `asyncio.run`.
+
+Review **ещё не пройден**. PR #27 остаётся Draft. TASK-24 **не** закрыт.
 
 ---
 
@@ -42,8 +46,14 @@ PTB internals localized in the helper (не global monkeypatch production): `App
 - [x] Ошибка callback → error handler с `RuntimeError` / `injected whoami callback failure`; нет `whoami_completed`
 - [x] Стадии: requests, get_me, after Bot / before Application flag, start, cancel, cleanup-only
 - [x] Jobs/sender/worker/Dropbox/PG/браузер/живая сеть запрещены harness; `start_polling`/`run_polling` blocked
+- [x] `Application.shutdown` до реальной очистки: fallback закрывает HTTPX; primary виден
+- [x] Один `request.shutdown` падает — второй всё равно закрывается
+- [x] Состояние ресурсов снято внутри loop до `asyncio.run`
+- [x] Отмена во время cleanup не пропускает remaining steps; CancelledError виден caller
+- [x] Неподдерживаемый JobQueue/processor — отказ до initialize
 - [ ] GPT review
 - [ ] merge/deploy (намеренно открыто)
+- [ ] закрытие TASK-24 (не в этом шаге)
 
 ---
 
@@ -74,9 +84,42 @@ py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_
 py -3.12 -m pytest tests/unit/test_antares_lifecycle.py -q --tb=short
 ```
 
-**10 passed, 0 failed, 0 skipped, exit 0.**
+Историческая граница (HEAD `e737281` / код `e039e25`): **91 passed** (10 lifecycle + boot/parser/gate), exit 0. Не переносить эти числа на текущий helper без этой границы.
 
-### Таблица очистки (факт subprocess)
+Текущий прогон lifecycle:
+
+```
+py -3.12 -m pytest tests/unit/test_antares_lifecycle.py -q --tb=short
+```
+
+**13 passed, 0 failed, 0 skipped, exit 0.**
+
+Regression (lifecycle + boot/run + parser/gate):
+
+```
+py -3.12 -m pytest tests/unit/test_antares_lifecycle.py tests/unit/test_antares_boot.py tests/unit/test_project_profile.py tests/unit/test_project_profile_boot.py -q --tb=short
+```
+
+**94 passed, 0 failed, 0 skipped, exit 0.**
+
+### Таблица очистки (факт subprocess, in-loop до выхода из asyncio.run)
+
+| Стадия | Primary | Cleanup | in-loop HTTPX / running | Код |
+|--------|---------|---------|-------------------------|-----|
+| `enable_polling` | ValueError до initialize | нет | клиенты открыты (caller) | 2 |
+| `unsupported_job_queue` / `unsupported_processor` | ValueError до initialize | нет | caller | 2 |
+| `fail_requests` | RuntimeError initialize | оба `*.shutdown` | `[True, True]` | 2 |
+| `fail_requests_and_cleanup` | RuntimeError initialize; cleanup ExceptionGroup | первый shutdown fail, второй ok | `[False, True]` | 2 |
+| `fail_get_me` | InvalidToken | `bot.shutdown` | `[True, True]` | 2 |
+| `fail_after_bot` | RuntimeError processor | `bot.shutdown` | `[True, True]` | 2 |
+| `fail_start` | RuntimeError start | `app.shutdown` | `[True, True]` | 2 |
+| `whoami` | нет | `app.stop`, `app.shutdown` | закрыты; fetcher done | 0 |
+| `callback_error` | нет (helper) | `app.stop`, `app.shutdown` | закрыты | 0; error handler |
+| `cancel` | CancelledError | `app.stop`, `app.shutdown` | закрыты; fetcher done | 2 |
+| `cancel_during_cleanup` | CancelledError (`cancelled_during_cleanup`) | `app.stop` и `app.shutdown` не пропущены | закрыты | 2 |
+| `fail_cleanup_only` | RuntimeError shutdown до orig | fallback `get_updates_request.shutdown` + `request.shutdown` | `[True, True]` | 2 |
+
+Поддерживаемый состав: `SimpleUpdateProcessor`, Updater есть, persistence нет, JobQueue extra нет. Иное — явный отказ. Extra **не** проверен.
 
 | Стадия | Что было | Cleanup helper | Leftover | Код |
 |--------|----------|----------------|----------|-----|
@@ -115,3 +158,4 @@ live polling; SIGINT/SIGTERM; drain хвоста очереди; публичн�
 | Дата | Событие |
 |------|---------|
 | 2026-09-21 | helper + sandbox subprocess; Draft PR #27; к review |
+| 2026-09-21 | staged fallback shutdown, in-loop snapshot, cancel-during-cleanup; TASK-24 не закрыт |

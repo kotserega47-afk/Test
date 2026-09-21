@@ -56,6 +56,7 @@ _WRAP_AFTER_LOAD = frozenset(
 _injected = {"registry": False, "bind": False, "assemble": False}
 _orig_create_connection = socket.create_connection
 _send_message_n = {"n": 0}
+_httpx_shutdown_fail_obj = {"obj": None}
 
 
 def _import_log_path() -> str:
@@ -385,10 +386,10 @@ def _after_load(name: str, module: types.ModuleType) -> None:
 
         async def _observe_shutdown(self):
             _event("application_shutdown_called")
-            await orig_shutdown(self)
-            if _scenario() == "fail_cleanup_only":
+            if _scenario() in {"fail_cleanup_only", "fail_shutdown_before_cleanup"}:
                 _event("application_shutdown_injected_failure")
                 raise RuntimeError("injected application shutdown failure")
+            await orig_shutdown(self)
             _event("application_shutdown_ok")
 
         module.Application.shutdown = _observe_shutdown
@@ -430,8 +431,11 @@ def _after_load(name: str, module: types.ModuleType) -> None:
         async def _observe_h_shut(self):
             _event("httpx_shutdown_called")
             if _scenario() == "fail_requests_and_cleanup":
-                _event("httpx_shutdown_injected_failure")
-                raise RuntimeError("injected HTTPXRequest.shutdown failure")
+                if _httpx_shutdown_fail_obj["obj"] is None:
+                    _httpx_shutdown_fail_obj["obj"] = self
+                if self is _httpx_shutdown_fail_obj["obj"]:
+                    _event("httpx_shutdown_injected_failure")
+                    raise RuntimeError("injected HTTPXRequest.shutdown failure")
             await orig_h_shut(self)
             client = getattr(self, "_client", None)
             _event(

@@ -15,7 +15,7 @@ from telegram import Update
 from telegram.ext import Application
 
 from apps.antares import _boot_prefix, _snapshot_local_rules
-from modules.antares.application_lifecycle import inspect_application_leftover, run_ptb_lifecycle
+from modules.antares.application_lifecycle import run_ptb_lifecycle
 
 _OK = "antares lifecycle ok"
 _EVENTS = os.environ.get("ANTARES_LC_EVENTS_LOG", "")
@@ -45,6 +45,14 @@ def _write_report(payload: dict) -> None:
     path = Path(_REPORT)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _read_report() -> dict:
+    path = Path(_REPORT)
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8") or "{}")
+    return raw if isinstance(raw, dict) else {}
 
 
 def _read_events() -> list[dict]:
@@ -88,39 +96,83 @@ def _whoami_update(bot, user_id: int) -> Update:
     return update
 
 
-def _flags(app) -> dict:
+def _observe_app(app, *, recorded_before_loop_close: bool) -> dict:
+    """Child-local snapshot. Does not call production inspect helpers."""
+
     bot = app.bot
     updater = app.updater
-    task = getattr(app, "_Application__update_fetcher_task", None)
+    pair = getattr(bot, "_request", None)
+    httpx_closed: list[object] = []
+    if isinstance(pair, tuple):
+        for req in pair[:2]:
+            client = getattr(req, "_client", None)
+            httpx_closed.append(None if client is None else bool(client.is_closed))
+    fetcher = getattr(app, "_Application__update_fetcher_task", None)
+    created = getattr(app, "_Application__create_task_tasks", None) or set()
+    create_unfinished = [
+        t.get_name() for t in list(created) if not t.done()
+    ]
+    current = None
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    ptb_unfinished: list[str] = []
+    runner_unfinished: list[str] = []
+    try:
+        loop = asyncio.get_running_loop()
+        tasks = asyncio.all_tasks(loop)
+    except RuntimeError:
+        tasks = set()
+        loop = None
+    for task in tasks:
+        if task is current or task.done():
+            continue
+        name = task.get_name()
+        if name.startswith("sandbox-"):
+            runner_unfinished.append(name)
+        elif name.startswith("Application:") or name == "ptb-lifecycle-cleanup":
+            ptb_unfinished.append(name)
     return {
+        "recorded_before_loop_close": recorded_before_loop_close,
+        "loop_running": loop is not None and loop.is_running(),
         "app_initialized": bool(getattr(app, "_initialized", False)),
         "app_running": bool(getattr(app, "running", False)),
         "bot_requests_initialized": bool(getattr(bot, "_requests_initialized", False)),
         "bot_initialized": bool(getattr(bot, "_bot_initialized", False)),
         "updater_initialized": bool(getattr(updater, "_initialized", False)) if updater else False,
         "updater_running": bool(getattr(updater, "running", False)) if updater else False,
-        "fetcher_done": None if task is None else bool(task.done()),
-        "job_queue": app.job_queue is not None,
-        "leftover": list(inspect_application_leftover(app)),
+        "fetcher_done": None if fetcher is None else bool(fetcher.done()),
+        "httpx_closed": httpx_closed,
+        "create_task_unfinished": create_unfinished,
+        "ptb_unfinished_tasks": ptb_unfinished,
+        "runner_unfinished_tasks": runner_unfinished,
+        "job_queue_set": getattr(app, "_job_queue", None) is not None,
+        "processor": type(getattr(app, "update_processor", None)).__name__,
     }
 
 
 def _outcome_payload(exc: BaseException | None, result) -> dict:
-    payload = {
+    return {
         "scenario": _scenario(),
         "exc_type": None if exc is None else type(exc).__name__,
         "exc": None if exc is None else str(exc),
         "cause_type": None
         if exc is None or exc.__cause__ is None
         else type(exc.__cause__).__name__,
+        "cancelled_during_cleanup": bool(getattr(exc, "ptb_cancelled_during_cleanup", False))
+        if exc is not None
+        else False,
         "cleanup_actions": list(getattr(result, "cleanup_actions", ()))
         if result is not None
         else list(getattr(exc, "ptb_cleanup_actions", ()) if exc is not None else ()),
         "helper_leftover": list(getattr(result, "leftover", ()))
         if result is not None
         else list(getattr(exc, "ptb_leftover", ()) if exc is not None else ()),
+        "cleanup_errors": list(getattr(result, "cleanup_errors", ()))
+        if result is not None
+        else list(getattr(exc, "ptb_cleanup_errors", ()) if exc is not None else ()),
     }
-    return payload
 
 
 async def _run_helper(app, *, enable_polling: bool) -> object:
@@ -156,30 +208,49 @@ async def _run_helper(app, *, enable_polling: bool) -> object:
         _event("cancelling_lifecycle")
         task.cancel()
 
-    task: asyncio.Task
-    helpers = []
-    if scenario in {"whoami", "callback_error", "fail_cleanup_only"}:
+    async def _cancel_during_cleanup():
+        await _wait_event("application_stop_called")
+        _event("cancelling_during_cleanup")
+        task.cancel()
+
+    helpers: list[asyncio.Task] = []
+    if scenario in {"whoami", "callback_error", "fail_cleanup_only", "cancel_during_cleanup"}:
         helpers.append(asyncio.create_task(_feed_whoami(), name="sandbox-feed-whoami"))
     if scenario == "cancel":
         helpers.append(asyncio.create_task(_cancel_after_start(), name="sandbox-cancel"))
+    if scenario == "cancel_during_cleanup":
+        helpers.append(asyncio.create_task(_cancel_during_cleanup(), name="sandbox-cancel-cleanup"))
 
     async def _lifecycle():
         return await run_ptb_lifecycle(app, stop=stop, enable_polling=enable_polling)
 
     task = asyncio.create_task(_lifecycle(), name="sandbox-run_ptb_lifecycle")
+    helper_exc: BaseException | None = None
+    result = None
     try:
         result = await task
-        for helper in helpers:
-            await asyncio.wait_for(helper, timeout=15)
-        return result
-    except Exception:
-        for helper in helpers:
-            helper.cancel()
-        raise
-    finally:
+    except BaseException as exc:
+        helper_exc = exc
+    if helpers:
         for helper in helpers:
             if not helper.done():
                 helper.cancel()
+        await asyncio.gather(*helpers, return_exceptions=True)
+    live = _observe_app(app, recorded_before_loop_close=True)
+    payload = _outcome_payload(helper_exc, result)
+    payload["in_loop"] = live
+    _write_report(payload)
+    _event(
+        "in_loop_state_recorded",
+        fetcher_done=live.get("fetcher_done"),
+        app_running=live.get("app_running"),
+        updater_running=live.get("updater_running"),
+        httpx_closed=live.get("httpx_closed"),
+        ptb_unfinished_tasks=live.get("ptb_unfinished_tasks"),
+    )
+    if helper_exc is not None:
+        raise helper_exc
+    return result
 
 
 def _build_app(assembled, token: str):
@@ -195,7 +266,16 @@ def main() -> None:
     snap = _snapshot_local_rules(rules)
     app = _build_app(assembled, token)
     app.bot_data["antares_snap"] = snap
-    _event("child_ready", scenario=scenario, job_queue=app.job_queue is not None)
+    if scenario == "unsupported_job_queue":
+        app._job_queue = object()
+    if scenario == "unsupported_processor":
+        app._update_processor = object()
+    _event(
+        "child_ready",
+        scenario=scenario,
+        job_queue_set=getattr(app, "_job_queue", None) is not None,
+        processor=type(getattr(app, "update_processor", None)).__name__,
+    )
 
     enable_polling = scenario == "enable_polling"
     result = None
@@ -204,16 +284,32 @@ def main() -> None:
         result = asyncio.run(_run_helper(app, enable_polling=enable_polling))
     except BaseException as raised:
         exc = raised
-    report = _outcome_payload(exc, result)
-    report.update(_flags(app))
-    _write_report(report)
-    _event("child_finished", **{k: report[k] for k in ("scenario", "exc_type", "cleanup_actions", "helper_leftover")})
 
-    leftover = report.get("leftover") or report.get("helper_leftover") or []
-    if scenario == "whoami" and exc is None and not leftover:
-        print(f"{_OK} scenario=whoami leftover=0")
-        raise SystemExit(0)
-    if scenario == "whoami":
+    report = _read_report()
+    if not report:
+        report = _outcome_payload(exc, result)
+    report["post_loop"] = _observe_app(app, recorded_before_loop_close=False)
+    if "in_loop" not in report:
+        report["in_loop"] = None
+    _write_report(report)
+    _event(
+        "child_finished",
+        scenario=report.get("scenario"),
+        exc_type=report.get("exc_type"),
+        cleanup_actions=report.get("cleanup_actions"),
+        helper_leftover=report.get("helper_leftover"),
+        cleanup_errors=report.get("cleanup_errors"),
+    )
+
+    leftover = (report.get("in_loop") or {}).get("httpx_closed")
+    in_loop = report.get("in_loop") or {}
+    kinds = {item.get("kind") for item in _read_events()}
+
+    if scenario == "whoami" and exc is None:
+        closed = in_loop.get("httpx_closed") or []
+        if closed == [True, True] and not in_loop.get("ptb_unfinished_tasks"):
+            print(f"{_OK} scenario=whoami leftover=0")
+            raise SystemExit(0)
         print("antares lifecycle incomplete cleanup; success diagnostic withheld", file=sys.stderr)
         raise SystemExit(4)
 
@@ -225,8 +321,11 @@ def main() -> None:
         "fail_after_bot": "RuntimeError",
         "fail_start": "RuntimeError",
         "cancel": "CancelledError",
+        "cancel_during_cleanup": "CancelledError",
         "callback_error": None,
         "fail_cleanup_only": "RuntimeError",
+        "unsupported_job_queue": "ValueError",
+        "unsupported_processor": "ValueError",
     }
     if scenario not in expected_fail:
         print(f"unknown scenario {scenario!r}", file=sys.stderr)
@@ -234,16 +333,15 @@ def main() -> None:
 
     want = expected_fail[scenario]
     if scenario == "callback_error":
-        # Helper should still stop cleanly after error handler; that is not callback success.
-        kinds = {item.get("kind") for item in _read_events()}
-        if "whoami_completed" in kinds or "antares lifecycle ok" in (sys.stdout and ""):
+        if "whoami_completed" in kinds:
             print("callback_error must not record whoami_completed", file=sys.stderr)
             raise SystemExit(1)
         if "error_handler" not in kinds:
             print("callback_error missing error_handler", file=sys.stderr)
             raise SystemExit(1)
-        if exc is None and not leftover:
-            print(f"{_OK} scenario=callback_error error_handler=1 leftover=0")
+        closed = in_loop.get("httpx_closed") or []
+        if exc is None and closed == [True, True]:
+            print("antares lifecycle helper-finished scenario=callback_error error_handler=1 leftover=0")
             raise SystemExit(0)
         print("callback_error helper did not finish cleanly", file=sys.stderr)
         raise SystemExit(1)
@@ -254,10 +352,9 @@ def main() -> None:
     if type(exc).__name__ != want:
         print(f"scenario {scenario} expected {want}, got {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1)
-    if scenario == "enable_polling":
-        kinds = {item.get("kind") for item in _read_events()}
+    if scenario in {"enable_polling", "unsupported_job_queue", "unsupported_processor"}:
         if "application_initialize_called" in kinds:
-            print("enable_polling must not initialize", file=sys.stderr)
+            print(f"{scenario} must not initialize", file=sys.stderr)
             raise SystemExit(1)
     print(f"antares lifecycle expected-failure scenario={scenario} exc={want}")
     raise SystemExit(2)
