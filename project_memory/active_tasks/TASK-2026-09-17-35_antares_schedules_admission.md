@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-34 close `057614413480831795a393bcfd3ac14f69d89fe4` (review `f76f9c9…`); [MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md) |
-| **PR** | Draft на `feat/task-2026-09-17-35-antares-schedules-admission`, base `feat/task-2026-09-17-34-antares-ingest-admission-impl` |
+| **PR** | Draft [#38](https://github.com/deniskotdavydov1991-wq/Test/pull/38) `feat/task-2026-09-17-35-antares-schedules-admission`, base `feat/task-2026-09-17-34-antares-ingest-admission-impl` |
 | **Риск** | medium: общий job executor; mixed `schedule_loop` не менять |
 
 Docs-контракт isolated schedules. Runtime **не** менялся. Реализация **не** начиналась. GPT pytest **не** требовался. TASK-34/33 повторно не закрывать.
