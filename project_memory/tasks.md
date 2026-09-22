@@ -306,7 +306,7 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-29** | **review** | Isolated `/registry_replay` admission; review passed (`71fce3b…`); close `d3eecc0…`; Cursor 129/52; GPT code/diff, pytest not run; not released / **not merged** | Draft PR #32 |
 | **TASK-2026-09-17-30** | **review** | Isolated `/reload_rules` admission; blocked until TASK-32 implementation review and reload re-check; not released / **not merged** | Draft PR #33 |
 | **TASK-2026-09-17-31** | **review** | Publish-generation contract; GPT reviewed `8ef2838…`; close `3d56791…`; runtime unchanged; pytest not run; **not merged** | Draft PR #34 |
-| **TASK-2026-09-17-32** | **review** | Implement rules publish generation; not released / **not merged** | Draft PR (this branch) |
+| **TASK-2026-09-17-32** | **review** | Implement rules publish generation; Draft PR #35; not released / **not merged** | Draft PR #35 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |

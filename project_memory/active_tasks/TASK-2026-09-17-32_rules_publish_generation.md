@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; не принято; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-31 close `3d567911e8fc69e4ca9fe54f3571e6657f6d31b2` (контракт `8ef2838…`); TASK-30 Draft PR #33 HEAD `1eefc54…` (**не** закрыт) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-32-rules-publish-generation`, base `feat/task-2026-09-17-31-rules-publish-generation` |
+| **PR** | Draft [#35](https://github.com/deniskotdavydov1991-wq/Test/pull/35) `feat/task-2026-09-17-32-rules-publish-generation`, base `feat/task-2026-09-17-31-rules-publish-generation` |
 | **Риск** | high: общий `rules_provider` + `AccessRules` для mixed/Antares/Raccoon/WR |
 
 Реализация принятого контракта [MODULAR_REORG_RULES_PUBLISH_GENERATION.md](../ops/MODULAR_REORG_RULES_PUBLISH_GENERATION.md). TASK-30 не закрывать автоматически. PR #33 не переназначать.
