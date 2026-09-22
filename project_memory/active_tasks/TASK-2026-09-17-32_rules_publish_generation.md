@@ -5,11 +5,11 @@
 | **ID** | TASK-2026-09-17-32 |
 | **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
-| **Связанные артефакты** | TASK-31 close `3d567911e8fc69e4ca9fe54f3571e6657f6d31b2` (контракт `8ef2838…`); TASK-30 Draft PR #33 HEAD `1eefc54…` (**не** закрыт) |
+| **Связанные артефакты** | TASK-31 close `3d567911e8fc69e4ca9fe54f3571e6657f6d31b2` (контракт `8ef2838…`); TASK-30 принят на объединённом PR #35 `c420b590…` (PR #33 `1eefc54…` не самостоятельная принятая версия) |
 | **PR** | Draft [#35](https://github.com/deniskotdavydov1991-wq/Test/pull/35) `feat/task-2026-09-17-32-rules-publish-generation`, base `feat/task-2026-09-17-31-rules-publish-generation` |
 | **Риск** | high: общий `rules_provider` + `AccessRules` для mixed/Antares/Raccoon/WR |
 
-Review **пройден**. GPT проверил код/diff на полном SHA `bb25f73433297a0179a3606f640236f7b3038463`. GPT pytest **не** запускал. Этот docs-коммит — закрытие TASK-32. Реализация **не** выпущена. PR #35 остаётся Draft. TASK-30 **не** закрыт. Merge/deploy нет.
+Review **пройден**. GPT проверил код/diff на полном SHA `bb25f73433297a0179a3606f640236f7b3038463`. GPT pytest **не** запускал. Закрытие TASK-32 — `7d3a4636d333b68a4106a5fbd4974590debf3cd7`. Реализация **не** выпущена. PR #35 остаётся Draft. Merge/deploy нет.
 
 Опубликованные capture живут до конца процесса. Cleanup неопубликованных файлов — best-effort: одна повторная попытка `unlink` после `gc.collect()`, затем warning.
 
@@ -52,7 +52,7 @@ Review **пройден**. GPT проверил код/diff на полном SH
 
 ## Out Of Scope
 
-Закрытие TASK-30; retarget PR #33; ingest; schedules; serve; merge; deploy; исходное Test; live credentials; leases; очистка опубликованных capture (живут до конца процесса).
+ingest; schedules; serve; merge; deploy; исходное Test; live credentials; leases; очистка опубликованных capture (живут до конца процесса); retarget PR #33.
 
 ---
 
@@ -65,4 +65,4 @@ Review **пройден**. GPT проверил код/diff на полном SH
 | 2026-09-22 | review-fix: чужой fresh commit → `existing`; одинаковая нормализация chat_id/user_id; nested attempt-local accessor; точный `ContractPublishRejected` в test_review_a |
 | 2026-09-22 | review-fix: fallback copy published capture; remote TTL not extended by snapshot reads; corrupt tests on real materialize |
 | 2026-09-22 | proof: fallback lost commit — A existing B, G/B captures kept, unpublished A capture removed |
-| 2026-09-22 | GPT review принят на `bb25f734…`; закрытие docs; pytest GPT не запускал; PR #35 Draft; TASK-30 не закрыт |
+| 2026-09-22 | GPT review принят на `bb25f734…`; закрытие docs `7d3a463…`; pytest GPT не запускал; PR #35 Draft |

@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 Draft PR #33 HEAD `1eefc54…` **не** закрыт (`1eefc54` без исправленного provider); TASK-31 принят (`8ef2838…`); TASK-32 GPT review `bb25f734…`; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 review пройден на объединённом PR #35 `c420b590…` (PR #33 `1eefc54…` не самостоятельная принятая версия); TASK-31 принят (`8ef2838…`); TASK-32 закрыт `7d3a463…`; cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -270,7 +270,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`
 
-Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29. `/reload_rules` — isolated TASK-30 (`submit_if_open` + `_reload_bound_rules` на том же bound `AccessRules` в общем executor; mixed — sync в callback). Контракт — [TASK-31](../active_tasks/TASK-2026-09-17-31_rules_publish_generation.md) (принят); code TASK-32 review на `bb25f734…`. TASK-30 **не** закрыт. Проверка reload на объединённом HEAD PR #35 — **не** на `1eefc54`. Успех TASK-27…32 **не** есть глобальный запрет новой работы.
+Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29. `/reload_rules` — isolated TASK-30 (`submit_if_open` + `_reload_bound_rules` на том же bound `AccessRules` в общем executor; mixed — sync в callback). Контракт — [TASK-31](../active_tasks/TASK-2026-09-17-31_rules_publish_generation.md) (принят); code TASK-32 закрыт `7d3a463…`. TASK-30 принят только в составе PR #35 `c420b590…`. PR #33 `1eefc54` **не** самостоятельно принятая версия. Успех TASK-27…32 **не** есть глобальный запрет новой работы.
 
 ### 7.2 Внутренние постановки — следующий этап
 

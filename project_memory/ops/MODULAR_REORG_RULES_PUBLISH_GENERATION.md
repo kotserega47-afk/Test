@@ -2,12 +2,12 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (review GPT на `8ef2838…`); code TASK-32 review GPT на `bb25f734…`; runtime этого docs PR **не** менялся |
-| **База** | TASK-30 HEAD `1eefc54720ccd036451f7c3c0e7dadaedf6efb98` (Draft PR #33, TASK-30 **не** закрыт) |
+| **Статус** | контракт **принят** (review GPT на `8ef2838…`); code TASK-32 закрыт `7d3a463…`; TASK-30 принят на объединённом PR #35 `c420b590…`; runtime этого docs PR **не** менялся |
+| **База** | исходный TASK-30 HEAD `1eefc54720ccd036451f7c3c0e7dadaedf6efb98` (Draft PR #33; **не** самостоятельно принятая версия) |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Repro исходного дефекта** | `test_repro_*` на SHA `1eefc54` (история дефекта, не будущий safety-критерий) |
 
-Контракт **принят**. Code scope — TASK-32. Смысл strict/shadow/legacy и provider stale-reuse **не** менять. Live credentials, merge, deploy, исходное Test, закрытие TASK-30 — вне этого docs PR.
+Контракт **принят**. Code scope TASK-32 закрыт `7d3a463…`. Смысл strict/shadow/legacy и provider stale-reuse **не** менять. Live credentials, merge, deploy, исходное Test — вне этого docs PR. TASK-30 позднее принят только в составе PR #35; PR #33 не переназначать.
 
 ---
 
@@ -410,4 +410,4 @@ Eager indexes до commit, полный объект. Lazy subset-update зап�
 
 ## 12. Вне scope
 
-Runtime **этого** docs PR. Merge/retarget/deploy. Закрытие TASK-30 / смена PR #33. Смена C4 policy. Antares-only fork provider. Code — TASK-32.
+Runtime **этого** docs PR. Merge/retarget/deploy. Смена PR #33 / cherry-pick в PR #33. Смена C4 policy. Antares-only fork provider.
