@@ -2,13 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен к review**; runtime **не** менялся |
+| **Статус** | docs-контракт **подготовлен к review** (уточнение после `1ebc024…`); runtime **не** менялся |
 | **База** | `4b1f3676507a11ea4582ab59eb9846bcac2849a6` (`feat/task-2026-09-17-32-rules-publish-generation`) |
-| **Обследованный SHA** | тот же `4b1f367…` |
+| **Обследованный SHA** | `4b1f367…`; уточнение контракта от review HEAD `1ebc024161dcb4f6876130f7a433aa2920ed55c8` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Owner ingest** | `modules/antares/document_ingest.py`; mixed re-export `integrations/wallet_editor_tg.py` |
 
-Этот PR — только обследование и контракт. Реализацию `put_nowait_if_open` / isolated ingest **не** делать здесь. TASK-30 и TASK-32 повторно не закрывать. Conversion bridge, внутренний Auto-Enable enqueue, schedules, drain, worker join, sender stop, mixed-stop — **не** этот этап.
+Этот PR — только обследование и контракт. Реализацию `put_nowait_if_open` / isolated ingest **не** делать здесь. TASK-33 **не** закрывать. TASK-30 и TASK-32 повторно не закрывать. Conversion bridge, внутренний Auto-Enable enqueue, schedules, drain, worker join, sender stop, mixed-stop — **не** этот этап.
 
 ---
 
@@ -43,7 +43,7 @@ except Exception → log; reply «❌ Ошибка при приёме файл�
 
 «Файл получен» и download **до** постановки. Это **не** атомарный admit.
 
-`CancelledError` (BaseException) текущим `except Exception` **не** ловится. Если cancel после создания `local_path` — файл может остаться.
+`CancelledError` (BaseException) текущим `except Exception` **не** ловится. Если cancel после создания `local_path` — файл может остаться. Isolated code обязан закрыть этот исход (§ 4); mixed этим этапом **не** менять.
 
 ### 1.2 Три маршрута: фактическая точка enqueue
 
@@ -84,6 +84,8 @@ return worker.queue.qsize()
 
 Cleanup входа: `delayed_cleanup(result_path, input_path)` в **daemon** thread через 30s, `os.remove` в `try/except`. Запускается **только** на успешном конце run (disable — после send/outbox; add/edit — после result send). Gate `manual_sync` None и exception в add/edit `return` **без** cleanup. Disable exception в loop шлёт текст, cleanup **нет**.
 
+Фактический результат задания после Accepted — ответственность worker, не handler.
+
 ---
 
 ## 2. Допуск (будущий isolated code)
@@ -92,9 +94,10 @@ Cleanup входа: `delayed_cleanup(result_path, input_path)` в **daemon** thr
 
 - mixed / unbound: текущий `add_*_task` и тексты **без изменений**.
 - isolated bound/closed и sealed: **новая** задача не ставится.
-- Ранняя проверка `bound_admission()` до download: может избежать `get_file`/Excel. **Не** заменяет атомарную проверку в момент enqueue (seal во время download всё ещё должен отказать).
-- Проверка `state is OPEN` и фактическая постановка — **один** `WorkAdmission._lock`.
-- Этот lock **не** держать через: `await`, download, Excel parsing, Telegram reply, `Thread.start`, блокирующий `Queue.put` (даже если unbounded put обычно мгновенный — в lock только `put_nowait`).
+- **Обязательная** ранняя проверка после allowlist / `.xlsx` / operator и **до** «Файл получен», `get_file`/download и создания worker: если bound и `state is not OPEN` → `ADMISSION_CLOSED_REPLY`, без файла и без `ensure_profile_queue`. Это не optional.
+- Ранний OPEN **не** резервирует право постановки. Атомарная проверка `state is OPEN` + `put_nowait` обязательна; seal во время download/routing/ensure всё ещё отказывает.
+- Проверка OPEN и фактическая постановка — **один** `WorkAdmission._lock`.
+- Этот lock **не** держать через: `await`, download, Excel parsing, Telegram reply, `Thread.start`, блокирующий `Queue.put` (в lock только `put_nowait`).
 
 ### 2.2 Минимальный API
 
@@ -107,59 +110,78 @@ Cleanup входа: `delayed_cleanup(result_path, input_path)` в **daemon** thr
 ```python
 @dataclass(frozen=True)
 class AdmissionQueued:
-    queue_size: int
+    queue_size: int | None = None  # диагностика; не часть Accepted
 
 def put_nowait_if_open(self, queue, item) -> AdmissionQueued | AdmissionRejected:
     with self._lock:
         if self._state is not AdmissionState.OPEN:
             return AdmissionRejected(self._state)
-        queue.put_nowait(item)
-        return AdmissionQueued(queue_size=queue.qsize())
+        queue.put_nowait(item)          # успех → Accepted; дальше не откатывать
+        size = None
+        try:
+            size = queue.qsize()        # ошибка qsize ≠ ошибка постановки
+        except Exception:
+            size = None
+        return AdmissionQueued(queue_size=size)
 ```
 
-`AdmissionAccepted.future` **не** использовать для очереди (нет Future от `put`).
+Успешный `put_nowait` **есть** Accepted, даже если последующий `qsize` бросил. `qsize` не позиция задачи и не доказательство, что worker ещё не забрал элемент (после put consumer уже может сделать `get`; размер может быть 0).
 
-Публичный lookup очереди (тонкая обёртка над существующим `_ensure_profile_worker`), **вне** admission lock:
+`AdmissionAccepted.future` **не** использовать для очереди.
+
+Публичный lookup очереди (тонкая обёртка над `_ensure_profile_worker`), **вне** admission lock:
 
 ```python
 def ensure_profile_queue(profile_key: str) -> Queue:
     return _ensure_profile_worker(profile_key).queue
 ```
 
-Порядок блокировок: сначала `_registry_lock` (создание Queue + start thread), **отпустить**, затем `WorkAdmission._lock` + `put_nowait`. Не вкладывать admission lock в registry lock и наоборот.
+Порядок блокировок: сначала `_registry_lock` (создание Queue + start thread), **отпустить**, затем `WorkAdmission._lock` + `put_nowait`. Не вкладывать locks.
 
-Старт daemon thread **до** admit не есть Accepted. Если затем `put_nowait_if_open` отвергнут — допустим простой worker без этой задачи (как уже существующий lazy worker).
+Старт daemon thread **до** окончательного admit не есть Accepted. Если `put_nowait_if_open` отвергнут после `ensure_profile_queue` — допустимый ресурсный эффект: простой worker без этой задачи. Это **не** drain/join и **не** гарантия, что после `seal` новые потоки больше не появятся (другой путь всё ещё может вызвать ensure).
 
-Isolated callback после routing:
+Isolated callback:
 
-1. optional early reject, если bound и не OPEN (без файла / с файлом — § 3);
-2. `queue = ensure_profile_queue(profile)` вне admission lock;
-3. `outcome = admission.put_nowait_if_open(queue, task)`;
-4. Rejected → handler владеет файлом, best-effort unlink, `ADMISSION_CLOSED_REPLY`;
-5. `AdmissionQueued` → Accepted; reply «📌 …» **после** lock; сбой reply не откатывает put.
+1. allowlist / `.xlsx` / operator — как сейчас;
+2. **обязательный** early reject, если bound и не OPEN (файла нет, worker не создаём);
+3. «Файл получен» / download / routing / построение task;
+4. `queue = ensure_profile_queue(profile)` вне admission lock;
+5. `outcome = admission.put_nowait_if_open(queue, task)`;
+6. Rejected или исключение **до** помещения элемента → handler владеет файлом, best-effort unlink, ответ отказа / ошибки постановки;
+7. успешный `put_nowait` → Accepted: **сразу** зафиксировать передачу владения (без `await` между put и этой фиксацией); затем log/qsize/reply уже не могут unlink и не могут сказать, что постановка не состоялась.
 
-Unbound: шаг 2–5 не через admission; как сейчас `add_*_task`.
+Unbound: шаги 2 и 5–7 не через admission; как сейчас `add_*_task`.
 
 ---
 
-## 3. Момент Accepted
+## 3. Момент Accepted и фиксация владения
 
-**Accepted** = `queue.put_nowait(item)` **вернулся внутри** `put_nowait_if_open` при `state is OPEN` без исключения.
+**Accepted** = `queue.put_nowait(item)` вернулся внутри `put_nowait_if_open` при `state is OPEN` без исключения.
+
+Сразу после этого результата handler фиксирует передачу `local_path` worker (`task.file_path`). Между успешным put и этой фиксацией **нет** `await`. Logging, `qsize`, формирование и отправка ответа — только после фиксации.
 
 Не Accepted:
 
 - allowlist / не-xlsx / operator deny;
+- ранний closed/sealed;
 - reply «Файл получен»;
-- успешный download / routing;
-- `ensure_profile_queue` / start thread;
+- download / routing / построение task;
+- `ensure_profile_queue` / `Thread.start`;
 - `AdmissionRejected`;
-- исключение `put_nowait` → не Accepted (как сбой `executor.submit`).
+- исключение `put_nowait` **до** помещения элемента.
 
-Следствия:
+### 3.1 После Accepted (ошибка ответа ≠ ошибка постановки)
 
-- `seal()` после Accepted **не** снимает элемент с очереди и не отменяет worker.
-- Ошибка Telegram-ответа после Accepted **не** отказ enqueue и **не** повод повторно `put`.
-- Cancellation handler после Accepted **не** unlink файла, уже переданного в task.
+- файл **не** удалять;
+- enqueue **не** повторять;
+- оператору **не** сообщать, что постановка не состоялась;
+- сбой подтверждения (Telegram reply) логировать отдельно (`exception` на confirmation, не ingest-failed);
+- `CancelledError` на **первом await после Accepted** (обычно confirmation reply): enqueue один, файл сохранён, cancel пробрасывается; это покрывается тестами этого этапа, не UNKNOWN;
+- фактический результат задания — worker.
+
+`seal()` после Accepted не снимает элемент и не отменяет worker.
+
+Ошибка диагностического `qsize` / logging после успешного put **не** превращает Accepted в «enqueue failed» и **не** даёт unlink.
 
 ---
 
@@ -167,19 +189,25 @@ Unbound: шаг 2–5 не через admission; как сейчас `add_*_task
 
 Путь: `TMP_DIR / f"wallet_editor_{uuid}{ALLOWED_EXTENSION}"` (`/tmp/wallet_editor`).
 
-| Исход | Владелец | Удаление |
-|-------|----------|----------|
+| Исход | Владелец | Isolated cleanup |
+|-------|----------|------------------|
 | download + parsing, до enqueue | handler | нет, пока исход не завершён |
-| AMBIGUOUS | handler | сейчас: `unlink(missing_ok=True)` + `except OSError: pass` |
-| early closed/sealed **до** download | файла нет | — |
-| closed/sealed **после** download, до Accepted | handler | isolated: тот же best-effort unlink, что AMBIGUOUS |
-| ошибка enqueue (`put_nowait` исключение) | handler | isolated: best-effort unlink |
-| cancellation **до** Accepted, `local_path` создан | handler | isolated: best-effort unlink (сейчас mixed не ловит `CancelledError`) |
-| **после Accepted**, включая ошибку/cancel reply | **worker / task.file_path** | handler **не** удаляет |
+| частичный download / ошибка download | handler | best-effort unlink |
+| ошибка routing/parsing / построения task (включая AMBIGUOUS) | handler | best-effort unlink |
+| ошибка `ensure_profile_queue` / `Thread.start` | handler | best-effort unlink |
+| ранний closed/sealed **до** download | файла нет | — |
+| отказ admission после файла, до put | handler | best-effort unlink |
+| ошибка `put_nowait` **до** помещения элемента | handler | best-effort unlink |
+| `CancelledError` **до** Accepted | handler | best-effort unlink, затем **проброс** cancel |
+| **после Accepted** (в т.ч. cancel/ошибка confirmation) | **worker / task.file_path** | handler **не** удаляет |
 
-Worker cleanup: `delayed_cleanup` — best-effort `os.remove`, warning при ошибке; delay 30s; daemon. **Не** обещать удаление при `OSError` или kill процесса. После Accepted handler **не** имеет права unlink «на всякий случай»: worker может уже читать файл.
+Best-effort unlink: `unlink(missing_ok=True)` + `except OSError`. Ошибка unlink **не** затирает исходную ошибку и **не** подменяет `CancelledError` (сначала cleanup, затем re-raise исходного / cancel).
 
-Существующий пробел (не чинить в этом docs PR, зафиксировать): add/edit exception и disable gate-fail / disable exception **не** вызывают `delayed_cleanup` — файл может остаться после Accepted. Это поведение worker, не handler.
+Worker `delayed_cleanup` — best-effort `os.remove`, warning при ошибке; delay 30s; daemon. **Не** обещать удаление при `OSError` или kill процесса.
+
+Существующий пробел worker (не этот code): add/edit exception и disable gate-fail / disable exception не вызывают `delayed_cleanup`. После Accepted это не обязанность handler.
+
+Mixed этим этапом **не** менять (включая сегодняшнее отсутствие ловли `CancelledError`).
 
 ---
 
@@ -199,21 +227,26 @@ Worker cleanup: `delayed_cleanup` — best-effort `os.remove`, warning при о
 
 ## 6. Матрица будущих тестов (code PR)
 
-Гонки: Event/barrier, **без** sleep. Реальные `WorkAdmission` и реальный `Queue.put_nowait` (можно sandbox `TMP_DIR`, stub `get_file` / download / `detect_excel_routing` / `resolve_operator_for_user`). Не запускать браузер, живой Telegram, живой `worker_loop` как сервис.
+Гонки: Event/barrier, **без** sleep. Реальные `WorkAdmission` и реальный `Queue.put_nowait` (sandbox `TMP_DIR`; stub `get_file` / download / routing / operator). Без браузера, сети, живого Telegram и **без бизнес-`worker_loop`**. Для ошибки put инъекция падает **до** помещения элемента в очередь.
 
 | # | Сценарий | Ожидание |
 |---|----------|----------|
-| I1–I3 | три маршрута isolated OPEN | один `put_nowait` на очередь профиля; тип task как сейчас; reset/admission lock не вокруг download |
-| I4 | bound/closed и sealed до download | нет enqueue; нет download; `ADMISSION_CLOSED_REPLY` |
+| I1–I3 | три маршрута isolated OPEN | один `put_nowait`; тип task как сейчас; admission lock не вокруг download |
+| I4 | bound/closed и sealed после operator, до «Файл получен» | нет download, нет worker ensure, нет enqueue; `ADMISSION_CLOSED_REPLY` |
 | I5 | allowlist / operator deny | прежние тексты; нет admit/enqueue |
-| I6 | seal во время download (barrier до `put_nowait_if_open`) | Rejected; файл unlink handler; нет элемента в queue |
+| I6 | seal во время download (barrier до `put_nowait_if_open`) | Rejected; unlink handler; нет элемента |
 | I7 | seal после routing, до enqueue | то же |
-| I8 | enqueue раньше seal (barrier: put внутри lock, затем seal) | **одна** принятая задача остаётся в queue |
-| I9 | `put_nowait` бросает | не Accepted; unlink handler; нет повторного put из reply |
-| I10 | cancel до Accepted (после появления local_path) | нет enqueue; unlink handler |
-| I11 | cancel после Accepted | элемент в queue; handler не unlink |
-| I12 | reply после Accepted бросает | enqueue сохраняется; нет второго put |
-| I13 | ownership по I4–I12 | assert exists/unlinked согласно § 4 |
+| I8 | enqueue раньше seal (barrier: put внутри lock, затем seal) | **одна** принятая задача |
+| I9 | инъекция ошибки put **до** помещения элемента | не Accepted; unlink handler; нет повторного put |
+| I10 | cancel до Accepted (после появления local_path) | нет enqueue; unlink; `CancelledError` проброшен |
+| I11 | отмена на **первом await после Accepted** | файл сохранён; enqueue ровно один; handler не unlink |
+| I12 | ошибка confirmation reply после Accepted | те же гарантии, что I11; лог отдельно; оператору не «постановка не состоялась» |
+| I13 | частичный download | нет enqueue; файл удалён best-effort |
+| I14 | parsing / routing / построение task failure | нет enqueue; файл удалён best-effort |
+| I15 | ошибка `ensure_profile_queue` / `Thread.start` | нет enqueue; файл удалён best-effort |
+| I16 | consumer уже забрал задачу | `qsize` может быть 0; Accepted сохраняется; файл не unlink |
+| I17 | ошибка unlink на исходе до Accepted | исходная ошибка / `CancelledError` не скрыты |
+| I18 | ошибка `qsize` после успешного put | Accepted; нет unlink; не «enqueue failed» |
 | M1 | mixed/unbound baseline | три маршрута через `add_*_task`; closed admission не участвует |
 
 Не считать `test_repro_*` / harness dump доказательством admit.
@@ -234,19 +267,22 @@ Worker cleanup: `delayed_cleanup` — best-effort `os.remove`, warning при о
 - смена C4 / rules publish;
 - merge/deploy/live polling.
 
+Lazy worker **может** быть создан до окончательного отказа admit. Это допустимый ресурсный эффект данного среза. Это **не** доказанный drain/join и **не** гарантия отсутствия новых потоков после `seal`.
+
 ### 7.1 Минимальный следующий code
 
-1. `AdmissionQueued` + `WorkAdmission.put_nowait_if_open`.
-2. `ensure_profile_queue` без смены семантики mixed `add_*_task`.
-3. Isolated ветка в `handle_wallet_editor_document` (early peek + атомарный put); unbound без изменений.
+1. `AdmissionQueued` + `WorkAdmission.put_nowait_if_open` (Accepted = успех `put_nowait`; `qsize` диагностика).
+2. `ensure_profile_queue` без смены mixed `add_*_task`.
+3. Isolated ветка в `handle_wallet_editor_document`: обязательный early reject; фиксация владения сразу после put, без await; cleanup всех исходов до Accepted.
 4. Тесты § 6. Без live Telegram.
 
 Успех этого code **не** глобальный запрет новой работы в процессе.
 
 ### 7.2 UNKNOWN / не обещать
 
-- удаление файла при `OSError`, kill, crash worker после Accepted;
-- наблюдаемая разница `put` vs `put_nowait` на unbounded queue (для admit всё равно только `put_nowait` в lock);
+- удаление файла при `OSError` unlink, kill процесса, crash worker после Accepted;
+- наблюдаемая разница `put` vs `put_nowait` на unbounded queue (для admit только `put_nowait` в lock);
 - Windows-путь `/tmp/wallet_editor` vs `%TEMP%` (сейчас константа);
-- отмена PTB `concurrent_updates` точно в окне между put и return callback;
-- нужен ли отдельный public API вместо вызова `_ensure_profile_worker` — code может экспортировать тонкую функцию, не меняя mixed helpers.
+- отдельный public API vs вызов `_ensure_profile_worker` — code может экспортировать тонкую функцию, не меняя mixed helpers.
+
+Отмена на первом await **после** Accepted — не UNKNOWN: I11.

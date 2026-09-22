@@ -9,7 +9,7 @@
 | **PR** | Draft [#36](https://github.com/deniskotdavydov1991-wq/Test/pull/36) `feat/task-2026-09-17-33-antares-ingest-admission`, base `feat/task-2026-09-17-32-rules-publish-generation` |
 | **Риск** | medium: isolated ingest делит WE `Queue` с mixed; файл после download до put |
 
-Только docs. Runtime **не** менялся. GPT review ещё не принимался. Реализация допуска ingest — следующий code, не этот PR. TASK-30 и TASK-32 повторно не закрывать.
+Только docs. Runtime **не** менялся. Уточнение контракта на review HEAD `1ebc024…`. GPT review ещё не принимался. TASK-33 **не** закрывать. Реализация — следующий code PR. TASK-30 и TASK-32 повторно не закрывать.
 
 ---
 
@@ -21,13 +21,13 @@
 
 ## Success Criteria
 
-- [x] Три маршрута: фактическая точка `worker.queue.put` после `_ensure_profile_worker` (не весь `add_*_task` как атом)
-- [x] Early check не заменяет проверку в lock вместе с `put_nowait`
-- [x] Accepted = `put_nowait` внутри admission lock при OPEN; seal после этого не отменяет; сбой reply не retry
-- [x] Владение файлом по исходам; после Accepted handler не unlink
-- [x] Матрица Event/barrier; mixed baseline
-- [x] Следующий code узкий: API + isolated ingest only
-- [ ] GPT review контракта
+- [x] Обязательный early reject после доступа/формата/operator и до «Файл получен»/download/worker; ранний OPEN не резервирует put
+- [x] Accepted = успех `put_nowait`; владение фиксируется до await/log/reply; qsize — диагностика
+- [x] Все isolated исходы до Accepted: best-effort cleanup без затирания ошибки; cancel пробрасывается
+- [x] После Accepted: нет unlink, нет retry, ошибка confirmation отдельно от постановки
+- [x] Матрица Event/barrier включая I11–I18; mixed baseline
+- [x] Lazy worker до отказа admit — ресурсный эффект, не drain/join
+- [ ] GPT review уточнённого контракта
 - [ ] реализация (отдельный code PR)
 - [ ] merge/deploy (намеренно открыто)
 
@@ -38,6 +38,7 @@
 | Кто | Что |
 |-----|-----|
 | Cursor | обследование исходников `4b1f3676507a11ea4582ab59eb9846bcac2849a6`; runtime не менялся; pytest **не** запускался |
+| Cursor | уточнение контракта от review HEAD `1ebc024161dcb4f6876130f7a433aa2920ed55c8`; runtime не менялся; pytest **не** запускался |
 | GPT | ещё не ревьюил |
 
 ---
@@ -53,3 +54,4 @@ runtime этого PR; conversion bridge; `enqueue_auto_enable_batch`; schedules
 | Дата | Событие |
 |------|---------|
 | 2026-09-22 | docs-контракт ingest admission; статус **review (подготовлено)** |
+| 2026-09-22 | уточнение: обязательный early reject; владение сразу после put; cleanup всех исходов до Accepted; qsize диагностика; I11–I18 |
