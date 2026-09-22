@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 review пройден на объединённом PR #35 `c420b590…` (PR #33 `1eefc54…` не самостоятельная принятая версия); TASK-31 принят (`8ef2838…`); TASK-32 закрыт `7d3a463…`; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; контракт ingest — [TASK-33](../active_tasks/TASK-2026-09-17-33_antares_ingest_admission.md) (docs, не code); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -264,7 +264,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- document ingest → `queue.put`
+- document ingest → `queue.put` (контракт isolated admit — TASK-33; **code ещё нет**)
 - mixed `schedule_loop` / `dispatch_job_background`
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2

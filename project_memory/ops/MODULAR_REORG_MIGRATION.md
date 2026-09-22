@@ -46,7 +46,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-30 reload_rules admission | isolated `/reload_rules`; review пройден на объединённом PR #35 `c420b590…`; GPT код/diff, pytest не запускал; Cursor **161 passed**, 3.12.10, exit 0; исторические **130** на `bb25f734…` и **143** / **7** / **52** на `1eefc54…`; PR #33 HEAD `1eefc54…` **не** самостоятельная принятая версия; TASK-32 остаётся закрытым `7d3a463…`; **не выпущено** | наборы не суммировать | **нет** |
 | TASK-31 rules publish generation | docs-контракт принят; Draft PR #34 review GPT `8ef2838…`; close `3d56791…`; runtime нет; pytest не запускался; **не выпущено** | pytest не требовался | **нет** |
 | TASK-32 rules publish code | GPT review кода/diff на `bb25f734…`; pytest GPT не запускал; Cursor **70** на `bb25f734…`; **123 / 34 / 30 / 52** на `5bbde8f…`; docs-close `7d3a463…`; PR #35 Draft; **не выпущено** | 3.12.10, exit 0; наборы не суммировать | **нет** |
-| Следующая | ingest / schedules отдельно; mixed-stop отдельно; serve отдельно | — |
+| TASK-33 ingest admission | docs-контракт Telegram document ingest; Draft от `4b1f367…`; runtime нет; **не выпущено** | pytest не требовался | **нет** |
+| Следующая | review TASK-33; code ingest admit отдельно; schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -62,7 +63,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-32 docs-close** `7d3a463…`. **TASK-30 docs-close** на объединённой ветке PR #35 (этот коммит); PR #33 не переназначать. Ingest / schedules отдельно. Не serve, не полный переход, не mixed-stop.
+**TASK-32 docs-close** `7d3a463…`. **TASK-30 docs-close** на объединённой ветке PR #35. Контракт ingest — TASK-33 (этот docs PR). PR #33 не переназначать. Schedules отдельно. Не serve, не полный переход, не mixed-stop.
 
 ---
 
