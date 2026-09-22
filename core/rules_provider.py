@@ -398,11 +398,22 @@ def _download_to_capture(db_path: str, attempt_id: int) -> Path | None:
 
 
 def _delete_unpublished_capture(path: Path) -> None:
-    try:
+    def _unlink() -> None:
         if path.exists():
             path.unlink()
+
+    try:
+        _unlink()
+        return
     except OSError:
         pass
+    import gc
+
+    gc.collect()
+    try:
+        _unlink()
+    except OSError:
+        log.warning("unpublished capture still locked", extra={"path": str(path)})
 
 
 def _materialize_capture(attempt_id: int) -> tuple[Path, str, tuple[float, int], str]:

@@ -1013,7 +1013,7 @@ def test_review_published_capture_survives_fallback_reject(
     assert kept.read_bytes() == original
 
 
-def test_review_published_capture_survives_fallback_lost_commit(
+def test_review_published_capture_survives_fallback_build_fail_existing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1052,10 +1052,7 @@ def test_review_published_capture_survives_fallback_lost_commit(
     held: dict[str, object] = {}
 
     def _a() -> None:
-        try:
-            held["a"] = publish_with_outcome(force_sync=True)
-        except BaseException as exc:  # noqa: BLE001
-            held["exc"] = exc
+        held["a"] = publish_with_outcome(force_sync=True)
 
     t = threading.Thread(target=_a)
     a_thread["t"] = t
@@ -1067,9 +1064,81 @@ def test_review_published_capture_survives_fallback_lost_commit(
     rp.evaluate_snapshot_publish = orig_eval
     rp.after_attempt_evaluate = None
     assert not t.is_alive()
+    assert "exc" not in held
+    assert "a" in held
+    a_res = held["a"]
     assert winner.outcome == "fresh_commit"
+    assert a_res.outcome == "existing"
+    assert a_res.state is winner.state
+    assert a_res.state.generation == winner.state.generation
     assert kept.is_file()
     assert kept.read_bytes() == original
+
+
+def test_review_published_capture_survives_fallback_lost_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+    a_thread: dict[str, threading.Thread | None] = {"t": None}
+
+    def _dl(_db: str, dest: str) -> bool:
+        if threading.current_thread() is a_thread["t"]:
+            return False
+        shutil.copy2(C5, dest)
+        return True
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    kept_g = Path(g.capture_path)
+    original_g = kept_g.read_bytes()
+    ready = threading.Event()
+    go = threading.Event()
+    held: dict[str, object] = {}
+
+    def _hook(_attempt: int) -> None:
+        if threading.current_thread() is a_thread["t"]:
+            ctx = rp._attempt_local.get()
+            assert ctx is not None
+            held["a_capture"] = Path(ctx.capture_path)
+            ready.set()
+            assert go.wait(timeout=5)
+
+    rp.before_commit_section = _hook
+
+    def _a() -> None:
+        held["a"] = publish_with_outcome(force_sync=True)
+
+    t = threading.Thread(target=_a)
+    a_thread["t"] = t
+    t.start()
+    assert ready.wait(timeout=5)
+    a_capture = held["a_capture"]
+    assert a_capture.is_file()
+    assert a_capture.resolve() != kept_g.resolve()
+    winner = publish_with_outcome(force_sync=True)
+    go.set()
+    t.join(timeout=5)
+    rp.before_commit_section = None
+    assert not t.is_alive()
+    assert "a" in held
+    a_res = held["a"]
+    assert winner.outcome == "fresh_commit"
+    assert a_res.outcome == "existing"
+    assert a_res.state is winner.state
+    assert a_res.state.generation == winner.state.generation
+    current = get_published_state(force_sync=False)
+    assert current is winner.state
+    assert kept_g.is_file()
+    assert kept_g.read_bytes() == original_g
+    b_capture = Path(winner.state.capture_path)
+    assert b_capture.is_file()
+    assert b_capture.resolve() != kept_g.resolve()
+    assert Path(winner.state.canon_path).read_bytes() == b_capture.read_bytes()
+    assert a_capture.resolve() != b_capture.resolve()
+    assert not a_capture.exists()
 
 
 def test_review_published_capture_survives_fallback_invalidate(

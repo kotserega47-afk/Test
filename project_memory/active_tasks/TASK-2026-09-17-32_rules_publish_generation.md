@@ -41,7 +41,8 @@
 | Cursor | HEAD `96c8592df0e6e0730250ea78a265882205ee5b4b`: provider/identity/C4/G **56 passed**; admission/handlers/access_guard **123 passed**; clocks/inventory/registration/dispatch/export **30 passed**; pair-caller settings/hourly **34 passed**; lifecycle+boot **52 passed**. Наборы не суммировать. |
 | Cursor | HEAD `8fea71e848d6bbf5b401762faee8655cb30e32aa`: provider/identity/C4/G **60 passed**, exit 0; admission/handlers/access_guard **123 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
 | Cursor | HEAD `472aabbdb261018dd044c9b44f5c4b0b0ad17472`: provider/identity/C4/G **64 passed**, exit 0; admission/handlers/access_guard **123 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
-| Cursor | capture-ownership/TTL: provider/identity/corrupt/C4/G **69 passed**, exit 0; admission/handlers/access_guard **123 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
+| Cursor | HEAD `5bbde8f4717366d826913f092492dff93bfb93dd`: provider/identity/corrupt/C4/G **69 passed**, exit 0; admission/handlers/access_guard **123 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
+| Cursor | lost-commit proof: provider/identity/corrupt/C4/G **70 passed**, exit 0; остальные четыре набора сохранены на `5bbde8f…`. Python 3.12.10. Наборы не суммировать. |
 | GPT | ещё не ревьюил |
 
 ---
@@ -60,3 +61,4 @@
 | 2026-09-22 | review-fix: stale_reuse под lock, `_last_rules_wb` epoch, EXISTING+freshness, `parse_integral_id`, G3/G14/G9, удаление `_download_rules_workbook_atomic`; TASK-32 не закрыт |
 | 2026-09-22 | review-fix: чужой fresh commit → `existing`; одинаковая нормализация chat_id/user_id; nested attempt-local accessor; точный `ContractPublishRejected` в test_review_a |
 | 2026-09-22 | review-fix: fallback copy published capture; remote TTL not extended by snapshot reads; corrupt tests on real materialize |
+| 2026-09-22 | proof: fallback lost commit — A existing B, G/B captures kept, unpublished A capture removed |
