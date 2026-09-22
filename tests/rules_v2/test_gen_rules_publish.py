@@ -11,6 +11,7 @@ import hashlib
 import os
 import shutil
 import threading
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -76,6 +77,7 @@ def sandbox_xlsx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     rp.before_compat_cache_write = None
     rp.replace_canon = os.replace
     rp.replace_identity = os.replace
+    rp._clock = time.time
 
 
 def _sha256(path: Path) -> str:
@@ -938,3 +940,251 @@ def test_review_d_integral_id_normalization() -> None:
     assert acc.resolve_role_level(chat_id="-100.0", user_id=1) == 7
     assert acc.resolve_role_level(chat_id=1, user_id=2) == 7
     assert acc.resolve_role_level(chat_id="private", user_id=1) == 7
+
+
+def _fail_build_decision(path) -> SnapshotPublishDecision:  # noqa: ANN001
+    return SnapshotPublishDecision(
+        workbook_path=str(path),
+        policy_mode="legacy",
+        validators_strict=False,
+        contract_issues=(),
+        has_blocking_contract=False,
+        blocking_issue_codes=(),
+        warning_count=0,
+        info_count=0,
+        error_count=0,
+        snapshot_fingerprint=None,
+        snapshot=None,
+        publish_allowed=False,
+        build_error="fallback-build-fail",
+    )
+
+
+def _prepare_remote_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import core.rules_provider as rp
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    local = cache / "rules.xlsx"
+    shutil.copy2(C5, local)
+    monkeypatch.setattr(rp, "_RULES_CACHE_DIR", cache)
+    monkeypatch.setattr(rp, "_RULES_LOCAL", local)
+    monkeypatch.setenv("RULES_XLSX_PATH", "/dropbox/rules.xlsx")
+    monkeypatch.setenv("RULES_SYNC_MIN_INTERVAL_SEC", "30")
+    monkeypatch.delenv("RULES_CONTRACT_STRICT", raising=False)
+    monkeypatch.delenv("RULES_CONTRACT_SHADOW", raising=False)
+    monkeypatch.setattr("core.config_manager.rules_validate_all", lambda **kwargs: ([], []))
+    monkeypatch.setattr(
+        "core.rules_v2.rules_validate_audit.try_append_publish_audit_trail",
+        lambda **kwargs: None,
+    )
+    invalidate_rules_v2_cache()
+    return local
+
+
+def test_review_published_capture_survives_fallback_reject(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+    downloads = {"n": 0}
+
+    def _dl(_db: str, dest: str) -> bool:
+        downloads["n"] += 1
+        if downloads["n"] == 1:
+            shutil.copy2(C5, dest)
+            return True
+        return False
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    kept = Path(g.capture_path)
+    original = kept.read_bytes()
+    orig_eval = rp.evaluate_snapshot_publish
+    rp.evaluate_snapshot_publish = lambda path, policy_mode=None: _fail_build_decision(path)
+    try:
+        result = publish_with_outcome(force_sync=True)
+        assert result.outcome in {"stale_reuse", "existing"}
+    finally:
+        rp.evaluate_snapshot_publish = orig_eval
+    assert kept.is_file()
+    assert kept.read_bytes() == original
+
+
+def test_review_published_capture_survives_fallback_lost_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+    a_thread: dict[str, threading.Thread | None] = {"t": None}
+
+    def _dl(_db: str, dest: str) -> bool:
+        if threading.current_thread() is a_thread["t"]:
+            return False
+        shutil.copy2(C5, dest)
+        return True
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    kept = Path(g.capture_path)
+    original = kept.read_bytes()
+    ready = threading.Event()
+    go = threading.Event()
+
+    def _hook(_attempt: int) -> None:
+        if threading.current_thread() is a_thread["t"]:
+            ready.set()
+            assert go.wait(timeout=5)
+
+    orig_eval = rp.evaluate_snapshot_publish
+
+    def _eval(path, policy_mode=None):  # noqa: ANN001
+        if threading.current_thread() is a_thread["t"]:
+            return _fail_build_decision(path)
+        return orig_eval(path, policy_mode=policy_mode)
+
+    rp.evaluate_snapshot_publish = _eval
+    rp.after_attempt_evaluate = _hook
+    held: dict[str, object] = {}
+
+    def _a() -> None:
+        try:
+            held["a"] = publish_with_outcome(force_sync=True)
+        except BaseException as exc:  # noqa: BLE001
+            held["exc"] = exc
+
+    t = threading.Thread(target=_a)
+    a_thread["t"] = t
+    t.start()
+    assert ready.wait(timeout=5)
+    winner = publish_with_outcome(force_sync=True)
+    go.set()
+    t.join(timeout=5)
+    rp.evaluate_snapshot_publish = orig_eval
+    rp.after_attempt_evaluate = None
+    assert not t.is_alive()
+    assert winner.outcome == "fresh_commit"
+    assert kept.is_file()
+    assert kept.read_bytes() == original
+
+
+def test_review_published_capture_survives_fallback_invalidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+
+    def _dl(_db: str, dest: str) -> bool:
+        shutil.copy2(C5, dest)
+        return True
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    kept = Path(g.capture_path)
+    original = kept.read_bytes()
+    monkeypatch.setattr(rp, "download_file", lambda *_a, **_k: False)
+    ready = threading.Event()
+    go = threading.Event()
+
+    def _after(_attempt: int) -> None:
+        if not ready.is_set():
+            ready.set()
+            assert go.wait(timeout=5)
+
+    orig_eval = rp.evaluate_snapshot_publish
+    rp.evaluate_snapshot_publish = lambda path, policy_mode=None: _fail_build_decision(path)
+    rp.after_attempt_evaluate = _after
+    held: dict[str, object] = {}
+
+    def _a() -> None:
+        try:
+            held["a"] = publish_with_outcome(force_sync=True)
+        except ContractPublishRejected as exc:
+            held["exc"] = exc
+
+    t = threading.Thread(target=_a)
+    t.start()
+    assert ready.wait(timeout=5)
+    invalidate_rules_v2_cache()
+    go.set()
+    t.join(timeout=5)
+    rp.evaluate_snapshot_publish = orig_eval
+    rp.after_attempt_evaluate = None
+    assert not t.is_alive()
+    assert type(held.get("exc")) is ContractPublishRejected
+    assert kept.is_file()
+    assert kept.read_bytes() == original
+
+
+def test_review_remote_ttl_not_extended_by_snapshot_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+    clock = {"t": 1_000.0}
+    rp._clock = lambda: clock["t"]
+    downloads: list[str] = []
+
+    def _dl(_db: str, dest: str) -> bool:
+        downloads.append(dest)
+        shutil.copy2(C5, dest)
+        return True
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    sync0 = rp._last_rules_sync_ts
+    assert sync0 == 1_000.0
+    n0 = len(downloads)
+    clock["t"] = 1_010.0
+    for _ in range(3):
+        get_rules_snapshot(force_sync=False)
+    assert rp._last_rules_sync_ts == sync0
+    assert len(downloads) == n0
+    clock["t"] = 1_000.0 + 31.0
+    g2 = get_published_state(force_sync=False)
+    assert len(downloads) > n0
+    assert g2.generation > g.generation
+
+
+def test_review_compat_workbook_does_not_refresh_published_ttl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    _prepare_remote_cache(tmp_path, monkeypatch)
+    clock = {"t": 2_000.0}
+    rp._clock = lambda: clock["t"]
+    downloads: list[str] = []
+    allow = {"ok": True}
+
+    def _dl(_db: str, dest: str) -> bool:
+        downloads.append(dest)
+        if not allow["ok"]:
+            return False
+        shutil.copy2(C5, dest)
+        return True
+
+    monkeypatch.setattr(rp, "download_file", _dl)
+    g = get_published_state(force_sync=True)
+    sync0 = rp._last_rules_sync_ts
+    n0 = len(downloads)
+    clock["t"] = 2_000.0 + 31.0
+    allow["ok"] = False
+    wb = get_rules_snapshot(force_sync=False)
+    assert rp._last_rules_sync_ts == sync0
+    assert rp._published is g
+    assert wb.local_path != g.capture_path or Path(wb.local_path).is_file()
+    allow["ok"] = True
+    g2 = get_published_state(force_sync=False)
+    assert rp._last_rules_sync_ts == clock["t"]
+    assert g2.generation > g.generation
+    assert len(downloads) > n0

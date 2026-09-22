@@ -96,6 +96,11 @@ after_attempt_evaluate: Optional[Callable[[int], None]] = None
 before_compat_cache_write: Optional[Callable[[], None]] = None
 replace_canon: Callable[[str, str], None] = os.replace
 replace_identity: Callable[[str, str], None] = os.replace
+_clock: Callable[[], float] = time.time
+
+
+def _now() -> float:
+    return _clock()
 
 
 @dataclass
@@ -321,7 +326,7 @@ def _existing_if_fresh_newer(*, observed: Optional[int]) -> Optional[PublishedSt
     if observed is not None and current.generation <= observed:
         return None
     policy = resolve_contract_validation_mode()
-    hit = _freshness_hit(force_sync=False, policy=policy, now=time.time())
+    hit = _freshness_hit(force_sync=False, policy=policy, now=_now())
     if hit is None:
         return None
     return hit
@@ -403,7 +408,6 @@ def _delete_unpublished_capture(path: Path) -> None:
 def _materialize_capture(attempt_id: int) -> tuple[Path, str, tuple[float, int], str]:
     """Copy/download into this process capture dir. Never replaces canon."""
 
-    now = time.time()
     local_direct = _try_local_workbook_path()
     if local_direct is not None:
         dest = _copy_to_capture(local_direct, attempt_id)
@@ -420,8 +424,8 @@ def _materialize_capture(attempt_id: int) -> tuple[Path, str, tuple[float, int],
     if published is not None and Path(published.capture_path).exists():
         if policy == ContractValidationMode.STRICT:
             raise RuntimeError(f"rules.xlsx download failed (strict; no stale reuse): {db_path}")
-        cap = Path(published.capture_path)
-        return cap, published.source_path, published.stat_key, published.source_path
+        dest = _copy_to_capture(Path(published.capture_path), attempt_id)
+        return dest, published.source_path, published.stat_key, published.source_path
 
     if _RULES_LOCAL.exists():
         dest = _copy_to_capture(_RULES_LOCAL, attempt_id)
@@ -568,7 +572,7 @@ def _commit_attempt(
                     "identity canon replace failed (ignored for in-memory)",
                     extra={"identity_tmp": str(identity_tmp)},
                 )
-        now = time.time()
+        now = _now()
         _last_rules_wb = _wb_from_published(state, now=now)
         _last_rules_sync_ts = now
         local_direct = _try_local_workbook_path()
@@ -588,7 +592,7 @@ def _compute_attempt(
     observed_generation: Optional[int],
 ) -> _PublishCallResult:
     capture_path, source_label, stat_key, source_path = _materialize_capture(my_attempt)
-    now = time.time()
+    now = _now()
     wb = _make_workbook_snapshot(
         local_path=str(capture_path),
         stat_key=stat_key,
@@ -736,7 +740,7 @@ def _publish(*, force_sync: bool) -> _PublishCallResult:
         )
 
     policy = resolve_contract_validation_mode()
-    now = time.time()
+    now = _now()
     with _LOCK:
         hit = _freshness_hit(force_sync=force_sync, policy=policy, now=now)
         published = _published
@@ -789,7 +793,7 @@ def get_rules_snapshot(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
     if ctx is not None:
         return ctx.wb
 
-    now = time.time()
+    now = _now()
     policy = resolve_contract_validation_mode()
     with _LOCK:
         start_epoch = _invalidate_epoch
@@ -831,8 +835,6 @@ def get_rules_snapshot(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
     with _LOCK:
         if _invalidate_epoch == start_epoch:
             _last_rules_wb = local_wb
-            if _try_local_workbook_path() is None:
-                _last_rules_sync_ts = now
     return local_wb
 
 
