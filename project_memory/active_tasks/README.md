@@ -58,9 +58,9 @@
 | [TASK-2026-09-17-27](TASK-2026-09-17-27_antares_dispatch_admission.md) | Isolated admission для шести dispatch-команд: review пройден (`a84e9cd…`), закрытие `08132f2…`, Cursor 90/52, GPT код/diff без этих pytest, не выпущено, merge нет (PR #30) |
 | [TASK-2026-09-17-28](TASK-2026-09-17-28_antares_direct_ops_admission.md) | Isolated допуск export/Auto-Enable: review пройден (`f0bd06b…`), закрытие `a81aa69…`, Cursor 120/21 на review HEAD, 52 lifecycle/boot исторически на `a5836de…`, GPT исходники без pytest, не выпущено, merge нет (PR #31) |
 | [TASK-2026-09-17-29](TASK-2026-09-17-29_antares_registry_replay_admission.md) | Isolated допуск `/registry_replay`: review пройден (`71fce3b…`), закрытие `d3eecc0…`, Cursor 129/52, GPT код/diff без pytest, не выпущено, merge нет (PR #32) |
-| [TASK-2026-09-17-30](TASK-2026-09-17-30_antares_reload_rules_admission.md) | Isolated допуск `/reload_rules`: к review, blocked до review реализации TASK-32 и повторной проверки reload, не выпущено, merge нет (PR #33) |
+| [TASK-2026-09-17-30](TASK-2026-09-17-30_antares_reload_rules_admission.md) | Isolated допуск `/reload_rules`: к review, не закрыт; проверка на объединённом HEAD TASK-32 `bb25f734…` (130 passed); PR #33 `1eefc54` без исправленного provider; не выпущено, merge нет |
 | [TASK-2026-09-17-31](TASK-2026-09-17-31_rules_publish_generation.md) | Контракт публикации поколений: review GPT на `8ef2838…`, закрытие docs `3d56791…`, runtime нет, pytest не запускался, merge нет (PR #34) |
-| [TASK-2026-09-17-32](TASK-2026-09-17-32_rules_publish_generation.md) | Code согласованной публикации snapshot/indexes: к review, Draft PR #35, не выпущено |
+| [TASK-2026-09-17-32](TASK-2026-09-17-32_rules_publish_generation.md) | Code согласованной публикации: GPT review на `bb25f734…` (pytest GPT не запускал); Cursor 70 на `bb25f734…`, 123/34/30/52 на `5bbde8f…`; закрытие docs в этом коммите; PR #35 Draft; не выпущено |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

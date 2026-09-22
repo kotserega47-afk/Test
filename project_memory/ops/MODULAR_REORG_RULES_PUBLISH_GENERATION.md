@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (review GPT на `8ef2838…`); runtime этого docs PR **не** менялся; code — TASK-32 |
+| **Статус** | контракт **принят** (review GPT на `8ef2838…`); code TASK-32 review GPT на `bb25f734…`; runtime этого docs PR **не** менялся |
 | **База** | TASK-30 HEAD `1eefc54720ccd036451f7c3c0e7dadaedf6efb98` (Draft PR #33, TASK-30 **не** закрыт) |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Repro исходного дефекта** | `test_repro_*` на SHA `1eefc54` (история дефекта, не будущий safety-критерий) |
@@ -346,7 +346,7 @@ Eager indexes до commit, полный объект. Lazy subset-update зап�
 | `AccessRules.invalidate` | instance epoch |
 | Проигрыш при чужом fresh | `existing` |
 | Isolated vs stale | isolated без reset; mixed без молчаливой смены |
-| Capture | неизменяемый; живёт до конца процесса; без `G < publish_seq - 1`; без leases; чужие process-dir не чистить |
+| Capture | неизменяемый; **опубликованные** живут до конца процесса; без `G < publish_seq - 1`; без leases; чужие process-dir не чистить; **неопубликованные** — best-effort unlink, одна повторная попытка после `gc.collect()`, затем warning |
 | `get_rules_snapshot.local_path` | `capture_path` на hit |
 | Replace | в секции commit; ошибки workbook vs identity раздельно |
 

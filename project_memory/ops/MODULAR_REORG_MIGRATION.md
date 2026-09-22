@@ -43,10 +43,10 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-27 dispatch admission | шесть isolated dispatch-команд; Draft PR #30, review `a84e9cd48095232d901d7b12ee499d3db61407d0`, close `08132f26310d1a99c3f7f6f2f5ea32c76f1edef4`; mixed/unbound без изменений; глобального запрета новой работы нет; **не выпущено** | Cursor **90** / **52 passed**, exit 0; GPT код/diff, эти pytest **не** запускал | **нет** |
 | TASK-28 direct ops admission | isolated export/plan/run; Draft PR #31, review `f0bd06bf157f4b377ad7648410605ee67841835f`, close `a81aa69a416b3ad03708bd5515ec135c12f0e896`; отказ смотрит `handlers` executor; orchestrator изолирован; internal enqueue — обход; **не выпущено** | Cursor **120** / **21 passed** на review HEAD; **52** lifecycle/boot — исторический прогон на `a5836de…`; GPT исходники, pytest **не** запускал | **нет** |
 | TASK-29 registry replay admission | isolated `/registry_replay`; Draft PR #32, review `71fce3b9eb4f621164799dd8ed379140fd3ebf5a`, close `d3eecc0bb9dd5d069d1a4f1b169026303fdff393`; mixed sync в callback; внутренние шаги принятого replay — продолжение операции; drain ≠ обход допуска; **не выпущено** | Cursor **129** / **52 passed**, 3.12.10, exit 0; GPT код/diff, pytest **не** запускал | **нет** |
-| TASK-30 reload_rules admission | isolated `/reload_rules`; Draft PR #33 HEAD `1eefc54…`; mixed sync; repro stale `_snap` / torn indexes; **blocked** до review реализации TASK-32 и повторной проверки reload; **не выпущено** | Cursor **143** / **7** clocks / **52** lifecycle+boot на `1eefc54…`, 3.12.10, exit 0; наборы не суммировать | **нет** |
+| TASK-30 reload_rules admission | isolated `/reload_rules`; Draft PR #33 HEAD `1eefc54…` **не** закрыт и **не** содержит исправленного provider; повторная проверка на объединённом HEAD TASK-32 `bb25f734…`; **не выпущено** | исторически **143** / **7** / **52** на `1eefc54…`; зависимость **130 passed** на `bb25f734…` (admission+handlers+access_guard+clocks), 3.12.10, exit 0; наборы не суммировать | **нет** |
 | TASK-31 rules publish generation | docs-контракт принят; Draft PR #34 review GPT `8ef2838…`; close `3d56791…`; runtime нет; pytest не запускался; **не выпущено** | pytest не требовался | **нет** |
-| TASK-32 rules publish code | реализация принятого контракта; Draft PR от ветки TASK-31; TASK-30 не закрыт; **не выпущено** | см. карточку TASK-32 | **нет** |
-| Следующая | review TASK-32; ingest / schedules отдельно; mixed-stop отдельно; serve отдельно | — |
+| TASK-32 rules publish code | GPT review кода/diff на `bb25f734…`; pytest GPT не запускал; Cursor **70** на `bb25f734…`; **123 / 34 / 30 / 52** на `5bbde8f…`; docs-close в этом коммите; PR #35 Draft; TASK-30 не закрыт; **не выпущено** | 3.12.10, exit 0; наборы не суммировать | **нет** |
+| Следующая | review отчёта TASK-30; ingest / schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -62,7 +62,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**Следующий code после закрытия TASK-31:** реализация принятого контракта (TASK-32). TASK-30 не закрывать автоматически. Ingest / schedules отдельно. Не serve, не полный переход, не mixed-stop.
+**TASK-32 docs-close выполнен.** TASK-30 не закрывать автоматически: нужен отдельный review отчёта зависимости. Ingest / schedules отдельно. Не serve, не полный переход, не mixed-stop.
 
 ---
 
