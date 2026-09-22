@@ -47,7 +47,7 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-31 rules publish generation | docs-контракт принят; Draft PR #34 review GPT `8ef2838…`; close `3d56791…`; runtime нет; pytest не запускался; **не выпущено** | pytest не требовался | **нет** |
 | TASK-32 rules publish code | GPT review кода/diff на `bb25f734…`; pytest GPT не запускал; Cursor **70** на `bb25f734…`; **123 / 34 / 30 / 52** на `5bbde8f…`; docs-close `7d3a463…`; PR #35 Draft; **не выпущено** | 3.12.10, exit 0; наборы не суммировать | **нет** |
 | TASK-33 ingest admission | docs-контракт принят; Draft PR #36 review GPT `4682e399…`; close `cecb336…`; runtime нет; реализация TASK-34; **не выпущено** | pytest не требовался | **нет** |
-| TASK-34 ingest admission code | isolated `put_nowait_if_open` + ingest; Draft от close TASK-33; mixed `add_*_task`; **не выпущено** | Cursor **20** I1–I18/M1; **87** ingest+baseline; **123** admission; **52** lifecycle+boot; 3.12.10, exit 0; наборы не суммировать | **нет** |
+| TASK-34 ingest admission code | isolated `put_nowait_if_open` + ingest; Draft PR #37 от close TASK-33; mixed `add_*_task`; **не выпущено** | Cursor **20** I1–I18/M1; **87** ingest+baseline; **123** admission; **52** lifecycle+boot; 3.12.10, exit 0; наборы не суммировать | **нет** |
 | Следующая | review TASK-34; schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |

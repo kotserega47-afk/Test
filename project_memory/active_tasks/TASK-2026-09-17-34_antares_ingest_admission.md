@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-33 close `cecb336da8f01877329d6ad4f0af72d86c42eb20` (review `4682e399…`); [MODULAR_REORG_ANTARES_INGEST_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_INGEST_ADMISSION.md) |
-| **PR** | Draft на `feat/task-2026-09-17-34-antares-ingest-admission-impl`, base `feat/task-2026-09-17-33-antares-ingest-admission` |
+| **PR** | Draft [#37](https://github.com/deniskotdavydov1991-wq/Test/pull/37) `feat/task-2026-09-17-34-antares-ingest-admission-impl`, base `feat/task-2026-09-17-33-antares-ingest-admission` |
 | **Риск** | medium: isolated ingest на общей WE Queue; mixed `add_*_task` не менять |
 
 Реализация контракта TASK-33. GPT review этого code ещё не принимался. TASK-33/30/32 повторно не закрывать. Conversion / Auto-Enable enqueue / schedules / drain / mixed-stop — обходы.
