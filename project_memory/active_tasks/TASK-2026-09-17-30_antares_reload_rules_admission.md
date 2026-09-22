@@ -49,7 +49,7 @@ Lock только в `/reload_rules` недостаточен. Очередь т
 
 Mixed: тот же lock в `rules_provider` сериализует и loop-reload, и job-readers — это изменение timing для всех профилей, не только isolated Antares.
 
-**Блокер TASK-30 (review не закрывать этим):** согласованная публикация — [TASK-2026-09-17-31](TASK-2026-09-17-31_rules_publish_generation.md) / [MODULAR_REORG_RULES_PUBLISH_GENERATION.md](../ops/MODULAR_REORG_RULES_PUBLISH_GENERATION.md). Контракт TASK-31 **не принят**. Code provider в TASK-30 **не** делается. Зелёные `test_repro_*` — доказательство дефекта, не исправление.
+**Блокер TASK-30 (review не закрывать этим):** согласованная публикация — контракт TASK-31 принят (`8ef2838…`); code — TASK-32. TASK-30 остаётся заблокированным до review реализации и повторной проверки reload. Зелёные `test_repro_*` на `1eefc54` — доказательство дефекта, не исправление.
 
 ---
 
@@ -85,3 +85,4 @@ ingest, schedules, самостоятельные новые постановк�
 | 2026-09-21 | isolated `/reload_rules` admission; Draft PR #33; статус **review** |
 | 2026-09-21 | уточнение конкурентного контракта: ACL/force_sync, repro stale `_snap` и torn indexes; provider не чинится |
 | 2026-09-21 | зависимость от TASK-31 (публикация поколений); TASK-30 не закрыт |
+| 2026-09-22 | контракт TASK-31 принят (`8ef2838…`); TASK-30 всё ещё blocked до review code TASK-32 и повторной проверки reload |

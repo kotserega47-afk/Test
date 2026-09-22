@@ -304,8 +304,8 @@ Detail: `active_tasks/TASK-2026-07-01-0[1-5]_*.md`; ADR E-WE-23…E-WE-27
 | **TASK-2026-09-17-27** | **review** | Isolated admission for six dispatch commands; review passed (`a84e9cd…`); close `08132f2…`; Cursor 90/52; GPT code/diff, these pytest not run; not released / **not merged** | Draft PR #30 |
 | **TASK-2026-09-17-28** | **review** | Isolated admission for export/Auto-Enable plan/run; review passed (`f0bd06b…`); close `a81aa69…`; Cursor 120/21 on review HEAD; 52 lifecycle/boot historical `a5836de…`; GPT sources, pytest not run; enqueue bypass; not released / **not merged** | Draft PR #31 |
 | **TASK-2026-09-17-29** | **review** | Isolated `/registry_replay` admission; review passed (`71fce3b…`); close `d3eecc0…`; Cursor 129/52; GPT code/diff, pytest not run; not released / **not merged** | Draft PR #32 |
-| **TASK-2026-09-17-30** | **review** | Isolated `/reload_rules` admission; blocked on TASK-31 publish contract; not released / **not merged** | Draft PR #33 |
-| **TASK-2026-09-17-31** | **review** | Contract for consistent rules snapshot/indexes publication; not accepted; runtime unchanged; **not merged** | Draft PR #34 |
+| **TASK-2026-09-17-30** | **review** | Isolated `/reload_rules` admission; blocked until TASK-32 implementation review and reload re-check; not released / **not merged** | Draft PR #33 |
+| **TASK-2026-09-17-31** | **review** | Publish-generation contract; GPT reviewed `8ef2838…`; runtime unchanged; pytest not run; closed docs; **not merged** | Draft PR #34 |
 | **CONFIG-MIGRATION-PHASE-4D** | **OPEN** | Payout observation period — monitor prod logs for clean `[payout_config] source=rules_v2`; no `[config_shadow] payout mismatch`; gate YAML removal | CONFIG-MIGRATION-PHASE-4C complete |
 | **CONV-OPTIMIZATION-PHASE-1B** | **READY** | Real dedup skip on fingerprint match — skip `conversion.run` when inputs unchanged | Collect 7–14 days observation data (`CONVERSION_FP_OBSERVATION_ENABLED=1`); GO/NO-GO from observation JSONL |
 | **WE-UX-B** | **OPEN** | Add registry column `Дата операции` (leftmost); conditional `Дата отключения` by action; lazy migration on next write | UX-A complete |
