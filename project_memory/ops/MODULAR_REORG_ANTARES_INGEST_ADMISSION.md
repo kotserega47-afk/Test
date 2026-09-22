@@ -2,13 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен к review** (уточнение после `1ebc024…`); runtime **не** менялся |
+| **Статус** | контракт **принят** (GPT review на `4682e3992adf4a02ef306bca5287fa96d1673efd`); runtime **не** менялся; реализация — TASK-34 |
 | **База** | `4b1f3676507a11ea4582ab59eb9846bcac2849a6` (`feat/task-2026-09-17-32-rules-publish-generation`) |
 | **Обследованный SHA** | `4b1f367…`; уточнение контракта от review HEAD `1ebc024161dcb4f6876130f7a433aa2920ed55c8` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Owner ingest** | `modules/antares/document_ingest.py`; mixed re-export `integrations/wallet_editor_tg.py` |
 
-Этот PR — только обследование и контракт. Реализацию `put_nowait_if_open` / isolated ingest **не** делать здесь. TASK-33 **не** закрывать. TASK-30 и TASK-32 повторно не закрывать. Conversion bridge, внутренний Auto-Enable enqueue, schedules, drain, worker join, sender stop, mixed-stop — **не** этот этап.
+Контракт **принят**. GPT проверил docs на `4682e3992adf4a02ef306bca5287fa96d1673efd`. Runtime этого PR **не** менялся. Pytest GPT **не** запускал. Реализация — TASK-34. TASK-30 и TASK-32 повторно не закрывать. Conversion bridge, внутренний Auto-Enable enqueue, schedules, drain, worker join, sender stop, mixed-stop — **не** этот этап.
 
 ---
 
@@ -110,22 +110,20 @@ Cleanup входа: `delayed_cleanup(result_path, input_path)` в **daemon** thr
 ```python
 @dataclass(frozen=True)
 class AdmissionQueued:
-    queue_size: int | None = None  # диагностика; не часть Accepted
+    """Successful queue admit. Not a Future. Diagnostic size is not this object."""
 
 def put_nowait_if_open(self, queue, item) -> AdmissionQueued | AdmissionRejected:
     with self._lock:
         if self._state is not AdmissionState.OPEN:
             return AdmissionRejected(self._state)
-        queue.put_nowait(item)          # успех → Accepted; дальше не откатывать
-        size = None
-        try:
-            size = queue.qsize()        # ошибка qsize ≠ ошибка постановки
-        except Exception:
-            size = None
-        return AdmissionQueued(queue_size=size)
+        queue.put_nowait(item)
+        return AdmissionQueued()
+# lock released
+# handler: if AdmissionQueued → handed_off = True  (no await)
+# then diagnostic queue.qsize() / log / confirmation reply
 ```
 
-Успешный `put_nowait` **есть** Accepted, даже если последующий `qsize` бросил. `qsize` не позиция задачи и не доказательство, что worker ещё не забрал элемент (после put consumer уже может сделать `get`; размер может быть 0).
+Успешный `put_nowait` **есть** Accepted. `qsize` **не** внутри admission lock и **не** определяет Accepted. Ошибка `qsize` после `AdmissionQueued` не откатывает постановку. `qsize` не позиция задачи и не доказательство, что worker ещё не забрал элемент (размер может быть 0).
 
 `AdmissionAccepted.future` **не** использовать для очереди.
 
@@ -146,9 +144,9 @@ Isolated callback:
 2. **обязательный** early reject, если bound и не OPEN (файла нет, worker не создаём);
 3. «Файл получен» / download / routing / построение task;
 4. `queue = ensure_profile_queue(profile)` вне admission lock;
-5. `outcome = admission.put_nowait_if_open(queue, task)`;
+5. `outcome = admission.put_nowait_if_open(queue, task)` → при успехе `AdmissionQueued`;
 6. Rejected или исключение **до** помещения элемента → handler владеет файлом, best-effort unlink, ответ отказа / ошибки постановки;
-7. успешный `put_nowait` → Accepted: **сразу** зафиксировать передачу владения (без `await` между put и этой фиксацией); затем log/qsize/reply уже не могут unlink и не могут сказать, что постановка не состоялась.
+7. `AdmissionQueued` → handler **сразу** фиксирует передачу владения (без `await`); затем диагностический `qsize` / log / reply.
 
 Unbound: шаги 2 и 5–7 не через admission; как сейчас `add_*_task`.
 
@@ -156,9 +154,9 @@ Unbound: шаги 2 и 5–7 не через admission; как сейчас `add
 
 ## 3. Момент Accepted и фиксация владения
 
-**Accepted** = `queue.put_nowait(item)` вернулся внутри `put_nowait_if_open` при `state is OPEN` без исключения.
+**Accepted** = возврат `AdmissionQueued` из `put_nowait_if_open` после успешного `queue.put_nowait` под lock при OPEN.
 
-Сразу после этого результата handler фиксирует передачу `local_path` worker (`task.file_path`). Между успешным put и этой фиксацией **нет** `await`. Logging, `qsize`, формирование и отправка ответа — только после фиксации.
+Порядок после постановки (§2.2): `put_nowait` → `AdmissionQueued` → handler фиксирует передачу владения → диагностический `qsize` / log / reply. Между `AdmissionQueued` и фиксацией владения **нет** `await`.
 
 Не Accepted:
 
@@ -271,7 +269,7 @@ Lazy worker **может** быть создан до окончательног
 
 ### 7.1 Минимальный следующий code
 
-1. `AdmissionQueued` + `WorkAdmission.put_nowait_if_open` (Accepted = успех `put_nowait`; `qsize` диагностика).
+1. `AdmissionQueued` + `WorkAdmission.put_nowait_if_open` (Accepted = успех `put_nowait`; `qsize` **после** lock, диагностика).
 2. `ensure_profile_queue` без смены mixed `add_*_task`.
 3. Isolated ветка в `handle_wallet_editor_document`: обязательный early reject; фиксация владения сразу после put, без await; cleanup всех исходов до Accepted.
 4. Тесты § 6. Без live Telegram.
