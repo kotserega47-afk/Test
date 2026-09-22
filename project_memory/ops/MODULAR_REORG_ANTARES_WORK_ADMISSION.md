@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; контракт ingest TASK-33 принят (`4682e399…`); реализация — TASK-34; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 реализован (`f76f9c9…`, не выпущен); schedules — TASK-35; cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -264,8 +264,8 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- document ingest → isolated `put_nowait_if_open` (TASK-34); mixed `queue.put` через `add_*_task`; conversion/`enqueue_auto_enable_batch` — обходы
-- mixed `schedule_loop` / `dispatch_job_background`
+- document ingest → isolated `put_nowait_if_open` (TASK-34 закрыт, не выпущен); mixed `queue.put` через `add_*_task`; conversion/`enqueue_auto_enable_batch` — обходы
+- mixed `schedule_loop` / `dispatch_job_background` — контракт isolated TASK-35
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2
 - прямой вызов `dispatch_job_async` / `request_job` / `get_job_executor().submit` в обход `submit_if_open` / `submit_job_if_open`

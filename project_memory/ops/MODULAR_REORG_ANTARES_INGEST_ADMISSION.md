@@ -2,13 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (GPT review на `4682e3992adf4a02ef306bca5287fa96d1673efd`); runtime **не** менялся; реализация — TASK-34 |
+| **Статус** | контракт **принят**; code TASK-34 **реализован** (GPT review `f76f9c96f46b2489ecb08a38c542de421b609ba6`); **не выпущен** |
 | **База** | `4b1f3676507a11ea4582ab59eb9846bcac2849a6` (`feat/task-2026-09-17-32-rules-publish-generation`) |
 | **Обследованный SHA** | `4b1f367…`; уточнение контракта от review HEAD `1ebc024161dcb4f6876130f7a433aa2920ed55c8` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Owner ingest** | `modules/antares/document_ingest.py`; mixed re-export `integrations/wallet_editor_tg.py` |
 
-Контракт **принят**. GPT проверил docs на `4682e3992adf4a02ef306bca5287fa96d1673efd`. Runtime этого PR **не** менялся. Pytest GPT **не** запускал. Реализация — TASK-34. TASK-30 и TASK-32 повторно не закрывать. Conversion bridge, внутренний Auto-Enable enqueue, schedules, drain, worker join, sender stop, mixed-stop — **не** этот этап.
+Контракт **принят** (GPT docs `4682e399…`). Code TASK-34 **реализован и закрыт** на `f76f9c9…` (GPT код/diff/тесты, pytest GPT не запускал; Cursor 28/95). **Не выпущен**. TASK-33 повторно не закрывать. Schedules — TASK-35. Conversion bridge, внутренний Auto-Enable enqueue, drain, worker join, sender stop, mixed-stop — **не** ingest.
 
 ---
 
