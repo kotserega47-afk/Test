@@ -77,7 +77,6 @@ OUTCOME_STALE_REUSE = "stale_reuse"
 _RULES_CACHE_DIR = Path("/tmp/rules_cache")
 _RULES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _RULES_LOCAL = _RULES_CACHE_DIR / "rules.xlsx"
-_RULES_DOWNLOAD_PART = _RULES_CACHE_DIR / "rules.xlsx.part"
 _CAPTURE_TOKEN = f"{os.getpid()}_{time.time_ns()}"
 
 log = logging.getLogger(__name__)
@@ -93,6 +92,8 @@ _source_stat_at_publish: Optional[tuple[float, int]] = None
 
 # Test barriers: callable(attempt_id) between prepare and the commit section.
 before_commit_section: Optional[Callable[[int], None]] = None
+after_attempt_evaluate: Optional[Callable[[int], None]] = None
+before_compat_cache_write: Optional[Callable[[], None]] = None
 replace_canon: Callable[[str, str], None] = os.replace
 replace_identity: Callable[[str, str], None] = os.replace
 
@@ -280,6 +281,8 @@ def _wb_from_published(published: PublishedState, *, now: float) -> RulesWorkboo
 
 
 def _freshness_hit(*, force_sync: bool, policy: ContractValidationMode, now: float) -> Optional[PublishedState]:
+    """Return current ``_published`` if TTL/source/policy match. Caller holds ``_LOCK``."""
+
     if force_sync:
         return None
     published = _published
@@ -304,42 +307,52 @@ def _freshness_hit(*, force_sync: bool, policy: ContractValidationMode, now: flo
     return published
 
 
+def _existing_if_fresh_newer(*, observed: Optional[int]) -> Optional[PublishedState]:
+    """EXISTING after a lost attempt. Caller holds ``_LOCK``.
+
+    Allowed only when published generation is newer than ``observed``, current
+    policy matches, and source/TTL freshness hits. Generation difference does
+    not replace a freshness miss.
+    """
+
+    current = _published
+    if current is None:
+        return None
+    if observed is not None and current.generation <= observed:
+        return None
+    policy = resolve_contract_validation_mode()
+    hit = _freshness_hit(force_sync=False, policy=policy, now=time.time())
+    if hit is None:
+        return None
+    return hit
+
+
+def _legacy_stale_reuse(
+    *,
+    start_epoch: int,
+    my_attempt: int,
+    observed_generation: Optional[int],
+) -> _PublishCallResult:
+    """Legacy build/load fail. Caller holds ``_LOCK``. One captured ``_published``."""
+
+    if _invalidate_epoch != start_epoch:
+        return _PublishCallResult("discard", None)
+    current = _published
+    if current is None:
+        return _PublishCallResult("reject", None)
+    attempt_ok = my_attempt == _latest_attempt
+    newer_published = (
+        observed_generation is None or current.generation > observed_generation
+    )
+    if attempt_ok or newer_published:
+        return _PublishCallResult(OUTCOME_STALE_REUSE, current)
+    return _PublishCallResult("discard", None)
+
+
 def _copy_to_capture(src: Path, attempt_id: int) -> Path:
     dest = _capture_dir() / f"attempt_{attempt_id}_{uuid.uuid4().hex}.xlsx"
     shutil.copy2(src, dest)
     return dest
-
-
-def _download_rules_workbook_atomic(db_path: str) -> bool:
-    """Download to ``.part``, validate ZIP; do not promote a truncated cache.
-
-    Successful promotion of canon is not this helper — canon is replaced only
-    in the publish commit section. This keeps the corrupt-download probe.
-    """
-
-    part = _RULES_DOWNLOAD_PART
-    try:
-        if part.exists():
-            part.unlink()
-    except OSError:
-        pass
-    if not download_file(db_path, str(part)):
-        return False
-    if not _is_valid_xlsx_zip(part):
-        log.warning(
-            "rules.xlsx download rejected (corrupt/truncated); cache unchanged",
-            extra={"dropbox_path": db_path, "part_path": str(part)},
-        )
-        try:
-            part.unlink()
-        except OSError:
-            pass
-        return False
-    try:
-        part.unlink()
-    except OSError:
-        pass
-    return True
 
 
 def _try_save_identity_registry_after_publish(*_a: object, **_k: object) -> None:
@@ -395,7 +408,8 @@ def _materialize_capture(attempt_id: int) -> tuple[Path, str, tuple[float, int],
     if dest is not None:
         return dest, db_path, _stat_key(dest), db_path
 
-    published = _published
+    with _LOCK:
+        published = _published
     if published is not None and Path(published.capture_path).exists():
         if policy == ContractValidationMode.STRICT:
             raise RuntimeError(f"rules.xlsx download failed (strict; no stale reuse): {db_path}")
@@ -601,27 +615,32 @@ def _compute_attempt(
             ctx.indexes = build_indexes(decision.snapshot)
         _run_publish_audit(wb, decision)
         _audit("attempt", attempt=my_attempt, observed_generation=observed_generation)
+        eval_hook = after_attempt_evaluate
+        if eval_hook is not None:
+            eval_hook(my_attempt)
 
         if policy == ContractValidationMode.LEGACY:
             if decision.has_blocking_contract:
                 _audit("reject", attempt=my_attempt)
                 raise ContractPublishRejected(decision)
             if decision.snapshot is None or ctx.indexes is None:
-                if (
-                    _published is not None
-                    and (
-                        decision.build_error
-                        or decision.load_error
-                        or decision.validation_crash
-                    )
-                ):
+                if decision.build_error or decision.load_error or decision.validation_crash:
                     log.warning(
                         "rules contract legacy: workbook build/load failed (non-blocking), "
                         "reusing last valid in-memory snapshot",
                         extra={"rules_contract": decision.to_log_dict()},
                     )
                     _audit("discard", attempt=my_attempt, reason="legacy_stale")
-                    return _PublishCallResult(OUTCOME_STALE_REUSE, _published)
+                    with _LOCK:
+                        stale = _legacy_stale_reuse(
+                            start_epoch=start_epoch,
+                            my_attempt=my_attempt,
+                            observed_generation=observed_generation,
+                        )
+                    if stale.outcome == "reject":
+                        _audit("reject", attempt=my_attempt)
+                        raise ContractPublishRejected(decision)
+                    return stale
                 _audit("reject", attempt=my_attempt)
                 raise ContractPublishRejected(decision)
         elif not decision.publish_allowed:
@@ -651,7 +670,9 @@ def _compute_attempt(
         )
         if committed is None:
             _audit("discard", attempt=my_attempt)
-            return _PublishCallResult("discard", _published)
+            with _LOCK:
+                captured = _published
+            return _PublishCallResult("discard", captured)
         unpublished = False
         _audit("commit", attempt=my_attempt, generation=committed.generation)
         return _PublishCallResult(OUTCOME_FRESH_COMMIT, committed)
@@ -714,21 +735,10 @@ def _publish(*, force_sync: bool) -> _PublishCallResult:
         if result.outcome == OUTCOME_STALE_REUSE:
             return result
         with _LOCK:
-            current = _published
-        if current is not None and (observed is None or current.generation > observed):
-            policy_now = resolve_contract_validation_mode()
-            now2 = time.time()
-            with _LOCK:
-                again = _freshness_hit(force_sync=False, policy=policy_now, now=now2)
-            if again is not None or current.generation != (observed or 0):
-                return _PublishCallResult(OUTCOME_EXISTING, current)
+            existing = _existing_if_fresh_newer(observed=observed)
+        if existing is not None:
+            return _PublishCallResult(OUTCOME_EXISTING, existing)
         last_error = None
-    if force_sync:
-        raise RulesPublishConflictExhausted("rules publish: 3 attempts lost without commit")
-    with _LOCK:
-        current = _published
-    if current is not None:
-        return _PublishCallResult(OUTCOME_EXISTING, current)
     raise RulesPublishConflictExhausted("rules publish: 3 attempts lost without commit") from last_error
 
 
@@ -762,42 +772,48 @@ def get_rules_snapshot(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
     now = time.time()
     policy = resolve_contract_validation_mode()
     with _LOCK:
+        start_epoch = _invalidate_epoch
         hit = _freshness_hit(force_sync=force_sync, policy=policy, now=now)
         published = _published
+        cached = _last_rules_wb
+        sync_ts = _last_rules_sync_ts
+
+    local_wb: Optional[RulesWorkbookSnapshot] = None
     if hit is not None:
-        wb = _wb_from_published(hit, now=now)
-        _last_rules_wb = wb
-        return wb
-
-    if not force_sync and published is None and _last_rules_wb is not None:
+        local_wb = _wb_from_published(hit, now=now)
+    elif not force_sync and published is None and cached is not None:
         local_direct = _try_local_workbook_path()
-        if local_direct is not None:
-            try:
-                if Path(_last_rules_wb.local_path).exists() and _stat_key(local_direct) == _last_rules_wb.stat_key:
-                    return _last_rules_wb
-            except OSError:
-                pass
-        elif Path(_last_rules_wb.local_path).exists() and (now - _last_rules_sync_ts) < _ttl_sec():
-            try:
-                if _stat_key(Path(_last_rules_wb.local_path)) == _last_rules_wb.stat_key:
-                    return _last_rules_wb
-            except OSError:
-                pass
+        try:
+            if local_direct is not None:
+                if Path(cached.local_path).exists() and _stat_key(local_direct) == cached.stat_key:
+                    local_wb = cached
+            elif Path(cached.local_path).exists() and (now - sync_ts) < _ttl_sec():
+                if _stat_key(Path(cached.local_path)) == cached.stat_key:
+                    local_wb = cached
+        except OSError:
+            local_wb = None
 
-    dummy_attempt = 0
+    if local_wb is None:
+        with _LOCK:
+            dummy_attempt = _latest_attempt
+        capture_path, source_label, stat_key, _source = _materialize_capture(dummy_attempt)
+        local_wb = _make_workbook_snapshot(
+            local_path=str(capture_path),
+            stat_key=stat_key,
+            loaded_at_ts=now,
+            source=source_label,
+        )
+
+    hook = before_compat_cache_write
+    if hook is not None:
+        hook()
+
     with _LOCK:
-        dummy_attempt = _latest_attempt
-    capture_path, source_label, stat_key, _source = _materialize_capture(dummy_attempt)
-    wb = _make_workbook_snapshot(
-        local_path=str(capture_path),
-        stat_key=stat_key,
-        loaded_at_ts=now,
-        source=source_label,
-    )
-    _last_rules_wb = wb
-    if _try_local_workbook_path() is None:
-        _last_rules_sync_ts = now
-    return wb
+        if _invalidate_epoch == start_epoch:
+            _last_rules_wb = local_wb
+            if _try_local_workbook_path() is None:
+                _last_rules_sync_ts = now
+    return local_wb
 
 
 def get_snapshot_v2(*, force_sync: bool = False) -> RulesSnapshotV2:

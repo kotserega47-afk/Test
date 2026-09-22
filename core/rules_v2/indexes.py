@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
+from .normalizers import parse_integral_id
 from .models import (
     AccessRule,
     CommandDef,
@@ -13,6 +15,8 @@ from .models import (
     TelegramRoute,
     ThresholdRule,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -97,7 +101,15 @@ def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
             continue
 
         chat_key = str(rule.chat_id).strip().lower()
-        user_id = int(float(str(rule.user_id).strip()))
+        try:
+            user_id = parse_integral_id(str(rule.user_id).strip())
+        except ValueError:
+            log.warning(
+                "skip access rule: non-integral user_id %r chat_id=%r",
+                rule.user_id,
+                rule.chat_id,
+            )
+            continue
         idx.access_by_chat_user[(chat_key, user_id)] = rule
 
     # ------------------------------------------------------------------

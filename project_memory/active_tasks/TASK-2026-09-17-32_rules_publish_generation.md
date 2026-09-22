@@ -38,7 +38,7 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | `tests/rules_v2/test_gen_rules_publish.py` + identity + corrupt + c4 **56 passed**, exit 0; `test_antares_work_admission.py` + handlers + access_guard **123 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
+| Cursor | review-fix: provider/identity/C4/G **60 passed**, exit 0; admission/handlers/access_guard **123 passed**, exit 0; pair-caller settings/hourly **34 passed**, exit 0; clocks/inventory/registration/dispatch/export **30 passed**, exit 0; lifecycle+boot **52 passed**, exit 0; Python 3.12.10. Наборы не суммировать. |
 | GPT | ещё не ревьюил |
 
 ---
@@ -54,3 +54,4 @@
 | Дата | Событие |
 |------|---------|
 | 2026-09-22 | реализация контракта TASK-31; Draft PR; статус **review** |
+| 2026-09-22 | review-fix: stale_reuse под lock, `_last_rules_wb` epoch, EXISTING+freshness, `parse_integral_id`, G3/G14/G9, удаление `_download_rules_workbook_atomic`; TASK-32 не закрыт |

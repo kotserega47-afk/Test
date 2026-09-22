@@ -9,6 +9,7 @@ from utils.loggers import get_logger
 from utils.log_profiles import LOG_PROFILES
 from core.rules_provider import PublishedState, get_published_state, with_provider_lock
 from core.rules_v2.accessors import AccessRulesAccessor
+from core.rules_v2.normalizers import parse_integral_id
 
 icon, name = LOG_PROFILES["MAIN"]
 logger = get_logger(name, icon)
@@ -40,14 +41,8 @@ def _norm_chat_id(v: Any) -> Any:
         s = v.strip()
         if s.lower() == "private":
             return "private"
-        try:
-            return int(float(s))
-        except Exception:
-            return s
-    try:
-        return int(v)
-    except Exception:
-        return v
+        return parse_integral_id(s)
+    return parse_integral_id(v)
 
 
 def _derive_access_snapshot(published: PublishedState) -> Snapshot:
@@ -66,8 +61,17 @@ def _derive_access_snapshot(published: PublishedState) -> Snapshot:
             continue
 
         raw_chat = str(rule.chat_id).strip()
-        chat_key: Any = "private" if raw_chat.lower() == "private" else int(float(raw_chat))
-        access_map[(chat_key, int(float(str(rule.user_id))))] = int(role.role_level)
+        try:
+            chat_key: Any = _norm_chat_id(raw_chat)
+            user_id = parse_integral_id(str(rule.user_id).strip())
+        except ValueError:
+            logger.warning(
+                "AccessRules skip access rule with non-integral id chat_id=%r user_id=%r",
+                rule.chat_id,
+                rule.user_id,
+            )
+            continue
+        access_map[(chat_key, user_id)] = int(role.role_level)
 
     commands_map: Dict[str, CommandRule] = {}
     for command in snapshot_v2.commands.values():

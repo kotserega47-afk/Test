@@ -281,7 +281,6 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             _event("rules_download_attempted")
             raise RuntimeError("rules download blocked in antares boot harness")
 
-        module._download_rules_workbook_atomic = _blocked_download
         module.download_file = _blocked_download
 
         orig_v2 = module.get_snapshot_v2

@@ -35,11 +35,9 @@ def rules_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cache = tmp_path / "rules_cache"
     cache.mkdir()
     local = cache / "rules.xlsx"
-    part = cache / "rules.xlsx.part"
     shutil.copy(C5_BASELINE, local)
     monkeypatch.setattr(rp, "_RULES_CACHE_DIR", cache)
     monkeypatch.setattr(rp, "_RULES_LOCAL", local)
-    monkeypatch.setattr(rp, "_RULES_DOWNLOAD_PART", part)
     monkeypatch.setenv("RULES_XLSX_PATH", "/dropbox/rules.xlsx")
     monkeypatch.delenv("RULES_CONTRACT_STRICT", raising=False)
     monkeypatch.delenv("RULES_CONTRACT_SHADOW", raising=False)
@@ -69,8 +67,8 @@ def test_corrupt_download_does_not_replace_valid_cache(
 
     monkeypatch.setattr(rp, "download_file", _write_truncated)
 
-    ok = rp._download_rules_workbook_atomic("/dropbox/rules.xlsx")
-    assert ok is False
+    got = rp._download_to_capture("/dropbox/rules.xlsx", attempt_id=1)
+    assert got is None
     assert rules_cache.stat().st_size == good_size
     assert rules_cache.stat().st_mtime == good_mtime
 
@@ -211,7 +209,7 @@ def test_valid_workbook_after_corrupt_attempt_replaces_snapshot(
         return True
 
     monkeypatch.setattr(rp, "download_file", _write_truncated)
-    assert rp._download_rules_workbook_atomic("/dropbox/rules.xlsx") is False
+    assert rp._download_to_capture("/dropbox/rules.xlsx", attempt_id=2) is None
 
     second = get_snapshot_v2(force_sync=True)
     assert second.meta.ruleset_version == first_version

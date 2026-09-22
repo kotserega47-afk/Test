@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -32,6 +33,45 @@ def parse_int(value: Any) -> int:
     if not s:
         raise ValueError("Empty int value")
     return int(s)
+
+
+_INTEGRAL_PLAIN = re.compile(r"^[+-]?\d+$")
+_INTEGRAL_DOT_ZERO = re.compile(r"^[+-]?\d+\.0+$")
+_NON_FINITE_TOKENS = frozenset(
+    {"nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}
+)
+
+
+def parse_integral_id(value: Any) -> int:
+    """Strict chat/user id: ``int``, ``\"1\"``, ``\"1.0\"``; keep negatives.
+
+    Rejects ``\"1.5\"``, NaN, Infinity, empty and garbage. Large integer strings
+    are parsed with ``int`` (no ``float``), so they do not lose precision.
+    """
+
+    if isinstance(value, bool):
+        raise ValueError(f"boolean is not an integral id: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite integral id: {value!r}")
+        as_int = int(value)
+        if as_int != value:
+            raise ValueError(f"non-integral id: {value!r}")
+        if abs(value) > 2**53:
+            raise ValueError(f"float integral id loses precision: {value!r}")
+        return as_int
+    s = str(value).strip()
+    if not s:
+        raise ValueError("empty integral id")
+    if s.lower() in _NON_FINITE_TOKENS:
+        raise ValueError(f"non-finite integral id: {value!r}")
+    if _INTEGRAL_PLAIN.fullmatch(s):
+        return int(s)
+    if _INTEGRAL_DOT_ZERO.fullmatch(s):
+        return int(s.split(".", 1)[0])
+    raise ValueError(f"not an integral id: {value!r}")
 
 
 def parse_float(value: Any) -> float:

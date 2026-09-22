@@ -335,7 +335,6 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             _event("rules_download_attempted")
             raise RuntimeError("rules download blocked in antares lifecycle harness")
 
-        module._download_rules_workbook_atomic = _blocked_download
         module.download_file = _blocked_download
     elif name == "dropbox":
         module.Dropbox = _blocked("dropbox.Dropbox", "Dropbox client blocked in antares lifecycle harness")
