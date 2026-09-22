@@ -327,24 +327,31 @@ def _existing_if_fresh_newer(*, observed: Optional[int]) -> Optional[PublishedSt
     return hit
 
 
-def _legacy_stale_reuse(
+def _legacy_build_fail_outcome(
     *,
     start_epoch: int,
     my_attempt: int,
     observed_generation: Optional[int],
 ) -> _PublishCallResult:
-    """Legacy build/load fail. Caller holds ``_LOCK``. One captured ``_published``."""
+    """Legacy build/load fail. Caller holds ``_LOCK``. One captured ``_published``.
+
+    Newer published generation is checked (with freshness) before stale_reuse.
+    """
 
     if _invalidate_epoch != start_epoch:
         return _PublishCallResult("discard", None)
     current = _published
     if current is None:
         return _PublishCallResult("reject", None)
-    attempt_ok = my_attempt == _latest_attempt
     newer_published = (
         observed_generation is None or current.generation > observed_generation
     )
-    if attempt_ok or newer_published:
+    if newer_published:
+        hit = _existing_if_fresh_newer(observed=observed_generation)
+        if hit is not None:
+            return _PublishCallResult(OUTCOME_EXISTING, hit)
+        return _PublishCallResult("discard", None)
+    if my_attempt == _latest_attempt:
         return _PublishCallResult(OUTCOME_STALE_REUSE, current)
     return _PublishCallResult("discard", None)
 
@@ -625,22 +632,29 @@ def _compute_attempt(
                 raise ContractPublishRejected(decision)
             if decision.snapshot is None or ctx.indexes is None:
                 if decision.build_error or decision.load_error or decision.validation_crash:
-                    log.warning(
-                        "rules contract legacy: workbook build/load failed (non-blocking), "
-                        "reusing last valid in-memory snapshot",
-                        extra={"rules_contract": decision.to_log_dict()},
-                    )
-                    _audit("discard", attempt=my_attempt, reason="legacy_stale")
                     with _LOCK:
-                        stale = _legacy_stale_reuse(
+                        fail_out = _legacy_build_fail_outcome(
                             start_epoch=start_epoch,
                             my_attempt=my_attempt,
                             observed_generation=observed_generation,
                         )
-                    if stale.outcome == "reject":
+                    if fail_out.outcome == "reject":
                         _audit("reject", attempt=my_attempt)
                         raise ContractPublishRejected(decision)
-                    return stale
+                    if fail_out.outcome == OUTCOME_EXISTING:
+                        gen = fail_out.state.generation if fail_out.state is not None else None
+                        _audit("existing", attempt=my_attempt, generation=gen)
+                        return fail_out
+                    if fail_out.outcome == OUTCOME_STALE_REUSE:
+                        log.warning(
+                            "rules contract legacy: workbook build/load failed (non-blocking), "
+                            "reusing last valid in-memory snapshot",
+                            extra={"rules_contract": decision.to_log_dict()},
+                        )
+                        _audit("discard", attempt=my_attempt, reason="legacy_stale")
+                        return fail_out
+                    _audit("discard", attempt=my_attempt, reason="legacy_build_fail")
+                    return fail_out
                 _audit("reject", attempt=my_attempt)
                 raise ContractPublishRejected(decision)
         elif not decision.publish_allowed:
@@ -693,27 +707,33 @@ def _compute_attempt(
                     pass
 
 
+def _attempt_local_published(ctx: _AttemptLocal) -> PublishedState:
+    """In-memory view of this attempt. Does not publish, bump ``publish_seq``, or replace canons."""
+
+    assert ctx.snapshot is not None and ctx.indexes is not None and ctx.decision is not None
+    return PublishedState(
+        generation=0,
+        attempt_id=ctx.attempt_id,
+        snapshot=ctx.snapshot,
+        decision=ctx.decision,
+        source_path=ctx.source_path,
+        capture_path=str(ctx.capture_path),
+        canon_path=str(_RULES_LOCAL),
+        stat_key=ctx.stat_key,
+        indexes=ctx.indexes,
+        policy_mode=resolve_contract_validation_mode().value,
+    )
+
+
 def _publish(*, force_sync: bool) -> _PublishCallResult:
     ctx = _attempt_local.get()
     if ctx is not None:
-        published = _published
         if ctx.snapshot is not None and ctx.indexes is not None and ctx.decision is not None:
-            if published is not None:
-                return _PublishCallResult(OUTCOME_EXISTING, published)
-            synthetic = PublishedState(
-                generation=0,
-                attempt_id=ctx.attempt_id,
-                snapshot=ctx.snapshot,
-                decision=ctx.decision,
-                source_path=ctx.source_path,
-                capture_path=str(ctx.capture_path),
-                canon_path=str(_RULES_LOCAL),
-                stat_key=ctx.stat_key,
-                indexes=ctx.indexes,
-                policy_mode=resolve_contract_validation_mode().value,
-            )
-            return _PublishCallResult(OUTCOME_EXISTING, synthetic)
-        return _PublishCallResult(OUTCOME_EXISTING, published)
+            return _PublishCallResult(OUTCOME_EXISTING, _attempt_local_published(ctx))
+        raise RuntimeError(
+            "nested rules accessor requires attempt-local snapshot, indexes, and decision "
+            "(get_rules_snapshot may still return this attempt's workbook before that)"
+        )
 
     policy = resolve_contract_validation_mode()
     now = time.time()
@@ -732,7 +752,7 @@ def _publish(*, force_sync: bool) -> _PublishCallResult:
             raise
         if result.outcome == OUTCOME_FRESH_COMMIT:
             return result
-        if result.outcome == OUTCOME_STALE_REUSE:
+        if result.outcome in (OUTCOME_STALE_REUSE, OUTCOME_EXISTING):
             return result
         with _LOCK:
             existing = _existing_if_fresh_newer(observed=observed)

@@ -17,7 +17,7 @@ from core.rules_v2.models import (
     TelegramRoute,
     ThresholdRule,
 )
-from core.rules_v2.normalizers import extract_partner_code, normalize_key
+from core.rules_v2.normalizers import extract_partner_code, normalize_key, parse_integral_id
 
 
 def _order_partner_group_memberships(members: list[PartnerGroupMember]) -> list[PartnerGroupMember]:
@@ -646,10 +646,10 @@ class ConversionRulesAccessor(BaseRulesAccessor):
 class AccessRulesAccessor(BaseRulesAccessor):
     @staticmethod
     def _normalize_chat_key(chat_id: int | str) -> str:
-        raw_chat = str(chat_id).strip().lower()
-        if raw_chat == "private":
+        raw_chat = str(chat_id).strip()
+        if raw_chat.lower() == "private":
             return "private"
-        return str(int(chat_id))
+        return str(parse_integral_id(raw_chat))
 
     def resolve_role_level(
         self,
@@ -659,7 +659,7 @@ class AccessRulesAccessor(BaseRulesAccessor):
     ) -> int | None:
         chat_key = self._normalize_chat_key(chat_id)
 
-        rule = self.indexes.access_by_chat_user.get((chat_key.lower(), int(user_id)))
+        rule = self.indexes.access_by_chat_user.get((chat_key, parse_integral_id(user_id)))
         if not rule or not rule.enabled:
             return None
 

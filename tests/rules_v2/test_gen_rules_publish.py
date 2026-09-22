@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import math
 import os
 import shutil
 import threading
@@ -32,9 +31,10 @@ from core.rules_provider import (
     invalidate_rules_v2_cache,
     publish_with_outcome,
 )
+from core.rules_v2.accessors import AccessRulesAccessor
 from core.rules_v2.contract_publish import SnapshotPublishDecision
 from core.rules_v2.indexes import build_indexes
-from core.rules_v2.models import AccessRule, MetaInfo, RulesSnapshotV2
+from core.rules_v2.models import AccessRule, MetaInfo, RoleDef, RulesSnapshotV2
 from core.rules_v2.normalizers import parse_integral_id
 from modules.antares import handlers
 from modules.antares.handlers import IsolatedReloadNotApplied, _reload_bound_rules
@@ -586,10 +586,13 @@ def test_review_a_invalidate_during_stale_compute_does_not_reuse(
     old_gen = first.generation
     ready = threading.Event()
     go = threading.Event()
+    paused = {"n": 0}
 
     def _after(_attempt: int) -> None:
-        ready.set()
-        assert go.wait(timeout=5)
+        paused["n"] += 1
+        if paused["n"] == 1:
+            ready.set()
+            assert go.wait(timeout=5)
 
     def _fail_build(path, policy_mode=None):  # noqa: ANN001
         return SnapshotPublishDecision(
@@ -616,7 +619,7 @@ def test_review_a_invalidate_during_stale_compute_does_not_reuse(
     def _run() -> None:
         try:
             held["result"] = publish_with_outcome(force_sync=True)
-        except BaseException as exc:  # noqa: BLE001
+        except ContractPublishRejected as exc:
             held["exc"] = exc
 
     t = threading.Thread(target=_run)
@@ -627,12 +630,202 @@ def test_review_a_invalidate_during_stale_compute_does_not_reuse(
     t.join(timeout=5)
     rp.evaluate_snapshot_publish = orig_eval
     assert not t.is_alive()
-    result = held.get("result")
-    if result is not None:
-        assert result.outcome != "stale_reuse" or result.state is None
-        if result.state is not None:
-            assert result.state.generation != old_gen
+    assert "result" not in held
+    exc = held.get("exc")
+    assert type(exc) is ContractPublishRejected
+    assert exc.decision.build_error == "paused-stale"
     assert rp._published is None or rp._published.generation != old_gen
+
+
+def test_review_legacy_fail_sees_winner_as_existing(sandbox_xlsx: Path) -> None:
+    import core.rules_provider as rp
+
+    get_published_state(force_sync=True)
+    ready = threading.Event()
+    go = threading.Event()
+    a_thread = {"t": None}
+
+    def _after(_attempt: int) -> None:
+        if threading.current_thread() is a_thread["t"]:
+            ready.set()
+            assert go.wait(timeout=5)
+
+    def _eval(path, policy_mode=None):  # noqa: ANN001
+        if threading.current_thread() is a_thread["t"]:
+            return SnapshotPublishDecision(
+                workbook_path=str(path),
+                policy_mode="legacy",
+                validators_strict=False,
+                contract_issues=(),
+                has_blocking_contract=False,
+                blocking_issue_codes=(),
+                warning_count=0,
+                info_count=0,
+                error_count=0,
+                snapshot_fingerprint=None,
+                snapshot=None,
+                publish_allowed=False,
+                build_error="a-build-fail",
+            )
+        return orig_eval(path, policy_mode=policy_mode)
+
+    orig_eval = rp.evaluate_snapshot_publish
+    rp.evaluate_snapshot_publish = _eval
+    rp.after_attempt_evaluate = _after
+    held: dict[str, object] = {}
+
+    def _a() -> None:
+        held["a"] = publish_with_outcome(force_sync=True)
+
+    t = threading.Thread(target=_a)
+    a_thread["t"] = t
+    t.start()
+    assert ready.wait(timeout=5)
+    _bump(sandbox_xlsx)
+    winner = publish_with_outcome(force_sync=True)
+    go.set()
+    t.join(timeout=5)
+    rp.evaluate_snapshot_publish = orig_eval
+    assert not t.is_alive()
+    assert winner.outcome == "fresh_commit"
+    a_res = held["a"]
+    assert a_res.outcome == "existing"
+    assert a_res.state.generation == winner.state.generation
+    assert a_res.state is winner.state
+
+
+def test_review_legacy_fail_source_change_does_not_existing_winner(sandbox_xlsx: Path) -> None:
+    import core.rules_provider as rp
+
+    get_published_state(force_sync=True)
+    ready = threading.Event()
+    go = threading.Event()
+    a_thread = {"t": None}
+
+    def _after(_attempt: int) -> None:
+        if threading.current_thread() is a_thread["t"] and not ready.is_set():
+            ready.set()
+            assert go.wait(timeout=5)
+
+    def _eval(path, policy_mode=None):  # noqa: ANN001
+        if threading.current_thread() is a_thread["t"]:
+            return SnapshotPublishDecision(
+                workbook_path=str(path),
+                policy_mode="legacy",
+                validators_strict=False,
+                contract_issues=(),
+                has_blocking_contract=False,
+                blocking_issue_codes=(),
+                warning_count=0,
+                info_count=0,
+                error_count=0,
+                snapshot_fingerprint=None,
+                snapshot=None,
+                publish_allowed=False,
+                build_error="a-build-fail",
+            )
+        return orig_eval(path, policy_mode=policy_mode)
+
+    orig_eval = rp.evaluate_snapshot_publish
+    rp.evaluate_snapshot_publish = _eval
+    rp.after_attempt_evaluate = _after
+    held: dict[str, object] = {}
+
+    def _a() -> None:
+        held["a"] = publish_with_outcome(force_sync=True)
+
+    t = threading.Thread(target=_a)
+    a_thread["t"] = t
+    t.start()
+    assert ready.wait(timeout=5)
+    _bump(sandbox_xlsx)
+    winner = publish_with_outcome(force_sync=True)
+    _bump(sandbox_xlsx)
+    go.set()
+    t.join(timeout=5)
+    rp.evaluate_snapshot_publish = orig_eval
+    assert not t.is_alive()
+    assert winner.outcome == "fresh_commit"
+    a_res = held["a"]
+    assert not (
+        a_res.outcome == "existing" and a_res.state.generation == winner.state.generation
+    )
+
+
+def test_review_isolated_existing_resets_clocks(
+    sandbox_xlsx: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.rules_provider as rp
+
+    get_published_state(force_sync=True)
+    clocks: list[object] = []
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        lambda **kwargs: clocks.append(kwargs),
+    )
+    ready = threading.Event()
+    go = threading.Event()
+    seen = {"n": 0}
+
+    def _hook(_attempt: int) -> None:
+        seen["n"] += 1
+        if seen["n"] == 1:
+            ready.set()
+            assert go.wait(timeout=5)
+
+    rp.before_commit_section = _hook
+    _bump(sandbox_xlsx)
+    held: dict[str, object] = {}
+    rules = AccessRules()
+
+    def _a() -> None:
+        held["snap"] = _reload_bound_rules(rules)
+
+    t = threading.Thread(target=_a)
+    t.start()
+    assert ready.wait(timeout=5)
+    winner = publish_with_outcome(force_sync=True)
+    go.set()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert winner.outcome == "fresh_commit"
+    assert held["snap"].provider_generation == winner.state.generation
+    assert clocks
+
+
+def test_review_nested_accessor_uses_attempt_local_candidate(sandbox_xlsx: Path) -> None:
+    import core.rules_provider as rp
+
+    g1 = get_published_state(force_sync=True)
+    seq = rp._publish_seq
+    canon_bytes = Path(g1.canon_path).read_bytes()
+    held: dict[str, object] = {}
+
+    def _after(_attempt: int) -> None:
+        held["nested"] = get_published_state(force_sync=False)
+        held["snap"] = get_snapshot_v2(force_sync=False)
+        held["idx"] = get_indexes_v2(force_sync=False)
+        held["seq"] = rp._publish_seq
+        held["published"] = rp._published
+        held["canon"] = Path(g1.canon_path).read_bytes()
+
+    rp.after_attempt_evaluate = _after
+    _bump(sandbox_xlsx)
+    g2 = get_published_state(force_sync=True)
+    nested = held["nested"]
+    assert nested.snapshot is held["snap"]
+    assert nested.indexes is held["idx"]
+    assert nested.snapshot is not g1.snapshot
+    assert nested.indexes is not g1.indexes
+    assert nested.capture_path != g1.capture_path
+    assert nested.generation == 0
+    assert held["published"] is g1
+    assert held["seq"] == seq
+    assert held["canon"] == canon_bytes
+    assert g2.generation > g1.generation
+    assert g2.snapshot is nested.snapshot
+    assert rp._publish_seq == g2.generation
 
 
 def test_review_b_invalidate_does_not_resurrect_last_rules_wb(sandbox_xlsx: Path) -> None:
@@ -712,20 +905,36 @@ def test_review_d_integral_id_normalization() -> None:
     assert parse_integral_id("1.0") == 1
     assert parse_integral_id(-100) == -100
     assert parse_integral_id("-100") == -100
+    assert parse_integral_id("-100.0") == -100
     assert parse_integral_id("9007199254740993") == 9007199254740993
-    for bad in ("1.5", "", "nope", float("nan"), float("inf"), float("-inf")):
+    for bad in ("1.5", "", "nope", True, False, float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValueError):
             parse_integral_id(bad)
 
     snap = RulesSnapshotV2(
         meta=MetaInfo(ruleset_version="t", updated_at=datetime(2026, 1, 1), updated_by="t"),
+        roles={"r": RoleDef(role_key="r", role_level=7, display_name="r", enabled=True)},
         access_rules=[
             AccessRule(chat_id="private", user_id="1.0", role_key="r", enabled=True),
+            AccessRule(chat_id="-100.0", user_id="1.0", role_key="r", enabled=True),
+            AccessRule(chat_id="1.0", user_id="2", role_key="r", enabled=True),
+            AccessRule(chat_id="9007199254740993", user_id="3", role_key="r", enabled=True),
             AccessRule(chat_id="-100", user_id="1.5", role_key="r", enabled=True),
+            AccessRule(chat_id="1.5", user_id="4", role_key="r", enabled=True),
             AccessRule(chat_id="private", user_id="nan", role_key="r", enabled=True),
+            AccessRule(chat_id="inf", user_id="5", role_key="r", enabled=True),
         ],
     )
     idx = build_indexes(snap)
     assert ("private", 1) in idx.access_by_chat_user
-    assert all(uid != 1 or chat != "-100" for chat, uid in idx.access_by_chat_user)
-    assert not any(math.isnan(uid) for _c, uid in idx.access_by_chat_user)
+    assert ("-100", 1) in idx.access_by_chat_user
+    assert ("1", 2) in idx.access_by_chat_user
+    assert ("9007199254740993", 3) in idx.access_by_chat_user
+    assert ("-100", 1) in idx.access_by_chat_user
+    assert all(chat != "1.5" for chat, _uid in idx.access_by_chat_user)
+    assert all(uid != 4 for _chat, uid in idx.access_by_chat_user)
+    acc = AccessRulesAccessor(snap, idx)
+    assert acc.resolve_role_level(chat_id=-100, user_id=1) == 7
+    assert acc.resolve_role_level(chat_id="-100.0", user_id=1) == 7
+    assert acc.resolve_role_level(chat_id=1, user_id=2) == 7
+    assert acc.resolve_role_level(chat_id="private", user_id=1) == 7

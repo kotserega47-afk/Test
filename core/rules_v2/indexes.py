@@ -100,14 +100,18 @@ def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
         if not rule.enabled:
             continue
 
-        chat_key = str(rule.chat_id).strip().lower()
+        raw_chat = str(rule.chat_id).strip()
         try:
+            if raw_chat.lower() == "private":
+                chat_key = "private"
+            else:
+                chat_key = str(parse_integral_id(raw_chat))
             user_id = parse_integral_id(str(rule.user_id).strip())
         except ValueError:
             log.warning(
-                "skip access rule: non-integral user_id %r chat_id=%r",
-                rule.user_id,
+                "skip access rule: non-integral id chat_id=%r user_id=%r",
                 rule.chat_id,
+                rule.user_id,
             )
             continue
         idx.access_by_chat_user[(chat_key, user_id)] = rule
