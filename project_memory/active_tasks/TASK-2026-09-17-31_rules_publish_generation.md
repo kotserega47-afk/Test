@@ -15,7 +15,7 @@
 
 ## Goal
 
-Зафиксировать поколение (`publish_seq`), единый read accessor, CAS AccessRules без окна, файловый протокол и раздельные исходы provider vs `/reload_rules` — без смены public provider/legacy и без runtime в этом PR.
+Зафиксировать `publish_seq`, accessor с freshness, CAS AccessRules, replace канона в одной секции с commit, неизменяемый capture и однозначный `RulesPublishConflictExhausted` — без runtime в этом PR.
 
 ---
 
@@ -24,10 +24,13 @@
 - [x] `publish_seq` монотонен; invalidate не обнуляет (анти-ABA)
 - [x] Единый accessor PublishedState; пара старых вызовов не обещана; callers пары в code scope
 - [x] AccessRules CAS: provider lock → instance lock; следующий reader проверяет generation
-- [x] Один протокол память-затем-диск; ошибки replace/identity; capture локального xlsx; `get_rules_snapshot`
-- [x] Provider `fresh_commit`/`existing`/`stale_reuse`/`rejected`/`conflict_exhausted` отдельно от isolated/mixed reload
-- [x] Eager indexes; audit kinds; проигрыш+падение позднего attempt; ≤3 force attempt
-- [x] Матрица G1–G16; historical repro ≠ safety
+- [x] AccessRules: freshness источника (TTL/stat/policy) до сравнения generation/epoch
+- [x] Prepare вне lock; проверка attempt + `os.replace` в одной секции с commit; ошибки workbook vs identity
+- [x] Неизменяемый `capture_path`; канон отдельным replace; retain не удаляет capture при смене current
+- [x] `get_rules_snapshot.local_path` = capture на hit; callers path перечислены
+- [x] `observed_generation` только под lock вместе с attempt/epoch
+- [x] `conflict_exhausted` → `RulesPublishConflictExhausted`, не stale-reuse и не успешный snapshot
+- [x] Матрица G1–G23; historical repro ≠ safety
 - [ ] GPT review; принятие контракта; code; merge/deploy
 
 ---
@@ -53,3 +56,4 @@ Runtime; закрытие TASK-30; смена PR #33; ingest; schedules; serve; 
 |------|---------|
 | 2026-09-21 | контракт публикации поколений; статус **review (не принято)** |
 | 2026-09-21 | уточнение: publish_seq, accessor, CAS, диск, force/policy, закрытые решения |
+| 2026-09-22 | replace в секции commit; capture vs canon; freshness до reuse; conflict_exhausted как исключение |
