@@ -47,8 +47,9 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-31 rules publish generation | docs-контракт принят; Draft PR #34 review GPT `8ef2838…`; close `3d56791…`; runtime нет; pytest не запускался; **не выпущено** | pytest не требовался | **нет** |
 | TASK-32 rules publish code | GPT review кода/diff на `bb25f734…`; pytest GPT не запускал; Cursor **70** на `bb25f734…`; **123 / 34 / 30 / 52** на `5bbde8f…`; docs-close `7d3a463…`; PR #35 Draft; **не выпущено** | 3.12.10, exit 0; наборы не суммировать | **нет** |
 | TASK-33 ingest admission | docs-контракт принят; Draft PR #36 review GPT `4682e399…`; close `cecb336…`; runtime нет; реализация TASK-34; **не выпущено** | pytest не требовался | **нет** |
-| TASK-34 ingest admission code | isolated `put_nowait_if_open` + ingest; Draft PR #37; GPT review `f76f9c9…`; docs-close этот коммит; mixed `add_*_task`; **не выпущено** | Cursor **28** / **95** на `f76f9c9…`; **123** / **52** исторические на `5362a93…`; 3.12.10, exit 0; GPT pytest не запускал; наборы не суммировать | **нет** |
-| Следующая | контракт isolated schedules (TASK-35); mixed-stop отдельно; serve отдельно | — |
+| TASK-34 ingest admission code | isolated `put_nowait_if_open` + ingest; Draft PR #37; GPT review `f76f9c9…`; docs-close `0576144…`; mixed `add_*_task`; **не выпущено** | Cursor **28** / **95** на `f76f9c9…`; **123** / **52** исторические на `5362a93…`; 3.12.10, exit 0; GPT pytest не запускал; наборы не суммировать | **нет** |
+| TASK-35 schedules admission | docs-контракт isolated schedules; Draft от close TASK-34; runtime нет; **не выпущено** | pytest не требовался; известное падение mixed «два тика» воспроизведено, mixed не чинился | **нет** |
+| Следующая | review TASK-35; реализация schedules отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -64,7 +65,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-34 docs-close** в этом коммите (GPT код/diff/тесты на `f76f9c9…`, pytest GPT не запускал). Schedules — TASK-35. PR #33 не переназначать. Не serve, не полный переход, не mixed-stop.
+**TASK-35** — docs-контракт isolated schedules (этот PR). Runtime нет. Mixed scheduler не менять. Не serve, не mixed-stop.
 
 ---
 

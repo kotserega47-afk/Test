@@ -63,6 +63,7 @@
 | [TASK-2026-09-17-32](TASK-2026-09-17-32_rules_publish_generation.md) | Code согласованной публикации: GPT review на `bb25f734…` (pytest GPT не запускал); Cursor 70 на `bb25f734…`, 123/34/30/52 на `5bbde8f…`; закрытие docs `7d3a463…`; PR #35 Draft; не выпущено |
 | [TASK-2026-09-17-33](TASK-2026-09-17-33_antares_ingest_admission.md) | Контракт допуска Telegram document ingest: GPT review на `4682e399…`, закрытие docs `cecb336…`, runtime нет, pytest GPT не запускал, реализация TASK-34, Draft PR #36 |
 | [TASK-2026-09-17-34](TASK-2026-09-17-34_antares_ingest_admission.md) | Isolated ingest admission code: GPT review на `f76f9c9…`, закрытие docs, Cursor 28/95, не выпущено, Draft PR #37 |
+| [TASK-2026-09-17-35](TASK-2026-09-17-35_antares_schedules_admission.md) | Контракт допуска isolated schedules: runtime нет, реализация не начата, к review |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

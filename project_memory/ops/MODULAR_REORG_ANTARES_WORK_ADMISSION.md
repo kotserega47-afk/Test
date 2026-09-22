@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 реализован (`f76f9c9…`, не выпущен); schedules — TASK-35; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт (`0576144…` / review `f76f9c9…`, не выпущен); контракт schedules — TASK-35; cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -26,7 +26,7 @@ Runtime в TASK-25 **не** менять. Live polling, sender stop, worker join
 | Постановка JOB_REGISTRY | `/run_*`, `/operator_wallets_ready`, `/wallet_editor_refresh` | `run_job_async` → `dispatch_job_async` → `request_job` | только `/run_wallet` |
 | Прямая registry/Auto-Enable | `/registry_replay`, `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` | callback → executor / sync API | **не** защищены |
 | Document ingest | `Document.ALL` | `queue.put` в `automation/worker.py` | **не** защищён |
-| Будущие schedules | isolated loop (нет) | mixed: `dispatch_job_background` | **не** защищены |
+| Будущие schedules | isolated loop (нет); контракт TASK-35 | mixed: `dispatch_job_background` | **не** защищены этим docs PR |
 | Внутренний re-enqueue | `enqueue_auto_enable_batch`; job → ещё dispatch/`add_task` | **новая** работа | **не** защищён (§ 7.2) |
 | Read-only | `/whoami`, `/help`, `/start`, `/status`, `/registry_health`, `/rules_validate` | ACL + ответ | допуск не режет |
 | Outbound sender | `telegram_bot.send_message_sync` | исходящая очередь | не точка приёма |
