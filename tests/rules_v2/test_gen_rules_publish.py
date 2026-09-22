@@ -421,11 +421,22 @@ def test_gen_g23_conflict_exhausted(sandbox_xlsx: Path) -> None:
         get_published_state(force_sync=True)
 
 
-def test_gen_g5_g16_isolated_reject_and_stale(sandbox_xlsx: Path) -> None:
+def test_gen_g5_g16_isolated_reject_and_stale(
+    sandbox_xlsx: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Isolated reload: reject and stale_reuse skip clocks reset.
+
+    ``evaluate_snapshot_publish`` is replaced with a controlled reject, then a
+    controlled build-fail (stale_reuse). ``_reload_bound_rules`` is not stubbed.
+    """
     import core.rules_provider as rp
 
     first = get_published_state(force_sync=True)
-    clocks: list[str] = []
+    clocks: list[object] = []
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        lambda **kwargs: clocks.append(kwargs),
+    )
 
     class _Rules:
         def invalidate(self) -> None:
@@ -469,18 +480,47 @@ def test_gen_g5_g16_isolated_reject_and_stale(sandbox_xlsx: Path) -> None:
             build_error="boom",
         )
 
-    orig_eval = rp.evaluate_snapshot_publish
-    rp.evaluate_snapshot_publish = _reject
-    try:
-        with pytest.raises(ContractPublishRejected):
-            _reload_bound_rules(_Rules())
-        assert clocks == []
-        rp.evaluate_snapshot_publish = _fail_build
-        with pytest.raises(IsolatedReloadNotApplied):
-            _reload_bound_rules(_Rules())
-        assert get_published_state(force_sync=False).generation == first.generation
-    finally:
-        rp.evaluate_snapshot_publish = orig_eval
+    monkeypatch.setattr(rp, "evaluate_snapshot_publish", _reject)
+    with pytest.raises(ContractPublishRejected) as rej:
+        _reload_bound_rules(_Rules())
+    assert type(rej.value) is ContractPublishRejected
+    assert clocks == []
+
+    monkeypatch.setattr(rp, "evaluate_snapshot_publish", _fail_build)
+    with pytest.raises(IsolatedReloadNotApplied) as stale:
+        _reload_bound_rules(_Rules())
+    assert type(stale.value) is IsolatedReloadNotApplied
+    assert "stale_reuse" in str(stale.value)
+    assert clocks == []
+    assert get_published_state(force_sync=False).generation == first.generation
+
+
+def test_isolated_reload_conflict_exhausted_skips_reset(
+    sandbox_xlsx: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Provider conflict chain through ``_reload_bound_rules`` skips reset.
+
+    Real provider and sandbox workbook. ``before_commit_section`` invalidates
+    before each commit (same hook as G23). ``publish_with_outcome`` is not
+    replaced with a ready exception. Hook restore is the sandbox fixture.
+    """
+    import core.rules_provider as rp
+
+    get_published_state(force_sync=True)
+    clocks: list[object] = []
+    monkeypatch.setattr(
+        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
+        lambda **kwargs: clocks.append(kwargs),
+    )
+
+    def _hook(_attempt: int) -> None:
+        invalidate_rules_v2_cache()
+
+    rp.before_commit_section = _hook
+    with pytest.raises(RulesPublishConflictExhausted) as exhausted:
+        _reload_bound_rules(AccessRules())
+    assert type(exhausted.value) is RulesPublishConflictExhausted
+    assert clocks == []
 
 
 def test_gen_g9_closed_and_acl_deny_real_handler(monkeypatch: pytest.MonkeyPatch) -> None:
