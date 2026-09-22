@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-32 close `7d3a463…`; TASK-30 accepted on combined PR #35 `c420b590…`; [MODULAR_REORG_ANTARES_INGEST_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_INGEST_ADMISSION.md) |
-| **PR** | Draft на `feat/task-2026-09-17-33-antares-ingest-admission`, base `feat/task-2026-09-17-32-rules-publish-generation` |
+| **PR** | Draft [#36](https://github.com/deniskotdavydov1991-wq/Test/pull/36) `feat/task-2026-09-17-33-antares-ingest-admission`, base `feat/task-2026-09-17-32-rules-publish-generation` |
 | **Риск** | medium: isolated ingest делит WE `Queue` с mixed; файл после download до put |
 
 Только docs. Runtime **не** менялся. GPT review ещё не принимался. Реализация допуска ingest — следующий code, не этот PR. TASK-30 и TASK-32 повторно не закрывать.
