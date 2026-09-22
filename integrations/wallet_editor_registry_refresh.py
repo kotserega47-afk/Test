@@ -219,11 +219,12 @@ def _send_to_route(route_key: str, text: str) -> bool:
 
     if routes_from_rules_v2_enabled():
         try:
-            from core.rules_provider import get_indexes_v2, get_snapshot_v2
+            from core.rules_provider import get_published_state
             from core.rules_v2.accessors import BaseRulesAccessor
 
-            snapshot = get_snapshot_v2(force_sync=False)
-            indexes = get_indexes_v2(force_sync=False)
+            published = get_published_state(force_sync=False)
+            snapshot = published.snapshot
+            indexes = published.indexes
             accessor = BaseRulesAccessor(snapshot=snapshot, indexes=indexes)
             chat_id = accessor.get_telegram_chat_id(route_key)
             if chat_id:

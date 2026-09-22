@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from core.rules_provider import get_indexes_v2, get_snapshot_v2
+from core.rules_provider import get_published_state
 from core.rules_v2.accessors import BaseRulesAccessor
 
 log = logging.getLogger(__name__)
@@ -227,8 +227,9 @@ def load_auto_enable_settings(*, force_sync: bool = False) -> AutoEnableSettings
     )}
 
     try:
-        snapshot = get_snapshot_v2(force_sync=force_sync)
-        indexes = get_indexes_v2(force_sync=force_sync)
+        published = get_published_state(force_sync=force_sync)
+        snapshot = published.snapshot
+        indexes = published.indexes
         accessor = BaseRulesAccessor(snapshot=snapshot, indexes=indexes)
         for key in raw:
             raw[key] = accessor.get_job_param(JOB_KEY, key, default=None)

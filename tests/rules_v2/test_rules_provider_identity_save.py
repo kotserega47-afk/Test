@@ -20,7 +20,7 @@ from core.rules_v2.validation_snapshot import validate_snapshot as real_validate
 
 C5_BASELINE = Path(__file__).resolve().parent / "c5" / "workbooks" / "baseline_prod_synthetic.xlsx"
 
-_SAVE_FN = "core.rules_v2.identity_registry_io.save_identity_registry"
+_REPLACE_FN = "core.rules_provider.replace_identity"
 _BUILD_FN = "core.rules_v2.identity_registry_io.build_registry_from_manifest"
 
 
@@ -46,7 +46,7 @@ def rules_xlsx_baseline(monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_save_off_does_not_call_save_identity_registry(rules_xlsx_baseline: Path) -> None:
-    with patch(_SAVE_FN) as save_m:
+    with patch(_REPLACE_FN) as save_m:
         snap = get_snapshot_v2(force_sync=True)
     save_m.assert_not_called()
     assert snap.meta.ruleset_version
@@ -57,7 +57,7 @@ def test_save_on_publish_success_calls_save_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RULES_IDENTITY_SAVE", "1")
-    with patch(_SAVE_FN) as save_m:
+    with patch(_REPLACE_FN) as save_m:
         get_snapshot_v2(force_sync=True)
     save_m.assert_called_once()
 
@@ -71,7 +71,7 @@ def test_save_oserror_does_not_block_snapshot_return(
     def _boom(*_a: object, **_k: object) -> None:
         raise OSError("simulated registry fs failure")
 
-    with patch(_SAVE_FN, side_effect=_boom):
+    with patch(_REPLACE_FN, side_effect=_boom):
         snap = get_snapshot_v2(force_sync=True)
     assert snap.meta.ruleset_version
 
@@ -95,7 +95,7 @@ def test_publish_rejected_does_not_call_save(
 
     with (
         patch("core.rules_v2.contract_publish.validate_snapshot", side_effect=_with_dup),
-        patch(_SAVE_FN) as save_m,
+        patch(_REPLACE_FN) as save_m,
     ):
         with pytest.raises(ContractPublishRejected):
             get_snapshot_v2(force_sync=True)
@@ -107,7 +107,7 @@ def test_cache_hit_does_not_call_save_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RULES_IDENTITY_SAVE", "1")
-    with patch(_SAVE_FN) as save_m:
+    with patch(_REPLACE_FN) as save_m:
         get_snapshot_v2(force_sync=False)
         get_snapshot_v2(force_sync=False)
     save_m.assert_called_once()
@@ -131,7 +131,7 @@ def test_rules_validate_cold_cache_does_not_save_registry(
     """``/rules_validate`` ``runtime_get`` uses ``suppress_identity_registry_save`` on cold cache."""
 
     monkeypatch.setenv("RULES_IDENTITY_SAVE", "1")
-    with patch(_SAVE_FN) as save_m:
+    with patch(_REPLACE_FN) as save_m:
         build_rules_validate_payload()
     save_m.assert_not_called()
 
@@ -142,7 +142,7 @@ def test_rules_validate_warm_cache_does_not_save_again(
 ) -> None:
     monkeypatch.setenv("RULES_IDENTITY_SAVE", "1")
     get_snapshot_v2(force_sync=True)
-    with patch(_SAVE_FN) as save_m:
+    with patch(_REPLACE_FN) as save_m:
         build_rules_validate_payload()
     save_m.assert_not_called()
 
@@ -170,7 +170,7 @@ def test_rules_validate_payload_invariant_with_identity_save_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RULES_IDENTITY_SAVE", "1")
-    with patch(_SAVE_FN):
+    with patch(_REPLACE_FN):
         with_save = build_rules_validate_payload()
     invalidate_rules_v2_cache()
     baseline = build_rules_validate_payload()

@@ -7,6 +7,7 @@ referenced by ``commands.required_level``, not only levels present on ``access``
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -14,6 +15,7 @@ import pandas as pd
 from core.access_guard import AccessContext, check_access
 from core.access_rules import AccessRules
 from core.rules_v2.bridge_legacy import _build_access_rules, _build_commands_and_policies, _build_roles
+from core.rules_v2.indexes import build_indexes
 from core.rules_v2.models import (
     AccessRule,
     CommandDef,
@@ -22,6 +24,15 @@ from core.rules_v2.models import (
     RoleDef,
     RulesSnapshotV2,
 )
+
+
+def _pub(snap: RulesSnapshotV2) -> SimpleNamespace:
+    return SimpleNamespace(
+        snapshot=snap,
+        indexes=build_indexes(snap),
+        generation=1,
+        stat_key=(1.0, 1),
+    )
 
 
 def test_build_roles_includes_required_level_from_commands_sheet() -> None:
@@ -82,7 +93,7 @@ def test_commands_map_contains_rules_validate_when_access_users_higher_level() -
         access_rules=access_rules_list,
     )
 
-    with patch("core.access_rules.get_snapshot_v2", return_value=snap):
+    with patch("core.access_rules.get_published_state", return_value=_pub(snap)):
         rules = AccessRules()
         rules.invalidate()
         wrapper = rules.get_snapshot()
@@ -134,7 +145,7 @@ def test_guard_accepts_slash_or_no_slash_command_name() -> None:
         access_rules=access_rules_list,
     )
 
-    with patch("core.access_rules.get_snapshot_v2", return_value=snap):
+    with patch("core.access_rules.get_published_state", return_value=_pub(snap)):
         rules = AccessRules()
         rules.invalidate()
         ctx = AccessContext(chat_type="private", chat_id=1, user_id=1)

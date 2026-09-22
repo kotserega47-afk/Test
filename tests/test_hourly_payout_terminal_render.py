@@ -453,8 +453,7 @@ def test_filled_enum_method_used_over_default_method(tmp_path: Path) -> None:
     payout.to_excel(pout, index=False)
 
     with (
-        patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap),
-        patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=build_indexes(snap)),
+        patch("analyzers.hourly_analyzer.get_published_state", return_value=__import__("types").SimpleNamespace(snapshot=snap, indexes=build_indexes(snap))),
         patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap),
         patch("reporters.hourly_render_model.get_job_params", return_value={"hide_inactive_rows": False}),
     ):
@@ -543,8 +542,7 @@ def test_same_terminal_and_method_amounts_are_summed(tmp_path: Path) -> None:
     )
 
     with (
-        patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap),
-        patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=build_indexes(snap)),
+        patch("analyzers.hourly_analyzer.get_published_state", return_value=__import__("types").SimpleNamespace(snapshot=snap, indexes=build_indexes(snap))),
         patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap),
         patch("reporters.hourly_render_model.get_job_params", return_value={"hide_inactive_rows": False}),
     ):

@@ -765,11 +765,22 @@ async def cmd_rules_validate(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.exception("rules_validate_audit: tg manual_validate hook failed (ignored)")
 
 
+class IsolatedReloadNotApplied(Exception):
+    """Isolated `/reload_rules` did not reset clocks (stale_reuse)."""
+
+
 def _reload_bound_rules(rules: object):
+    from core.rules_provider import (
+        OUTCOME_STALE_REUSE,
+        publish_with_outcome,
+    )
     from core.scheduler_clocks_control import request_scheduler_clocks_reset
 
     rules.invalidate()
-    snap = rules.get_snapshot(force_sync=True)
+    result = publish_with_outcome(force_sync=True)
+    if result.outcome == OUTCOME_STALE_REUSE:
+        raise IsolatedReloadNotApplied("stale_reuse")
+    snap = rules.get_snapshot(force_sync=False)
     request_scheduler_clocks_reset(reason="reload_rules")
     return snap
 

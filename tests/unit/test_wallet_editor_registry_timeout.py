@@ -111,14 +111,10 @@ def test_registry_settings_loaded_from_job_params():
 
     accessor.get_job_param.side_effect = _param
     with patch(
-        "integrations.wallet_editor_registry_settings.get_snapshot_v2",
+        "integrations.wallet_editor_registry_settings.get_published_state",
         return_value=MagicMock(),
     ):
         with patch(
-            "integrations.wallet_editor_registry_settings.get_indexes_v2",
-            return_value=MagicMock(),
-        ):
-            with patch(
                 "integrations.wallet_editor_registry_settings.BaseRulesAccessor",
                 return_value=accessor,
             ):
@@ -132,14 +128,10 @@ def test_registry_settings_defaults_when_missing():
     accessor = MagicMock()
     accessor.get_job_param.return_value = None
     with patch(
-        "integrations.wallet_editor_registry_settings.get_snapshot_v2",
+        "integrations.wallet_editor_registry_settings.get_published_state",
         return_value=MagicMock(),
     ):
         with patch(
-            "integrations.wallet_editor_registry_settings.get_indexes_v2",
-            return_value=MagicMock(),
-        ):
-            with patch(
                 "integrations.wallet_editor_registry_settings.BaseRulesAccessor",
                 return_value=accessor,
             ):
@@ -161,14 +153,10 @@ def test_registry_invalid_settings_fallback():
 
     accessor.get_job_param.side_effect = _param
     with patch(
-        "integrations.wallet_editor_registry_settings.get_snapshot_v2",
+        "integrations.wallet_editor_registry_settings.get_published_state",
         return_value=MagicMock(),
     ):
         with patch(
-            "integrations.wallet_editor_registry_settings.get_indexes_v2",
-            return_value=MagicMock(),
-        ):
-            with patch(
                 "integrations.wallet_editor_registry_settings.BaseRulesAccessor",
                 return_value=accessor,
             ):

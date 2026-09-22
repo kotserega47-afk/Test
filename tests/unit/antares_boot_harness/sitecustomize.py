@@ -285,25 +285,37 @@ def _after_load(name: str, module: types.ModuleType) -> None:
         module.download_file = _blocked_download
 
         orig_v2 = module.get_snapshot_v2
+        orig_published = module.get_published_state
+
+        def _observe_reject(exc, *, force_sync: bool) -> None:
+            if type(exc).__name__ == "ContractPublishRejected":
+                decision = getattr(exc, "decision", None)
+                codes = list(getattr(decision, "blocking_issue_codes", ()) or []) if decision is not None else []
+                _event(
+                    "publish_rejected",
+                    exc_type=f"{type(exc).__module__}.{type(exc).__name__}",
+                    exc_name=type(exc).__name__,
+                    blocking_issue_codes=codes,
+                    policy_mode=getattr(decision, "policy_mode", None) if decision is not None else None,
+                    force_sync=bool(force_sync),
+                )
 
         def _observe_snapshot_v2(*, force_sync: bool = False):
             try:
                 return orig_v2(force_sync=force_sync)
             except Exception as exc:
-                if type(exc).__name__ == "ContractPublishRejected":
-                    decision = getattr(exc, "decision", None)
-                    codes = list(getattr(decision, "blocking_issue_codes", ()) or []) if decision is not None else []
-                    _event(
-                        "publish_rejected",
-                        exc_type=f"{type(exc).__module__}.{type(exc).__name__}",
-                        exc_name=type(exc).__name__,
-                        blocking_issue_codes=codes,
-                        policy_mode=getattr(decision, "policy_mode", None) if decision is not None else None,
-                        force_sync=bool(force_sync),
-                    )
+                _observe_reject(exc, force_sync=force_sync)
+                raise
+
+        def _observe_published(*, force_sync: bool = False):
+            try:
+                return orig_published(force_sync=force_sync)
+            except Exception as exc:
+                _observe_reject(exc, force_sync=force_sync)
                 raise
 
         module.get_snapshot_v2 = _observe_snapshot_v2
+        module.get_published_state = _observe_published
     elif name == "dropbox":
         module.Dropbox = _blocked("dropbox.Dropbox", "Dropbox client blocked in antares boot harness")
     elif name in {"psycopg", "psycopg2"}:

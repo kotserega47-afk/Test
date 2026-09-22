@@ -59,7 +59,8 @@
 | [TASK-2026-09-17-28](TASK-2026-09-17-28_antares_direct_ops_admission.md) | Isolated допуск export/Auto-Enable: review пройден (`f0bd06b…`), закрытие `a81aa69…`, Cursor 120/21 на review HEAD, 52 lifecycle/boot исторически на `a5836de…`, GPT исходники без pytest, не выпущено, merge нет (PR #31) |
 | [TASK-2026-09-17-29](TASK-2026-09-17-29_antares_registry_replay_admission.md) | Isolated допуск `/registry_replay`: review пройден (`71fce3b…`), закрытие `d3eecc0…`, Cursor 129/52, GPT код/diff без pytest, не выпущено, merge нет (PR #32) |
 | [TASK-2026-09-17-30](TASK-2026-09-17-30_antares_reload_rules_admission.md) | Isolated допуск `/reload_rules`: к review, blocked до review реализации TASK-32 и повторной проверки reload, не выпущено, merge нет (PR #33) |
-| [TASK-2026-09-17-31](TASK-2026-09-17-31_rules_publish_generation.md) | Контракт публикации поколений: review GPT на `8ef2838…`, закрытие docs, runtime нет, pytest не запускался, merge нет (PR #34) |
+| [TASK-2026-09-17-31](TASK-2026-09-17-31_rules_publish_generation.md) | Контракт публикации поколений: review GPT на `8ef2838…`, закрытие docs `3d56791…`, runtime нет, pytest не запускался, merge нет (PR #34) |
+| [TASK-2026-09-17-32](TASK-2026-09-17-32_rules_publish_generation.md) | Code согласованной публикации snapshot/indexes: к review, не выпущено |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

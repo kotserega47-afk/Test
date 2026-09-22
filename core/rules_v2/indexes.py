@@ -97,7 +97,7 @@ def build_indexes(snapshot: RulesSnapshotV2) -> RulesIndexes:
             continue
 
         chat_key = str(rule.chat_id).strip().lower()
-        user_id = int(rule.user_id)
+        user_id = int(float(str(rule.user_id).strip()))
         idx.access_by_chat_user[(chat_key, user_id)] = rule
 
     # ------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -206,8 +207,10 @@ def test_ambiguous_payin_mapping_skips_amount_non_strict(
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     end = day.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
-        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+    with patch(
+        "analyzers.hourly_analyzer.get_published_state",
+        return_value=SimpleNamespace(snapshot=snap, indexes=idx),
+    ):
             dto = build_hourly_dto_from_files(
                 payin_path=str(payin),
                 payout_path=str(payout),
@@ -253,8 +256,10 @@ def test_ambiguous_payin_mapping_strict_raises(
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     end = day.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
-        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+    with patch(
+        "analyzers.hourly_analyzer.get_published_state",
+        return_value=SimpleNamespace(snapshot=snap, indexes=idx),
+    ):
             with pytest.raises(RuntimeError, match="ambiguous"):
                 build_hourly_dto_from_files(
                     payin_path=str(payin),
@@ -304,8 +309,10 @@ def test_payin_rows_aggregate_by_report_source_key_composite(
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     end = day.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
-        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+    with patch(
+        "analyzers.hourly_analyzer.get_published_state",
+        return_value=SimpleNamespace(snapshot=snap, indexes=idx),
+    ):
             dto = build_hourly_dto_from_files(
                 payin_path=str(payin),
                 payout_path=str(payout),
@@ -356,8 +363,10 @@ def test_single_excel_cell_with_plus_codes_maps_to_shared_payin_row(
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     end = day.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
-        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+    with patch(
+        "analyzers.hourly_analyzer.get_published_state",
+        return_value=SimpleNamespace(snapshot=snap, indexes=idx),
+    ):
             dto = build_hourly_dto_from_files(
                 payin_path=str(payin),
                 payout_path=str(payout),
@@ -407,8 +416,10 @@ def test_unknown_partner_code_does_not_crash(tmp_path: Path, caplog: pytest.LogC
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     end = day.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    with patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap):
-        with patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx):
+    with patch(
+        "analyzers.hourly_analyzer.get_published_state",
+        return_value=SimpleNamespace(snapshot=snap, indexes=idx),
+    ):
             dto = build_hourly_dto_from_files(
                 payin_path=str(payin),
                 payout_path=str(payout),

@@ -29,9 +29,8 @@ def _mock_accessor(params: dict[str, object | None]):
 
 
 def test_load_auto_enable_settings_defaults():
-    with patch("integrations.wallet_editor_auto_enable_settings.get_snapshot_v2"):
-        with patch("integrations.wallet_editor_auto_enable_settings.get_indexes_v2"):
-            with patch(
+    with patch("integrations.wallet_editor_auto_enable_settings.get_published_state"):
+        with patch(
                 "integrations.wallet_editor_auto_enable_settings.BaseRulesAccessor",
                 return_value=_mock_accessor({}),
             ):
@@ -64,9 +63,8 @@ def test_load_auto_enable_settings_bool_and_int_parsing():
         "batch_timeout_buffer_seconds": "60",
         "include_overdue": "0",
     }
-    with patch("integrations.wallet_editor_auto_enable_settings.get_snapshot_v2"):
-        with patch("integrations.wallet_editor_auto_enable_settings.get_indexes_v2"):
-            with patch(
+    with patch("integrations.wallet_editor_auto_enable_settings.get_published_state"):
+        with patch(
                 "integrations.wallet_editor_auto_enable_settings.BaseRulesAccessor",
                 return_value=_mock_accessor(params),
             ):
@@ -88,9 +86,8 @@ def test_load_auto_enable_settings_parses_working_and_auto_return_statuses():
         "auto_return_statuses": "Не готов. Плановый прозвон",
         "auto_return_target_status": "Готов к работе",
     }
-    with patch("integrations.wallet_editor_auto_enable_settings.get_snapshot_v2"):
-        with patch("integrations.wallet_editor_auto_enable_settings.get_indexes_v2"):
-            with patch(
+    with patch("integrations.wallet_editor_auto_enable_settings.get_published_state"):
+        with patch(
                 "integrations.wallet_editor_auto_enable_settings.BaseRulesAccessor",
                 return_value=_mock_accessor(params),
             ):
@@ -106,9 +103,8 @@ def test_deprecated_allowed_statuses_fallback_only_for_working_statuses():
     params = {
         "allowed_statuses_for_enable": "Готов к работе, Не готов. Плановый прозвон",
     }
-    with patch("integrations.wallet_editor_auto_enable_settings.get_snapshot_v2"):
-        with patch("integrations.wallet_editor_auto_enable_settings.get_indexes_v2"):
-            with patch(
+    with patch("integrations.wallet_editor_auto_enable_settings.get_published_state"):
+        with patch(
                 "integrations.wallet_editor_auto_enable_settings.BaseRulesAccessor",
                 return_value=_mock_accessor(params),
             ):
@@ -133,9 +129,8 @@ def test_deprecated_allowed_statuses_fallback_only_for_working_statuses():
     ],
 )
 def test_load_auto_enable_settings_invalid_values_fallback(bad_value, field, expected):
-    with patch("integrations.wallet_editor_auto_enable_settings.get_snapshot_v2"):
-        with patch("integrations.wallet_editor_auto_enable_settings.get_indexes_v2"):
-            with patch(
+    with patch("integrations.wallet_editor_auto_enable_settings.get_published_state"):
+        with patch(
                 "integrations.wallet_editor_auto_enable_settings.BaseRulesAccessor",
                 return_value=_mock_accessor({field: bad_value}),
             ):

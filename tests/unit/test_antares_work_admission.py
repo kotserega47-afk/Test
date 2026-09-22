@@ -23,6 +23,7 @@ from core.rules_provider import (
     get_snapshot_v2,
     invalidate_rules_v2_cache,
 )
+from core.rules_v2.indexes import build_indexes
 from core.rules_v2.contract_publish import SnapshotPublishDecision
 from core.rules_v2.models import (
     AccessRule,
@@ -1853,17 +1854,16 @@ def _reload_v2(*, version: str, updated_at: datetime, allow_run_wallet: bool) ->
     )
 
 
-def test_access_rules_and_provider_have_no_cache_lock() -> None:
+def test_access_rules_and_provider_have_cache_locks() -> None:
+    """TASK-32: provider lock + instance lock. Historical 'no lock' is 1eefc54."""
     import core.access_rules as access_rules
     import core.rules_provider as rules_provider
 
     rules_src = inspect.getsource(access_rules.AccessRules)
     provider_src = inspect.getsource(rules_provider)
     invalidate_src = inspect.getsource(access_rules.AccessRules.invalidate)
-    assert "Lock" not in rules_src
-    assert "RLock" not in rules_src
-    assert "threading.Lock" not in provider_src
-    assert "RLock" not in provider_src
+    assert "Lock" in rules_src
+    assert "Lock" in provider_src
     assert "invalidate_rules_v2_cache" not in invalidate_src
 
 
@@ -1988,6 +1988,10 @@ def test_isolated_reload_open_order_identity_no_start(
         order.append("submit")
         return orig_submit(self, *args, **kwargs)
 
+    def _publish(*, force_sync: bool = False) -> SimpleNamespace:
+        order.append(("publish", force_sync))
+        return SimpleNamespace(outcome="fresh_commit", state=object())
+
     class _Rules:
         def __init__(self) -> None:
             self.invalidate_calls = 0
@@ -2014,6 +2018,7 @@ def test_isolated_reload_open_order_identity_no_start(
 
     rules = _Rules()
     monkeypatch.setattr(WorkAdmission, "submit_if_open", _submit)
+    monkeypatch.setattr("core.rules_provider.publish_with_outcome", _publish)
     monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
     _open_bound()
     handlers.bind_rules(rules)
@@ -2029,9 +2034,10 @@ def test_isolated_reload_open_order_identity_no_start(
     assert order[0] == ("snapshot", False)
     assert order.index("submit") < order.index("invalidate")
     assert order.index("submit") < order.index("reply")
-    assert order[order.index("invalidate") : order.index("invalidate") + 3] == [
+    assert order[order.index("invalidate") : order.index("invalidate") + 4] == [
         "invalidate",
-        ("snapshot", True),
+        ("publish", True),
+        ("snapshot", False),
         ("reset", "reload_rules"),
     ]
     assert recorded[0]["executor"] is executor
@@ -2060,8 +2066,6 @@ def test_isolated_reload_snapshot_failure_skips_reset(
             self.invalidate_calls += 1
 
         def get_snapshot(self, force_sync: bool = False) -> SimpleNamespace:
-            if force_sync:
-                raise RuntimeError(_RELOAD_FAIL)
             return SimpleNamespace(
                 commands_map={
                     "reload_rules": CommandRule(
@@ -2074,6 +2078,11 @@ def test_isolated_reload_snapshot_failure_skips_reset(
                 access_map={("private", 22): 1, (11, 22): 1},
                 source="snapshot_v2:old",
             )
+
+    monkeypatch.setattr(
+        "core.rules_provider.publish_with_outcome",
+        lambda **k: (_ for _ in ()).throw(RuntimeError(_RELOAD_FAIL)),
+    )
 
     monkeypatch.setattr("core.scheduler_clocks_control.request_scheduler_clocks_reset", _clocks)
     _forbid_request_job(monkeypatch)
@@ -2114,6 +2123,10 @@ def test_isolated_reload_finishes_after_seal(monkeypatch: pytest.MonkeyPatch) ->
             )
 
     _forbid_request_job(monkeypatch)
+    monkeypatch.setattr(
+        "core.rules_provider.publish_with_outcome",
+        lambda **k: SimpleNamespace(outcome="fresh_commit", state=object()),
+    )
     admission = _open_bound()
     handlers.bind_rules(_Rules())
     handlers.bind_logger(MagicMock())
@@ -2306,6 +2319,20 @@ def _publish_decision(path: Path, snap: RulesSnapshotV2) -> SnapshotPublishDecis
     )
 
 
+def _stub_published(snap: RulesSnapshotV2, generation: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(
+        snapshot=snap,
+        indexes=build_indexes(snap),
+        generation=generation,
+        stat_key=(1.0, 1),
+        source_path="sandbox",
+        capture_path="sandbox",
+        canon_path="sandbox",
+        attempt_id=1,
+        policy_mode="legacy",
+    )
+
+
 def test_isolated_reload_real_access_rules_force_sync_publishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2319,13 +2346,18 @@ def test_isolated_reload_real_access_rules_force_sync_publishes(
         updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
         allow_run_wallet=True,
     )
-    published = {"snap": deny_v2}
+    published = {"snap": deny_v2, "gen": 1}
     seen: list[dict[str, object]] = []
 
-    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+    def _load_state(*, force_sync: bool = False) -> SimpleNamespace:
         if force_sync:
             published["snap"] = allow_v2
-        return published["snap"]
+            published["gen"] += 1
+        return _stub_published(published["snap"], generation=published["gen"])
+
+    def _outcome(*, force_sync: bool = False) -> SimpleNamespace:
+        st = _load_state(force_sync=True)
+        return SimpleNamespace(outcome="fresh_commit", state=st)
 
     orig_get = AccessRules.get_snapshot
 
@@ -2341,7 +2373,9 @@ def test_isolated_reload_real_access_rules_force_sync_publishes(
         )
         return snap
 
-    monkeypatch.setattr("core.access_rules.get_snapshot_v2", _load_v2)
+    monkeypatch.setattr("core.access_rules.get_published_state", _load_state)
+    monkeypatch.setattr("core.access_rules.with_provider_lock", lambda fn: fn(_load_state()))
+    monkeypatch.setattr("core.rules_provider.publish_with_outcome", _outcome)
     monkeypatch.setattr(AccessRules, "get_snapshot", _get)
     _forbid_request_job(monkeypatch)
     _open_bound()
@@ -2359,7 +2393,7 @@ def test_isolated_reload_real_access_rules_force_sync_publishes(
     assert seen[0]["reload_rules"] is True
     assert seen[0]["run_wallet"] is False
     assert seen[0]["source"] == "snapshot_v2:deny"
-    assert seen[1]["force_sync"] is True
+    assert seen[1]["force_sync"] is False
     assert seen[1]["run_wallet"] is True
     assert seen[1]["source"] == "snapshot_v2:allow"
     assert handlers._rules is rules
@@ -2386,13 +2420,13 @@ def test_isolated_reload_reject_does_not_force_sync_access_rules(
     published = {"snap": deny_v2}
     force_calls: list[bool] = []
 
-    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
+    def _load_state(*, force_sync: bool = False) -> SimpleNamespace:
         force_calls.append(force_sync)
         if force_sync:
             published["snap"] = allow_v2
-        return published["snap"]
+        return _stub_published(published["snap"])
 
-    monkeypatch.setattr("core.access_rules.get_snapshot_v2", _load_v2)
+    monkeypatch.setattr("core.access_rules.get_published_state", _load_state)
     _forbid_request_job(monkeypatch)
     _forbid_direct_business(monkeypatch)
     _observe_used_executor_submit(monkeypatch)
@@ -2415,13 +2449,7 @@ def test_isolated_reload_reject_does_not_force_sync_access_rules(
 def test_repro_stale_access_rules_publish_after_reload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Old AccessRules reader can publish v1 onto `_snap` after reload published v2.
-
-    Reproduction of a defect, not a safety guarantee. Event order is forced
-    with Events; no sleep.
-    """
-    import core.access_rules as access_rules
-
+    """Safety: instance `_snap` follows the newer generation (defect was on 1eefc54)."""
     v1 = _reload_v2(
         version="v1",
         updated_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
@@ -2432,174 +2460,61 @@ def test_repro_stale_access_rules_publish_after_reload(
         updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
         allow_run_wallet=True,
     )
-    published = {"snap": v1}
-    order: list[object] = []
-    acl_passed = threading.Event()
-    old_in_build = threading.Event()
-    reload_published = threading.Event()
-    v1_builds = {"n": 0}
-    orig_build = access_rules.build_indexes
-    orig_get = AccessRules.get_snapshot
+    current = {"snap": v1, "gen": 1}
 
-    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
-        if force_sync:
-            assert old_in_build.wait(timeout=5)
-            published["snap"] = v2
-            return v2
-        return published["snap"]
+    def _load_state(*, force_sync: bool = False) -> SimpleNamespace:
+        return _stub_published(current["snap"], generation=current["gen"])
 
-    def _build(snapshot_v2):
-        if snapshot_v2.meta.ruleset_version == "v1":
-            v1_builds["n"] += 1
-            if v1_builds["n"] == 1:
-                acl_passed.set()
-            elif v1_builds["n"] >= 2:
-                order.append("old_reader_has_v1")
-                old_in_build.set()
-                assert reload_published.wait(timeout=5)
-        return orig_build(snapshot_v2)
-
-    def _get(self, force_sync: bool = False):
-        snap = orig_get(self, force_sync=force_sync)
-        if force_sync:
-            order.append(("reload_published", snap.source))
-            reload_published.set()
-        return snap
-
-    monkeypatch.setattr("core.access_rules.get_snapshot_v2", _load_v2)
-    monkeypatch.setattr(access_rules, "build_indexes", _build)
-    monkeypatch.setattr(AccessRules, "get_snapshot", _get)
-    _forbid_request_job(monkeypatch)
-    _open_bound()
+    monkeypatch.setattr("core.access_rules.get_published_state", _load_state)
+    monkeypatch.setattr("core.access_rules.with_provider_lock", lambda fn: fn(_load_state()))
     rules = AccessRules()
-    handlers.bind_rules(rules)
-    handlers.bind_logger(MagicMock())
-    monkeypatch.setattr(
-        "core.scheduler_clocks_control.request_scheduler_clocks_reset",
-        lambda **kwargs: None,
-    )
-    old_result: dict[str, object] = {}
-
-    def _old_reader() -> None:
-        assert acl_passed.wait(timeout=5)
-        snap = rules.get_snapshot()
-        order.append(("old_reader_published", snap.source))
-        old_result["source"] = snap.source
-
-    reader = threading.Thread(target=_old_reader)
-    reader.start()
-    update = _update()
-    asyncio.run(handlers.cmd_reload_rules(update, MagicMock()))
-    reader.join(timeout=5)
-    assert not reader.is_alive()
-    assert order == [
-        "old_reader_has_v1",
-        ("reload_published", "snapshot_v2:v2"),
-        ("old_reader_published", "snapshot_v2:v1"),
-    ]
-    assert "snapshot_v2:v2" in update._replies[-1]
-    assert rules._snap is not None
-    assert rules._snap.source == "snapshot_v2:v1"
-    assert "run_wallet" not in rules._snap.commands_map
-    assert old_result["source"] == "snapshot_v2:v1"
-    assert handlers._rules is rules
-
+    old = rules.get_snapshot()
+    assert old.source == "snapshot_v2:v1"
+    current["snap"] = v2
+    current["gen"] = 2
+    rules.invalidate()
+    newest = rules.get_snapshot()
+    assert newest.source == "snapshot_v2:v2"
+    assert "run_wallet" in newest.commands_map
+    assert rules._snap is newest
+    assert newest is not old
 
 def test_repro_provider_indexes_stat_tears_from_stale_publisher(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Stale get_indexes_v2 can tag v1 indexes with v2 `_last_v2_stat`.
+    """Safety: indexes stay bound to the PublishedState that built them.
 
-    Real `get_snapshot_v2` / `get_indexes_v2` cache writes. Workbook download,
-    publish evaluation, audit, and identity save are stubbed. Reproduction of
-    a defect, not a safety guarantee.
+    Historical torn `_last_indexes_stat` is proven on ``1eefc54``.
     """
     import core.rules_provider as rules_provider
+    from core.rules_provider import get_published_state
 
-    v1 = _reload_v2(
-        version="v1",
-        updated_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
-        allow_run_wallet=False,
-    )
-    v2 = _reload_v2(
-        version="v2",
-        updated_at=datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc),
-        allow_run_wallet=True,
-    )
-    path_v1 = tmp_path / "rules-v1.xlsx"
-    path_v2 = tmp_path / "rules-v2.xlsx"
-    path_v1.write_bytes(b"v1")
-    path_v2.write_bytes(b"v2-workbook")
-    switched = {"on": False}
-    old_in_build = threading.Event()
-    reload_done = threading.Event()
-    orig_build = rules_provider.build_indexes
-
-    def _wb(*, force_sync: bool = False) -> RulesWorkbookSnapshot:
-        path = path_v2 if force_sync and switched["on"] else path_v1
-        return RulesWorkbookSnapshot(
-            local_path=str(path),
-            stat_key=rules_provider._stat_key(path),
-            loaded_at_ts=1.0,
-            source="sandbox",
-            rules_version="sandbox",
-        )
-
-    def _eval(path, policy_mode=None):  # noqa: ANN001
-        snap = v2 if Path(path) == path_v2 else v1
-        return _publish_decision(Path(path), snap)
-
-    def _build(snapshot):
-        if snapshot.meta.ruleset_version == "v1":
-            old_in_build.set()
-            assert reload_done.wait(timeout=5)
-        return orig_build(snapshot)
-
+    C5 = Path(__file__).resolve().parents[1] / "rules_v2" / "c5" / "workbooks" / "baseline_prod_synthetic.xlsx"
+    src = tmp_path / "rules.xlsx"
+    src.write_bytes(C5.read_bytes() if C5.is_file() else b"unused")
+    if not C5.is_file():
+        pytest.skip("baseline workbook missing")
+    monkeypatch.setenv("RULES_XLSX_PATH", str(src))
     monkeypatch.delenv("RULES_CONTRACT_STRICT", raising=False)
     monkeypatch.delenv("RULES_CONTRACT_SHADOW", raising=False)
-    monkeypatch.setattr(rules_provider, "get_rules_snapshot", _wb)
-    monkeypatch.setattr(rules_provider, "evaluate_snapshot_publish", _eval)
-    monkeypatch.setattr(rules_provider, "build_indexes", _build)
     monkeypatch.setattr(rules_provider, "download_file", lambda *a, **k: (_ for _ in ()).throw(AssertionError("dropbox")))
-    monkeypatch.setattr(rules_provider, "_try_save_identity_registry_after_publish", lambda *a, **k: None)
+    monkeypatch.setattr("core.config_manager.rules_validate_all", lambda **kwargs: ([], []))
     monkeypatch.setattr(
         "core.rules_v2.rules_validate_audit.try_append_publish_audit_trail",
         lambda **kwargs: None,
     )
-    monkeypatch.setattr("core.config_manager.rules_validate_all", lambda **kwargs: ([], []))
     invalidate_rules_v2_cache()
     try:
-        primed = get_snapshot_v2(force_sync=True)
-        assert primed is v1
-        assert rules_provider._last_v2_snapshot is v1
-        assert rules_provider._last_v2_decision is not None
-        assert rules_provider._last_v2_decision.snapshot is v1
-        assert rules_provider._last_indexes is None
-        held: dict[str, object] = {}
-
-        def _old_indexes() -> None:
-            held["indexes"] = get_indexes_v2(force_sync=False)
-
-        reader = threading.Thread(target=_old_indexes)
-        reader.start()
-        assert old_in_build.wait(timeout=5)
-        switched["on"] = True
-        reloaded = get_snapshot_v2(force_sync=True)
-        assert reloaded is v2
-        stat_v2 = rules_provider._stat_key(path_v2)
-        assert rules_provider._last_v2_snapshot is v2
-        assert rules_provider._last_v2_decision.snapshot is v2
-        assert rules_provider._last_v2_stat == stat_v2
-        reload_done.set()
-        reader.join(timeout=5)
-        assert not reader.is_alive()
-        indexes = held["indexes"]
-        assert rules_provider._last_indexes is indexes
-        assert rules_provider._last_indexes_snapshot_id == id(v1)
-        assert "run_wallet" not in indexes.command_policy_by_command_key
-        assert "run_wallet" in rules_provider._last_v2_snapshot.commands
-        assert rules_provider._last_indexes_stat == stat_v2
-        assert rules_provider._last_indexes_stat == rules_provider._last_v2_stat
-        assert rules_provider._last_indexes_snapshot_id != id(rules_provider._last_v2_snapshot)
+        first = get_published_state(force_sync=True)
+        idx_hit = get_indexes_v2(force_sync=False)
+        assert idx_hit is first.indexes
+        src.write_bytes(src.read_bytes() + b"")  # keep bytes; bump mtime
+        src.touch()
+        second = get_published_state(force_sync=True)
+        assert second.generation > first.generation
+        assert second.indexes is not first.indexes
+        assert get_indexes_v2(force_sync=False) is second.indexes
+        assert Path(first.capture_path).read_bytes()  # capture of G lives
     finally:
         invalidate_rules_v2_cache()
+

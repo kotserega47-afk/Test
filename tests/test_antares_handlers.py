@@ -19,6 +19,7 @@ from telegram.ext import CommandHandler
 from core.access_guard import deny_message
 from core.access_rules import AccessRules, CommandRule
 from core.job_runner import Actor
+from core.rules_v2.indexes import build_indexes
 from core.rules_v2.models import (
     AccessRule,
     CommandDef,
@@ -162,6 +163,15 @@ def _run_wallet_snapshot_v2(*, allow: bool, version: str, updated_at: datetime) 
         commands=commands,
         command_policies=policies,
         access_rules=access,
+    )
+
+
+def _published_stub(snap: RulesSnapshotV2) -> SimpleNamespace:
+    return SimpleNamespace(
+        snapshot=snap,
+        indexes=build_indexes(snap),
+        generation=1,
+        stat_key=(1.0, 1),
     )
 
 
@@ -354,8 +364,8 @@ def test_reload_replaces_snapshot_without_rebind(unbound) -> None:
     )
     source = {"current": deny_v2}
 
-    def _load_v2(*, force_sync: bool = False) -> RulesSnapshotV2:
-        return source["current"]
+    def _load_state(*, force_sync: bool = False) -> SimpleNamespace:
+        return _published_stub(source["current"])
 
     rules = AccessRules()
     logger = MagicMock()
@@ -364,27 +374,28 @@ def test_reload_replaces_snapshot_without_rebind(unbound) -> None:
     update = _update()
 
     async def _run() -> None:
-        with patch("core.access_rules.get_snapshot_v2", side_effect=_load_v2):
-            with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
-                await handlers.cmd_run_wallet(update, MagicMock())
-                dispatch.assert_not_called()
-                snap_deny = rules.get_snapshot()
-                assert "run_wallet" not in snap_deny.commands_map
+        with patch("core.access_rules.get_published_state", side_effect=_load_state):
+            with patch("core.access_rules.with_provider_lock", side_effect=lambda fn: fn(_load_state())):
+                with patch("core.tg_command_dispatch.dispatch_job_async", new_callable=AsyncMock) as dispatch:
+                    await handlers.cmd_run_wallet(update, MagicMock())
+                    dispatch.assert_not_called()
+                    snap_deny = rules.get_snapshot()
+                    assert "run_wallet" not in snap_deny.commands_map
 
-                rules.invalidate()
-                source["current"] = allow_v2
-                dispatch.return_value = "jid-after-reload"
-                await handlers.cmd_run_wallet(update, MagicMock())
-                dispatch.assert_awaited_once()
-                assert dispatch.await_args.args[0] == "wallet"
+                    rules.invalidate()
+                    source["current"] = allow_v2
+                    dispatch.return_value = "jid-after-reload"
+                    await handlers.cmd_run_wallet(update, MagicMock())
+                    dispatch.assert_awaited_once()
+                    assert dispatch.await_args.args[0] == "wallet"
 
-                snap_allow = rules.get_snapshot()
-                assert snap_allow is not snap_deny
-                assert snap_allow.commands_map is not snap_deny.commands_map
-                assert snap_allow.access_map is not snap_deny.access_map
-                assert "run_wallet" in snap_allow.commands_map
-                assert unbound._rules is rules
-                assert snap_allow is rules.get_snapshot()
+                    snap_allow = rules.get_snapshot()
+                    assert snap_allow is not snap_deny
+                    assert snap_allow.commands_map is not snap_deny.commands_map
+                    assert snap_allow.access_map is not snap_deny.access_map
+                    assert "run_wallet" in snap_allow.commands_map
+                    assert unbound._rules is rules
+                    assert snap_allow is rules.get_snapshot()
 
     asyncio.run(_run())
     assert any(text.startswith("🚀 Запускаю: wallet") for text in update._replies)

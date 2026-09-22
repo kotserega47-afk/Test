@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from core.rules_provider import get_snapshot_v2, get_indexes_v2
+from core.rules_provider import get_published_state
 from core.rules_v2.accessors import WalletRulesAccessor
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
 
@@ -170,8 +170,9 @@ def _status_pending(s: str) -> bool:
 
 
 def _get_wallet_job_params(*, rules_force_sync: bool = False) -> dict:
-    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
-    indexes = get_indexes_v2(force_sync=rules_force_sync)
+    published = get_published_state(force_sync=rules_force_sync)
+    snapshot = published.snapshot
+    indexes = published.indexes
     rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
 
     required_keys = {
@@ -238,8 +239,9 @@ def build_wallet_dto_from_payout_xlsx(
     if report_day is None:
         report_day = datetime.now(MSK_TZ).date()
 
-    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
-    indexes = get_indexes_v2(force_sync=rules_force_sync)
+    published = get_published_state(force_sync=rules_force_sync)
+    snapshot = published.snapshot
+    indexes = published.indexes
     rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
 
     analyzer_job_key = analyzer.strip().lower()
@@ -403,8 +405,9 @@ def build_wallet_stats_dto(
 
     runtime = _get_wallet_job_params(rules_force_sync=rules_force_sync)
 
-    snapshot = get_snapshot_v2(force_sync=rules_force_sync)
-    indexes = get_indexes_v2(force_sync=rules_force_sync)
+    published = get_published_state(force_sync=rules_force_sync)
+    snapshot = published.snapshot
+    indexes = published.indexes
 
     rules = WalletRulesAccessor(snapshot=snapshot, indexes=indexes)
 

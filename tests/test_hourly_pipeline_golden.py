@@ -322,8 +322,7 @@ def pipeline_ctx(tmp_path: Path):
     header = datetime(2026, 1, 15, 0, 0, tzinfo=MSK)
 
     with (
-        patch("analyzers.hourly_analyzer.get_snapshot_v2", return_value=snap),
-        patch("analyzers.hourly_analyzer.get_indexes_v2", return_value=idx),
+        patch("analyzers.hourly_analyzer.get_published_state", return_value=__import__("types").SimpleNamespace(snapshot=snap, indexes=idx)),
         patch("reporters.hourly_render_model.get_snapshot_v2", return_value=snap),
         patch("reporters.hourly_reporter.get_snapshot_v2", return_value=snap),
         patch("reporters.hourly_render_model.get_job_params", side_effect=_job_params),

@@ -13,7 +13,7 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 
 from utils.normalization import normalize_partner_name, parse_dt_series_msk
-from core.rules_provider import get_snapshot_v2, get_indexes_v2
+from core.rules_provider import get_published_state
 from core.rules_v2.accessors import HourlyRulesAccessor
 from core.rules_v2.models import RulesSnapshotV2
 from core.rules_v2.normalizers import normalize_key
@@ -276,8 +276,9 @@ def build_hourly_dto_from_files(
     - Rules are resolved via RulesSnapshotV2 + HourlyRulesAccessor
     - Layout is applied in Reporter
     """
-    snapshot = get_snapshot_v2()
-    indexes = get_indexes_v2()
+    published = get_published_state()
+    snapshot = published.snapshot
+    indexes = published.indexes
     rules = HourlyRulesAccessor(snapshot=snapshot, indexes=indexes)
     job_key = "hourly"
 
