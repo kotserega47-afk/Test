@@ -26,11 +26,12 @@
 - [x] AccessRules CAS: provider lock → instance lock; следующий reader проверяет generation
 - [x] AccessRules: freshness источника (TTL/stat/policy) до сравнения generation/epoch
 - [x] Prepare вне lock; проверка attempt + `os.replace` в одной секции с commit; ошибки workbook vs identity
-- [x] Неизменяемый `capture_path`; канон отдельным replace; retain не удаляет capture при смене current
+- [x] Неизменяемый `capture_path`; process-unique dir; опубликованные живут до конца процесса; без `G < publish_seq - 1` и без leases
 - [x] `get_rules_snapshot.local_path` = capture на hit; callers path перечислены
 - [x] `observed_generation` только под lock вместе с attempt/epoch
 - [x] `conflict_exhausted` → `RulesPublishConflictExhausted`, не stale-reuse и не успешный snapshot
-- [x] Матрица G1–G23; historical repro ≠ safety
+- [x] Identity temp только после evaluate и при разрешённом save
+- [x] Матрица G1–G24; historical repro ≠ safety
 - [ ] GPT review; принятие контракта; code; merge/deploy
 
 ---
@@ -46,7 +47,7 @@
 
 ## Out Of Scope
 
-Runtime; закрытие TASK-30; смена PR #33; ingest; schedules; serve; mixed-stop; merge; retarget; deploy; исходное Test; live credentials; смена C4 policy.
+Runtime; закрытие TASK-30; смена PR #33; ingest; schedules; serve; mixed-stop; merge; retarget; deploy; исходное Test; live credentials; смена C4 policy; reader leases/refcount; очистка опубликованных capture (будущий scope, не этот code).
 
 ---
 
@@ -57,3 +58,4 @@ Runtime; закрытие TASK-30; смена PR #33; ingest; schedules; serve; 
 | 2026-09-21 | контракт публикации поколений; статус **review (не принято)** |
 | 2026-09-21 | уточнение: publish_seq, accessor, CAS, диск, force/policy, закрытые решения |
 | 2026-09-22 | replace в секции commit; capture vs canon; freshness до reuse; conflict_exhausted как исключение |
+| 2026-09-22 | lifetime capture: до конца процесса; без sweep `publish_seq - 1`; G24 |

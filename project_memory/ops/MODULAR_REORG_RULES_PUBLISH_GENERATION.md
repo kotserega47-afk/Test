@@ -199,10 +199,12 @@ under lock:
 unlock
 
 # вне lock: только подготовка содержимого
-build immutable capture file (copy/download into capture_path unique for attempt)
-write identity temp *body* (not canon replace)
+build immutable capture file (copy/download into this process's capture dir)
 parse capture; evaluate; eager build_indexes
 buffer audit
+if identity save allowed for this evaluate result:
+    write identity temp *body* from evaluate (not canon replace)
+# иначе identity_tmp отсутствует — replace identity в секции commit не вызывать
 
 under lock:                    # та же секция, что invalidate
   if invalidate_epoch != start_epoch: discard
@@ -212,10 +214,11 @@ under lock:                    # та же секция, что invalidate
     published = PublishedState(generation=publish_seq, attempt_id=my_attempt,
                                capture_path=..., source_path=..., canon_path=...)
     os.replace(canon_tmp, canon_path)      # короткий; см. ошибки §6.2
-    os.replace(identity_tmp, identity_canon)
+    if identity_tmp is not None:
+        os.replace(identity_tmp, identity_canon)
 unlock
 
-if discarded: audit discard; unpublished capture may be deleted
+if discarded: audit discard; unpublished capture: §6.3
 ```
 
 `observed_generation` читается **только** в этой регистрации attempt, вместе с `latest_attempt` и `invalidate_epoch`. `None` — пусто, не «0».
@@ -244,7 +247,7 @@ if discarded: audit discard; unpublished capture may be deleted
 
 ### 5.3 Invalidate во время compute
 
-`invalidate_epoch++`, `latest_attempt++`, `published = None`. `publish_seq` не трогать. Capture файлов уже опубликованных поколений **не** удалять. Unpublished attempt-capture можно удалить. Identity/canon `replace` не выполнять. Audit **discard**.
+`invalidate_epoch++`, `latest_attempt++`, `published = None`. `publish_seq` не трогать. Опубликованные capture **не** удалять. Identity/canon `replace` не выполнять. Audit **discard**. Неопубликованный capture этого attempt — §6.3.
 
 ### 5.4 Лимит попыток
 
@@ -270,7 +273,7 @@ Kill процесса ≠ `OSError` replace: после kill следующее 
 
 ### 6.2 Replace под той же секцией, что commit
 
-Подготовка `canon_tmp` (копия байт capture) и `identity_tmp` — вне lock.
+Подготовка `canon_tmp` (копия байт capture) — вне lock. `identity_tmp` — только после evaluate и только если identity save разрешён (§5); иначе в секции commit identity `replace` нет.
 
 В секции commit, **после** проверки attempt, **до** unlock:
 
@@ -283,18 +286,22 @@ Kill процесса ≠ `OSError` replace: после kill следующее 
 
 Не делать `replace` после unlock с повторной проверкой: она не отменит уже записанный канон.
 
-### 6.3 Срок capture и очистка
+### 6.3 Lifetime capture (первое исправление)
 
-Не удалять capture **потому что** поколение перестало быть `published` (новый commit или invalidate).
+Правило `G < publish_seq - 1` **запрещено**. Опубликованный capture **не** удаляют из-за того, что поколение перестало быть текущим.
 
-Хранить минимум:
+Для **первого** code:
 
-- capture текущего PublishedState, если он есть;
-- capture **предыдущего** успешно опубликованного поколения.
+- каталог capture **уникален для этого запуска процесса** (например suffix pid+start-token под cache root); не чистить и не reuse каталоги других потенциально живых процессов;
+- каждый опубликованный capture живёт **до конца процесса**;
+- `commit` и `invalidate` опубликованные файлы **не** удаляют;
+- проигравший **неопубликованный** capture можно удалить, только если путь **не** отдан reader (не попал в возвращённый PublishedState / `local_path`) и больше не используется этим attempt;
+- **не** вводить reader leases / refcount в этом исправлении;
+- очистка опубликованных capture (в т.ч. между процессами, по возрасту, по диску) — **отдельный будущий scope**.
 
-Sweep (отдельный шаг, не побочный эффект invalidate): можно удалить capture поколения `G` только если `G < publish_seq - 1` (строго старше «текущий + предыдущий») **и** файл не является `capture_path` текущего `published` **и** нет in-flight attempt с этим capture. Unpublished staging проигравшего attempt удалять сразу.
+Ограничение: объём файлов растёт с числом опубликованных поколений. Это компромисс первого исправления, **не** политика хранения для бессрочного production-сервиса.
 
-Гарантия reader: пока он держит PublishedState поколения в retain-окне (текущее или предыдущее), `capture_path` существует после чужого commit и после invalidate. Старше окна — вне гарантии.
+Гарантия reader: сохранив `local_path` / `capture_path` поколения G, после любых последующих commit и invalidate в **этом** процессе файл G остаётся и отдаёт исходные байты.
 
 ### 6.4 Совместимость `get_rules_snapshot`
 
@@ -339,7 +346,7 @@ Eager indexes до commit, полный объект. Lazy subset-update зап�
 | `AccessRules.invalidate` | instance epoch |
 | Проигрыш при чужом fresh | `existing` |
 | Isolated vs stale | isolated без reset; mixed без молчаливой смены |
-| Capture | неизменяемый на поколение; канон отдельным replace; не удалять при смене current |
+| Capture | неизменяемый; живёт до конца процесса; без `G < publish_seq - 1`; без leases; чужие process-dir не чистить |
 | `get_rules_snapshot.local_path` | `capture_path` на hit |
 | Replace | в секции commit; ошибки workbook vs identity раздельно |
 
@@ -378,8 +385,9 @@ Eager indexes до commit, полный объект. Lazy subset-update зап�
 | G19 | истёк TTL remote | miss; не hit |
 | G20 | смена policy | miss |
 | G21 | обычный cache hit | нет нового attempt / force |
-| G22 | reader старого поколения после нового commit **и** invalidate | читает свой `capture_path`; файл не удалён invalidate/commit |
+| G22 | reader старого поколения после нового commit **и** invalidate | читает свой `capture_path`; файл не удалён |
 | G23 | `conflict_exhausted` | `RulesPublishConflictExhausted` после 3 попыток; не `stale_reuse`; не успешный snapshot |
+| G24 | reader сохраняет `local_path` поколения G; затем ≥3 следующих публикации и invalidate; порядок через Event/barrier, **без** sleep | открытие сохранённого пути отдаёт **исходные** байты G |
 
 ---
 
@@ -387,11 +395,11 @@ Eager indexes до commit, полный объект. Lazy subset-update зап�
 
 **Обязательно:**
 
-- `core/rules_provider.py` — `publish_seq`, PublishedState (три пути), freshness, attempt CAS + `os.replace` в одной секции, capture retain, `get_published_state()`, `RulesPublishConflictExhausted`, `get_rules_snapshot.local_path` = capture на hit, eager indexes, audit kinds
+- `core/rules_provider.py` — `publish_seq`, PublishedState (три пути), freshness, attempt CAS + `os.replace` в одной секции, **process-unique** capture dir (без sweep опубликованных), `get_published_state()`, `RulesPublishConflictExhausted`, `get_rules_snapshot.local_path` = capture на hit, eager indexes, audit kinds
 - `core/access_rules.py` — freshness через accessor, epoch, CAS
 - `modules/antares/handlers.py` — только isolated `_reload_bound_rules`
 - callers пары §2.1 (шесть integrations/analyzers + AccessRules)
-- тесты `test_gen_*` включая G17–G23; `tests/rules_v2/test_rules_provider_*.py`, `test_contract_publish_c4.py`; historical repro не safety
+- тесты `test_gen_*` включая G17–G24; `tests/rules_v2/test_rules_provider_*.py`, `test_contract_publish_c4.py`; historical repro не safety
 - docs: эта страница, карточка TASK-31
 
 **Проверить без молчаливой смены семантики path:** callers §2.2 (`config_manager`, raccoon analyzers, `payout_config_loader`, `partner_resolve`, `ops_rules_validate_summary`, `job_runner` source string). Если тест сравнивает `local_path` с env/`_RULES_LOCAL` — поправить ожидание на capture.
