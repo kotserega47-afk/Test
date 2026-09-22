@@ -264,7 +264,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.1 Ещё не защищены (обходы)
 
-- document ingest → `queue.put` (контракт isolated admit — TASK-33; **code ещё нет**)
+- document ingest → isolated `put_nowait_if_open` (TASK-34); mixed `queue.put` через `add_*_task`; conversion/`enqueue_auto_enable_batch` — обходы
 - mixed `schedule_loop` / `dispatch_job_background`
 - conversion bridge `add_task`
 - внутренний re-enqueue § 7.2

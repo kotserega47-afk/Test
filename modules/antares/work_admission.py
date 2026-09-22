@@ -45,6 +45,11 @@ class AdmissionAccepted:
     future: Future
 
 
+@dataclass(frozen=True)
+class AdmissionQueued:
+    """Successful queue admit. Diagnostic qsize is not this object."""
+
+
 class WorkAdmission:
     """Process-local admission: bound/closed → open → sealed."""
 
@@ -92,6 +97,13 @@ class WorkAdmission:
                 return AdmissionRejected(self._state)
             future = executor.submit(fn, *args, **kwargs)
             return AdmissionAccepted(future)
+
+    def put_nowait_if_open(self, queue, item) -> AdmissionQueued | AdmissionRejected:
+        with self._lock:
+            if self._state is not AdmissionState.OPEN:
+                return AdmissionRejected(self._state)
+            queue.put_nowait(item)
+            return AdmissionQueued()
 
     def submit_job_if_open(
         self,

@@ -101,6 +101,12 @@ def _ensure_profile_worker(profile_key: str) -> _ProfileWorker:
         return worker
 
 
+def ensure_profile_queue(profile_key: str):
+    """Return the profile Queue after lazy worker start. Not an admit."""
+
+    return _ensure_profile_worker(profile_key).queue
+
+
 def add_task(task: WalletEditorTask) -> int:
     worker = _ensure_profile_worker(task.operator_profile)
     worker.queue.put(task)
