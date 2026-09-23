@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт (`0576144…` / review `f76f9c9…`, не выпущен); контракт schedules — TASK-35; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт; schedules TASK-36 закрыт (`c9c7533…` / review `3f6d3e7…`, не выпущен); внутренний Auto-Enable enqueue — TASK-37; cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -272,13 +272,13 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 Шесть TG dispatch-команд — isolated путь TASK-27. `/registry_export`, `/auto_enable_plan`, `/auto_enable_run` — TASK-28. `/registry_replay` — isolated TASK-29. `/reload_rules` — isolated TASK-30 (`submit_if_open` + `_reload_bound_rules` на том же bound `AccessRules` в общем executor; mixed — sync в callback). Контракт — [TASK-31](../active_tasks/TASK-2026-09-17-31_rules_publish_generation.md) (принят); code TASK-32 закрыт `7d3a463…`. TASK-30 принят только в составе PR #35 `c420b590…`. PR #33 `1eefc54` **не** самостоятельно принятая версия. Успех TASK-27…32 **не** есть глобальный запрет новой работы.
 
-### 7.2 Внутренние постановки — следующий этап
+### 7.2 Внутренние постановки Auto-Enable
 
-`run_auto_enable` → `enqueue_auto_enable_batch` (`integrations/wallet_editor_auto_enable.py` ≈ L512, `automation/worker.py`) ставит карточки в WE queue **после** того, как Telegram-вход (даже будущий submit `run_auto_enable`) уже принят.
+Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37 docs).
 
-Первый этап **не** перекрывает этот re-enqueue. Не писать «sealed ⇒ никакой новой работы в процессе».
+`run_auto_enable` → `enqueue_auto_enable_batch` ставит батч в WE queue **после** Accepted оркестратора. Это **продолжение** принятого `/auto_enable_run`, не новый внешний вход. Seal запрещает новый `submit_if_open`, но **не** обязан запрещать continuation put уже Accepted Future. `put_nowait_if_open` на батч после seal **не** выбран как единственный затвор.
 
-Следующий этап (не сейчас): либо `put_nowait` под тем же admission в worker helpers (меняет shared worker — смешает mixed, нужна осторожность), либо isolated-обёртка только для Antares auto-enable enqueue.
+Mixed `enqueue_auto_enable_batch` этим docs **не** менять. Conversion `add_task` — не caller enqueue и не первый isolated Antares.
 
 ---
 
