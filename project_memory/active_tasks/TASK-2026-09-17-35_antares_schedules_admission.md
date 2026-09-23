@@ -3,13 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-35 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
-| **Связанные артефакты** | TASK-34 close `057614413480831795a393bcfd3ac14f69d89fe4` (review `f76f9c9…`); [MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md) |
+| **Связанные артефакты** | TASK-34 close `057614413480831795a393bcfd3ac14f69d89fe4`; [MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md); реализация — TASK-36 |
 | **PR** | Draft [#38](https://github.com/deniskotdavydov1991-wq/Test/pull/38) `feat/task-2026-09-17-35-antares-schedules-admission`, base `feat/task-2026-09-17-34-antares-ingest-admission-impl` |
 | **Риск** | medium: общий job executor; mixed `schedule_loop` не менять |
 
-Docs-контракт isolated schedules. Runtime **не** менялся. Реализация **не** начиналась. TASK-34/33 повторно не закрывать.
+Review **пройден**. GPT проверил контракт на полном SHA `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`. GPT pytest **не** запускал. Runtime **не** менялся. Этот docs-коммит — закрытие TASK-35. Реализация **ещё не** выполнена (TASK-36). TASK-34 повторно не закрывать. PR #38 остаётся Draft. Merge/deploy нет.
+
+Историческое падение mixed-теста «два тика» сохранено: дефект ожидания теста, mixed runtime не менять.
 
 ---
 
@@ -27,8 +29,8 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 - [x] Один `add_done_callback`; без второго `watch_admitted_future`
 - [x] Последовательный `tick` на одном state; параллельный tick не поддерживается
 - [x] Матрица S1–S18 + S7b/c/d, S12b; «два тика» — дефект ожидания теста
-- [ ] GPT review контракта
-- [ ] реализация (будущий code)
+- [x] GPT review контракта на `ce5326a…`; pytest GPT не запускал
+- [ ] реализация (TASK-36)
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -54,17 +56,15 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 
 | Кто | Что |
 |-----|-----|
-| Cursor | уточнение от HEAD `6aebbaba5c13e1c643108632ab77d9d943279aed` |
+| Cursor | обследование и контракт; runtime не менялся |
 | Cursor | «два тика»: **1 failed** на указанном fake clock; mixed не менялся |
-| GPT | ещё не ревьюил это уточнение |
-
-Runtime этого PR не менялся. Pytest GPT не требовался.
+| GPT | контракт на `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`; pytest **не** запускал |
 
 ---
 
 ## Out Of Scope
 
-runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg_receiver`; drain/join/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test; extract формул в `core/`; параллельный tick.
+runtime этого PR; реализация tick (TASK-36); mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg_receiver`; drain/join/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test.
 
 ---
 
@@ -73,5 +73,5 @@ runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg
 | Дата | Событие |
 |------|---------|
 | 2026-09-22 | docs-контракт isolated schedules; статус **review (подготовлено)** |
-| 2026-09-23 | уточнение: peek/commit gate; однозначные часы; API tick; identity job_type; матрица S1–S18 |
-| 2026-09-23 | attempted на clock; prepare до submit; один observer; sequential tick |
+| 2026-09-23 | уточнение: peek/commit gate; attempted; prepare; один observer; sequential tick |
+| 2026-09-23 | GPT review на `ce5326a…`; закрытие docs; runtime нет; реализация — TASK-36 |

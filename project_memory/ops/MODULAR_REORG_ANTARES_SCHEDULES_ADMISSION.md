@@ -2,13 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт на review; runtime **не** менялся; реализации **нет** |
+| **Статус** | контракт **принят** (GPT review на `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`); runtime **не** менялся; реализация — TASK-36 |
 | **База** | закрытие TASK-34 `057614413480831795a393bcfd3ac14f69d89fe4` (принятый review HEAD `f76f9c96f46b2489ecb08a38c542de421b609ba6`, Draft PR #37) |
 | **Обследованный SHA** | runtime schedules `f76f9c9…`; уточнение от `209b96d…` / `6aebbaba5c13e1c643108632ab77d9d943279aed` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **Mixed owner** | `scheduler.py` `schedule_loop` — **поведение не менять**; isolated **не** импортирует этот модуль |
 
-Контракт описывает будущий isolated code. Mixed `schedule_loop` / `dispatch_job_background` / `evaluate_hourly_gate` сохраняют текущее поведение, включая мутацию gate **до** dispatch. Durable cursor, exactly-once и «пропусков нет» **не** объявлять реализованными. Успех будущего code **не** drain/join и **не** полный запрет новой работы в процессе.
+Контракт **принят**. GPT проверил docs на `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`. Runtime этого PR **не** менялся. Pytest GPT **не** запускал. Реализация — TASK-36. TASK-34 повторно не закрывать. Mixed `schedule_loop` / `dispatch_job_background` / `evaluate_hourly_gate` сохраняют текущее поведение, включая мутацию gate **до** dispatch. Durable cursor, exactly-once и «пропусков нет» **не** объявлять реализованными. Успех будущего code **не** drain/join и **не** полный запрет новой работы в процессе.
 
 ---
 
