@@ -4,167 +4,177 @@
 |------|----------|
 | **Статус** | docs-контракт на review; runtime **не** менялся; реализации **нет** |
 | **База** | закрытие TASK-34 `057614413480831795a393bcfd3ac14f69d89fe4` (принятый review HEAD `f76f9c96f46b2489ecb08a38c542de421b609ba6`, Draft PR #37) |
-| **Обследованный SHA** | `0576144…` / runtime schedules как на `f76f9c9…` |
+| **Обследованный SHA** | runtime schedules `f76f9c9…`; уточнение контракта от review HEAD `209b96dc30df324d69c90d4619deae6aee2e7af8` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
-| **Mixed owner** | `scheduler.py` `schedule_loop` — **не** менять этим этапом |
+| **Mixed owner** | `scheduler.py` `schedule_loop` — **поведение не менять**; isolated **не** импортирует этот модуль |
 
-Контракт описывает будущий isolated code. Mixed `schedule_loop` / `dispatch_job_background` сохраняют текущее поведение. Durable schedule cursor, exactly-once и «пропусков нет» **не** объявлять реализованными. Успех будущего code **не** есть drain/join и **не** полный запрет новой работы в процессе.
+Контракт описывает будущий isolated code. Mixed `schedule_loop` / `dispatch_job_background` / `evaluate_hourly_gate` сохраняют текущее поведение, включая мутацию gate **до** dispatch. Durable cursor, exactly-once и «пропусков нет» **не** объявлять реализованными. Успех будущего code **не** drain/join и **не** полный запрет новой работы в процессе.
 
 ---
 
-## 1. Фактическая цепочка (исходники `f76f9c9…`)
+## 1. Фактическая цепочка mixed (исходники `f76f9c9…`)
 
 ```text
-scheduler.schedule_loop                          # mixed daemon thread; isolated loop нет
+scheduler.schedule_loop                          # mixed daemon; isolated loop нет
   load_schedules(force_sync=False)
     get_snapshot_v2 → ScheduleRulesAccessor.get_enabled_schedules
-    interval → Schedule.schedule_type="every_seconds", job_type=rule.job_key
-    cron     → Schedule.schedule_type="cron"
-    прочие stype / пустой job_key / пустой cron / every_seconds<=0 → drop
-  выбор due:
-    every_seconds: первый hit только вооружает next_every[jt]=now+interval, без dispatch
+    interval → every_seconds, job_type=rule.job_key
+    cron     → cron
+  часы keyed by job_type: next_every / next_cron
+  due:
+    every_seconds: первый hit только arm next_every[jt]=ts_now+interval
                    далее ts_now >= ts_next → due
-    cron: первый hit только _next_cron_run, без dispatch; далее now >= dt_next → due
-    hourly: дополнительно HourlyGate (job_params), до dispatch
-  dispatch_job_background(jt, Actor(kind="scheduler"))
-    get_job_executor().submit(request_job, jt, actor, force_rules_sync=False)
-    add_done_callback → лог exception Future
-    caller не ждёт result
-  request_job                                    # lock job_type, JOB_REGISTRY; не знает admission
+    cron: первый hit только _next_cron_run(now); далее now >= dt_next → due
+    hourly: evaluate_hourly_gate мутирует last_* до dispatch
+  dispatch_job_background → executor.submit(request_job)  # обход WorkAdmission
+  request_job                                             # не знает admission
 ```
 
-Подтверждено чтением: `core/schedules.py`, `scheduler.py` L240–342, `core/job_dispatch.py` `dispatch_job_background` L67–90, `core/job_runner.py` `request_job` L178.
-
-`Schedule.coalesce` в `schedule_loop` **не** читается. После due mixed ставит `next_every[jt] = ts_now + interval` (скачок от «сейчас», промежуточные интервалы не догоняются). Поле coalesce **не** есть exactly-once.
-
-`dispatch_job_background` **обходит** `WorkAdmission`: голый `executor.submit`. Isolated code **не** должен звать его как gate.
-
-Часы: in-memory `next_every` / `next_cron`. `/reload_rules` → `request_scheduler_clocks_reset` → на следующем тике `_apply_scheduler_clock_reset_if_requested` чистит оба dict; **HourlyGate не сбрасывается**. После reset следующий hit снова только вооружает, без немедленного dispatch.
-
-Остановка mixed loop: `while True` + `time.sleep(5)`; daemon из `main()`. Isolated serve **не** запускает этот loop. Источник новых schedule-задач в mixed — сам `schedule_loop`.
+`Schedule.id` в loop **не** используется. `Schedule.coalesce` **не** читается. После due mixed: `next_every[jt] = ts_now + interval`; cron next от **второго** `datetime.now(MSK)` после dispatch. Gate-skip mixed **сдвигает** `next_*`. Exception `dispatch_job_background` mixed **всё равно** сдвигает `next_*`. Isolated эти два пункта **не** копирует как «слот принят».
 
 ---
 
-## 2. Семь Antares keys (фильтр до dispatch)
+## 2. Семь keys — фильтр до admission
 
-Allowlist isolated = `ANTARES_ASSEMBLY_JOB_TYPES` (`modules/antares/assembly.py`):
+`ANTARES_ASSEMBLY_JOB_TYPES`: `wallet`, `hourly`, `rate`, `download`, `wallet_editor_registry_refresh`, `wallet_editor_registry_replay`, `script_job:operator_wallets_ready`.
 
-| key |
-|-----|
-| `wallet` |
-| `hourly` |
-| `rate` |
-| `download` |
-| `wallet_editor_registry_refresh` |
-| `wallet_editor_registry_replay` |
-| `script_job:operator_wallets_ready` |
-
-Фильтр — **до** `submit` / `dispatch_job_background`. Неизвестный или чужой `job_type` (conversion, raccoon_*, wr, опечатка, пустой) **не** диспатчится и **не** идёт в `WorkAdmission.submit_*`. Это не Accepted.
-
-HourlyGate для `hourly` остаётся **до** admit: skip gate ≠ отказ admission и ≠ Accepted.
+Чужой / неизвестный `job_type`: **до** peek gate и **до** `submit_job_if_open` — нет arm, нет due-потребления, нет submit. Не Accepted.
 
 ---
 
-## 3. Атомарный допуск на submit
+## 3. HourlyGate: peek, затем commit только после Accepted
 
-Будущий isolated путь due-слота:
+Mixed `evaluate_hourly_gate` пишет `last_intraday_key` / `last_final_key` **до** dispatch. Isolated так **не** делает.
 
-```text
-если jt не в семи keys → skip, не submit
-outcome = admission.submit_job_if_open(jt, Actor(kind="scheduler"))
-  with WorkAdmission._lock:
-    если state is not OPEN → AdmissionRejected(state)   # submit не вызывается
-    иначе executor.submit(request_job, ...) → AdmissionAccepted(future)
-```
+Isolated (копия формул, без импорта `scheduler.py`):
 
-Не оборачивать `await` / `future.result()` / `request_job()` в admission lock. Не считать `dispatch_job_background` атомарным admit. Не менять `request_job`.
+1. `get_job_params(job="hourly")` и расчёт кандидата — **вне** admission lock (I/O не под lock).
+2. **Peek** на снимке/копии gate: `should_fire`, reason, candidate keys. Опубликованный `HourlyGate` **не** меняется.
+3. `should_fire is False` → gate-skip (§ 4), не submit.
+4. `should_fire is True` → `submit_job_if_open`.
+5. **Accepted** → **commit** candidate в опубликованный gate **и** сдвиг `next_*`.
+6. **Rejected** или исключение `submit` до Future → commit **нет**; due-маркер **не** потребляется.
+7. Ошибка уже принятого Future → gate и `next_*` **не** откатываются.
 
-| Исход | Слот принят? | Часы isolated |
-|-------|----------------|---------------|
-| `AdmissionAccepted` | **да** (успешный `executor.submit`) | двигать `next_*` как mixed после due (скачок от now) |
-| `AdmissionRejected` (closed/sealed) | **нет** | **не** выдавать за успешный слот; не двигать `next_*` как после Accepted |
-| исключение `submit` до Future | **нет** | то же: не Accepted; не маскировать под успешный слот |
-| ошибка **внутри** уже принятого Future | слот уже принят | часы уже сдвинуты; это слой D / callback лога, не откат admit |
-| skip фильтра / hourly gate | **нет** | не submit; gate-skip mixed двигает `next_every` без job — isolated может повторить тот же skip без вызова submit |
-
-Mixed сегодня двигает `next_every` **даже после exception** `dispatch_job_background`. Isolated **не** копирует это как «слот принят». Mixed этим PR **не** править.
-
-closed: bound, ещё не `open` — isolated loop не должен submit. sealed: новые due не submit; уже принятые Future продолжают.
+Допустима проверка на `copy.copy(gate)` / dataclass-замене, затем присвоение полей только в commit. Intraday bucket и `final_daily_time` — независимые candidate fields; commit только тех, что peek пометил к фиксации. Mixed не менять.
 
 ---
 
-## 4. Пропущенный слот, reload, stop источника
+## 4. Часы, повторы, sealed (без «может»)
 
-**Пропуск:** если тик опоздал, mixed один раз due и ставит next от `ts_now`, а не догоняет каждый интервал. Isolated — та же модель. Это **не** durable cursor и **не** запрет пропусков.
+Tick получает `now_ts: float` и `now_dt: datetime` (MSK) снаружи. Внутри одного tick **нет** busy-retry: каждый row не больше одной попытки submit; затем возврат. Следующая попытка — только на **следующем** вызове `tick`.
 
-**Reload/reset clocks:** как сейчас — очистка `next_every`/`next_cron` по флагу; HourlyGate живёт. После очистки нет немедленного fire. Isolated использует тот же `request_scheduler_clocks_reset` / apply, не отдельный диск.
+| Событие | next_every (interval) | next_cron | gate last_* |
+|---------|----------------------|-----------|-------------|
+| Arm (ключа ещё нет) | `now_ts + max(1, every_seconds)` | `_next_cron_run(now_dt, cron)` | не трогать |
+| Accepted | `now_ts + max(1, every_seconds)` | `_next_cron_run(now_dt, cron)` | commit peek |
+| Gate-skip (`should_fire` false) | **сдвигает** так же, как строка due без admit | **сдвигает** `_next_cron_run(now_dt, cron)` | **не** commit |
+| closed / ошибка submit до Future | **не** сдвигать | **не** сдвигать | **не** commit |
+| sealed | **не** сдвигать; **явный no-op submit** | то же | не commit |
+| ошибка Future после Accepted | уже сдвинуты, **не** откат | то же | уже commit, не откат |
+| чужой key | не писать часы | не писать | — |
 
-**Стоп новых schedule-задач:** isolated loop перестаёт `submit_if_open` после `seal` (проверка на тике или выход из loop). Это **не** drain очереди, **не** `executor.shutdown`, **не** worker join, **не** sender stop. Принятые Future не cancel.
+**От какого времени следующий запуск (isolated):** всегда от **входов tick** `now_ts` / `now_dt`, не от предыдущего `ts_next` и не от второго wall-clock после submit. Пропущенные интервалы не догоняются (скачок от now). Это совместимо с mixed interval `ts_now + interval`; для cron isolated **намеренно** использует тот же `now_dt`, что due (тестируемый fake clock). Mixed второй `datetime.now` не копировать.
+
+**closed / ошибка submit:** на следующем tick тот же due ещё истинный (маркер не потреблён) → снова peek/submit. Не цикл внутри текущего tick.
+
+**sealed:** источник новых schedule-задач на этом tick — **явный no-op** (нет submit, нет потребления gate/`next_*`). Первый code **не** обязан останавливать поток: потока нет. Serve позже может перестать звать `tick`. Не drain/join.
+
+**Accepted** = успешный `executor.submit(request_job, …)` → `AdmissionAccepted`. Это **не** успех бизнес-задания. `job_rejected_busy` / unknown type / exception **внутри** Future слот **назад не возвращают**.
 
 ---
 
-## 5. Mixed
+## 5. Минимальный production API следующего code
 
-`scheduler.py` `schedule_loop`, `dispatch_job_background`, `JOB_DISPATCH_VIA_EXECUTOR`, early profile gate — без изменений. Не чинить mixed ради зелёного теста § 6.
+**Вариант (выбран):** формулы cron/hourly **копируются** в isolated-модули с pin-тестами против текущих mixed формул. `scheduler.py` в первом code **не** трогать и **не** импортировать. Общий `core/`-extract — отдельное решение, не этот этап. `core.schedules.load_schedules`, `core.scheduler_clocks_control`, `core.config_manager.get_job_params`, `WorkAdmission` — допустимы (не mixed gate, не `telegram_bot`).
 
-Isolated loop — отдельный модуль/вход (`python -m apps.antares` / будущий serve), не ветка внутри mixed `main()`.
+| Роль | Имя |
+|------|-----|
+| Владелец | `modules/antares/scheduler.py` (`modules.antares.scheduler`) |
+| Cron | `modules/antares/schedule_timing.py` — `_next_cron_run` / parse (копия формул `scheduler.py` L60–103) |
+| Gate peek/commit | `modules/antares/hourly_gate.py` — dataclass + peek + commit; **не** `scheduler.HourlyGate` |
+| Tick | единственный владелец: `tick(state, *, now_ts, now_dt, schedules, admission) -> TickResult` |
+
+Состояние (`IsolatedScheduleState`): `next_every`, `next_cron`, isolated `HourlyGate`. Живёт у caller теста / будущего serve; `tick` — единственный, кто apply reset, arm, peek, submit, commit.
+
+**Reset:** в **начале** `tick` через существующий `core.scheduler_clocks_control._apply_scheduler_clock_reset_if_requested(state.next_every, state.next_cron)`. HourlyGate **не** чистится (как mixed). Caller `tick` reset сам не дублирует. `/reload_rules` по-прежнему только `request_scheduler_clocks_reset`.
+
+**Входы tick:** clock (`now_ts`, `now_dt`), `schedules: list[Schedule]`, `admission: WorkAdmission`. Не читать env clock внутри. Не звать `dispatch_job_background`.
+
+**Первый code:** testable `tick` без serve, без thread, без `time.sleep`. `apps.antares` `boot`/`run` и `assemble_antares` **не** стартуют schedules и **не** зовут `tick`.
+
+Запрет импорта в `modules.antares.scheduler` и соседних hourly/timing: `scheduler` (top-level mixed), `integrations.telegram_bot`, `integrations.tg_commands`.
 
 ---
 
-## 6. Известное падение «два тика» (sandbox, не чинить mixed)
+## 6. Accepted Future
 
-Команда (cwd worktree, `PYTHONPATH` снят, `PROJECT_PROFILE` unset), Python **3.12.10**, SHA `0576144…` / тот же `schedule_loop` что `f76f9c9…`:
+Сразу после `AdmissionAccepted`, **до** любого await tick:
+
+1. Commit gate + `next_*` (§ 3–4).
+2. Наблюдение: `future.add_done_callback` (sync tick без running loop) логирует exception **один раз**; **не** `future.result()` / не await job. Если позже tick окажется на event loop — дополнительно `watch_admitted_future(..., job_type=jt)` **сразу**, без wait. Не использовать mixed `dispatch_job_background`.
+3. `seal` **не** cancel принятый Future.
+4. Сбой шага 2 (диагностика/callback attach) логируется отдельно; **не** un-commit; **не** повторный submit того же слота на этом и следующих tick (часы уже как после Accepted).
+
+---
+
+## 7. Идентичность расписания (сохранить mixed, не keyed by id)
+
+Clocks **keyed by `job_type`**, отдельно `next_every` и `next_cron`. `Schedule.id` **не** ключ часов.
+
+Несколько enabled rows **одного** `job_type`:
+
+- две **interval** строки: **общий** `next_every[jt]`; порядок `load_schedules` как mixed (arm/due зависят от порядка в одном tick);
+- **interval + cron** того же `job_type`: **два** независимых clock, **два** возможных submit;
+- не вводить ключ по `id` и не reject duplicates в этом этапе.
+
+Это **сохранение** mixed, не новая семантика. Валидация/отклонение дублей — отдельное решение, не молча.
+
+Чужие keys (§ 2) в эти dict не попадают. Исчезнувший из текущего списка allowlist `job_type` — pop из dict, как mixed `active`.
+
+---
+
+## 8. «Два тика» — дефект ожидания теста, не mixed runtime
 
 ```
 py -3.12 -m pytest tests/test_scheduler_dispatch.py::test_schedule_loop_calls_dispatch_job_background -q --tb=short
 ```
 
-**1 failed**, exit 1: `assert calls == [("wallet", "scheduler")]` — слева **два** `("wallet", "scheduler")`.
-
-Причина (подтверждена кодом + этим прогоном, не UNKNOWN):
-
-1. Тест патчит `sleep`: 3-й вызов → `KeyboardInterrupt` ⇒ **три** итерации loop.
-2. `every_seconds=1`; `time.time`: 1→0.0 (только arm), 2→2.0 (**dispatch 1**), далее 100.0 (**dispatch 2**).
-3. Ожидание теста — ровно один dispatch. Поведение loop при таком clock согласовано с L292–309: первый hit не шлёт, каждый последующий due шлёт и сдвигает next от `ts_now`.
-
-Соседний `test_schedule_loop_ticks_while_background_job_holds` с тем же clock/sleep проверяет `tick_count >= 2`, не единственный dispatch.
-
-Исторически то же падение на TASK-25/26 (`a33df9c…`, `137fa639…`). **Не** менять mixed scheduler, чтобы тест стал зелёным, без отдельного решения. Isolated тесты § 7 **не** копируют этот assert.
+На `0576144…` / том же loop что `f76f9c9…`, Python 3.12.10: **1 failed** — два `("wallet", "scheduler")`. Fake clock 0→2→100 плюс 3 итерации (`KeyboardInterrupt` на 3-м sleep) даёт arm + два due. Ожидание теста (ровно один dispatch) **неверно для этого clock**. Mixed runtime **не** менять. Isolated тесты этот assert не копируют.
 
 ---
 
-## 7. Матрица будущих проверок (code PR, не этот)
+## 9. Матрица будущих проверок (code PR)
 
-Fake clock + `threading.Event` / barrier; **без** `time.sleep` как доказательства. Реальный `WorkAdmission` + реальный `executor.submit` (обёртка наблюдения). Без live polling, браузера, сети. Бизнес-`request_job` можно заменить функцией с Event.
+Fake clock + Event/barrier; без sleep как доказательства. Реальные `WorkAdmission` и `executor.submit`. Без live polling, `scheduler.py` import, `telegram_bot`. `request_job` — stub с Event.
 
 | # | Сценарий | Ожидание |
 |---|----------|----------|
-| S1 | due + OPEN, ключ из семи | один `submit` под lock; `AdmissionAccepted`; часы после Accepted |
-| S2 | неизвестный / чужой key | нет dispatch/submit |
-| S3 | seal **до** submit (barrier: seal держит lock / seal завершён до submit) | `AdmissionRejected`; `request_job` не ставится; слот **не** успех |
-| S4 | submit **до** seal | Accepted Future живёт после seal; не cancel |
-| S5 | `submit` бросает до Future | не Accepted; часы не как после успеха; нет ложного «слот взят» |
-| S6 | closed (не OPEN) | как S3 |
-| S7 | hourly gate skip | нет submit; не путать с Rejected |
-| S8 | reset clocks | dict пусты; следующий hit только arm |
-
-Гонки: наблюдать попытку захвата admission lock, не короткий timeout без события.
+| S1 | interval due + OPEN, ключ из семи | один submit под lock; Accepted; `next_every` от `now_ts` |
+| S2 | cron arm, затем due | первый tick только arm; due → Accepted; next от `now_dt` |
+| S3 | чужой key | нет admission, нет часов |
+| S4 | seal до submit (lock barrier) | Rejected; `request_job` нет; gate/`next_*` не потреблены |
+| S5 | submit до seal | Accepted Future живёт; seal не cancel |
+| S6 | closed | как S4 |
+| S7 | submit exception до Future | не Accepted; gate/`next_*` не потреблены; следующий tick может принять |
+| S8 | hourly peek fire → Rejected / submit error | тот же bucket на следующем tick может Accepted; last_* не сдвинуты |
+| S9 | hourly Accepted (intraday bucket) | второй tick того же bucket не дублирует submit |
+| S10 | `final_daily_time` fire / already / not due | commit только после Accepted; skip сдвигает cron/interval `next_*`, не last_final_key если не fire |
+| S11 | gate-skip (already fired / waiting / no config) | нет submit; `next_*` **сдвинуты**; last_* без нового commit |
+| S12 | ошибка Future после Accepted | лог один раз; часы/gate не откат; нет повторного слота |
+| S13 | диагностика после commit бросает | слот остаётся Accepted; нет второго submit |
+| S14 | reset clocks | `next_*` пусты, gate жив; следующий hit только arm |
+| S15 | две interval rows одного job_type | общий `next_every`; порядок списка как mixed |
+| S16 | interval+cron одного job_type | два clock, возможны два submit |
+| S17 | модуль tick не импортирует mixed `scheduler` / `telegram_bot` | проверка импортов |
+| S18 | I/O `get_job_params` вне admission lock | lock не держат на peek params |
 
 ---
 
-## 8. Границы / оставшаяся работа
+## 10. Границы
 
-Этот контракт — **только** isolated schedules admit.
+**Обходы admission:** internal `enqueue_auto_enable_batch`; conversion `add_task`; `tg_receiver`.
 
-**Обходы admission (постановка работы):** внутренний `enqueue_auto_enable_batch`; conversion bridge `add_task`; применимые legacy-входы (`automation/tg_receiver.py`).
+**Lifecycle:** drain; worker/executor/sender stop; serve; mixed-stop; автозапуск tick из boot/run.
 
-**Lifecycle:** drain очереди; worker join; executor shutdown; sender stop; serve; mixed-stop.
-
-`rules_provider` / `load_schedules` сами по себе **не** обход постановки (чтение rules). Live Telegram; merge/retarget/deploy; исходное Test; правка mixed ради § 6.
-
-### 8.1 Не обещать
-
-- durable cursor / запись last-run на диск;
-- exactly-once, отсутствие пропусков, использование `Schedule.coalesce`;
-- что sealed ⇒ в процессе нет никакой новой работы (ingest/TG/internal enqueue — другие пути);
-- drain/join принятых jobs.
+`load_schedules` / `rules_provider` — не обход постановки. Не обещать durable cursor, coalesce, exactly-once, sealed ⇒ нет любой новой работы в процессе.

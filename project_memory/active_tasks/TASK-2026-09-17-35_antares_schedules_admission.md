@@ -9,27 +9,43 @@
 | **PR** | Draft [#38](https://github.com/deniskotdavydov1991-wq/Test/pull/38) `feat/task-2026-09-17-35-antares-schedules-admission`, base `feat/task-2026-09-17-34-antares-ingest-admission-impl` |
 | **Риск** | medium: общий job executor; mixed `schedule_loop` не менять |
 
-Docs-контракт isolated schedules. Runtime **не** менялся. Реализация **не** начиналась. GPT pytest **не** требовался. TASK-34/33 повторно не закрывать.
+Docs-контракт isolated schedules. Runtime **не** менялся. Реализация **не** начиналась. TASK-34/33 повторно не закрывать.
 
 ---
 
 ## Goal
 
-Зафиксировать фильтр семи Antares keys, атомарный admit на `submit_job_if_open`, часы vs Accepted, stop источника новых schedule-задач и матрицу S1–S8 — без runtime и без правки mixed scheduler.
+Зафиксировать peek/commit HourlyGate, однозначные часы, API `tick` без импорта mixed `scheduler.py`, identity по `job_type` как mixed, наблюдение Accepted Future — без runtime.
 
 ---
 
 ## Success Criteria
 
-- [x] Цепочка `load_schedules` → due → `dispatch_job_background` → `submit` → `request_job` описана по исходникам
-- [x] Фильтр семи keys до dispatch; admit только `submit_if_open` / `submit_job_if_open`
-- [x] closed/sealed и ошибка submit ≠ успешный слот; Accepted Future после seal живёт
-- [x] Пропуск/reload clocks / stop источника без durable cursor и exactly-once
-- [x] Падение «два тика» воспроизведено в sandbox; mixed не чинился
-- [x] Матрица fake clock + Event/barrier
+- [x] Peek gate без мутации; commit gate+`next_*` только после Accepted
+- [x] closed / submit error не потребляют due/gate; Future error не откатывает; нет intra-tick retry
+- [x] Gate-skip **сдвигает** `next_*`; sealed = явный no-op submit
+- [x] Owner `modules.antares.scheduler`; копия cron/hourly формул; boot/run не стартуют tick
+- [x] Observation callback сразу после Accepted; seal не cancel; диагностика ≠ повтор слота
+- [x] Несколько rows одного `job_type`: сохранить mixed (не ключ по `id`)
+- [x] Матрица S1–S18; «два тика» — дефект ожидания теста
 - [ ] GPT review контракта
 - [ ] реализация (будущий code)
 - [ ] merge/deploy (намеренно открыто)
+
+---
+
+## Выбранные решения (этот docs)
+
+| Тема | Решение |
+|------|---------|
+| HourlyGate | peek на копии; commit только Accepted |
+| Следующий запуск | от `now_ts`/`now_dt` входов tick |
+| Gate-skip | сдвигает `next_*`, не last_* |
+| Rejected / submit error | не сдвигать; следующий tick может принять |
+| Sealed | явный no-op на tick, не обязательный stop thread |
+| Формулы cron/hourly | копия в `modules.antares.{schedule_timing,hourly_gate}`; mixed файл не импортировать |
+| Identity | `job_type` + раздельные dict interval/cron, как mixed |
+| Accepted | постановка `request_job`, не успех job / не busy-rollback |
 
 ---
 
@@ -37,15 +53,17 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 
 | Кто | Что |
 |-----|-----|
-| Cursor | обследование `scheduler.py` / `core/schedules.py` / `job_dispatch.py` на close TASK-34 `0576144…` |
-| Cursor | `py -3.12 -m pytest tests/test_scheduler_dispatch.py::test_schedule_loop_calls_dispatch_job_background` **1 failed** (два `wallet`), 3.12.10, exit 1; mixed не менялся |
-| GPT | ещё не ревьюил |
+| Cursor | обследование на close TASK-34 `0576144…`; уточнение контракта от `209b96dc30df324d69c90d4619deae6aee2e7af8` |
+| Cursor | «два тика»: **1 failed** на указанном fake clock; mixed не менялся |
+| GPT | ещё не ревьюил этот уточнённый контракт |
+
+Runtime этого PR не менялся. Pytest GPT не требовался.
 
 ---
 
 ## Out Of Scope
 
-runtime этого PR; mixed `schedule_loop`; internal Auto-Enable enqueue; conversion `add_task`; `tg_receiver`; drain/join/executor shutdown/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test.
+runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg_receiver`; drain/join/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test; extract формул в `core/` (отдельное решение).
 
 ---
 
@@ -54,3 +72,4 @@ runtime этого PR; mixed `schedule_loop`; internal Auto-Enable enqueue; conv
 | Дата | Событие |
 |------|---------|
 | 2026-09-22 | docs-контракт isolated schedules; статус **review (подготовлено)** |
+| 2026-09-23 | уточнение: peek/commit gate; однозначные часы; API tick; identity job_type; матрица S1–S18 |
