@@ -5,12 +5,21 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import secrets
 import threading
 from concurrent.futures import Future
 from dataclasses import dataclass
 
 from core.job_dispatch import get_job_executor
 from core.job_runner import Actor, request_job
+from modules.antares.auto_enable_continuation import (
+    AutoEnableContinuationRecord,
+    IsolatedAutoEnableEnqueueRejected,
+    bind_thread_continuation,
+    clear_thread_continuation,
+    current_auto_enable_continuation,
+    make_auto_enable_wrapper,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +65,7 @@ class WorkAdmission:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._state = AdmissionState.UNBOUND
+        self._ae_continuations: dict[str, AutoEnableContinuationRecord] = {}
 
     @property
     def state(self) -> AdmissionState:
@@ -97,6 +107,50 @@ class WorkAdmission:
                 return AdmissionRejected(self._state)
             future = executor.submit(fn, *args, **kwargs)
             return AdmissionAccepted(future)
+
+    def submit_auto_enable_run_if_open(
+        self,
+        executor,
+        fn,
+        /,
+        *args,
+        **kwargs,
+    ) -> AdmissionAccepted | AdmissionRejected:
+        with self._lock:
+            if self._state is not AdmissionState.OPEN:
+                return AdmissionRejected(self._state)
+            token = secrets.token_urlsafe(16)
+            record = AutoEnableContinuationRecord(token=token, admission=self)
+            self._ae_continuations[token] = record
+            try:
+                wrapper = make_auto_enable_wrapper(self, token, fn, args, kwargs)
+                future = executor.submit(wrapper)
+            except BaseException:
+                self._ae_continuations.pop(token, None)
+                record.state = "revoked"
+                raise
+            record.orchestrator_future = future
+            return AdmissionAccepted(future)
+
+    def activate_auto_enable_continuation(self, token: str) -> None:
+        with self._lock:
+            record = self._ae_continuations.get(token)
+            if record is None or record.state != "pending":
+                raise IsolatedAutoEnableEnqueueRejected(
+                    "auto-enable continuation cannot be activated"
+                )
+            record.state = "active"
+            record.owner_thread = threading.current_thread()
+            bind_thread_continuation(record)
+
+    def revoke_auto_enable_continuation(self, token: str) -> None:
+        with self._lock:
+            record = self._ae_continuations.pop(token, None)
+            if record is not None:
+                record.state = "revoked"
+            current = current_auto_enable_continuation()
+            if current is not None and (record is None or current is record):
+                clear_thread_continuation()
 
     def put_nowait_if_open(self, queue, item) -> AdmissionQueued | AdmissionRejected:
         with self._lock:
@@ -227,6 +281,31 @@ def watch_admitted_future(
 
 def bound_admission() -> WorkAdmission | None:
     return _bound
+
+
+def require_valid_auto_enable_continuation(admission: WorkAdmission) -> AutoEnableContinuationRecord:
+    """Refuse isolated enqueue unless this thread holds an active continuation on *this* instance."""
+
+    with admission._lock:
+        record = current_auto_enable_continuation()
+        if record is None:
+            raise IsolatedAutoEnableEnqueueRejected(
+                "isolated auto-enable enqueue requires an active continuation"
+            )
+        if record.admission is not admission:
+            raise IsolatedAutoEnableEnqueueRejected(
+                "auto-enable continuation belongs to another admission"
+            )
+        live = admission._ae_continuations.get(record.token)
+        if live is not record or record.state != "active":
+            raise IsolatedAutoEnableEnqueueRejected(
+                "auto-enable continuation is not active"
+            )
+        if record.owner_thread is not threading.current_thread():
+            raise IsolatedAutoEnableEnqueueRejected(
+                "auto-enable continuation is bound to another thread"
+            )
+        return record
 
 
 def bind_antares_admission(admission: WorkAdmission) -> None:

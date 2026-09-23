@@ -1,0 +1,92 @@
+# Task Workflow v1 — Task
+
+| Мета | Значение |
+|------|----------|
+| **ID** | TASK-2026-09-17-38 |
+| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **KB версия** | v1.10 |
+| **Связанные артефакты** | TASK-37 close `8efa1ec9a88d1ad628e679bee83755d758dc9382` (GPT review `741f5ccf7e59e172d5ec427fa630343238bb768c`, Draft PR #40); [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](../ops/MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
+| **PR** | Draft (этот PR) `feat/task-2026-09-17-38-antares-auto-enable-enqueue-impl`, base `feat/task-2026-09-17-37-antares-auto-enable-enqueue` |
+| **Риск** | medium: shared WE `CONVERSION_AUTO` queue; mixed ensure/put order не менять |
+
+Реализация принятого протокола continuation. TASK-37 повторно не закрывать. Merge/deploy нет. Serve/drain/join/already-dead worker supervision **не** реализованы.
+
+---
+
+## Goal
+
+Isolated `/auto_enable_run` регистрирует continuation до `executor.submit(wrapper)`; bound `enqueue_auto_enable_batch` проверяет её до credentials/ensure/put; AE worker Future завершается один раз.
+
+---
+
+## Success Criteria
+
+- [x] Continuation map на конкретном `WorkAdmission`; pending до submit; cleanup при submit exception
+- [x] Wrapper activate + TLS/owner_thread; finally revoke при любом выходе
+- [x] seal / cancel TG-handler не отзывают Accepted run
+- [x] isolated `/auto_enable_run` — `submit_auto_enable_run_if_open`; `/auto_enable_plan` без continuation
+- [x] bound enqueue gate до credentials/ensure/put; unbound mixed прежний
+- [x] qsize/log после put не отменяют wait; AE Future-once; log после set_result не второй terminal
+- [x] E1–E15 + чужой поток / TLS reuse; Event/barrier
+- [ ] GPT review
+- [ ] merge/deploy (намеренно открыто)
+
+---
+
+## Карта сценариев (`tests/test_antares_auto_enable_enqueue.py`)
+
+| Тест | Сценарий |
+|------|----------|
+| `test_e1_seal_before_new_run` | E1 |
+| `test_e2_accepted_then_seal_before_enqueue` | E2 |
+| `test_e3_n_batches_one_run` | E3 |
+| `test_e3b_batches_after_seal` | E3b |
+| `test_e4_error_before_put` | E4 |
+| `test_e5_put_ok_execute_set_exception` | E5 |
+| `test_e6_isolated_direct_enqueue_without_continuation` | E6 |
+| `test_e6b_missing_foreign_revoked_token` | E6b |
+| `test_e7_seal_during_result_wait` | E7 |
+| `test_e8_unbound_mixed_enqueue_unchanged` | E8 |
+| `test_e9_callable_starts_before_submit_returns` | E9 |
+| `test_e10_queued_accepted_then_seal_then_start` | E10 |
+| `test_e11_submit_exception_cleans_continuation` | E11 |
+| `test_e12_cancel_tg_handler_after_accepted` | E12 |
+| `test_e13_qsize_log_failure_after_put` | E13 |
+| `test_e14_exception_before_execute_completes_future` | E14 wait-log / start-log / import-execute |
+| `test_e15_diag_after_set_result_does_not_set_exception` | E15 |
+| `test_tls_cleared_on_executor_thread_reuse` | TLS после revoke на том же TPE thread |
+| `test_plan_does_not_register_continuation` | `/auto_enable_plan` |
+| `test_empty_candidates_bound_without_continuation_rejected` | пустой batch без token |
+
+---
+
+## Происхождение проверки
+
+Наборы не суммировать. SHA прогона — HEAD этого PR.
+
+| Кто | Что |
+|-----|-----|
+| Cursor | `tests/test_antares_auto_enable_enqueue.py` **20 passed**, exit 0, Python **3.12.10** |
+| Cursor | `tests/unit/test_wallet_editor_auto_enable_orchestrator.py` + phase_b1/b2 + `tests/unit/test_wallet_editor_concurrency_guard.py` **40 passed, 1 failed** — `test_disable_flow_unchanged` (`schedule_registry_append` нет на `automation.worker`); **тот же fail на close SHA `8efa1ec…`** |
+| Cursor | `tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py` **120 passed**, exit 0 |
+| Cursor | `tests/test_antares_ingest_admission.py tests/unit/test_wallet_editor_worker.py` **36 passed, 1 failed** — `test_worker_passes_user_output_file_to_registry_schedule` (`stage_registry_result_copy` нет на `automation.worker`); атрибут в worker на этой ветке отсутствует |
+| Cursor | `tests/unit/test_antares_boot.py tests/unit/test_antares_lifecycle.py` **52 passed**, exit 0 |
+| Cursor | mixed `tests/test_scheduler_dispatch.py tests/test_hourly_scheduler_gate.py tests/test_scheduler_health.py` **1 failed, 15 passed** — `test_schedule_loop_calls_dispatch_job_background` (два тика); дефект ожидания, historically SHA TASK-36 |
+| GPT | pytest **не** запускал (ожидается review) |
+
+**real:** `WorkAdmission`, `executor.submit`, `Queue`, `Future`.  
+**stub:** batch `execute_enable_batch`, credentials, Playwright.
+
+---
+
+## Out Of Scope
+
+надзор/restart мёртвого worker; drain/join; serve; scheduled Auto-Enable; mixed-stop; live кабинеты/Telegram; merge/retarget/deploy; исходное Test; повторное закрытие TASK-37.
+
+---
+
+## История
+
+| Дата | Событие |
+|------|---------|
+| 2026-09-23 | реализация контракта TASK-37; статус **review (подготовлено)** |

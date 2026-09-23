@@ -141,11 +141,13 @@ async def _admit_direct_work(
     args: tuple = (),
     kwargs: dict | None = None,
     start_text: str | None = None,
+    submit=None,
 ):
     admission = bound_admission()
     assert admission is not None
+    submit_fn = submit or admission.submit_if_open
     try:
-        outcome = admission.submit_if_open(
+        outcome = submit_fn(
             get_job_executor(),
             fn,
             *args,
@@ -475,6 +477,7 @@ async def cmd_auto_enable_run(update: Update, context: ContextTypes.DEFAULT_TYPE
         args=(actor,),
         kwargs={"manual": True},
         start_text=start_text,
+        submit=admission.submit_auto_enable_run_if_open,
     )
     if admitted is None:
         return

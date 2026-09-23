@@ -1211,9 +1211,13 @@ def test_isolated_auto_enable_run_exact_callable_and_args(
     update = _update()
     asyncio.run(handlers.cmd_auto_enable_run(update, MagicMock()))
     from integrations.wallet_editor_auto_enable import run_auto_enable
+    import inspect
 
-    assert recorded[0]["fn"] is run_auto_enable
-    assert recorded[0]["kwargs"] == {"manual": True}
+    submitted = recorded[0]["fn"]
+    assert inspect.unwrap(submitted) is run_auto_enable
+    assert submitted is not run_auto_enable
+    assert recorded[0]["args"] == ()
+    assert recorded[0]["kwargs"] == {}
     assert update._replies[0] == _RUN_START
     assert update._replies[-1] == "✅ Auto-Enable execution finished. Telegram report sent=True"
 
