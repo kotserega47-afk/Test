@@ -87,7 +87,7 @@ def _ensure_profile_worker(profile_key: str) -> _ProfileWorker:
         if worker is not None:
             return worker
 
-        worker = _ProfileWorker()
+        worker = _ProfileWorker(queue=Queue())
         thread = threading.Thread(
             target=worker_loop,
             args=(profile_key, worker.queue),
@@ -191,7 +191,7 @@ def enqueue_auto_enable_batch(
             len(candidates),
         )
     except Exception:
-        log.exception(
+        _best_effort_log_exception(
             "[AutoEnable] queued diagnostics failed profile=%s batch_size=%s",
             profile,
             len(candidates),
@@ -396,14 +396,26 @@ def _run_edit_wallet_task(profile_key: str, task: WalletEditorEditWalletTask) ->
     ).start()
 
 
+def _best_effort_log_exception(msg: str, *args) -> None:
+    try:
+        log.exception(msg, *args)
+    except Exception:
+        pass
+
+
 def _complete_auto_enable_batch_future(task: WalletEditorAutoEnableBatchTask, *, result=None, exc: BaseException | None = None) -> None:
     future = task.result_future
     if future.done():
         return
-    if exc is not None:
-        future.set_exception(exc)
-        return
-    future.set_result(result)
+    try:
+        if exc is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+    except Exception:
+        if future.done():
+            return
+        raise
 
 
 def _run_auto_enable_batch_task(profile_key: str, task: WalletEditorAutoEnableBatchTask) -> None:
@@ -436,14 +448,20 @@ def _run_auto_enable_batch_task(profile_key: str, task: WalletEditorAutoEnableBa
                 len(outcomes),
             )
         except Exception:
-            log.exception(
+            _best_effort_log_exception(
                 "[AutoEnable] finished-log failed profile=%s batch_size=%s",
                 profile_key,
                 batch_size,
             )
     except Exception as exc:
-        log.exception("[AutoEnable] failed profile=%s batch_size=%s", profile_key, batch_size)
-        _complete_auto_enable_batch_future(task, exc=exc)
+        try:
+            _complete_auto_enable_batch_future(task, exc=exc)
+        finally:
+            _best_effort_log_exception(
+                "[AutoEnable] failed profile=%s batch_size=%s",
+                profile_key,
+                batch_size,
+            )
 
 
 def _log_queue_wait(profile_key: str, item: ProfileQueueItem) -> None:
@@ -503,14 +521,16 @@ def worker_loop(profile_key: str, task_queue: Queue[ProfileQueueItem]) -> None:
                     _log_queue_wait(profile_key, item)
                     _run_auto_enable_batch_task(profile_key, item)  # type: ignore[arg-type]
                 except Exception as exc:
-                    log.exception(
-                        "[AutoEnable] worker failed profile=%s item=%s",
-                        profile_key,
-                        type(item).__name__,
-                    )
-                    future = getattr(item, "result_future", None)
-                    if future is not None and not future.done():
-                        future.set_exception(exc)
+                    try:
+                        future = getattr(item, "result_future", None)
+                        if future is not None and not future.done():
+                            future.set_exception(exc)
+                    finally:
+                        _best_effort_log_exception(
+                            "[AutoEnable] worker failed profile=%s item=%s",
+                            profile_key,
+                            type(item).__name__,
+                        )
             elif _is_edit_wallet_task_item(item):
                 _log_queue_wait(profile_key, item)
                 _run_edit_wallet_task(profile_key, item)  # type: ignore[arg-type]
