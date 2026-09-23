@@ -2,257 +2,282 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **подготовлен к review**; runtime **не** менялся |
+| **Статус** | контракт **уточнён, на review**; runtime **не** менялся |
 | **База** | закрытие TASK-38 `9221f052f8b9bacda10a3041757fa72f7687202c` (принятый review HEAD `f12811035433bce0306ef9ef9d328db43652795a`, Draft PR #41) |
-| **Обследованный SHA** | `f128110…` / close `9221f05…` |
+| **Обследованный SHA** | runtime `f128110…`; этот docs `ffa2702…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **AE continuation** | [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
 | **PTB helper** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / TASK-24 `run_ptb_lifecycle` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Цель: зафиксировать, **что считается ещё принятой работой** после `seal()`, в каком порядке её можно дожимать и какие ресурсы останавливать. Это **не** mixed-stop, **не** serve/polling, **не** cutover `JOB_ACCEPT`. Имена production API **не** выбраны (§ 8).
+Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Runtime этого PR **нет**.
 
-Тестовый `_HarnessQueue.end_loop` TASK-38 **не** является production stop API и **не** входит в этот контракт как механизм остановки.
+Тестовый `_HarnessQueue.end_loop` TASK-38 **не** production stop и **не** доказательство остановки WE worker.
 
 ---
 
-## 0. Жёсткие правила (приняты этим docs)
+## 0. Жёсткие правила
 
-1. **`seal()` запрещает новые внешние принятия** (`submit_if_open` / `submit_job_if_open` / `submit_auto_enable_run_if_open` / `put_nowait_if_open`). Уже возвращённый `AdmissionAccepted` / `AdmissionQueued` seal **не** отменяет.
-2. **Accepted Auto-Enable orchestrator сохраняет continuation** до `wrapper.finally`. Seal continuation **не** отзывает. Cancel TG-handler / `AdmittedJob` **не** отзывает живой run (TASK-37/38).
-3. **WE worker нельзя останавливать, пока оркестратор ещё может поставить batch** — пока есть запись continuation `pending`/`active` **или** оркестраторский Future не terminal. Пустая `Queue` этого **не** отменяет.
-4. **Пустая Queue не доказывает drain.** Учитывать: `unfinished_tasks` / item между `get` и `task_done`; Accepted executor Futures; живые continuation; batch `result_future` не done; `_RUNNING`; sender in-flight.
-5. **Порядок остановки выводится из зависимостей** (§ 5), не из удобного списка join.
-6. **Timeout ≠ «бизнес-эффекта не было»** и **не** разрешает retry той же операции с неизвестным результатом (Playwright / registry / Telegram send).
-7. **Already-dead worker** и **смерть worker до `get()`** принятого batch/ingest item — **блокеры**: drain **неуспешен**, пока нет выбранного (сейчас **открытого**) способа завершить Future / handoff. Надзор/restart **не** этот контракт.
+1. **`seal()`** запрещает новые внешние принятия. Уже Accepted/Queued seal не отменяет.
+2. Реестр всех isolated Accepted **executor** Futures принадлежит **тому же** `WorkAdmission`. Регистрация — в том же `_lock`, что OPEN-check и успешный `executor.submit`, **до** выхода из lock. После успешного seal не существует Accepted Future, ещё невидимого drain.
+3. Accepted AE orchestrator держит continuation до `wrapper.finally`. Worker **не** останавливать, пока continuation жива или оркестраторский Future не terminal.
+4. Пустая Queue ≠ drain. Пустая sender queue + завершённый job ≠ нет запланированного `put`.
+5. **Work drain** ≠ **resource shutdown**. Бизнес-ошибка задания допустима при успешном drain и видна отдельно.
+6. Полный graceful shutdown isolated **обязан** остановить sender. Его code можно вынести в отдельный срез; без него полный graceful **не** заявлять.
+7. Запрос остановки: **`seal()` → `stop.set()` на owner loop**. `stop.set()` — координация, **не** завершение.
+8. Loop PTB **не** блокировать `Future.result()` / `Thread.join()`.
+9. Timeout / dead worker → **явный failure**, без restart/handoff/retry; бизнес-исход остаётся неизвестным. Ограниченное время выхода процесса **не** обещать.
+10. Mixed-stop — отдельная зависимость до cutover (**O10**).
 
 ---
 
 ## 1. Обследованные цепочки (SHA `f128110…`)
 
-### 1.1 Общий job executor
+### 1.1 Job executor
 
-| | Факт |
-|--|------|
-| Ресурс | `core/job_dispatch.py` `ThreadPoolExecutor` (`get_job_executor()`, prefix `job-worker`, default `max_workers=2`) |
-| Владелец постановки | isolated: `WorkAdmission.submit_*` под коротким `_lock`; mixed: `dispatch_job_background` / `loop.run_in_executor` |
-| Момент Accepted | успешный `executor.submit` внутри OPEN-check → `AdmissionAccepted.future` |
-| Terminal outcome | Future `set_result` / `set_exception` тела callable (`request_job`, `run_auto_enable` wrapper, export/plan/replay/reload) |
-| Дочерние работы | `request_job` → `_RUNNING` + file lock + `JOB_REGISTRY` callable (Playwright/jobs); AE wrapper → `enqueue_auto_enable_batch` → WE queue + `result_future`; export/plan/replay — свои I/O |
-| Ждёт | слот TPE; внутри job — lock файла `{STATE_DIR}/locks`; AE — WE worker `result()` |
-| Сейчас stop | production shutdown **нет**; `_reset_job_executor_for_tests` делает `shutdown(wait=False, cancel_futures=True)` — **запрещено** копировать на Accepted work |
+`get_job_executor()` — `ThreadPoolExecutor`, prefix `job-worker`, default `max_workers=2`. Isolated Accepted = успешный `submit` под OPEN. Terminal = done Future тела (`request_job`, AE wrapper, export/plan/replay/reload).
 
-Queued vs running: элемент в очереди TPE ещё не начал callable; running — поток `job-worker-*` внутри callable. Оба — Accepted, если `submit` уже вернул Future.
+Дочерние: `_RUNNING` + lock-файл; AE → WE `result_future`; Playwright.
 
-### 1.2 Auto-Enable orchestrator → batch → result_future
+`_reset_job_executor_for_tests`: `shutdown(wait=False, cancel_futures=True)` — **запрещено** на Accepted.
 
-| | Факт |
-|--|------|
-| Владелец | isolated `/auto_enable_run` → `submit_auto_enable_run_if_open` → wrapper → `run_auto_enable` → `_run_phase_b2_batches` → `enqueue_auto_enable_batch` (`integrations/wallet_editor_auto_enable.py`, `automation/worker.py`) |
-| Accepted | Future wrapper на job executor, **не** `Queue.put` |
-| Continuation | map на том же `WorkAdmission`; `pending` до activate; `active` на job thread; revoke в `finally` |
-| Batch | после обязательной проверки continuation: credentials → `_ensure_profile_worker` → `queue.put` → wait `WalletEditorAutoEnableBatchTask.result_future` |
-| Terminal batch | один `set_result` **или** `set_exception` на WE thread; `task_done` в `worker_loop.finally` |
-| Дочерние | `execute_enable_batch` (Playwright); registry patch / outbox `prepare_registry_outbox_and_schedule`; TG report через sender |
-| Ждёт | слот TPE (orchestrator); живой WE daemon + item processed; Playwright; `result()` на job thread |
-| Не ждать admission lock | put / `result()` / Playwright / registry **вне** `_lock` |
+### 1.2 Auto-Enable
 
-N батчей одного run — N put/Future при одном внешнем Accepted. После seal внутренние put continuation **разрешены**.
+Accepted = Future wrapper, не `Queue.put`. Continuation на том же admission. Batch wait `result_future` на job thread, вне `_lock`.
 
-### 1.3 Ingest → profile queue → активное задание
+### 1.3 Ingest
 
-| | Факт |
-|--|------|
-| Владелец | `modules/antares/document_ingest.py` isolated: `ensure_profile_queue` + `put_nowait_if_open`; mixed `add_*_task` → `_ensure_profile_worker` + `queue.put` |
-| Accepted | `AdmissionQueued` = успешный `put_nowait` под lock (isolated). Diagnostic `qsize` **не** этот объект |
-| Terminal | тело `_run_disable_task` / add / edit на WE thread; `task_done`; TG `send_text`/`send_document`; `delayed_cleanup` daemon (sleep 30s — **не** критерий drain бизнес-задания) |
-| Дочерние | registry outbox schedule; sender; delayed file delete |
-| Ждёт | живой profile thread; очередь профиля; Playwright/engine |
-| Conversion `add_task` | **не** первый isolated; этот контракт **не** обещает mixed conversion drain |
+Isolated: `ensure_profile_queue` **до** `put_nowait_if_open`. Handler может **скачать файл и создать lazy worker до seal**, затем получить Rejected. Такой worker входит в финальный список ресурсов.
 
-Active item: `get()` уже забран, `task_done` ещё нет. `qsize()==0` при `unfinished_tasks>0` — drain **не** завершён.
+Active item: между `get` и `task_done`. `delayed_cleanup` daemon (sleep) **не** критерий work drain.
 
 ### 1.4 Schedules
 
-| | Факт |
-|--|------|
-| Isolated | `modules.antares.scheduler.tick` + `submit_job_if_open`; **не** подключён к `boot`/`run`/`assemble_antares` / helper |
-| Mixed | `scheduler.py` `schedule_loop` → `dispatch_job_background` — **вне** isolated drain |
-| Accepted | как § 1.1 (`request_job` Future) |
-| После seal | `tick` не принимает новую работу (Rejected); уже Accepted Future — слой D |
-| Этот контракт | isolated tick, **если** его вызовут; mixed `schedule_loop` stop **открыт как не этот scope** |
+Isolated `tick` не wired. После seal новые submit Rejected. Mixed `schedule_loop` — не этот контракт.
 
 ### 1.5 PTB callbacks
 
-| | Факт |
-|--|------|
-| Владелец | `run_ptb_lifecycle` (sandbox/будущий serve) + `Application` caller |
-| Работа | handler после ACL: admit → `watch_admitted_future` → reply → `await AdmittedJob.wait()` |
-| Accepted | Future job/work; callback **не** владеет отменой Future |
-| Terminal callback | reply результата **или** `CancelledError` на wait (Future жив) |
-| Ждёт | event loop; job executor; иногда WE `result()` внутри job thread, не на loop |
-| PTB `app.stop`/`shutdown` | **не** drain jobs/WE/sender (TASK-23/24/25). `stop.set()` **не** seal (seal должен быть первым) |
+`watch_admitted_future` + `await wait()`. Cancel callback **не** cancel Future и **не** снимает Future с реестра admission.
 
-Live polling **не** обследуется как действующий isolated путь (`enable_polling=True` отвергается).
+Сейчас helper после `stop.wait()` сразу `seal` (идемпотентно) и PTB cleanup — **без** drain. Будущее изменение — § 5.
 
-### 1.6 Sender / outbox
+### 1.6 Sender (обязателен для полного graceful)
 
-| | Факт |
-|--|------|
-| Sender | `integrations/telegram_bot.py`: daemon thread `run_forever`, `asyncio.Queue`, `_worker` `while True`; `send_message_sync` / file → `call_soon_threadsafe(put_nowait)` |
-| Владелец исходящего | callers (handlers reply — PTB Bot; jobs/worker — этот sender) |
-| Accepted исходящего | успешный enqueue в sender queue (**не** WorkAdmission) |
-| Terminal | `_record_delivery_success` / failure после `await bot.send_*` |
-| Stop API | production **нет** (`run_forever`, daemon) |
-| Registry outbox | `{STATE_DIR}/wallet_editor/` durable; `replay_pending_outbox_records` — Accepted direct work на executor; in-flight append из WE task — дочерняя работа **того** task |
-| Durable outbox ≠ drain in-memory queue | записанный outbox переживает процесс; незавершённый in-memory send — нет |
+Файл: `integrations/telegram_bot.py`.
 
----
+| Вызов | Путь |
+|-------|------|
+| `send_message_sync` / `send_file_sync` (`transport.telegram_transport.send_text` / `send_document`) | `loop.call_soon_threadsafe(queue.put_nowait, item)` затем `_record_enqueue`; **не** ждёт доставки |
+| `send_photo_sync` | **прямой** `requests.post(sendPhoto)` на потоке caller; **не** через sender `asyncio.Queue`. При ошибке fallback `send_message_sync` (уже очередь) |
+| `send_message_direct` | прямой HTTP; **только тесты** |
 
-## 2. Учёт «ещё принятого» после seal
+Три состояния очереди (для `send_message_sync` / `send_file_sync`):
 
-Считать незавершённым, пока истинно хотя бы одно:
+| # | Состояние | Сейчас видно как |
+|---|-----------|------------------|
+| S1 | передача **запланирована**: `call_soon_threadsafe` принял callback, `put_nowait` ещё не исполнен на sender loop | `_record_enqueue` уже +1, `queue` ещё может быть пуста |
+| S2 | элемент **в** `asyncio.Queue` | `qsize` / `empty()` лгут относительно S1 |
+| S3 | отправка **выполняется** | `_worker` между `get` и `task_done` (`await bot.send_*`) |
 
-| Учёт | Наблюдение (без sleep-as-proof) |
-|------|----------------------------------|
-| Executor queued/running | Future Accepted не `done()` |
-| AE continuation | запись в `admission._ae_continuations` (`pending` или `active`) |
-| AE batch | `result_future` не `done()` **или** item в WE queue **или** между get и `task_done` |
-| Ingest/WE task | то же для profile `Queue` / active item |
-| `request_job` | ключ в `_RUNNING` и/или держащийся lock-файл живого pid |
-| Sender | item в `telegram_bot.queue` **или** `_worker` между get и `task_done` |
-| PTB in-flight callback | task handler не завершён (не путать с job Future) |
+Пустая очередь и done job **не** доказывают отсутствие S1.
 
-`qsize()==0` **и** `not queue.empty()` гонки не определяют idle. Нужны Event/barrier на `task_done` / Future done / revoke continuation.
+Worker `send_text`/`send_document` возвращаются сразу после планирования S1; `task_done` WE может наступить, пока S1/S2/S3 ещё живы.
+
+### 1.7 Registry / outbox
+
+`prepare_registry_outbox_and_schedule` (`wallet_editor_registry_async.py`):
+
+| Шаг | Когда заканчивается | Кто учитывает |
+|-----|---------------------|---------------|
+| `persist_durable_result_copy` | синхронно в теле WE task | work drain этого item |
+| `create_outbox_record` | синхронно; durable pending на `{STATE_DIR}` | work drain этого item |
+| `schedule_registry_append` | **сразу** стартует daemon `we-registry-*`; `append_run_to_dropbox_registry` идёт отдельно | **не** WorkAdmission; **не** work drain; **не** первый resource shutdown |
+
+Durable pending **не** есть доставка Telegram и **не** есть завершение in-flight Dropbox I/O. Первый isolated graceful **не** ждёт Dropbox daemon и **не** обещает sync. `/registry_replay` — отдельный Accepted executor Future, если admit прошёл.
 
 ---
 
-## 3. Смерть worker
+## 2. Реестр Accepted executor Futures
 
-| Момент | Состояние | Следствие drain |
-|--------|-----------|-----------------|
-| Уже мёртв, в очереди лежат items | `result_future` / ingest terminal **нет** | **Неуспешный shutdown**, пока политика не выбрана (§ 8). Не timeout-как-доказательство, не retry |
-| Смерть **до** `get()` этого item | item в queue, поток нет | то же |
-| Смерть **во время** `_run_*` / execute | Playwright/registry могли частично выполниться | Future может не завершиться; **не** трактовать как «не выполнялось»; **не** retry |
-| Исключение на живом worker после get | TASK-38: AE Future один раз `set_exception`; `task_done` есть | item снят; оркестратор видит ошибку — это **успех учёта**, не успех бизнеса |
+**Владелец:** конкретный bound `WorkAdmission` (не глобальный dict вне instance; не PTB Application).
 
-Надзор/restart потока **вне** этого docs.
+Покрывает **все** isolated `executor.submit`, дающие `AdmissionAccepted`: `submit_if_open`, `submit_job_if_open`, `submit_auto_enable_run_if_open`. Queued ingest (`AdmissionQueued`) в этот реестр **не** входит — учёт через WE queue/active/`result_future`.
+
+### 2.1 Согласование с submit/seal
+
+Под **тем же** коротким `_lock`:
+
+1. если не OPEN → `AdmissionRejected`, Future нет, реестр не трогать;
+2. `future = executor.submit(...)` (AE: сначала continuation pending);
+3. **вставить `future` в реестр**;
+4. выйти из lock, вернуть `AdmissionAccepted(future)`.
+
+`seal()` берёт тот же lock → либо submit уже зарегистрировал Future, либо submit ещё не прошёл OPEN и получит Rejected. Окна «Accepted есть, drain его не видит» нет.
+
+Submit exception: как сейчас, continuation снимается; Future в реестр не класть.
+
+### 2.2 Callback и already-done
+
+`add_done_callback` ставить **только после** отпускания `_lock`.
+
+Если Future уже `done` к моменту `add_done_callback` (callable успел до возврата `submit`): callback выполняется **синхронно** в этом потоке. Он не берёт `_lock` на ожидание; под lock только короткое удаление из реестра (или удаление через структуру, допускающую pop без реentrant acquire на том же потоке, что держит lock — проще: **не вызывать callback под lock**).
+
+Ожидание drain: снимок незавершённых Future **под коротким lock**, `await` / `asyncio.wrap_future` / `wait` — **вне** lock. Playwright/`result()`/join — вне lock.
+
+Идемпотентное удаление при terminal: один done-callback реестра снимает запись, если она ещё там.
+
+### 2.3 Cancel callback handler
+
+Cancel `AdmittedJob` / TG-handler **не** `future.cancel()`, **не** pop из реестра, **не** revoke continuation. Живая принятая работа остаётся в реестре до собственного terminal.
 
 ---
 
-## 4. Timeout и retry
+## 3. Протокол учёта sender (будущий code-срез)
 
-- `Future.result(timeout=…)` / `join(timeout=…)` / `wait(timeout)` истекли → **неизвестно**, жива ли работа и был ли кабинетный эффект.
-- **Запрещено** по одному timeout: объявить «не выполнялось», снять continuation, повторно `submit`/`put` ту же бизнес-операцию, `cancel_futures=True` на Accepted.
-- Допустимо: классифицировать shutdown как **неуспешный** (§ 6) и эскалировать.
+Пока нет счётчика S1, полный graceful **не** заявлять.
+
+**Выбранный протокол:** под lock sender:
+
+1. Caller `send_message_sync` / `send_file_sync`: увеличить `pending_loop_handoffs`, затем `call_soon_threadsafe(_enqueue_item, payload)`.
+2. На sender loop `_enqueue_item`: `queue.put_nowait`; уменьшить `pending_loop_handoffs` (и при ошибке put — тоже уменьшить, зафиксировать failure).
+3. `_worker`: in-flight флаг/счётчик между `get` и `task_done`.
+
+Idle sender для drain исходящих: `pending_loop_handoffs==0` **и** очередь пуста **и** in-flight==0. Наблюдение Event/barrier, не sleep.
+
+`send_photo_sync`: часть тела caller (Accepted job/WE item), не S1–S3. Work drain caller включает блокирующий HTTP. Fallback `send_message_sync` после ошибки фото — уже S1–S3.
 
 ---
 
-## 5. Порядок, выведенный из зависимостей
+## 4. Work drain vs resource shutdown
 
-Ребра (кто кого ждёт):
+| | Work drain | Resource shutdown |
+|--|------------|-------------------|
+| Смысл | вся принятая работа получила **terminal outcome** | остановлены и **joined** ресурсы этого запуска |
+| Успех при бизнес-ошибке | **да** (Future exception / AE `set_exception` видны отдельно) | только если потоки/loop/HTTP закрыты |
+| Executor Futures | все из реестра `done()` | затем `shutdown`; `cancel_futures` запрещён |
+| Continuation | map пуст | — |
+| WE items | нет queued, `unfinished_tasks==0`, AE `result_future` done | production stop loop + **join** thread |
+| Sender S1–S3 | idle (§ 3) | cancel task, stop loop, join thread, закрыть HTTP sender Bot |
+| PTB | in-flight callbacks, которые ещё ensure/put, завершились как producers | `app.stop` / `shutdown` |
+| Dropbox daemon / `delayed_cleanup` | не входят | не входят в первый isolated (daemon; durable outbox уже есть) |
+
+Drain успешен, а WE/executor/sender thread ещё жив → **resource shutdown не успешен**.
+
+### 4.1 Production stop WE worker (после drain)
+
+**Выбор:** предмет в production `worker_loop` — выделенный sentinel type (не test exception из `Queue.get`). После drain (нет queued/active/continuation, которые ещё put) положить sentinel в каждую profile queue этого процесса, loop выходит, **join** thread.
+
+`_HarnessQueue.end_loop` / `_EndWorkerLoop` **не** цитировать как production. Имя sentinel — code PR.
+
+Пока drain не завершён, sentinel **не** класть (оркестратор ещё может put).
+
+---
+
+## 5. Один порядок и стык с PTB
+
+Сохранить **`request_antares_stop`: `seal()` затем `stop.set()` на owner loop**.
+
+`stop.set()` будит `run_ptb_lifecycle` (`await stop.wait()`). Это **запрос** начать фазу остановки, не idle.
+
+### Необходимое будущее изменение helper
+
+Сейчас: `stop.wait()` → `seal()` → сразу PTB `_await_cleanup`. Нужно:
 
 ```text
-PTB callback wait  →  Accepted executor Future
-AE wrapper (executor)  →  continuation + WE result_future
-WE worker  →  Playwright, registry/outbox, sender enqueue
-ingest/disable/add/edit worker  →  engine, sender, delayed_cleanup (не drain-критерий)
-request_job  →  JOB lock + callable
-sender worker  →  Bot HTTP
-run_ptb_lifecycle after stop.set  →  app.stop/shutdown (не jobs)
+[уже] initialize → start → admission.open → await stop.wait()
+      # request_antares_stop уже сделал seal до set
+1. Прекратить входящие updates (сейчас polling нет; когда serve — updater.stop
+   здесь, не после drain jobs). Isolated tick после seal не звать.
+2. Дождаться завершения in-flight PTB callbacks как producers
+   (download/ensure/put_nowait). Их CancelledError не cancel Accepted Future.
+3. Work drain: реестр Futures, continuation, WE queued/active/result_future,
+   sender S1–S3.
+   Только await / wrap_future / to_thread — не Future.result/join на PTB loop.
+4. Resource shutdown: WE sentinel+join; executor shutdown после drain
+   (не wait=True после deadline); sender task/loop/thread + HTTP;
+   затем PTB app.stop / shutdown (helper TASK-24).
 ```
 
-**Обязательная последовательность для isolated** (имена шагов — смысл, не API):
+Финальный список WE workers снимать **после** шага 2: handler, начавший download до seal, может `ensure_profile_queue` **после** seal и получить Rejected — поток всё равно создан.
 
-1. **`admission.seal()`** — нет новых внешних Accepted/Queued.
-2. **Прекратить кормление новых updates** (уже sealed; `stop.set()` не заменяет шаг 1). **OPEN:** звать `stop.set()` до или после шага 3 — § 8.
-3. **Дождаться Accepted executor Futures** (включая queued-after-seal AE wrapper) **и** опустошения continuation map. Пока continuation жива — **не** останавливать WE worker.
-4. **Дождаться WE profile queues**: нет queued items, нет active item (`task_done` для каждого get), нет незавершённых AE `result_future`.
-5. **Sender:** после шагов 3–4 (больше не ставят send из jobs/worker). Дождаться sender queue + in-flight `_worker`.
-6. **Executor `shutdown`**: только когда шаги 3–4 не оставляют работы, которая ещё вызовет `submit`/wait на этом пуле. `cancel_futures` на Accepted **запрещён**.
-7. **PTB `app.stop` / `shutdown`**: не считать заменой шагов 3–6. Helper TASK-24 сегодня после `stop.set()` сразу PTB stop — **стык открыт** (§ 8).
-8. **Lock-файлы `_RUNNING`:** должны уйти сами из `request_job.finally`. Висящий lock живого pid после мёртвого executor — неуспех.
-
-Admission `_lock` **не** держать через wait/join/Playwright/sender/PTB.
-
-Worker **раньше** шага 4 останавливать нельзя: оркестратор после seal имеет право `put`.
+Admission lock не держать через шаги 2–4.
 
 ---
 
-## 6. Критерии исхода
+## 6. Dead worker / deadline (первый вариант)
 
-### Успешный drain (все пункты)
+**Выбор:** явный **failure** shutdown. Нет automatic restart, durable handoff «считай выполненным», retry бизнес-операции. Неизвестный исход сохранить в отчёте.
 
-- `admission` **SEALED**; новых внешних accept нет.
-- Нет живых AE continuation.
-- Все известные Accepted executor Futures `done()` (результат или исключение тела — неважно для drain).
-- По каждому isolated WE profile: нет queued item, `unfinished_tasks==0`, нет незавершённых AE `result_future`.
-- `_RUNNING` пуст (для job types, которые этот процесс принимал).
-- Sender: очередь пуста и нет in-flight send **если** sender входит в isolated stop (иначе явно исключить — § 8).
-- Ни один из этих фактов не установлен timeout-суррогатом.
+Отчёт остатков (минимум): SEALED?; незавершённые Future из реестра (queued vs running, если известно); живые continuation; profile → qsize / unfinished / dead thread; AE `result_future`; sender `pending_loop_handoffs` / queue / in-flight.
 
-### Явный неуспешный shutdown (достаточно одного)
+Ограничения:
 
-- Worker мёртв, а в его queue есть item **или** AE `result_future` не done.
-- Смерть worker во время execute без terminal Future.
-- По истечении объявленного wait drain условия успеха **не** выполнены (остаток описать: чьи Future/queue/continuation).
-- `executor.shutdown` с отменой Accepted **или** обрыв `result()` wait без terminal batch.
-- Retry бизнес-операции после timeout.
-
-Неуспех **логируется как shutdown failure**, не как «очередь была пуста».
+- незавершённый TPE job **нельзя безопасно убить**;
+- после истечения deadline **`shutdown(wait=True)` может зависнуть** — не звать;
+- `shutdown(wait=False, cancel_futures=False)` не останавливает running thread;
+- **не** обещать ограниченное время `exit` процесса.
 
 ---
 
-## 7. Матрица будущих Event/barrier-тестов (code PR, не этот)
+## 7. Матрица будущих Event/barrier-тестов
 
-Реальные `WorkAdmission`, `executor.submit`, `Queue`, `Future`. Без sleep-as-proof. Execute/Playwright/Telegram — заглушки. Worker: production loop + тестовый способ **закончить loop после элементов** (как TASK-38 harness), **не** выдавая его за production stop. Join в `finally`. Ошибки рабочих потоков — в основной тест.
+Реальные `WorkAdmission`, `executor.submit`, `Queue`, `Future`. Без sleep-as-proof. Harness только для теста loop, не как proof production stop.
 
 | # | Сценарий | Ожидание |
 |---|----------|----------|
-| D1 | seal, нет Accepted | успех drain без wait worker; новый submit Rejected |
-| D2 | `/run_wallet` Accepted running, seal | drain ждёт Future; seal не cancel |
-| D3 | AE queued в TPE, seal, затем старт wrapper | continuation жива; worker **не** остановлен до revoke; batch put разрешён |
-| D4 | AE `result()` wait, seal | worker жив; после batch terminal — continuation revoke — тогда можно стоп worker |
-| D5 | N батчей одного run после seal | все Future batch done; один внешний Accepted |
-| D6 | `qsize==0`, но get без `task_done` (active item) | drain **не** успех |
+| D1 | seal, нет Accepted | drain успех; новый submit Rejected |
+| D2 | `/run_wallet` running, seal | drain ждёт реестр Future; не cancel |
+| D3 | AE queued в TPE, seal, старт wrapper | continuation жива; worker не стопать; put разрешён |
+| D4 | AE `result()` wait, seal | worker жив до terminal batch + revoke |
+| D5 | N батчей после seal | все batch Future done; один внешний Accepted в реестре |
+| D6 | `qsize==0`, get без `task_done` | drain не успех |
 | D7 | ingest Queued, seal | item дожимается; новый ingest Rejected |
-| D8 | cancel TG-handler после AE Accepted | continuation и worker drain по Future, не по callback |
-| D9 | пустая Queue + живая continuation | стоп worker **запрещён**; drain не успех |
-| D10 | пустая Queue + Accepted Future ещё queued в TPE | drain не успех |
-| D11 | timeout wait при живом execute | неуспешный shutdown; нет retry; Future не объявлять «не выполнялся» |
-| D12 | worker мёртв до get, batch в queue | неуспешный shutdown; `result_future` не done |
-| D13 | исключение AE на живом worker после get | Future once; `task_done`; drain этого item успешен как учёт |
-| D14 | sender enqueue из worker, jobs уже done | drain не успех, пока sender in-flight (если sender в scope) |
-| D15 | `stop.set` без предварительного seal | **запрещённый** порядок; тест фиксирует, что контракт требует seal первым |
-| D16 | diagnostic qsize/log throw после put | не превращает batch в «не принятый»; drain ждёт Future |
+| D8 | cancel TG после AE Accepted | реестр и continuation живы |
+| D9 | пустая Queue + живая continuation | стоп worker запрещён |
+| D10 | пустая Queue + Future ещё в очереди TPE | drain не успех |
+| D11 | deadline при живом execute | failure + отчёт; нет retry |
+| D12 | worker мёртв до get | failure; `result_future` не done; нет retry |
+| D13 | исключение AE после get | drain work успех; бизнес-ошибка видна отдельно |
+| D14 | job done, sender S1 ещё не put | work drain исходящих не успех |
+| D15 | `stop.set` без seal | запрещённый порядок request API |
+| D16 | qsize/log throw после put | batch принят; drain ждёт Future |
+| D17 | submit выиграл гонку с seal | Future **в реестре** до возврата submit; drain его видит |
+| D18 | Future done до `add_done_callback` | callback sync вне submit-lock; реестр корректно пуст; нет deadlock |
+| D19 | job завершён, sender put ждёт loop (S1) | пустая queue ≠ idle sender |
+| D20 | очередь пуста, `_worker` в send (S3) | drain исходящих не успех |
+| D21 | pre-seal ingest: ensure worker после seal, put Rejected | worker в финальном списке; join обязателен |
+| D22 | work drain done, WE/executor thread жив | resource shutdown **не** успешен |
+| D23 | dead worker / deadline | failure с остатками; нет retry/handoff/restart |
 
 ---
 
-## 8. Открытые решения (явно)
+## 8. Решения (бывшие O1–O9) и срезы code
 
-| ID | Вопрос | Почему открыто |
-|----|--------|----------------|
-| O1 | Имена production API (`drain_*`, `shutdown_*`, sentinel vs Event vs join) | «до выбора API»; harness TASK-38 не кандидат |
-| O2 | `stop.set()` до или после drain executor/WE | helper TASK-24 сразу PTB stop после `stop.wait()`; callbacks vs jobs |
-| O3 | Входит ли sender в **первый** isolated stop | daemon `run_forever`, нет stop; handlers replies идут через PTB, jobs — через sender |
-| O4 | `delayed_cleanup` daemon | не бизнес-terminal; ждать или игнорировать |
-| O5 | Политика already-dead: только fail shutdown vs durable handoff vs restart | restart/надзор вне scope; handoff меняет обещание |
-| O6 | Isolated `tick` в drain, пока не wired | вызовы tick после seal Rejected; loop нет |
-| O7 | Несколько WE profile keys | join все, что процесс создал; conversion profile в isolated процессе **OPEN** |
-| O8 | Стык `app.stop` и незавершённых handler `wait()` | Future не cancel; нужен ли drain до `app.stop` |
-| O9 | `executor.shutdown(wait=True)` vs явный wait всех известных Future | известные Future есть у caller admit; TPE внутреннюю очередь чужих submit не видим без учёта |
-| O10 | Mixed-stop (`schedule_loop`, mixed `add_task`) | **не этот контракт** |
+| Было | Решение | Срез (не этот PR) |
+|------|---------|-------------------|
+| O1 API | Реестр на `WorkAdmission`; WE stop = production sentinel + join; drain/shutdown — отдельные исходы | admission registry; worker sentinel; helper orchestration |
+| O2 `stop.set` vs drain | Request: seal→set как сейчас. Drain **после** `stop.wait()`, **до** PTB cleanup | изменение `run_ptb_lifecycle` |
+| O3 sender | В полном graceful **обязателен**; отдельный code-срез учёта S1–S3 | sender handoff + stop loop/thread/HTTP |
+| O4 `delayed_cleanup` | Не work drain, не первый resource shutdown | — |
+| O5 dead worker | Failure + отчёт; без restart/handoff/retry | remainder report |
+| O6 tick | После seal не звать; не wired | serve/schedules отдельно |
+| O7 профили | Join **все** `_profile_workers`, созданные процессом до конца producers (включая Rejected после ensure) | resource shutdown |
+| O8 `app.stop` vs wait() | Сначала producers+work drain, потом PTB stop; cancel wait ≠ cancel Future | helper |
+| O9 shutdown TPE | Ждать **реестр** Future, не «все неизвестные». После deadline не `wait=True` | drain + shutdown slice |
+| O10 mixed-stop | **Открыто** до cutover | не isolated TASK-39 |
+
+Имена функций code PR может уточнить; семантика этого docs обязательна.
 
 ---
 
 ## 9. Вне скоупа
 
-Runtime этого PR; serve / live polling; mixed-stop; ослабление mixed gate; merge/retarget/deploy; исходное Test; надзор/restart worker; выдавать test harness за stop API; `JOB_ACCEPT` cutover.
+Runtime этого PR; реализация срезов; serve / live polling; mixed-stop; mixed gate; merge/retarget/deploy; исходное Test; надзор worker; harness как stop API.
 
 ---
 
-## 10. Связь с уже принятым
+## 10. Связь
 
-- TASK-25: seal → затем `stop.set()`; Future после submit — слой D.
-- TASK-38: continuation + Future-once AE; dead worker — блокер, перенесён сюда как D12 / O5.
-- TASK-24: PTB initialize/start/stop/shutdown **без** worker/sender/executor.
+- TASK-25: seal → `stop.set()`; слой D = Accepted Future.
+- TASK-38: continuation; Future-once AE; harness ≠ stop.
+- TASK-24: PTB cleanup остаётся последним HTTP PTB; jobs/WE/sender вставляются **перед** ним.

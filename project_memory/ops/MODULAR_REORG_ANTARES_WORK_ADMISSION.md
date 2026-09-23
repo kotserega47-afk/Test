@@ -348,7 +348,7 @@ loop.call_soon_threadsafe(stop.set)   # не stop.set() напрямую
 | Остальные TG-команды, ingest, прямые ops | не первый code |
 | Внутренний Auto-Enable enqueue | § 7.2 |
 | Live polling / serve | STARTSTOP.md |
-| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39; production API не выбран |
+| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39: реестр Futures на admission; drain ≠ shutdown; production WE sentinel; sender S1–S3 обязателен для полного graceful; runtime ещё нет |
 | Reservation + download-then-put | меняет обещание «нет enqueue после seal» |
 | `JOB_ACCEPT` env cutover | другой процесс |
 
