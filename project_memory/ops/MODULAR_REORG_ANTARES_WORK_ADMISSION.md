@@ -276,7 +276,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37 docs).
 
-`run_auto_enable` → `enqueue_auto_enable_batch` ставит батч в WE queue **после** Accepted оркестратора. Это **продолжение** принятого `/auto_enable_run`, не новый внешний вход. Seal запрещает новый `submit_if_open`, но **не** обязан запрещать continuation put уже Accepted Future. `put_nowait_if_open` на батч после seal **не** выбран как единственный затвор.
+`run_auto_enable` → `enqueue_auto_enable_batch`. Isolated: continuation на том же `WorkAdmission`, wrapper в `executor.submit`, проверка **до** ensure/put. Seal не отзывает живой Accepted run. Прямой `enqueue_auto_enable_batch` при bound admission без token — отказ. Mixed unbound без изменения put. Произвольный `Queue.put` не закрыт. Dead worker с очередью — отложенный блокер.
 
 Mixed `enqueue_auto_enable_batch` этим docs **не** менять. Conversion `add_task` — не caller enqueue и не первый isolated Antares.
 
