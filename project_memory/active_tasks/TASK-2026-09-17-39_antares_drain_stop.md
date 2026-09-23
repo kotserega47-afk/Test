@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-38 close `9221f052f8b9bacda10a3041757fa72f7687202c` (review `f12811035433bce0306ef9ef9d328db43652795a`, Draft PR #41); [MODULAR_REORG_ANTARES_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-39-antares-drain-stop`, base `feat/task-2026-09-17-38-antares-auto-enable-enqueue-impl` |
+| **PR** | Draft [#42](https://github.com/deniskotdavydov1991-wq/Test/pull/42) `feat/task-2026-09-17-39-antares-drain-stop`, base `feat/task-2026-09-17-38-antares-auto-enable-enqueue-impl` |
 | **Риск** | high: общий executor, WE daemon, sender `run_forever`; mixed-stop не этот docs |
 
 Контракт учёта принятой работы, drain и остановки isolated Antares. Runtime **не** менялся. Реализация **не** начата. TASK-38 повторно не закрывать. Merge/deploy нет.
