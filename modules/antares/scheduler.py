@@ -13,7 +13,12 @@ from core.schedules import Schedule
 from modules.antares.assembly import ANTARES_ASSEMBLY_JOB_TYPES
 from modules.antares.hourly_gate import HourlyGate, HourlyGatePeek, commit_hourly_gate, peek_hourly_gate
 from modules.antares.schedule_timing import _next_cron_run
-from modules.antares.work_admission import AdmissionAccepted, AdmissionRejected, WorkAdmission
+from modules.antares.work_admission import (
+    AdmissionAccepted,
+    AdmissionRejected,
+    AdmissionState,
+    WorkAdmission,
+)
 
 log = logging.getLogger(__name__)
 
@@ -117,10 +122,14 @@ def tick(
     _prune_inactive(state, schedules)
     result = TickResult()
     attempted: set[tuple[str, str]] = set()
+    # Snapshot only: does not reserve admission. submit_job_if_open still decides.
+    already_sealed = admission.state is AdmissionState.SEALED
 
     for schedule in schedules:
         jt = schedule.job_type
         if jt not in ANTARES_ASSEMBLY_JOB_TYPES:
+            continue
+        if already_sealed:
             continue
 
         if schedule.schedule_type == _INTERVAL:

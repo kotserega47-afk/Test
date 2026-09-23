@@ -97,7 +97,8 @@ class _JobStub:
         self.calls.append((job_type, actor.kind, force_rules_sync))
         self.started.set()
         if self.hold:
-            assert self.release.wait(timeout=5)
+            if not self.release.wait(timeout=5):
+                raise RuntimeError("job stub was not released")
         if self.error is not None:
             raise self.error
         return f"jid-{job_type}-{len(self.calls)}"
@@ -114,6 +115,24 @@ def _install_stub(monkeypatch, **kwargs) -> _JobStub:
     return stub
 
 
+class _LogSeen(logging.Handler):
+    """Set Event after a matching log record is actually emitted."""
+
+    def __init__(self, event: threading.Event, needle: str) -> None:
+        super().__init__(level=logging.ERROR)
+        self._event = event
+        self._needle = needle
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if self._needle in record.getMessage():
+                self.count += 1
+                self._event.set()
+        except Exception:
+            pass
+
+
 class _ObservingLock:
     def __init__(self, inner, *, holder, waiter, holder_acquired, waiter_blocked):
         self._inner = inner
@@ -121,6 +140,8 @@ class _ObservingLock:
         self._waiter = waiter
         self.holder_acquired = holder_acquired
         self.waiter_blocked = waiter_blocked
+        self.observer_error: BaseException | None = None
+        self.hold_release_until_waiter = True
 
     def acquire(self, blocking=True, timeout=-1):
         me = threading.current_thread()
@@ -135,9 +156,15 @@ class _ObservingLock:
         return acquired
 
     def release(self):
-        if threading.current_thread() is self._holder:
-            assert self.waiter_blocked.wait(timeout=5)
-        self._inner.release()
+        try:
+            if (
+                threading.current_thread() is self._holder
+                and self.hold_release_until_waiter
+            ):
+                if not self.waiter_blocked.wait(timeout=5):
+                    self.observer_error = AssertionError("waiter was not observed blocked on lock")
+        finally:
+            self._inner.release()
 
     def locked(self):
         return self._inner.locked()
@@ -151,9 +178,63 @@ class _ObservingLock:
         return False
 
 
+def _thread(name: str, fn, errors: dict) -> threading.Thread:
+    def _run() -> None:
+        try:
+            fn()
+        except BaseException as exc:
+            errors[name] = exc
+
+    return threading.Thread(target=_run, name=name)
+
+
+def _join_threads(threads: list[threading.Thread], *, unlock=None, timeout: float = 15) -> None:
+    try:
+        for thread in threads:
+            thread.join(timeout=timeout)
+    finally:
+        if unlock is not None:
+            unlock()
+        for thread in threads:
+            thread.join(timeout=timeout)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    if alive:
+        pytest.fail(f"threads still alive: {alive}")
+
+
+def _raise_thread_errors(errors: dict, extra: BaseException | None = None) -> None:
+    items = list(errors.items())
+    if extra is not None:
+        items.append(("observer", extra))
+    if not items:
+        return
+    name, exc = items[0]
+    raise AssertionError(f"worker thread {name} failed: {exc!r}") from exc
+
+
 def _due_interval(state: IsolatedScheduleState, job_type: str = "wallet") -> IsolatedScheduleState:
     state.next_every[job_type] = 0.0
     return state
+
+
+def _sealed() -> WorkAdmission:
+    admission = WorkAdmission()
+    admission._bind_instance()
+    admission.seal()
+    return admission
+
+
+def _count_executor(monkeypatch) -> list:
+    real = get_job_executor()
+    hits: list = []
+
+    class _Wrap:
+        def submit(self, fn, *args, **kwargs):
+            hits.append((fn, args, kwargs))
+            return real.submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Wrap())
+    return hits
 
 
 def test_s1_interval_due_open_one_submit(monkeypatch) -> None:
@@ -214,28 +295,40 @@ def test_s3_foreign_key_no_admission_no_clocks(monkeypatch) -> None:
 
 
 def test_s4_seal_before_submit_lock_barrier(monkeypatch) -> None:
+    """OPEN at tick start; seal wins after hourly peek, before submit_job_if_open."""
     stub = _install_stub(monkeypatch)
+    hits = _count_executor(monkeypatch)
     admission = _open()
-    state = _due_interval(IsolatedScheduleState())
+    state = IsolatedScheduleState()
+    state.next_every["hourly"] = 0.0
     holder_acquired = threading.Event()
     waiter_blocked = threading.Event()
+    in_prepare = threading.Event()
     outcome: dict[str, object] = {}
+    errors: dict[str, BaseException] = {}
+
+    def _params(*, job):
+        in_prepare.set()
+        assert holder_acquired.wait(timeout=5)
+        return {"intraday_interval_minutes": 15}
+
+    monkeypatch.setattr("modules.antares.hourly_gate.get_job_params", _params)
 
     def _seal() -> None:
+        assert in_prepare.wait(timeout=5)
         admission.seal()
 
     def _tick() -> None:
-        assert holder_acquired.wait(timeout=5)
         outcome["r"] = tick(
             state,
             now_ts=50.0,
-            now_dt=_dt(),
-            schedules=[_sched("wallet", every_seconds=10)],
+            now_dt=_dt(10, 5),
+            schedules=[_sched("hourly", every_seconds=10)],
             admission=admission,
         )
 
-    tick_thread = threading.Thread(target=_tick, name="sched-tick")
-    seal_thread = threading.Thread(target=_seal, name="sched-seal")
+    tick_thread = _thread("sched-tick", _tick, errors)
+    seal_thread = _thread("sched-seal", _seal, errors)
     observed = _ObservingLock(
         admission._lock,
         holder=seal_thread,
@@ -244,17 +337,20 @@ def test_s4_seal_before_submit_lock_barrier(monkeypatch) -> None:
         waiter_blocked=waiter_blocked,
     )
     admission._lock = observed
-    seal_thread.start()
-    tick_thread.start()
-    seal_thread.join(timeout=5)
-    tick_thread.join(timeout=5)
-    assert not seal_thread.is_alive()
-    assert not tick_thread.is_alive()
+    try:
+        tick_thread.start()
+        seal_thread.start()
+        _join_threads([seal_thread, tick_thread])
+    finally:
+        stub.release.set()
+    _raise_thread_errors(errors, observed.observer_error)
     result = outcome["r"]
     assert isinstance(result.rejected[0], AdmissionRejected)
     assert result.rejected[0].state is AdmissionState.SEALED
     assert stub.calls == []
-    assert state.next_every["wallet"] == 0.0
+    assert hits == []
+    assert state.next_every["hourly"] == 0.0
+    assert state.hourly_gate.last_intraday_key is None
 
 
 def test_s5_submit_before_seal_future_lives(monkeypatch) -> None:
@@ -265,13 +361,14 @@ def test_s5_submit_before_seal_future_lives(monkeypatch) -> None:
     waiter_blocked = threading.Event()
     in_submit = threading.Event()
     outcome: dict[str, object] = {}
+    errors: dict[str, BaseException] = {}
     real = get_job_executor()
 
     class _HoldSubmit:
         def submit(self, fn, *args, **kwargs):
             assert admission._lock.locked()
             in_submit.set()
-            assert waiter_blocked.wait(timeout=5)
+            waiter_blocked.wait(timeout=5)
             return real.submit(fn, *args, **kwargs)
 
     monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _HoldSubmit())
@@ -289,8 +386,8 @@ def test_s5_submit_before_seal_future_lives(monkeypatch) -> None:
         assert in_submit.wait(timeout=5)
         admission.seal()
 
-    tick_thread = threading.Thread(target=_tick, name="sched-tick")
-    seal_thread = threading.Thread(target=_seal, name="sched-seal")
+    tick_thread = _thread("sched-tick", _tick, errors)
+    seal_thread = _thread("sched-seal", _seal, errors)
     observed = _ObservingLock(
         admission._lock,
         holder=tick_thread,
@@ -298,19 +395,101 @@ def test_s5_submit_before_seal_future_lives(monkeypatch) -> None:
         holder_acquired=holder_acquired,
         waiter_blocked=waiter_blocked,
     )
+    observed.hold_release_until_waiter = False
     admission._lock = observed
-    tick_thread.start()
-    seal_thread.start()
-    tick_thread.join(timeout=5)
-    seal_thread.join(timeout=5)
-    assert not tick_thread.is_alive()
-    assert not seal_thread.is_alive()
+    try:
+        tick_thread.start()
+        seal_thread.start()
+        _join_threads([tick_thread, seal_thread], unlock=stub.release.set)
+    finally:
+        stub.release.set()
+    _raise_thread_errors(errors, observed.observer_error)
     result = outcome["r"]
     fut = result.accepted[0].future
     assert not fut.cancelled()
-    stub.release.set()
     assert fut.result(timeout=5) == "jid-wallet-1"
     assert admission.state is AdmissionState.SEALED
+
+
+def test_sealed_empty_clocks_interval_and_cron_no_arm(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    hits = _count_executor(monkeypatch)
+    admission = _sealed()
+    state = IsolatedScheduleState()
+    result = tick(
+        state,
+        now_ts=10.0,
+        now_dt=_dt(hour=1, minute=0),
+        schedules=[
+            _sched("wallet", every_seconds=30, sid="i"),
+            _sched("rate", "cron", cron="0 2 * * *", sid="c"),
+        ],
+        admission=admission,
+    )
+    assert result.accepted == []
+    assert result.rejected == []
+    assert stub.calls == []
+    assert hits == []
+    assert state.next_every == {}
+    assert state.next_cron == {}
+
+
+def test_sealed_due_hourly_gate_skip_does_not_consume(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    hits = _count_executor(monkeypatch)
+    admission = _sealed()
+    now_dt = _dt(10, 7)
+    state = IsolatedScheduleState()
+    state.next_every["hourly"] = 0.0
+    state.next_cron["hourly"] = now_dt
+    state.hourly_gate.last_intraday_key = "20260607-0040"
+    state.hourly_gate.last_final_key = "20260606"
+    with patch("modules.antares.hourly_gate.get_job_params", return_value={"intraday_interval_minutes": 15}):
+        interval = tick(
+            state,
+            now_ts=50.0,
+            now_dt=now_dt,
+            schedules=[_sched("hourly", every_seconds=10, sid="i")],
+            admission=admission,
+        )
+        cron = tick(
+            state,
+            now_ts=50.0,
+            now_dt=now_dt,
+            schedules=[_sched("hourly", "cron", cron="7 10 * * *", sid="c")],
+            admission=admission,
+        )
+    assert interval.accepted == [] and interval.rejected == []
+    assert cron.accepted == [] and cron.rejected == []
+    assert stub.calls == []
+    assert hits == []
+    assert state.next_every["hourly"] == 0.0
+    assert state.next_cron["hourly"] == now_dt
+    assert state.hourly_gate.last_intraday_key == "20260607-0040"
+    assert state.hourly_gate.last_final_key == "20260606"
+
+
+def test_sealed_reset_clocks_without_arm(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    hits = _count_executor(monkeypatch)
+    admission = _sealed()
+    state = IsolatedScheduleState()
+    state.next_every["wallet"] = 99.0
+    state.next_cron["rate"] = _dt()
+    state.hourly_gate.last_intraday_key = "keep-me"
+    request_scheduler_clocks_reset("sealed-reset")
+    tick(
+        state,
+        now_ts=10.0,
+        now_dt=_dt(),
+        schedules=[_sched("wallet", every_seconds=5), _sched("rate", "cron", cron="0 2 * * *")],
+        admission=admission,
+    )
+    assert stub.calls == []
+    assert hits == []
+    assert state.next_every == {}
+    assert state.next_cron == {}
+    assert state.hourly_gate.last_intraday_key == "keep-me"
 
 
 def test_s6_closed_rejects_without_consuming(monkeypatch) -> None:
@@ -371,6 +550,81 @@ def test_s7b_two_interval_rows_one_attempt(monkeypatch) -> None:
     tick(state, now_ts=50.0, now_dt=_dt(), schedules=rows, admission=admission)
     assert _Boom.n == 1
     assert state.next_every["wallet"] == 0.0
+
+
+def test_two_interval_rows_rejected_one_admission_attempt(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    hits = _count_executor(monkeypatch)
+    admission = _closed()
+    state = _due_interval(IsolatedScheduleState())
+    rows = [
+        _sched("wallet", every_seconds=10, sid="a"),
+        _sched("wallet", every_seconds=10, sid="b"),
+    ]
+    result = tick(state, now_ts=50.0, now_dt=_dt(), schedules=rows, admission=admission)
+    assert len(result.rejected) == 1
+    assert result.rejected[0].state is AdmissionState.BOUND_CLOSED
+    assert hits == []
+    assert stub.calls == []
+    assert state.next_every["wallet"] == 0.0
+
+
+def test_hourly_submit_exception_same_bucket_retries(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    real = get_job_executor()
+
+    class _BoomOnce:
+        n = 0
+
+        def submit(self, fn, *a, **k):
+            type(self).n += 1
+            if type(self).n == 1:
+                raise RuntimeError("submit failed")
+            return real.submit(fn, *a, **k)
+
+    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _BoomOnce())
+    admission = _open()
+    state = IsolatedScheduleState()
+    state.next_every["hourly"] = 0.0
+    now_dt = _dt(10, 5)
+    rows = [_sched("hourly", every_seconds=10)]
+    with patch("modules.antares.hourly_gate.get_job_params", return_value={"intraday_interval_minutes": 15}):
+        first = tick(state, now_ts=50.0, now_dt=now_dt, schedules=rows, admission=admission)
+        assert first.submit_exceptions
+        assert state.next_every["hourly"] == 0.0
+        assert state.hourly_gate.last_intraday_key is None
+        second = tick(state, now_ts=50.0, now_dt=now_dt, schedules=rows, admission=admission)
+    assert len(second.accepted) == 1
+    wait([second.accepted[0].future], timeout=5)
+    assert stub.calls == [("hourly", "scheduler", False)]
+    assert state.hourly_gate.last_intraday_key == "20260607-0040"
+
+
+def test_final_daily_reject_and_submit_error_do_not_commit_key(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch)
+    params = {"final_daily_time": "02:30"}
+    fire_dt = _dt(2, 30)
+    rows = [_sched("hourly", "cron", cron="30 2 * * *")]
+    with patch("modules.antares.hourly_gate.get_job_params", return_value=params):
+        closed = IsolatedScheduleState()
+        closed.next_cron["hourly"] = fire_dt
+        rejected = tick(closed, now_ts=2.0, now_dt=fire_dt, schedules=rows, admission=_closed())
+        assert rejected.rejected
+        assert closed.hourly_gate.last_final_key is None
+        assert closed.next_cron["hourly"] == fire_dt
+
+        class _Boom:
+            def submit(self, *a, **k):
+                raise RuntimeError("submit failed")
+
+        monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Boom())
+        boom_state = IsolatedScheduleState()
+        boom_state.next_cron["hourly"] = fire_dt
+        boom = tick(boom_state, now_ts=2.0, now_dt=fire_dt, schedules=rows, admission=_open())
+        assert boom.submit_exceptions
+        assert boom_state.hourly_gate.last_final_key is None
+        assert boom_state.next_cron["hourly"] == fire_dt
+    assert stub.calls == []
 
 
 def test_s7c_next_tick_retries_unconsumed(monkeypatch) -> None:
@@ -546,11 +800,27 @@ def test_s11_gate_skip_writes_next_not_last(monkeypatch) -> None:
     assert state.hourly_gate.last_intraday_key == "20260607-0040"
 
 
-def test_s12_future_error_logged_once_no_rollback(monkeypatch, caplog) -> None:
-    stub = _install_stub(monkeypatch, error=RuntimeError("job failed"))
+def test_s12_future_error_logged_once_no_rollback(monkeypatch) -> None:
+    stub = _install_stub(monkeypatch, hold=True, error=RuntimeError("job failed"))
     admission = _open()
-    state = _due_interval(IsolatedScheduleState())
-    with caplog.at_level(logging.ERROR, logger="modules.antares.scheduler"):
+    state = IsolatedScheduleState()
+    state.next_every["wallet"] = 0.0
+    state.hourly_gate.last_intraday_key = "keep-gate"
+    logged = threading.Event()
+    logger = logging.getLogger("modules.antares.scheduler")
+    orig_exc = logger.exception
+    count = {"n": 0}
+
+    def _exc(*args, **kwargs):
+        try:
+            return orig_exc(*args, **kwargs)
+        finally:
+            if args and "scheduled job failed" in str(args[0]):
+                count["n"] += 1
+                logged.set()
+
+    monkeypatch.setattr(logger, "exception", _exc)
+    try:
         result = tick(
             state,
             now_ts=50.0,
@@ -558,14 +828,29 @@ def test_s12_future_error_logged_once_no_rollback(monkeypatch, caplog) -> None:
             schedules=[_sched("wallet", every_seconds=10)],
             admission=admission,
         )
-        wait([result.accepted[0].future], timeout=5)
-    assert state.next_every["wallet"] == 60.0
-    lines = [r for r in caplog.records if "scheduled job failed" in r.getMessage()]
-    assert len(lines) == 1
-    assert stub.calls == [("wallet", "scheduler", False)]
+        assert len(result.accepted) == 1
+        assert state.next_every["wallet"] == 60.0
+        stub.release.set()
+        assert logged.wait(timeout=5)
+        assert count["n"] == 1
+        assert stub.calls == [("wallet", "scheduler", False)]
+        assert state.hourly_gate.last_intraday_key == "keep-gate"
+        again = tick(
+            state,
+            now_ts=55.0,
+            now_dt=_dt(),
+            schedules=[_sched("wallet", every_seconds=10)],
+            admission=admission,
+        )
+        assert again.accepted == []
+        assert stub.calls == [("wallet", "scheduler", False)]
+        assert state.next_every["wallet"] == 60.0
+        assert count["n"] == 1
+    finally:
+        stub.release.set()
 
 
-def test_s12b_future_already_done_callback_logs_once(monkeypatch, caplog) -> None:
+def test_s12b_future_already_done_callback_sees_commit(monkeypatch) -> None:
     stub = _install_stub(monkeypatch, error=RuntimeError("already done"))
     admission = _open()
     orig = admission.submit_job_if_open
@@ -578,8 +863,38 @@ def test_s12b_future_already_done_callback_logs_once(monkeypatch, caplog) -> Non
         return outcome
 
     monkeypatch.setattr(admission, "submit_job_if_open", _wait_done)
-    state = _due_interval(IsolatedScheduleState())
-    with caplog.at_level(logging.ERROR, logger="modules.antares.scheduler"):
+    state = IsolatedScheduleState()
+    state.next_every["wallet"] = 0.0
+    state.hourly_gate.last_intraday_key = "keep-gate"
+    during_cb: dict[str, object] = {}
+    logged = threading.Event()
+    handler = _LogSeen(logged, "scheduled job failed")
+    logger = logging.getLogger("modules.antares.scheduler")
+    from concurrent.futures import Future as CFFuture
+
+    orig_add = CFFuture.add_done_callback
+
+    def _add(self, cb):
+        def _wrapped(fut):
+            during_cb["next_every"] = dict(state.next_every)
+            during_cb["last_intraday"] = state.hourly_gate.last_intraday_key
+            cb(fut)
+
+        orig_add(self, _wrapped)
+
+    monkeypatch.setattr(CFFuture, "add_done_callback", _add)
+    logger.addHandler(handler)
+    orig_exc = logger.exception
+
+    def _exc(*args, **kwargs):
+        try:
+            return orig_exc(*args, **kwargs)
+        finally:
+            if args and "scheduled job failed" in str(args[0]):
+                logged.set()
+
+    monkeypatch.setattr(logger, "exception", _exc)
+    try:
         result = tick(
             state,
             now_ts=50.0,
@@ -587,14 +902,18 @@ def test_s12b_future_already_done_callback_logs_once(monkeypatch, caplog) -> Non
             schedules=[_sched("wallet", every_seconds=10)],
             admission=admission,
         )
-    assert result.accepted[0].future.done()
-    assert state.next_every["wallet"] == 60.0
-    lines = [r for r in caplog.records if "scheduled job failed" in r.getMessage()]
-    assert len(lines) == 1
-    assert stub.calls == [("wallet", "scheduler", False)]
+        assert logged.wait(timeout=5)
+        assert result.accepted[0].future.done()
+        assert during_cb["next_every"] == {"wallet": 60.0}
+        assert during_cb["last_intraday"] == "keep-gate"
+        assert state.next_every["wallet"] == 60.0
+        assert handler.count == 1
+        assert stub.calls == [("wallet", "scheduler", False)]
+    finally:
+        logger.removeHandler(handler)
 
 
-def test_s13_observer_attach_error_keeps_accepted(monkeypatch) -> None:
+def test_s13_observer_attach_error_keeps_accepted_no_duplicate(monkeypatch) -> None:
     stub = _install_stub(monkeypatch)
     admission = _open()
     state = _due_interval(IsolatedScheduleState())
@@ -615,6 +934,16 @@ def test_s13_observer_attach_error_keeps_accepted(monkeypatch) -> None:
     assert state.next_every["wallet"] == 60.0
     wait([result.accepted[0].future], timeout=5)
     assert stub.calls == [("wallet", "scheduler", False)]
+    again = tick(
+        state,
+        now_ts=50.0,
+        now_dt=_dt(),
+        schedules=[_sched("wallet", every_seconds=10)],
+        admission=admission,
+    )
+    assert again.accepted == []
+    assert stub.calls == [("wallet", "scheduler", False)]
+    assert state.next_every["wallet"] == 60.0
 
 
 def test_s14_reset_clocks_keeps_gate(monkeypatch) -> None:
