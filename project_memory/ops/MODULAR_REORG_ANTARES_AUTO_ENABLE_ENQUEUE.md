@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **подготовлен к review** (протокол выбран); runtime **не** менялся |
+| **Статус** | контракт **принят** (GPT review на `741f5ccf7e59e172d5ec427fa630343238bb768c`); runtime **не** менялся; реализация — TASK-38 |
 | **База** | закрытие TASK-36 `c9c75336cd12dc5182608790159055aa5c73482a` (принятый review HEAD `3f6d3e75dd4874efb9020374bf82360771092f2e`, Draft PR #39) |
 | **Обследованный SHA** | runtime `3f6d3e7…` / close `c9c7533…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) § 7.2 |
@@ -288,4 +288,4 @@ Admit (Draft, не выпущено): TG jobs; export/plan/run submit; replay; r
 
 ## 11. Границы этого docs
 
-Runtime нет. Не serve, не live polling, не merge. `/auto_enable_plan` без AE continuation. Seal не отменяет принятый run. Произвольный `Queue.put` не закрыт. Timeout ≠ «execute не было».
+Контракт **принят**. Runtime **не** менялся. Реализация — TASK-38. Не serve, не live polling, не merge. `/auto_enable_plan` без AE continuation. Seal не отменяет принятый run. Произвольный `Queue.put` не закрыт. Timeout ≠ «execute не было». Already-dead worker с очередью — отложенный блокер (§ 7).

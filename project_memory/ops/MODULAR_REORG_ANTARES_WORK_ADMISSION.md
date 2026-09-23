@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт; schedules TASK-36 закрыт (`c9c7533…` / review `3f6d3e7…`, не выпущен); внутренний Auto-Enable enqueue — TASK-37; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт; schedules TASK-36 закрыт (`c9c7533…` / review `3f6d3e7…`, не выпущен); внутренний Auto-Enable enqueue TASK-37 принят (`741f5cc…`, не выпущен, impl TASK-38); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -274,7 +274,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.2 Внутренние постановки Auto-Enable
 
-Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37 docs).
+Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37 принят `741f5cc…`; code TASK-38).
 
 `run_auto_enable` → `enqueue_auto_enable_batch`. Isolated: continuation на том же `WorkAdmission`, wrapper в `executor.submit`, проверка **до** ensure/put. Seal не отзывает живой Accepted run. Прямой `enqueue_auto_enable_batch` при bound admission без token — отказ. Mixed unbound без изменения put. Произвольный `Queue.put` не закрыт. Dead worker с очередью — отложенный блокер.
 

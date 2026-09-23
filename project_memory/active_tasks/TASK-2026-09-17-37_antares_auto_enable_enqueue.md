@@ -3,13 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-37 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
-| **Связанные артефакты** | TASK-36 close `c9c75336cd12dc5182608790159055aa5c73482a` (review `3f6d3e75dd4874efb9020374bf82360771092f2e`, Draft PR #39); [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](../ops/MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
+| **Связанные артефакты** | TASK-36 close `c9c75336cd12dc5182608790159055aa5c73482a` (review `3f6d3e75dd4874efb9020374bf82360771092f2e`, Draft PR #39); [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](../ops/MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md); реализация — TASK-38 |
 | **PR** | Draft [#40](https://github.com/deniskotdavydov1991-wq/Test/pull/40) `feat/task-2026-09-17-37-antares-auto-enable-enqueue`, base `feat/task-2026-09-17-36-antares-schedules-admission-impl` |
 | **Риск** | medium: shared WE `CONVERSION_AUTO` queue; mixed `enqueue_auto_enable_batch` не менять этим docs |
 
-Контракт внутреннего Auto-Enable enqueue. Runtime **не** менялся. Реализация **ещё не** выполнена. TASK-36 повторно не закрывать. Merge/deploy нет. PR [#40](https://github.com/deniskotdavydov1991-wq/Test/pull/40) остаётся Draft.
+Review **пройден**. GPT проверил контракт на полном SHA `741f5ccf7e59e172d5ec427fa630343238bb768c`. GPT pytest **не** запускал. Runtime **не** менялся. Этот docs-коммит — закрытие TASK-37. Реализация **ещё не** выполнена (TASK-38). TASK-36 повторно не закрывать. PR #40 остаётся Draft. Merge/deploy нет.
+
+Сохранены: already-dead worker / смерть worker до `get()` — отложенный блокер; покрытие только `enqueue_auto_enable_batch` при bound admission (не произвольный `Queue.put`).
 
 ---
 
@@ -29,8 +31,8 @@
 - [x] Ошибки до/после put; Future-once; log после set_result
 - [x] Граница worker для обычных AE exception; dead worker — отложенный блокер
 - [x] Матрица E1–E15
-- [ ] GPT review
-- [ ] реализация
+- [x] GPT review контракта на `741f5cc…`; pytest GPT не запускал
+- [ ] реализация (TASK-38)
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -46,13 +48,13 @@
 | Кто | Что |
 |-----|-----|
 | Cursor | обследование worker/handlers на `3f6d3e7…` / close `c9c7533…`; runtime не менялся; pytest не требовался |
-| GPT | pytest **не** запускал (ожидается review) |
+| GPT | контракт на `741f5ccf7e59e172d5ec427fa630343238bb768c`; pytest **не** запускал |
 
 ---
 
 ## Out Of Scope
 
-runtime; mixed enqueue/add_task; conversion в первый isolated; serve; drain/join; live кабинеты/Telegram/сеть; merge/retarget/deploy; исходное Test; повторное закрытие TASK-36.
+runtime; mixed enqueue/add_task; conversion в первый isolated; serve; drain/join; live кабинеты/Telegram/сеть; merge/retarget/deploy; исходное Test; повторное закрытие TASK-36; надзор/restart мёртвого worker.
 
 ---
 
@@ -62,3 +64,4 @@ runtime; mixed enqueue/add_task; conversion в первый isolated; serve; dra
 |------|---------|
 | 2026-09-23 | docs-контракт Auto-Enable enqueue continuation; статус **review (подготовлено)** |
 | 2026-09-23 | протокол выбран: WorkAdmission token + submit wrapper + gate в `enqueue_auto_enable_batch`; E9–E15 |
+| 2026-09-23 | GPT review на `741f5cc…`; закрытие docs; runtime нет; реализация TASK-38 |
