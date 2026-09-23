@@ -3,13 +3,13 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-38 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
-| **Связанные артефакты** | TASK-37 close `8efa1ec9a88d1ad628e679bee83755d758dc9382` (GPT review `741f5ccf7e59e172d5ec427fa630343238bb768c`, Draft PR #40); [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](../ops/MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
+| **Связанные артефакты** | TASK-37 close `8efa1ec9a88d1ad628e679bee83755d758dc9382` (review `741f5ccf7e59e172d5ec427fa630343238bb768c`, Draft PR #40); [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](../ops/MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
 | **PR** | Draft [#41](https://github.com/deniskotdavydov1991-wq/Test/pull/41) `feat/task-2026-09-17-38-antares-auto-enable-enqueue-impl`, base `feat/task-2026-09-17-37-antares-auto-enable-enqueue` |
 | **Риск** | medium: shared WE `CONVERSION_AUTO` queue; mixed ensure/put order не менять |
 
-Реализация принятого протокола continuation. TASK-37 повторно не закрывать. Merge/deploy нет. Serve/drain/join/already-dead worker supervision **не** реализованы.
+Review **пройден**. GPT проверил код/diff и тесты на полном SHA `f12811035433bce0306ef9ef9d328db43652795a`. GPT pytest **не** запускал. Этот docs-коммит — закрытие TASK-38. Isolated Auto-Enable continuation **реализован**, **не выпущен**. Harness `_HarnessQueue.end_loop` **не** production stop API. Already-dead worker и смерть worker до `get()` остаются блокерами lifecycle (TASK-39). TASK-37 повторно не закрывать. PR #41 остаётся Draft. Merge/deploy нет.
 
 ---
 
@@ -29,7 +29,7 @@ Isolated `/auto_enable_run` регистрирует continuation до `executor
 - [x] qsize/info/exception-log после put не отменяют wait; terminal worker не зависит от log.exception
 - [x] E1–E15: чужой admission, отозванная запись, чужой поток, реальный ImportError до execute; E9 вход в activate до возврата submit
 - [x] Тестовый harness: временный registry, Finite/Harness Queue, join потоков, restore handlers
-- [ ] GPT review
+- [x] GPT review кода/diff и тестов на `f128110…`; pytest GPT не запускал
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -68,25 +68,32 @@ Isolated `/auto_enable_run` регистрирует continuation до `executor
 
 ## Происхождение проверки
 
-Наборы не суммировать. SHA прогона — HEAD после review-fix (этот коммит).
+Наборы не суммировать. Прогон Cursor — SHA review `f12811035433bce0306ef9ef9d328db43652795a`.
+
+### Успешно
 
 | Кто | Что |
 |-----|-----|
-| Cursor | `tests/test_antares_auto_enable_enqueue.py` **25 passed**, exit 0, Python **3.12.10** |
-| Cursor | `tests/unit/test_wallet_editor_auto_enable_orchestrator.py` + phase_b1/b2 + `tests/unit/test_wallet_editor_concurrency_guard.py` **40 passed, 1 failed** — `test_disable_flow_unchanged` (`patch("automation.worker.schedule_registry_append")`). **То же на base `8efa1ec…`:** символ есть только в тесте, в `automation/worker.py` base и HEAD отсутствует |
-| Cursor | `tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py` **120 passed**, exit 0 |
-| Cursor | `tests/test_antares_ingest_admission.py tests/unit/test_wallet_editor_worker.py` **36 passed, 1 failed** — `test_worker_passes_user_output_file_to_registry_schedule`. **Сравнение с base `8efa1ec…`:** `git grep stage_registry_result_copy 8efa1ec -- automation/worker.py` пусто; совпадение только `tests/unit/test_wallet_editor_worker.py:232` `patch("automation.worker.stage_registry_result_copy")`. HEAD `automation/worker.py` тот же пробел, не регрессия этого PR |
-| Cursor | `tests/unit/test_antares_boot.py tests/unit/test_antares_lifecycle.py` **52 passed**, exit 0 |
-| GPT | pytest **не** запускал (ожидается review) |
+| Cursor | `tests/test_antares_auto_enable_enqueue.py` **25 passed**, exit 0, Python **3.12.10**, SHA `f128110…` |
+| Cursor | `tests/unit/test_antares_work_admission.py tests/test_antares_handlers.py` **120 passed**, exit 0, тот же SHA |
+| Cursor | `tests/unit/test_antares_boot.py tests/unit/test_antares_lifecycle.py` **52 passed**, exit 0, тот же SHA |
+| GPT | код/diff и тесты на `f12811035433bce0306ef9ef9d328db43652795a`; pytest **не** запускал |
+
+### Прежние падения (не этого PR; те же на base `8efa1ec…`)
+
+| Кто | Что |
+|-----|-----|
+| Cursor | orchestrator/concurrency: **40 passed, 1 failed** `test_disable_flow_unchanged` — `patch("automation.worker.schedule_registry_append")`; в `automation/worker.py` символа нет на `8efa1ec…` и на `f128110…` |
+| Cursor | ingest/worker: **36 passed, 1 failed** `test_worker_passes_user_output_file_to_registry_schedule` — `git grep stage_registry_result_copy 8efa1ec -- automation/worker.py` пусто; совпадение только тест L232; HEAD тот же пробел |
 
 **real:** `WorkAdmission`, `executor.submit`, production `worker_loop` на тестовой `_HarnessQueue`, `Queue`, `Future`.  
-**stub:** `execute_enable_batch` (кроме E14 import delattr), credentials, Playwright. Harness `end_loop` — только тест, не production stop API.
+**stub:** `execute_enable_batch` (кроме E14 import delattr), credentials, Playwright. Harness `end_loop` — только тест, **не** production stop API.
 
 ---
 
 ## Out Of Scope
 
-надзор/restart мёртвого worker; drain/join; serve; scheduled Auto-Enable; mixed-stop; live кабинеты/Telegram; merge/retarget/deploy; исходное Test; повторное закрытие TASK-37.
+надзор/restart мёртвого worker; production drain/join; serve; scheduled Auto-Enable; mixed-stop; live кабинеты/Telegram; merge/retarget/deploy; исходное Test; повторное закрытие TASK-37.
 
 ---
 
@@ -96,3 +103,4 @@ Isolated `/auto_enable_run` регистрирует continuation до `executor
 |------|---------|
 | 2026-09-23 | реализация контракта TASK-37; статус **review (подготовлено)** |
 | 2026-09-23 | review-fix: безопасная диагностика batch/worker; harness без clear живых потоков; E6/E9/E14/E15 |
+| 2026-09-23 | GPT review на `f128110…`; закрытие docs; continuation не выпущен; drain — TASK-39 |
