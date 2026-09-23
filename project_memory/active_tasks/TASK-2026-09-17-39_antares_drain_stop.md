@@ -22,11 +22,13 @@
 ## Success Criteria
 
 - [x] Реестр Futures на admission, согласован с submit/seal; callback вне lock; cancel handler не снимает работу
-- [x] Sender S1–S3 + `send_photo_sync` вне очереди; outbox sync vs daemon
-- [x] Work drain vs resource shutdown; production WE sentinel ≠ harness
-- [x] Helper: producers после seal, drain без блокировки loop
-- [x] Dead worker/deadline = failure + отчёт, без retry
-- [x] Матрица D1–D23; O1–O9 сведены; O10 mixed-stop до cutover
+- [x] Sender S1–S3 + rollback handoff; intake seal вместе с idle; `send_photo_sync` вне очереди
+- [x] Work drain vs resource shutdown; финальный WE список после producers+executor+continuation
+- [x] Registry daemon: учёт/join для полного graceful до sender; `delayed_cleanup` — отдельное исключение
+- [x] Cancel drain не трогает Accepted Future (не голый wrap_future); один cleanup
+- [x] Helper порядок: drain → registry join → WE sentinel → sender → PTB
+- [x] Dead worker/deadline = failure + отчёт, без retry (в т.ч. живой registry daemon)
+- [x] Матрица D1–D30; O1–O9 сведены; O10 mixed-stop до cutover
 - [ ] GPT review
 - [ ] реализация
 - [ ] merge/deploy (намеренно открыто)
@@ -37,7 +39,7 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | уточнение контракта по review HEAD `ffa270222ccd2471cb39337f438cbc7996239d6f`; обследование sender/outbox/ingest ensure на `f128110…`; runtime нет; pytest не требовался |
+| Cursor | точечное уточнение по review HEAD `dbc7ce4b80ff8326ace5cea25efd40eb6c9b7cdd`: финальный WE список после AE, registry join, cancel drain, sender rollback; runtime нет; pytest не требовался |
 | GPT | pytest **не** запускал (ожидается review) |
 
 ---
@@ -53,4 +55,4 @@ runtime; serve; mixed-stop; mixed gate; merge/retarget/deploy; исходное 
 | Дата | Событие |
 |------|---------|
 | 2026-09-23 | docs-контракт isolated drain/stop; статус **review (подготовлено)** |
-| 2026-09-23 | уточнение: реестр Futures, sender S1–S3, drain≠shutdown, helper, deadline failure, D17–D23 |
+| 2026-09-23 | точечно: финальный список WE после executor/continuation; registry daemon в полный graceful; cancel drain; sender handoff rollback / intake seal; D24–D30 |
