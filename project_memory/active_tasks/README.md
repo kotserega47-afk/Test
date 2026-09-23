@@ -64,7 +64,7 @@
 | [TASK-2026-09-17-33](TASK-2026-09-17-33_antares_ingest_admission.md) | Контракт допуска Telegram document ingest: GPT review на `4682e399…`, закрытие docs `cecb336…`, runtime нет, pytest GPT не запускал, реализация TASK-34, Draft PR #36 |
 | [TASK-2026-09-17-34](TASK-2026-09-17-34_antares_ingest_admission.md) | Isolated ingest admission code: GPT review на `f76f9c9…`, закрытие docs, Cursor 28/95, не выпущено, Draft PR #37 |
 | [TASK-2026-09-17-35](TASK-2026-09-17-35_antares_schedules_admission.md) | Контракт допуска isolated schedules: GPT review на `ce5326a…`, закрытие docs `0be29ec…`, runtime нет, реализация TASK-36, Draft PR #38 |
-| [TASK-2026-09-17-36](TASK-2026-09-17-36_antares_schedules_admission.md) | Isolated schedule tick + HourlyGate peek/commit: реализация принятого контракта, Draft PR, review |
+| [TASK-2026-09-17-36](TASK-2026-09-17-36_antares_schedules_admission.md) | Isolated schedule tick + HourlyGate peek/commit: HEAD `44d36f6…`, Draft PR #39, review |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-35 close `0be29ec80685753ba5286b2a03b0e02ab0048eed` (GPT review `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`, Draft PR #38); [MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md) |
-| **PR** | Draft `feat/task-2026-09-17-36-antares-schedules-admission-impl`, base `feat/task-2026-09-17-35-antares-schedules-admission` |
+| **PR** | Draft [#39](https://github.com/deniskotdavydov1991-wq/Test/pull/39) `feat/task-2026-09-17-36-antares-schedules-admission-impl`, base `feat/task-2026-09-17-35-antares-schedules-admission` HEAD `44d36f6620451525bc43cc76097cdbed4530dce1` |
 | **Риск** | medium: общий job executor; mixed `schedule_loop` / `dispatch_job_background` не менять |
 
 Реализация принятого контракта TASK-35. Tick **не** подключён к `boot`/`run`/`assemble_antares`. Serve, поток, бесконечный loop **нет**. TASK-35 повторно не закрывать. PR остаётся Draft. Merge/deploy нет.
