@@ -15,19 +15,18 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 
 ## Goal
 
-Зафиксировать peek/commit HourlyGate, однозначные часы, API `tick` без импорта mixed `scheduler.py`, identity по `job_type` как mixed, наблюдение Accepted Future — без runtime.
+Зафиксировать peek/commit HourlyGate, однозначные часы, API `tick` без импорта mixed `scheduler.py`, identity по `job_type`, один observer Accepted Future — без runtime.
 
 ---
 
 ## Success Criteria
 
-- [x] Peek gate без мутации; commit gate+`next_*` только после Accepted
-- [x] closed / submit error не потребляют due/gate; Future error не откатывает; нет intra-tick retry
-- [x] Gate-skip **сдвигает** `next_*`; sealed = явный no-op submit
-- [x] Owner `modules.antares.scheduler`; копия cron/hourly формул; boot/run не стартуют tick
-- [x] Observation callback сразу после Accepted; seal не cancel; диагностика ≠ повтор слота
-- [x] Несколько rows одного `job_type`: сохранить mixed (не ключ по `id`)
-- [x] Матрица S1–S18; «два тика» — дефект ожидания теста
+- [x] Peek gate без мутации; commit только подготовленного состояния после Accepted
+- [x] Tick-local `attempted` по `(job_type, schedule_type)`; отказ ≠ вторая попытка в том же tick
+- [x] Подготовка deadline/gate до submit; битый cron на due без ложного Accepted
+- [x] Один `add_done_callback`; без второго `watch_admitted_future`
+- [x] Последовательный `tick` на одном state; параллельный tick не поддерживается
+- [x] Матрица S1–S18 + S7b/c/d, S12b; «два тика» — дефект ожидания теста
 - [ ] GPT review контракта
 - [ ] реализация (будущий code)
 - [ ] merge/deploy (намеренно открыто)
@@ -39,13 +38,15 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 | Тема | Решение |
 |------|---------|
 | HourlyGate | peek на копии; commit только Accepted |
-| Следующий запуск | от `now_ts`/`now_dt` входов tick |
-| Gate-skip | сдвигает `next_*`, не last_* |
-| Rejected / submit error | не сдвигать; следующий tick может принять |
-| Sealed | явный no-op на tick, не обязательный stop thread |
-| Формулы cron/hourly | копия в `modules.antares.{schedule_timing,hourly_gate}`; mixed файл не импортировать |
-| Identity | `job_type` + раздельные dict interval/cron, как mixed |
-| Accepted | постановка `request_job`, не успех job / не busy-rollback |
+| Следующий запуск | заранее подготовленный next от `now_ts`/`now_dt`; не `_next_cron_run` после Accepted |
+| Gate-skip | записывает подготовленный `next_*`, не last_* |
+| Rejected / submit error | не сдвигать; `attempted` в tick; следующий tick может принять |
+| Дубли interval rows | одна попытка на clock за tick (isolated) |
+| Sealed | явный no-op на tick |
+| Observer | один `add_done_callback` на sync tick |
+| Tick concurrency | только последовательный вызов на state |
+| Identity clocks | `job_type` + раздельные interval/cron dict |
+| Accepted | постановка `request_job`, не успех job |
 
 ---
 
@@ -53,9 +54,9 @@ Docs-контракт isolated schedules. Runtime **не** менялся. Ре�
 
 | Кто | Что |
 |-----|-----|
-| Cursor | обследование на close TASK-34 `0576144…`; уточнение контракта от `209b96dc30df324d69c90d4619deae6aee2e7af8` |
+| Cursor | уточнение от HEAD `6aebbaba5c13e1c643108632ab77d9d943279aed` |
 | Cursor | «два тика»: **1 failed** на указанном fake clock; mixed не менялся |
-| GPT | ещё не ревьюил этот уточнённый контракт |
+| GPT | ещё не ревьюил это уточнение |
 
 Runtime этого PR не менялся. Pytest GPT не требовался.
 
@@ -63,7 +64,7 @@ Runtime этого PR не менялся. Pytest GPT не требовался.
 
 ## Out Of Scope
 
-runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg_receiver`; drain/join/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test; extract формул в `core/` (отдельное решение).
+runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg_receiver`; drain/join/sender stop; serve; mixed-stop; live polling; merge/retarget/deploy; исходное Test; extract формул в `core/`; параллельный tick.
 
 ---
 
@@ -73,3 +74,4 @@ runtime; mixed `schedule_loop`; internal Auto-Enable; conversion `add_task`; `tg
 |------|---------|
 | 2026-09-22 | docs-контракт isolated schedules; статус **review (подготовлено)** |
 | 2026-09-23 | уточнение: peek/commit gate; однозначные часы; API tick; identity job_type; матрица S1–S18 |
+| 2026-09-23 | attempted на clock; prepare до submit; один observer; sequential tick |
