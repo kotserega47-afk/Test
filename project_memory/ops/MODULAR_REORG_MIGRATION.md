@@ -49,8 +49,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-33 ingest admission | docs-контракт принят; Draft PR #36 review GPT `4682e399…`; close `cecb336…`; runtime нет; реализация TASK-34; **не выпущено** | pytest не требовался | **нет** |
 | TASK-34 ingest admission code | isolated `put_nowait_if_open` + ingest; Draft PR #37; GPT review `f76f9c9…`; docs-close `0576144…`; mixed `add_*_task`; **не выпущено** | Cursor **28** / **95** на `f76f9c9…`; **123** / **52** исторические на `5362a93…`; 3.12.10, exit 0; GPT pytest не запускал; наборы не суммировать | **нет** |
 | TASK-35 schedules admission | docs-контракт принят; Draft PR #38 review GPT `ce5326a…`; close `0be29ec…`; runtime нет; реализация TASK-36; **не выпущено** | pytest GPT не запускал; «два тика» — дефект ожидания mixed-теста | **нет** |
-| TASK-36 schedules admission code | isolated `tick` + peek/commit HourlyGate; Draft PR #39 HEAD `44d36f6…`, base ветка TASK-35; mixed `schedule_loop` не менять; **не выпущено** | Cursor **25** schedules / **7** clocks / **84** admission / **52** boot+lifecycle; mixed **1 failed, 15 passed** (два тика — дефект ожидания); 3.12.10; наборы не суммировать | **нет** |
-| Следующая | GPT review TASK-36; mixed-stop отдельно; serve отдельно | — |
+| TASK-36 schedules admission code | isolated `tick` + peek/commit HourlyGate; Draft PR #39 review GPT `3f6d3e7…`; close этот коммит; не подключён к boot/run/assembly; **не выпущено** | Cursor **31** / **7** / **84** / **52** на `3f6d3e7…`; mixed **1 failed, 15 passed** исторически (два тика — дефект ожидания); 3.12.10; наборы не суммировать | **нет** |
+| Следующая | контракт внутреннего Auto-Enable enqueue (TASK-37); mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -66,7 +66,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-35 docs-close** `0be29ec…` (контракт GPT на `ce5326a…`). **TASK-36** — isolated `tick` в этом PR. Mixed scheduler не менять. Не serve, не mixed-stop.
+**TASK-36 docs-close** в этом коммите (GPT review кода/тестов на `3f6d3e7…`). Isolated tick не подключён к boot/run. Serve/drain/join нет. Mixed scheduler не менять. Внутренний Auto-Enable enqueue — TASK-37.
 
 ---
 

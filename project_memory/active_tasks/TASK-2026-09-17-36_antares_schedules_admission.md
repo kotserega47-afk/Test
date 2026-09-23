@@ -3,15 +3,13 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-36 |
-| **Статус** | review (не закрыт; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-35 close `0be29ec80685753ba5286b2a03b0e02ab0048eed` (GPT review `ce5326a6882a24ed3bbb23e828df99fe7f8d15fb`, Draft PR #38); [MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md](../ops/MODULAR_REORG_ANTARES_SCHEDULES_ADMISSION.md) |
 | **PR** | Draft [#39](https://github.com/deniskotdavydov1991-wq/Test/pull/39) `feat/task-2026-09-17-36-antares-schedules-admission-impl`, base `feat/task-2026-09-17-35-antares-schedules-admission` |
 | **Риск** | medium: общий job executor; mixed `schedule_loop` / `dispatch_job_background` не менять |
 
-Реализация принятого контракта TASK-35. Tick **не** подключён к `boot`/`run`/`assemble_antares`. Serve, поток, бесконечный loop **нет**. TASK-36 **не закрывать**. TASK-35 повторно не закрывать. PR остаётся Draft. Merge/deploy нет.
-
-Review HEAD, к которому правили: `5958c3a2d4bd69ffb98732be32f39a417664a3ae`.
+Review **пройден**. GPT проверил код/diff и тесты на полном SHA `3f6d3e75dd4874efb9020374bf82360771092f2e`. GPT pytest **не** запускал. Этот docs-коммит — закрытие TASK-36. Isolated `tick` **реализован**, **не** подключён к `boot`/`run`/`assemble_antares`, **не выпущен**. Serve/drain/join **не** реализованы. TASK-35 повторно не закрывать. PR #39 остаётся Draft. Merge/deploy нет.
 
 ---
 
@@ -32,7 +30,7 @@ Isolated sequential `tick`: peek/commit HourlyGate, `submit_job_if_open`, tick-l
 - [x] Rejected / submit exception не потребляют due/gate; gate-skip (OPEN) сдвигает `next_*`
 - [x] S12: job удерживается Event до observer; лог после фактической записи callback; нет повторного submit до deadline
 - [x] S12b: commit виден в синхронном callback уже done Future
-- [ ] GPT review (повторно после review-fix)
+- [x] GPT review кода/diff и тестов на `3f6d3e7…`; pytest GPT не запускал
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -83,12 +81,12 @@ Thread-тесты: lock `release` в `finally`; ошибки рабочих по
 
 | Кто | Что |
 |-----|-----|
-| Cursor | `tests/test_antares_schedules_admission.py` **31 passed**, exit 0, Python **3.12.10** |
-| Cursor | `tests/test_scheduler_clocks_reset.py` **7 passed**, exit 0 |
-| Cursor | `tests/unit/test_antares_work_admission.py` **84 passed**, exit 0 |
-| Cursor | `tests/unit/test_antares_boot.py tests/unit/test_antares_lifecycle.py` **52 passed**, exit 0 |
-| Cursor | mixed «два тика» **не** гонялся и **не** исправлялся в этом scope |
-| GPT | повторный review ожидается; pytest GPT не запускал |
+| Cursor | `tests/test_antares_schedules_admission.py` **31 passed**, exit 0, Python **3.12.10**, SHA `3f6d3e75dd4874efb9020374bf82360771092f2e` |
+| Cursor | `tests/test_scheduler_clocks_reset.py` **7 passed**, exit 0, тот же SHA |
+| Cursor | `tests/unit/test_antares_work_admission.py` **84 passed**, exit 0, тот же SHA |
+| Cursor | `tests/unit/test_antares_boot.py tests/unit/test_antares_lifecycle.py` **52 passed**, exit 0, тот же SHA |
+| Cursor | исторический mixed `tests/test_scheduler_dispatch.py tests/test_hourly_scheduler_gate.py tests/test_scheduler_health.py` **1 failed, 15 passed** — `test_schedule_loop_calls_dispatch_job_background` (два тика); дефект ожидания, mixed runtime не менялся |
+| GPT | код/diff и тесты на `3f6d3e75dd4874efb9020374bf82360771092f2e`; pytest **не** запускал |
 
 **real:** `WorkAdmission`, `executor.submit`, `add_done_callback`, `_apply_scheduler_clock_reset_if_requested`.  
 **stub:** `request_job` в `modules.antares.work_admission`. Mixed формулы — `ast`/`exec` исходника `scheduler.py`, без `import scheduler`.
@@ -97,7 +95,7 @@ Thread-тесты: lock `release` в `finally`; ошибки рабочих по
 
 ## Out Of Scope
 
-internal Auto-Enable enqueue; drain/join; worker/executor/sender stop; serve; mixed-stop; wiring tick to boot/run/assembly; live polling; merge/retarget/deploy; исходное Test; правка mixed «два тика».
+internal Auto-Enable enqueue (TASK-37); drain/join; worker/executor/sender stop; serve; mixed-stop; wiring tick to boot/run/assembly; live polling; merge/retarget/deploy; исходное Test; правка mixed «два тика».
 
 ---
 
@@ -107,3 +105,4 @@ internal Auto-Enable enqueue; drain/join; worker/executor/sender stop; serve; mi
 |------|---------|
 | 2026-09-23 | реализация контракта TASK-35; Draft PR #39; статус **review** |
 | 2026-09-23 | review-fix: SEALED no-op arm/gate-skip; S12 Event/log; матрица Rejected/hourly/final/S13 next tick; thread finally |
+| 2026-09-23 | GPT review на `3f6d3e7…`; закрытие docs; tick не подключён к boot/run; не выпущено |
