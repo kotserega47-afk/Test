@@ -70,7 +70,7 @@
 | [TASK-2026-09-17-39](TASK-2026-09-17-39_antares_drain_stop.md) | Контракт drain/stop: GPT review на `69ae53c…`, закрытие docs, runtime нет, матрица D1–D30, O1–O9 выбраны, Draft PR #42 |
 | [TASK-2026-09-17-40](TASK-2026-09-17-40_antares_accepted_executor_work.md) | Isolated Accepted executor Future registry: GPT review на `04c6f8f…`, закрытие docs, Cursor 15, не полный drain, Draft PR #43 |
 | [TASK-2026-09-17-41](TASK-2026-09-17-41_antares_profile_worker_stop.md) | Production WE sentinel + join: GPT review на `6ae8f88…`, закрытие docs, Cursor 12, не полный graceful, Draft PR #44 |
-| [TASK-2026-09-17-42](TASK-2026-09-17-42_antares_registry_daemon.md) | Контракт isolated WE registry daemon drain/join: runtime нет, Draft PR #45 |
+| [TASK-2026-09-17-42](TASK-2026-09-17-42_antares_registry_daemon.md) | Контракт isolated WE registry daemon drain/join: GPT review на `d0e73d5…`, закрытие docs, runtime нет, реализация TASK-43, Draft PR #45 |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

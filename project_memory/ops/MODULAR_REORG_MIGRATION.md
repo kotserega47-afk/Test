@@ -55,8 +55,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-39 drain/stop | docs-контракт принят; Draft PR #42; GPT review `69ae53c…`; close `fa08d7d…`; runtime нет; матрица D1–D30; O1–O9 выбраны; **не выпущено** | pytest GPT не запускал | **нет** |
 | TASK-40 accepted executor work | реестр Accepted Futures + `wait_accepted_executor_work`; Draft PR #43; GPT review `04c6f8f…`; close `85c0b75…`; **не** полный drain; **не выпущено** | Cursor **15** TASK-40 на `04c6f8f…`; **25 / 120 / 31 / 52** исторические на `c3eaea0…`; прежние **2 failed** worker registry; 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
 | TASK-41 WE sentinel/join | production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers`; freeze `_profile_workers`; Draft PR #44; GPT review `6ae8f88…`; close `655e14a…`; **не** полный graceful; **не выпущено** | Cursor **12** TASK-41 на `c5ad702…`; **15 / 25 / 52 / 7** related на том же runtime; worker unit **8 passed, 1 failed** historical (`test_worker_passes_user_output_file_to_registry_schedule`); 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
-| TASK-42 registry daemon | docs-контракт drain/join `we-registry-*`; Draft PR #45; runtime нет; **не выпущено** | pytest не требовался | **нет** |
-| Следующая | code TASK-42; затем sender stop; executor shutdown; helper/serve; mixed-stop отдельно | — |
+| TASK-42 registry daemon | docs-контракт drain/join `we-registry-*`; Draft PR #45; GPT review `d0e73d5…`; close этот коммит; runtime нет; реализация TASK-43; **не выпущено** | pytest GPT не запускал; docs-only | **нет** |
+| Следующая | TASK-43: code registry daemon accounting/join; затем sender stop; executor shutdown; helper/serve; mixed-stop отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -72,7 +72,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-41** закрыт docs-коммитом `655e14a…` после GPT review `6ae8f88…`. Не полный graceful. TASK-42 — контракт registry daemon join (runtime нет). TASK-39/40/41 повторно не закрывать.
+**TASK-42** закрыт docs-коммитом после GPT review `d0e73d5…`. Runtime нет. Реализация — TASK-43. TASK-39/40/41 повторно не закрывать.
 
 ---
 

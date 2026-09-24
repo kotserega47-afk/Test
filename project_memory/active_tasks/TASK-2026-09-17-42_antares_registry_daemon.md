@@ -3,13 +3,15 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-42 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-41 close `655e14aac8413fce44a9d3ece1be653441ac700a` (review `6ae8f88de2d146e9a550ae750745214c7c36c136`, runtime `c5ad702…`, Draft PR #44); [MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md](../ops/MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md); [DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) § 1.7 / O4b |
 | **PR** | Draft [#45](https://github.com/deniskotdavydov1991-wq/Test/pull/45) `feat/task-2026-09-17-42-antares-registry-daemon-join`, base `feat/task-2026-09-17-41-antares-profile-worker-stop` |
 | **Риск** | medium: fire-and-forget `we-registry-*`; sender handoff из append; не полный graceful |
 
-Docs-контракт isolated drain/join daemon `schedule_registry_append`. Runtime **не** менялся. TASK-41 повторно не реализовывать. TASK-39/40/41 повторно не закрывать. Merge/deploy нет.
+Review **пройден**. GPT проверил PR #45, контракт, карточку и diff от close TASK-41 на полном SHA `d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`. Runtime changes отсутствуют (только `project_memory/**`). GPT pytest **не** запускал (docs-only). Этот docs-коммит — закрытие TASK-42.
+
+Контракт isolated registry daemon drain/join **принят**, **не выпущен**. Реализация — TASK-43. Матрица R1–R15 принята. TASK-39/40/41 повторно не закрывать. PR #45 остаётся Draft. Merge/deploy нет.
 
 ---
 
@@ -31,8 +33,8 @@ Docs-контракт isolated drain/join daemon `schedule_registry_append`. Run
 - [x] `start()` exception не оставляет live daemon; drain не ждёт её
 - [x] Join ≠ business success; outbox shutdown не переписывает
 - [x] Матрица R1–R15 (R4/R8/R9 уточнены)
-- [ ] GPT review
-- [ ] runtime (следующий code-срез)
+- [x] GPT review документа на `d0e73d5…`; pytest GPT не запускал
+- [ ] runtime (TASK-43)
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -42,7 +44,7 @@ Docs-контракт isolated drain/join daemon `schedule_registry_append`. Run
 | Кто | Что |
 |-----|-----|
 | Cursor | контракт по production paths на `c5ad702…`; runtime нет; pytest не требовался |
-| GPT | pytest **не** запускал (ожидается review документа) |
+| GPT | review PR #45 / контракт / карточка / diff от TASK-41 close на `d0e73d5…`; pytest **не** запускал |
 
 ---
 
@@ -58,3 +60,4 @@ runtime; sender; executor shutdown; helper; serve; mixed-stop; merge/retarget/de
 |------|---------|
 | 2026-09-24 | docs-контракт registry daemon drain/join; статус **review (подготовлено)** |
 | 2026-09-24 | уточнение: already-finished STARTED = success; lifecycle и remainder; R15 start-failure |
+| 2026-09-24 | GPT review `d0e73d5…`; закрытие docs; runtime нет; реализация — TASK-43 |
