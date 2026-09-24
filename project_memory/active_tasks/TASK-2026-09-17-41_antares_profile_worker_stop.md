@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-40 close `85c0b75ca7b86b3648c8ad79d0caeedf413533d5` (review `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`, Draft PR #43); [MODULAR_REORG_ANTARES_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) § 4.1 |
-| **PR** | Draft (этот срез) `feat/task-2026-09-17-41-antares-profile-worker-stop`, base `feat/task-2026-09-17-40-antares-accepted-executor-work` |
+| **PR** | Draft [#44](https://github.com/deniskotdavydov1991-wq/Test/pull/44) `feat/task-2026-09-17-41-antares-profile-worker-stop`, base `feat/task-2026-09-17-40-antares-accepted-executor-work` |
 | **Риск** | medium: process-local `_profile_workers`; freeze после снимка; не полный graceful |
 
 Production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers`. Не полный drain: registry daemon, sender, executor shutdown, helper, serve — следующие срезы. TASK-40/39 повторно не закрывать. Merge/deploy нет.
