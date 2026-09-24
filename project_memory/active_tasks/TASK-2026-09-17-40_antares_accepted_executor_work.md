@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-39 close `fa08d7db059096766effb81fd5e243a0ce53d2b3` (review `69ae53c65b66a9ad918c294d3f6f1e53192c47a0`, Draft PR #42); [MODULAR_REORG_ANTARES_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) § 2 |
-| **PR** | Draft (этот срез) `feat/task-2026-09-17-40-antares-accepted-executor-work`, base `feat/task-2026-09-17-39-antares-drain-stop` |
+| **PR** | Draft [#43](https://github.com/deniskotdavydov1991-wq/Test/pull/43) `feat/task-2026-09-17-40-antares-accepted-executor-work`, base `feat/task-2026-09-17-39-antares-drain-stop` |
 | **Риск** | medium: общий executor; callback под чужим потоком; не полный drain |
 
 Реестр Accepted executor Futures на конкретном `WorkAdmission` и `wait_accepted_executor_work`. Это **не** полный drain: WE queues, registry, sender, helper, resource shutdown — следующие срезы. TASK-39 повторно не закрывать. TASK-38 повторно не закрывать. Merge/deploy нет.
@@ -57,7 +57,7 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | реализация + pytest 3.12.10: **12** TASK-40; **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed**: `test_disable_flow_unchanged`, `test_worker_passes_user_output_file_to_registry_schedule` (те же, что на `8efa1ec…` / TASK-38). Наборы не суммировать |
+| Cursor | реализация `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5` + pytest 3.12.10: **12** TASK-40; **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed**: `test_disable_flow_unchanged`, `test_worker_passes_user_output_file_to_registry_schedule` (те же, что на `8efa1ec…` / TASK-38). Наборы не суммировать |
 | GPT | pytest **не** запускал (ожидается review) |
 
 ---
