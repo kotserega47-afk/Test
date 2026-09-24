@@ -52,8 +52,8 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-36 schedules admission code | isolated `tick` + peek/commit HourlyGate; Draft PR #39 review GPT `3f6d3e7…`; close `c9c7533…`; не подключён к boot/run/assembly; **не выпущено** | Cursor **31** / **7** / **84** / **52** на `3f6d3e7…`; mixed **1 failed, 15 passed** исторически (два тика — дефект ожидания); 3.12.10; наборы не суммировать | **нет** |
 | TASK-37 Auto-Enable enqueue | docs-контракт принят; Draft PR #40 review GPT `741f5cc…`; close `8efa1ec…`; runtime нет; реализация TASK-38; already-dead worker — отложенный блокер; произвольный `Queue.put` не закрыт; **не выпущено** | pytest GPT не запускал | **нет** |
 | TASK-38 Auto-Enable enqueue code | continuation + bound gate + AE Future-once; Draft PR #41; GPT review `f128110…`; close `9221f05…`; не выпущено; harness end_loop ≠ production stop; already-dead worker — блокер TASK-39 | Cursor **25** AE; **120** admission/handlers; **52** boot/lifecycle на `f128110…`; **40 passed, 1 failed** / **36 passed, 1 failed** — прежние, те же на `8efa1ec…`; GPT pytest не запускал; наборы не суммировать | **нет** |
-| TASK-39 drain/stop | docs-контракт уточнён (реестр, sender S1–S3, drain≠shutdown, финальный WE список, registry join, cancel drain); Draft PR #42, base TASK-38; runtime нет; **не закрыт**; **не выпущено** | pytest не требовался | **нет** |
-| Следующая | GPT review TASK-39 (оставить на review); code-срезы после принятия; mixed-stop отдельно; serve отдельно | — |
+| TASK-39 drain/stop | docs-контракт принят; Draft PR #42; GPT review `69ae53c…`; close этот коммит; runtime нет; матрица D1–D30; O1–O9 выбраны; **не выпущено** | pytest GPT не запускал | **нет** |
+| Следующая | TASK-40: реестр Accepted executor Futures + защищённое ожидание; WE/registry/sender/helper отдельно; mixed-stop отдельно; serve отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -69,7 +69,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-39** — контракт isolated drain/stop в этом PR. Runtime нет. Mixed-stop и serve отдельно. TASK-38 повторно не закрывать.
+**TASK-39** закрыт docs-коммитом после GPT review `69ae53c…`. Runtime нет. Первый code-срез — TASK-40. Mixed-stop и serve отдельно. TASK-38 повторно не закрывать.
 
 ---
 

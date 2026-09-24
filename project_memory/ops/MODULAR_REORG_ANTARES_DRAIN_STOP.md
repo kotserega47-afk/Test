@@ -2,15 +2,15 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **уточнён, на review**; runtime **не** менялся |
+| **Статус** | контракт **принят** (`69ae53c65b66a9ad918c294d3f6f1e53192c47a0`); runtime **не** менялся; code — TASK-40+ |
 | **База** | закрытие TASK-38 `9221f052f8b9bacda10a3041757fa72f7687202c` (принятый review HEAD `f12811035433bce0306ef9ef9d328db43652795a`, Draft PR #41) |
-| **Обследованный SHA** | runtime `f128110…`; этот docs `dbc7ce4…` |
+| **Обследованный SHA** | runtime `f128110…`; принятый docs `69ae53c…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
 | **AE continuation** | [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) |
 | **PTB helper** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / TASK-24 `run_ptb_lifecycle` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Runtime этого PR **нет**.
+Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Runtime этого PR **нет**. Первый code-срез — TASK-40 (`wait_accepted_executor_work`); успешное ожидание executor Futures **не** есть полный drain.
 
 Тестовый `_HarnessQueue.end_loop` TASK-38 **не** production stop и **не** доказательство остановки WE worker.
 

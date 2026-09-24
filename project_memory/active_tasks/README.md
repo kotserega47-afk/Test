@@ -67,7 +67,7 @@
 | [TASK-2026-09-17-36](TASK-2026-09-17-36_antares_schedules_admission.md) | Isolated schedule tick: GPT review на `3f6d3e7…`, закрытие docs, Cursor 31/7/84/52, не выпущено, Draft PR #39 |
 | [TASK-2026-09-17-37](TASK-2026-09-17-37_antares_auto_enable_enqueue.md) | Контракт Auto-Enable continuation: GPT review на `741f5cc…`, закрытие docs `8efa1ec…`, runtime нет, реализация TASK-38, Draft PR #40 |
 | [TASK-2026-09-17-38](TASK-2026-09-17-38_antares_auto_enable_enqueue.md) | Isolated Auto-Enable continuation: GPT review на `f128110…`, закрытие docs `9221f05…`, не выпущено, Draft PR #41 |
-| [TASK-2026-09-17-39](TASK-2026-09-17-39_antares_drain_stop.md) | Контракт drain/stop уточнён (WE inventory, registry join, cancel drain, sender rollback); runtime нет; **не закрыт**; Draft PR #42 |
+| [TASK-2026-09-17-39](TASK-2026-09-17-39_antares_drain_stop.md) | Контракт drain/stop: GPT review на `69ae53c…`, закрытие docs, runtime нет, матрица D1–D30, O1–O9 выбраны, Draft PR #42 |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
