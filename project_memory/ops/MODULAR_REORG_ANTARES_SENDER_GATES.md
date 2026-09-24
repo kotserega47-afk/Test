@@ -20,21 +20,41 @@
 
 ## 0. Жёсткие правила (preflight)
 
-1. **Preflight-before-mutation:** ownership valid? ∧ PTB compatibility valid? ∧ required sender handles/state available? — **все PASS** до любой destructive mutation (intake seal, S1 mutation, sentinel, HTTP close, `loop.stop`).
-2. Failure любого mandatory preflight → **REFUSE**, zero mutation; shared sender остаётся usable.
-3. `WorkAdmission.seal()` **никогда** не ownership proof.
-4. Голое чтение mutable `PROJECT_PROFILE` в момент shutdown **не** единственное доказательство dedicated ownership.
-5. O10 mixed-stop **не** закрывается.
-6. Helper / `run_ptb_lifecycle` / executor shutdown / `requirements.txt` — **не** этот срез.
+1. **Ownership first, always:** validate ownership proof **до** любого другого stop decision.
+2. **Preflight-before-mutation** для **незавершённого** stop: ownership PASS → PTB compatibility PASS → structural handles PASS — **все** до любой destructive mutation (intake seal, S1 mutation, sentinel, HTTP close, `loop.stop`).
+3. **STOPPED terminal fast-path** (после ownership): если sender lifecycle уже **STOPPED** — не повторять running-state PTB/structural preflight и не повторять mutation (см. § 0.1). Это **не** ослабляет preflight для первого/незавершённого stop.
+4. Failure любого mandatory gate на активном path → **REFUSE**, zero mutation; shared sender остаётся usable.
+5. `WorkAdmission.seal()` **никогда** не ownership proof.
+6. Голое чтение mutable `PROJECT_PROFILE` в момент shutdown **не** единственное доказательство dedicated ownership.
+7. O10 mixed-stop **не** закрывается.
+8. Helper / `run_ptb_lifecycle` / executor shutdown / `requirements.txt` — **не** этот срез.
+9. Ownership **claim** path **side-effect-free** wrt sender: не import/`integrations.telegram_bot` (см. § 3.6).
 
-Порядок preflight (принят):
+### 0.1 Порядок stop decision (принят)
 
 ```
-1. ownership proof
-2. PTB compatibility (capabilities + request graph intelligibility)
-3. sender structural state / handles
-4. только потом → intake seal → drain → worker/HTTP/loop/thread
+1. validate ownership proof
+2. read sender lifecycle state (observation only; no destructive mutation)
+3. if lifecycle == STOPPED:
+     ├─ same exact process ownership proof → idempotent SUCCESS
+     │     (no PTB re-probe; no structural running-handle demand;
+     │      no repeated sentinel / HTTP close / loop.stop / thread join)
+     ├─ foreign / missing proof → REFUSE (no PTB re-probe; no mutation)
+     └─ (STOPPED only — see § 0.2 for non-terminal)
+4. if lifecycle != STOPPED (stop still needs work):
+     ownership already PASS
+     → PTB compatibility preflight
+     → structural preflight
+     → only then mutation (intake seal → drain → worker/HTTP/loop/thread)
 ```
+
+### 0.2 Partial / non-terminal lifecycle
+
+Terminal fast-path применяется **только** к lifecycle **STOPPED**.
+
+Не считать STOPPED: `RUNNING` / `STOPPING` / `FAILED_WITH_LIVE_RESOURCES` / equivalent (точные enum — code slice).
+
+Для non-terminal repeat: semantics TASK-44 sender drain/stop — **не** скрывать leftovers и **не** объявлять success по fast-path.
 
 ---
 
@@ -108,7 +128,7 @@ apps.antares / _boot_prefix
   → mixed/default entrypoint attestation НЕ получает → REFUSE
 ```
 
-Совместимость с import/boot order: `enforce` уже **до** `assemble_antares`; handlers могут позже lazy-import `telegram_bot`. Claim **обязан** создаваться **сразу после** успешного enforce и **до** assemble/`Application` — чтобы attestation существовала до первого sender import на Antares path.
+Совместимость с import/boot order: `enforce` уже **до** `assemble_antares`; handlers могут позже lazy-import `telegram_bot`. Claim **обязан** создаваться **сразу после** успешного enforce и **до** assemble/`Application` — чтобы attestation существовала до первого sender import на Antares path. Claim API — side-effect-free wrt sender (§ 3.6).
 
 ---
 
@@ -155,6 +175,20 @@ Conceptual:
 ### 3.5 Process-level
 
 Ownership proof — **process-level**, не per-message / per-admission.
+
+### 3.6 Claim placement — side-effect-free (обязательный invariant)
+
+Future claim/attestation mechanism **обязан** жить в **side-effect-free** process ownership/profile module (или эквиваленте), **не** на import path `integrations.telegram_bot`.
+
+Invariant:
+
+```
+successful enforce_antares_isolated_profile
+→ create claim  (MUST NOT import / start sender)
+→ only then assemble / possible sender import
+```
+
+Создание ownership claim **не** должно требовать `import integrations.telegram_bot` (модуль при import стартует loop/queue/worker). Точное module/function имя — code slice; claim API **не** переносить в telegram_bot.
 
 ---
 
@@ -220,7 +254,9 @@ Code slice **не** выбирает NO_TOKEN no-op policy — решение з
 
 ## 5. Structural preflight (handles)
 
-После ownership + PTB capability PASS, до mutation проверить наличие required future handles (TASK-44): loop thread handle, worker Task handle, lifecycle state. Missing → REFUSE before mutation (не partial stop).
+Для **незавершённого** stop (lifecycle ≠ STOPPED): после ownership + PTB capability PASS, до mutation проверить наличие required future handles (TASK-44): loop thread handle, worker Task handle, lifecycle state. Missing → REFUSE before mutation (не partial stop).
+
+Для lifecycle **STOPPED** + same owner: structural running handles **не** требуются (§ 0.1 fast-path).
 
 ---
 
@@ -238,11 +274,11 @@ stop_isolated_sender(ownership_proof, *, timeout=None) -> …
 |----------|---------|
 | Proof required | нет proof → REFUSE |
 | No implicit proof | admission / env / re-enforce ≠ proof |
-| Preflight first | ownership → PTB → structural; all PASS else REFUSE |
+| Decision order | § 0.1 (ownership → lifecycle branch → PTB/structural only if not STOPPED) |
 | No mutation on refuse | intake/S1/sentinel/HTTP/loop untouched |
-| Repeat + same owner + already stopped | **idempotent success** |
-| Repeat + same owner + still running | continue/complete stop per drain contract |
-| Foreign / no proof when already stopped | **REFUSE** (не «success»); no further mutation |
+| STOPPED + same exact process proof | **idempotent success**; no PTB re-probe; no repeated sentinel/HTTP/loop/thread join (G13) |
+| STOPPED + foreign/no proof | **REFUSE**; no PTB re-probe; no mutation (G14) |
+| Non-terminal lifecycle + same owner | continue/complete per TASK-44; **not** STOPPED fast-path success |
 | Conflicting claim attempt at create | explicit failure; no replace |
 | Shared/mixed after refuse | sender remains usable |
 
@@ -250,12 +286,14 @@ stop_isolated_sender(ownership_proof, *, timeout=None) -> …
 
 ## 7. Independence of gates
 
-| Failure | Mutation? |
-|---------|-----------|
+| Path / Failure | Mutation? |
+|----------------|-----------|
 | Ownership FAIL | нет |
-| Ownership PASS, PTB FAIL | нет |
-| Both PASS, structural FAIL | нет |
-| All PASS | mutation phase allowed (G15) |
+| STOPPED + same owner | нет (idempotent success; already terminal) |
+| STOPPED + foreign/no proof | нет (REFUSE) |
+| Not STOPPED; ownership PASS, PTB FAIL | нет |
+| Not STOPPED; ownership+PTB PASS, structural FAIL | нет |
+| Not STOPPED; all running preflights PASS | mutation phase allowed (G15) |
 
 ---
 
@@ -268,16 +306,16 @@ stop_isolated_sender(ownership_proof, *, timeout=None) -> …
 | G3 | mixed/legacy UNCLAIMED | **REFUSE**; sender usable |
 | G4 | WorkAdmission sealed, proof absent | **REFUSE** |
 | G5 | env → `PROJECT_PROFILE=antares` after boot, no claim | **REFUSE** |
-| G6 | same valid proof repeatedly | idempotent **PASS** |
+| G6 | same valid proof repeatedly (ownership check) | idempotent **PASS** |
 | G7 | conflicting/foreign proof | **REFUSE**, no mutation |
-| G8 | ownership PASS, PTB FAIL | no seal / no worker stop / no HTTP close |
+| G8 | ownership PASS, not STOPPED, PTB FAIL | no seal / no worker stop / no HTTP close |
 | G9 | Bot absent (`bot is None` / expected Bot unavailable) **или** mandatory public `Bot.shutdown` / request `shutdown` missing | fail-closed preflight; **no mutation** |
 | G10 | Bot request graph unavailable/ambiguous | fail-closed preflight |
 | G11 | capable Bot present + intelligible full graph | compatibility **PASS** |
 | G12 | preflight PASS; one request fails during actual close | per-request leftover; ≠ preflight fail |
-| G13 | already stopped + same owner | idempotent success |
-| G14 | already stopped + foreign/no proof | **REFUSE** (explicit); no mutation |
-| G15 | all gates PASS | mutation phase **allowed** |
+| G13 | lifecycle already **STOPPED** + same exact process proof | idempotent **success**; **no** PTB re-probe; **no** repeated sentinel/HTTP close/loop stop/thread join |
+| G14 | lifecycle already **STOPPED** + foreign/no proof | **REFUSE**; **no** PTB re-probe; **no** mutation |
+| G15 | not STOPPED; all running gates PASS | mutation phase **allowed** |
 
 ---
 
