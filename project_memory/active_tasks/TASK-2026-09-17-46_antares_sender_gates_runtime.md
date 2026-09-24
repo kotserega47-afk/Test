@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; docs-close **не** выполнен) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-45 close `873c0a91397ff3ba79938907aa2ff6384ed136cd` (accepted review `a3b95990b09a52848498d7518d2bc234a8f19800`, Draft PR #48); [MODULAR_REORG_ANTARES_SENDER_GATES.md](../ops/MODULAR_REORG_ANTARES_SENDER_GATES.md); [SENDER_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-46-antares-sender-gates-runtime`, base `873c0a9…` |
+| **PR** | Draft [#49](https://github.com/deniskotdavydov1991-wq/Test/pull/49) `feat/task-2026-09-17-46-antares-sender-gates-runtime`, base `873c0a9…` |
 | **Риск** | medium: wrong ownership identity / PTB graph guess would undermine future sender stop |
 
 Реализация **runtime foundation** принятых TASK-45 gate primitives. **Не** full sender drain/stop. **Не** docs-close до GPT review. Merge/deploy/helper wiring нет.
