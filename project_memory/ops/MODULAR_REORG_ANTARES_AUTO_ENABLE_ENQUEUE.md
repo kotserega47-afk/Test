@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (`741f5cc…`); code TASK-38 принят GPT на `f12811035433bce0306ef9ef9d328db43652795a`, **не выпущен**; drain/stop контракт TASK-39 принят (`69ae53c…`); executor wait TASK-40 принят (`04c6f8f…`); WE sentinel TASK-41 (не полный graceful) |
+| **Статус** | контракт **принят** (`741f5cc…`); code TASK-38 принят GPT на `f12811035433bce0306ef9ef9d328db43652795a`, **не выпущен**; drain/stop контракт TASK-39 принят (`69ae53c…`); executor wait TASK-40 принят (`04c6f8f…`); WE sentinel TASK-41 принят (`6ae8f88…`, не полный graceful) |
 | **База** | закрытие TASK-36 `c9c75336cd12dc5182608790159055aa5c73482a` (принятый review HEAD `3f6d3e75dd4874efb9020374bf82360771092f2e`, Draft PR #39) |
 | **Обследованный SHA** | runtime `3f6d3e7…` / close `c9c7533…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) § 7.2 |

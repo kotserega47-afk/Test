@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (`69ae53c65b66a9ad918c294d3f6f1e53192c47a0`); code TASK-40 принят GPT на `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`, **не выпущен**; WE sentinel/join — TASK-41 (этот срез, **не** полный graceful) |
+| **Статус** | контракт **принят** (`69ae53c65b66a9ad918c294d3f6f1e53192c47a0`); code TASK-40 принят GPT на `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`, **не выпущен**; WE sentinel TASK-41 принят GPT на `6ae8f88de2d146e9a550ae750745214c7c36c136` (runtime `c5ad702…`), **не выпущен**, **не** полный graceful; registry daemon — TASK-42 |
 | **База** | закрытие TASK-38 `9221f052f8b9bacda10a3041757fa72f7687202c` (принятый review HEAD `f12811035433bce0306ef9ef9d328db43652795a`, Draft PR #41) |
 | **Обследованный SHA** | runtime `f128110…`; принятый docs `69ae53c…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
@@ -10,7 +10,7 @@
 | **PTB helper** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / TASK-24 `run_ptb_lifecycle` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Code TASK-40 (`wait_accepted_executor_work`) **не** полный drain. TASK-41: production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers` (**не** полный graceful; registry daemon/sender/executor/serve отдельно).
+Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Code TASK-40 (`wait_accepted_executor_work`) **не** полный drain. TASK-41 (принят `6ae8f88…`): production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers` (**не** полный graceful). Registry daemon join — TASK-42.
 
 Тестовый `_HarnessQueue.end_loop` TASK-38 **не** production stop и **не** доказательство остановки WE worker.
 
@@ -295,11 +295,11 @@ Admission lock не держать через шаги 2–8. Cancel шага 3 
 
 | Было | Решение | Срез (не этот PR) |
 |------|---------|-------------------|
-| O1 API | Реестр на `WorkAdmission`; ожидание = `wait_accepted_executor_work` (**не** полный drain); WE stop = production sentinel + join | TASK-40 registry (принят `04c6f8f…`); TASK-41 worker sentinel (этот срез); helper позже |
+| O1 API | Реестр на `WorkAdmission`; ожидание = `wait_accepted_executor_work` (**не** полный drain); WE stop = production sentinel + join | TASK-40 registry (принят `04c6f8f…`); TASK-41 worker sentinel (принят `6ae8f88…`); helper позже |
 | O2 `stop.set` vs drain | Request: seal→set как сейчас. Drain **после** `stop.wait()`, **до** PTB cleanup | изменение `run_ptb_lifecycle` |
 | O3 sender | В полном graceful **обязателен**; rollback handoff при failure `call_soon`/put; intake seal вместе с idle | sender handoff + stop loop/thread/HTTP |
 | O4 `delayed_cleanup` | Явное исключение: не ждать, не смешивать с registry I/O | — |
-| O4b registry daemon | Полный graceful: учёт + join уже запущенных `we-registry-*` **до** sender stop; deadline при живом daemon = failure | отдельный code-срез |
+| O4b registry daemon | Полный graceful: учёт + join уже запущенных `we-registry-*` **до** sender stop; deadline при живом daemon = failure | TASK-42 |
 | O5 dead worker | Failure + отчёт; без restart/handoff/retry | remainder report |
 | O6 tick | После seal не звать; не wired | serve/schedules отдельно |
 | O7 профили | Финальный список **после** PTB producers **и** Accepted executor **и** continuation; во время drain — живой registry | resource shutdown |

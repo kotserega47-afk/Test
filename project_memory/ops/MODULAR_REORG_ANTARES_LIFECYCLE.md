@@ -258,7 +258,7 @@ Isolated: **не** копировать mixed loop как есть. Фильтр
 | Sender loop + thread + queue + `Bot` | **import** `telegram_bot` | **нет** | stop/join/drain | не импортировать на `run` prefix; stop — отдельный PR **после** появления API |
 | Job executor | lazy `get_job_executor` | `_reset_job_executor_for_tests` only | production shutdown | не dispatch на первом `run` prefix; позже вынести shutdown из test helper |
 | Schedule thread | `Thread(schedule_loop).start()` | **нет** (while True) | Event/flag | не стартовать в первом code PR; когда вводить — фильтр семи keys **и** stop event в том же PR что и thread |
-| WE worker queues/threads | `add_task` → daemon | TASK-41 `stop_isolated_profile_workers` (не в helper) | sentinel/join; freeze registry | API есть, **не** wired к `run_ptb_lifecycle`; не полный graceful; не `JOB_ACCEPT` |
+| WE worker queues/threads | `add_task` → daemon | TASK-41 `stop_isolated_profile_workers` (принят `6ae8f88…`, не в helper) | sentinel/join; freeze registry | API есть, **не** wired к `run_ptb_lifecycle`; не полный graceful; не `JOB_ACCEPT` |
 | `STATE_DIR/locks` | `_try_lock` в `request_job` | unlock в runner | межпроцессный lock чужого mixed | не запускать jobs в первом `run` prefix |
 | `/tmp/auth_state_wallet_editor_*.json` | Playwright storage_state | файл не «закрывается» процессом | отдельный каталог на cutover | не трогать в docs/code TASK-19 |
 | Dropbox/PG/Telegram API | клиенты по вызову | нет единого shutdown | — | заглушки в subprocess-тестах |
