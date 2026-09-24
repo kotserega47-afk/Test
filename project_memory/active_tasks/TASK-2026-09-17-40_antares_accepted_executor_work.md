@@ -3,13 +3,13 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-40 |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (пройден; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-39 close `fa08d7db059096766effb81fd5e243a0ce53d2b3` (review `69ae53c65b66a9ad918c294d3f6f1e53192c47a0`, Draft PR #42); [MODULAR_REORG_ANTARES_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) § 2 |
 | **PR** | Draft [#43](https://github.com/deniskotdavydov1991-wq/Test/pull/43) `feat/task-2026-09-17-40-antares-accepted-executor-work`, base `feat/task-2026-09-17-39-antares-drain-stop` |
 | **Риск** | medium: общий executor; callback под чужим потоком; не полный drain |
 
-Реестр Accepted executor Futures на конкретном `WorkAdmission` и `wait_accepted_executor_work`. Это **не** полный drain: WE queues, registry, sender, helper, resource shutdown — следующие срезы. TASK-39 повторно не закрывать. TASK-38 повторно не закрывать. Merge/deploy нет.
+Review **пройден**. GPT проверил код/diff и тесты на полном SHA `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`. GPT pytest **не** запускал. Этот docs-коммит — закрытие TASK-40. Isolated реестр Accepted executor Futures и `wait_accepted_executor_work` **реализованы**, **не выпущены**. Это **не** полный drain/shutdown. WE sentinel/join — TASK-41. TASK-39 повторно не закрывать. PR #43 остаётся Draft. Merge/deploy нет.
 
 ---
 
@@ -29,7 +29,7 @@
 - [x] Ошибка callable видна на Future; wait при этом завершается
 - [x] Event/barrier тесты (см. карту); потоки join в finally
 - [x] `run_ptb_lifecycle` не вызывает это ожидание
-- [ ] GPT review
+- [x] GPT review кода/diff и тестов на `04c6f8f…`; pytest GPT не запускал
 - [ ] merge/deploy (намеренно открыто)
 
 ---
@@ -60,14 +60,14 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | исправление доказательств (этот коммит): **15 passed** TASK-40, 3.12.10. Runtime не менялся. Остальные наборы исторические на `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5`. |
-| GPT | pytest **не** запускал (ожидается review) |
+| Cursor | **15 passed** TASK-40 на принятом HEAD `04c6f8f4b29460e792c41a6cd7c4aa098667a39f` (3.12.10). Остальные наборы исторические на `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5`: **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed**: `test_disable_flow_unchanged`, `test_worker_passes_user_output_file_to_registry_schedule` (как на TASK-38 / `8efa1ec…`). Наборы не суммировать |
+| GPT | review кода/diff и тестов на `04c6f8f…`; pytest **не** запускал |
 
 ---
 
 ## Out Of Scope
 
-WE sentinel/join; registry drain; sender stop; serve; mixed-stop; подключение к `run_ptb_lifecycle`; merge/retarget/deploy; исходное Test.
+WE sentinel/join (TASK-41); registry drain; sender stop; serve; mixed-stop; подключение к `run_ptb_lifecycle`; merge/retarget/deploy; исходное Test; повторное закрытие TASK-39.
 
 ---
 
@@ -78,3 +78,4 @@ WE sentinel/join; registry drain; sender stop; serve; mixed-stop; подключ
 | 2026-09-24 | первый code-срез реестра Accepted executor Futures; статус **review (подготовлено)** |
 | 2026-09-24 | усиление тестов: управляемый submit/seal lock, already-done subprocess, cancel/timeout. Mutation helpers в test-файле, подмена только в subprocess; production-мутации не внесены |
 | 2026-09-24 | исправление доказательств: оригинальный AdmittedJob.wait; join обоих потоков до чтения outcome; точный INVISIBLE_FUTURE/exit 7; READY до callback-under-lock |
+| 2026-09-24 | GPT review `04c6f8f…`; закрытие docs; не полный drain; WE stop — TASK-41 |
