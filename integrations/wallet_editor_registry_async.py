@@ -336,14 +336,18 @@ def _outbox_status_for(run_id: str) -> str | None:
     return record.status if record is not None else None
 
 
-def _mark_daemon_terminal(run_id: str) -> None:
+def _mark_daemon_terminal(op: _RegistryDaemonOp) -> None:
+    """Mark exact operation TERMINAL and reap it from active accounting.
+
+    Identity check avoids ABA: a newer op with the same run_id is not popped.
+    Snapshots that already hold ``op`` still see TERMINAL on that object.
+    """
+
     with _daemon_ops_lock:
-        op = _daemon_ops.get(run_id)
-        if op is None:
-            return
         op.state = RegistryDaemonLifecycle.TERMINAL
-        if _daemon_ops_wait_done:
-            _daemon_ops.pop(run_id, None)
+        current = _daemon_ops.get(op.run_id)
+        if current is op:
+            _daemon_ops.pop(op.run_id, None)
 
 
 def _continuation_states(admission) -> tuple[str, ...]:
@@ -373,8 +377,8 @@ def snapshot_isolated_registry_daemon_ops() -> dict[str, _RegistryDaemonOp]:
 def collect_registry_daemon_remainder(*, reason: str) -> RegistryDaemonRemainder:
     """Build failure remainder: unfinished or abnormal ops only.
 
-    Normal TERMINAL resource-terminal ops stay in accounting until reap but are
-    not listed as failure remainder entries.
+    Normal TERMINAL is reaped from active accounting after wrapper finally; if a
+    race still shows TERMINAL briefly, it is not listed as a failure entry.
 
     Included:
     - REGISTERED (inconsistent during drain);
@@ -443,6 +447,8 @@ def schedule_registry_append(
     from integrations.wallet_editor_registry import append_run_to_dropbox_registry
 
     run_id = task.run_id
+    # Filled under lock before start(); finally closes this exact op (identity).
+    op_box: list[_RegistryDaemonOp | None] = [None]
 
     def _run() -> None:
         try:
@@ -459,7 +465,9 @@ def schedule_registry_append(
                 if is_staged_copy and not from_durable_copy:
                     remove_staged_result(result_path, is_staged_copy=True)
             finally:
-                _mark_daemon_terminal(run_id)
+                op = op_box[0]
+                if op is not None:
+                    _mark_daemon_terminal(op)
 
     thread = threading.Thread(
         target=_run,
@@ -486,14 +494,17 @@ def schedule_registry_append(
             state=RegistryDaemonLifecycle.REGISTERED,
             started=False,
         )
+        op_box[0] = op
         _daemon_ops[run_id] = op
         try:
             thread.start()
         except BaseException:
             op.state = RegistryDaemonLifecycle.TERMINAL
-            _daemon_ops.pop(run_id, None)
+            if _daemon_ops.get(run_id) is op:
+                _daemon_ops.pop(run_id, None)
             raise
-        # Child may have finished and set TERMINAL before we mark STARTED.
+        # Child may finish and wait on this lock; TERMINAL/reap only after release.
+        # Do not overwrite TERMINAL if somehow already set on this op.
         if op.state is not RegistryDaemonLifecycle.TERMINAL:
             op.state = RegistryDaemonLifecycle.STARTED
             op.started = True
@@ -516,6 +527,9 @@ async def wait_isolated_registry_daemon_ops(
 
     Not a full graceful shutdown. Join is not business success. Durable outbox
     statuses are not rewritten. Does not stop mixed/unbound runtimes.
+
+    Returns run_ids from the final freeze snapshot that this wait joined/observed.
+    Ops already resource-terminal and reaped before the snapshot are omitted.
     """
 
     global _daemon_ops_frozen, _daemon_ops_wait_done, _daemon_ops_joined
@@ -582,6 +596,8 @@ async def wait_isolated_registry_daemon_ops(
         for op in snapshot:
             if op.started:
                 op.state = RegistryDaemonLifecycle.TERMINAL
+                if _daemon_ops.get(op.run_id) is op:
+                    _daemon_ops.pop(op.run_id, None)
         for run_id, op in list(_daemon_ops.items()):
             if op.state is RegistryDaemonLifecycle.TERMINAL:
                 _daemon_ops.pop(run_id, None)

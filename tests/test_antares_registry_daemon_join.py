@@ -215,10 +215,23 @@ def test_r2_started_and_append_entered(
     assert "r2" in snap
     assert snap["r2"].state is RegistryDaemonLifecycle.STARTED
     assert snap["r2"].started is True
-    release.set()
-    joined = asyncio.run(
-        wait_isolated_registry_daemon_ops(admission, producers_complete=True)
-    )
+
+    import integrations.wallet_editor_registry_async as async_mod
+
+    async def _drain() -> tuple[str, ...]:
+        wait_task = asyncio.create_task(
+            wait_isolated_registry_daemon_ops(admission, producers_complete=True)
+        )
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            with async_mod._daemon_ops_lock:
+                if async_mod._daemon_ops_frozen:
+                    break
+            await asyncio.sleep(0)
+        release.set()
+        return await wait_task
+
+    joined = asyncio.run(_drain())
     assert joined == ("r2",)
 
 
@@ -260,8 +273,10 @@ def test_r3_start_ok_before_append_body(
 def test_r4_finished_before_wait_is_success(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
+    gate = threading.Barrier(2)
+
     def _fast(*_a, **_k) -> None:
-        return None
+        gate.wait(timeout=5)
 
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
@@ -273,12 +288,81 @@ def test_r4_finished_before_wait_is_success(
     daemon_cleanup()
     snap = snapshot_isolated_registry_daemon_ops()
     assert "r4" in snap
-    snap["r4"].thread.join(timeout=5)
-    assert snap["r4"].thread.is_alive() is False
+    thread = snap["r4"].thread
+    gate.wait(timeout=5)
+    thread.join(timeout=5)
+    assert thread.is_alive() is False
+    assert snap["r4"].state is RegistryDaemonLifecycle.TERMINAL
+    assert "r4" not in snapshot_isolated_registry_daemon_ops()
     joined = asyncio.run(
         wait_isolated_registry_daemon_ops(admission, producers_complete=True)
     )
-    assert "r4" in joined
+    # Finished+reaped before snapshot is omitted from joined tuple.
+    assert "r4" not in joined
+    assert snapshot_isolated_registry_daemon_ops() == {}
+
+
+def test_terminal_operation_reaped_without_wait(
+    workers, monkeypatch, daemon_cleanup
+) -> None:
+    gate = threading.Barrier(2)
+
+    def _hold(*_a, **_k) -> None:
+        gate.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
+        _hold,
+    )
+    admission = _open_bound()
+    admission.seal()
+    _schedule(_task("reap-now"), append_impl=_hold)
+    daemon_cleanup()
+    snap = snapshot_isolated_registry_daemon_ops()
+    assert "reap-now" in snap
+    op = snap["reap-now"]
+    thread = op.thread
+    assert op.started is True
+    gate.wait(timeout=5)
+    thread.join(timeout=5)
+    assert thread.is_alive() is False
+    assert op.state is RegistryDaemonLifecycle.TERMINAL
+    assert "reap-now" not in snapshot_isolated_registry_daemon_ops()
+    joined = asyncio.run(
+        wait_isolated_registry_daemon_ops(admission, producers_complete=True)
+    )
+    assert "reap-now" not in joined
+    assert snapshot_isolated_registry_daemon_ops() == {}
+
+
+def test_bounded_history_fast_daemons_without_wait(
+    workers, monkeypatch, daemon_cleanup
+) -> None:
+    current_gate: list[threading.Barrier | None] = [None]
+
+    def _hold(*_a, **_k) -> None:
+        gate = current_gate[0]
+        assert gate is not None
+        gate.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
+        _hold,
+    )
+    for i in range(5):
+        run_id = f"hist-{i}"
+        gate = threading.Barrier(2)
+        current_gate[0] = gate
+        _schedule(_task(run_id), append_impl=_hold)
+        daemon_cleanup()
+        snap = snapshot_isolated_registry_daemon_ops()
+        assert run_id in snap
+        thread = snap[run_id].thread
+        gate.wait(timeout=5)
+        thread.join(timeout=5)
+        assert thread.is_alive() is False
+        assert snap[run_id].state is RegistryDaemonLifecycle.TERMINAL
+        assert run_id not in snapshot_isolated_registry_daemon_ops()
     assert snapshot_isolated_registry_daemon_ops() == {}
 
 
@@ -373,10 +457,21 @@ def test_r6_cancel_wait_keeps_underlying(
     assert snap["r6"].started is True
     assert snap["r6"].thread.is_alive()
     assert async_mod._daemon_ops_wait_done is False
-    release.set()
-    joined = asyncio.run(
-        wait_isolated_registry_daemon_ops(admission, producers_complete=True)
-    )
+
+    async def _drain() -> tuple[str, ...]:
+        wait_task = asyncio.create_task(
+            wait_isolated_registry_daemon_ops(admission, producers_complete=True)
+        )
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            with async_mod._daemon_ops_lock:
+                if async_mod._daemon_ops_frozen:
+                    break
+            await asyncio.sleep(0)
+        release.set()
+        return await wait_task
+
+    joined = asyncio.run(_drain())
     assert joined == ("r6",)
     if errors:
         raise errors[0]
@@ -385,17 +480,39 @@ def test_r6_cancel_wait_keeps_underlying(
 def test_r7_repeat_wait_same_daemon(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _hold(*_a, **_k) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
     admission = _open_bound()
     admission.seal()
-    _schedule(_task("r7"), append_impl=None)
+    _schedule(_task("r7"), append_impl=_hold)
     daemon_cleanup()
-    first = asyncio.run(
-        wait_isolated_registry_daemon_ops(admission, producers_complete=True)
-    )
+    assert entered.wait(timeout=5)
+
+    import integrations.wallet_editor_registry_async as async_mod
+
+    async def _first() -> tuple[str, ...]:
+        wait_task = asyncio.create_task(
+            wait_isolated_registry_daemon_ops(admission, producers_complete=True)
+        )
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            with async_mod._daemon_ops_lock:
+                if async_mod._daemon_ops_frozen:
+                    break
+            await asyncio.sleep(0)
+        release.set()
+        return await wait_task
+
+    first = asyncio.run(_first())
     second = asyncio.run(
         wait_isolated_registry_daemon_ops(admission, producers_complete=True)
     )
@@ -440,17 +557,21 @@ def test_r8_deadline_alive_fails(
     release.set()
 
 
-def test_remainder_excludes_normal_terminal_keeps_alive_started(
+def test_remainder_excludes_finished_a_keeps_alive_b(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
-    """Normal TERMINAL stays in accounting until reap but not in failure remainder."""
+    """Finished A is reaped; deadline remainder lists only live B."""
 
     entered_b = threading.Event()
     release_b = threading.Event()
+    gate_a = threading.Barrier(2)
     errors: list[BaseException] = []
 
     def _append(task, *_a, **_k) -> None:
         try:
+            if task.run_id == "rem-a":
+                gate_a.wait(timeout=5)
+                return
             if task.run_id == "rem-b":
                 entered_b.set()
                 if not release_b.wait(timeout=30):
@@ -469,12 +590,12 @@ def test_remainder_excludes_normal_terminal_keeps_alive_started(
     daemon_cleanup()
     snap_a = snapshot_isolated_registry_daemon_ops()
     assert "rem-a" in snap_a
-    snap_a["rem-a"].thread.join(timeout=5)
-    assert snap_a["rem-a"].thread.is_alive() is False
-    # finally marks TERMINAL before the thread exits; op may remain until drain reap.
-    snap = snapshot_isolated_registry_daemon_ops()
-    assert "rem-a" in snap
-    assert snap["rem-a"].state is RegistryDaemonLifecycle.TERMINAL
+    thread_a = snap_a["rem-a"].thread
+    gate_a.wait(timeout=5)
+    thread_a.join(timeout=5)
+    assert thread_a.is_alive() is False
+    assert snap_a["rem-a"].state is RegistryDaemonLifecycle.TERMINAL
+    assert "rem-a" not in snapshot_isolated_registry_daemon_ops()
 
     _schedule(_task("rem-b"), append_impl=_append)
     daemon_cleanup()
@@ -486,39 +607,38 @@ def test_remainder_excludes_normal_terminal_keeps_alive_started(
             )
         )
     rem_ids = {e.run_id for e in ei.value.remainder.entries}
-    assert "rem-b" in rem_ids
-    assert "rem-a" not in rem_ids
+    assert rem_ids == {"rem-b"}
     entry_b = next(e for e in ei.value.remainder.entries if e.run_id == "rem-b")
     assert entry_b.alive is True
     assert entry_b.lifecycle == RegistryDaemonLifecycle.STARTED.value
-    # rem-a still accounted until successful drain/reap
-    assert "rem-a" in snapshot_isolated_registry_daemon_ops()
-    assert (
-        snapshot_isolated_registry_daemon_ops()["rem-a"].state
-        is RegistryDaemonLifecycle.TERMINAL
-    )
+    assert "rem-a" not in snapshot_isolated_registry_daemon_ops()
     release_b.set()
     if errors:
         raise errors[0]
 
 
-def test_remainder_only_terminal_excluded_on_refusal(
+def test_remainder_empty_when_only_finished_reaped(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
+    gate = threading.Barrier(2)
+
+    def _hold(*_a, **_k) -> None:
+        gate.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
-    _schedule(_task("only-term"), append_impl=None)
+    _schedule(_task("only-term"), append_impl=_hold)
     daemon_cleanup()
     snap = snapshot_isolated_registry_daemon_ops()
     assert "only-term" in snap
-    snap["only-term"].thread.join(timeout=5)
-    assert snap["only-term"].thread.is_alive() is False
-    assert (
-        snapshot_isolated_registry_daemon_ops()["only-term"].state
-        is RegistryDaemonLifecycle.TERMINAL
-    )
+    thread = snap["only-term"].thread
+    gate.wait(timeout=5)
+    thread.join(timeout=5)
+    assert thread.is_alive() is False
+    assert snap["only-term"].state is RegistryDaemonLifecycle.TERMINAL
+    assert "only-term" not in snapshot_isolated_registry_daemon_ops()
     foreign = WorkAdmission()
     with pytest.raises(IsolatedRegistryDaemonStopError) as ei:
         asyncio.run(
@@ -526,27 +646,49 @@ def test_remainder_only_terminal_excluded_on_refusal(
         )
     assert "mixed/unbound" in ei.value.remainder.reason
     assert ei.value.remainder.entries == ()
-    # Direct collector probe with the same accounting snapshot
     probe = collect_registry_daemon_remainder(reason="probe")
     assert probe.entries == ()
-    assert "only-term" in snapshot_isolated_registry_daemon_ops()
+    assert snapshot_isolated_registry_daemon_ops() == {}
 
 
 def test_r9_successful_drain_reaps(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
+    release = threading.Event()
+    entered = {rid: threading.Event() for rid in ("r9a", "r9b")}
+
+    def _hold(task, *_a, **_k) -> None:
+        entered[task.run_id].set()
+        assert release.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
     admission = _open_bound()
     admission.seal()
-    _schedule(_task("r9a"), append_impl=None)
-    _schedule(_task("r9b"), append_impl=None)
+    _schedule(_task("r9a"), append_impl=_hold)
+    _schedule(_task("r9b"), append_impl=_hold)
     daemon_cleanup()
-    joined = asyncio.run(
-        wait_isolated_registry_daemon_ops(admission, producers_complete=True)
-    )
+    assert entered["r9a"].wait(timeout=5)
+    assert entered["r9b"].wait(timeout=5)
+
+    import integrations.wallet_editor_registry_async as async_mod
+
+    async def _drain() -> tuple[str, ...]:
+        wait_task = asyncio.create_task(
+            wait_isolated_registry_daemon_ops(admission, producers_complete=True)
+        )
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            with async_mod._daemon_ops_lock:
+                if async_mod._daemon_ops_frozen:
+                    break
+            await asyncio.sleep(0)
+        release.set()
+        return await wait_task
+
+    joined = asyncio.run(_drain())
     assert set(joined) == {"r9a", "r9b"}
     assert snapshot_isolated_registry_daemon_ops() == {}
 
@@ -569,9 +711,14 @@ def test_r10_freeze_rejects_new_schedule(
 def test_r11_pending_outbox_not_inflight(
     workers, monkeypatch, daemon_cleanup, tmp_path
 ) -> None:
+    gate = threading.Barrier(2)
+
+    def _hold(*_a, **_k) -> None:
+        gate.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
     admission = _open_bound()
     admission.seal()
@@ -587,19 +734,33 @@ def test_r11_pending_outbox_not_inflight(
         output_file="r11.xlsx",
     )
     assert get_outbox_record("r11").status == OUTBOX_STATUS_PENDING
-    _schedule(task, append_impl=None)
+    _schedule(task, append_impl=_hold)
     daemon_cleanup()
+    snap = snapshot_isolated_registry_daemon_ops()
+    assert "r11" in snap
+    thread = snap["r11"].thread
+    gate.wait(timeout=5)
+    thread.join(timeout=5)
+    assert "r11" not in snapshot_isolated_registry_daemon_ops()
     joined = asyncio.run(
         wait_isolated_registry_daemon_ops(admission, producers_complete=True)
     )
-    assert joined == ("r11",)
+    # Finished+reaped before snapshot omitted; outbox unchanged by join.
+    assert "r11" not in joined
     assert get_outbox_record("r11").status == OUTBOX_STATUS_PENDING
 
 
 def test_r12_unbound_does_not_freeze(workers, monkeypatch, daemon_cleanup) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _hold(*_a, **_k) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
     foreign = WorkAdmission()
     with pytest.raises(IsolatedRegistryDaemonStopError) as ei:
@@ -607,17 +768,26 @@ def test_r12_unbound_does_not_freeze(workers, monkeypatch, daemon_cleanup) -> No
             wait_isolated_registry_daemon_ops(foreign, producers_complete=True)
         )
     assert "mixed/unbound" in ei.value.remainder.reason
-    _schedule(_task("r12"), append_impl=None)
+    _schedule(_task("r12"), append_impl=_hold)
     daemon_cleanup()
+    assert entered.wait(timeout=5)
     assert "r12" in snapshot_isolated_registry_daemon_ops()
+    release.set()
 
 
 def test_r14_delayed_cleanup_ignored(
     workers, monkeypatch, daemon_cleanup
 ) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _hold(*_a, **_k) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+
     monkeypatch.setattr(
         "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
-        lambda *a, **k: None,
+        _hold,
     )
     hold = threading.Event()
     cleanup_started = threading.Event()
@@ -634,17 +804,31 @@ def test_r14_delayed_cleanup_ignored(
         assert cleanup_started.wait(timeout=5)
         admission = _open_bound()
         admission.seal()
-        _schedule(_task("r14"), append_impl=None)
+        _schedule(_task("r14"), append_impl=_hold)
         daemon_cleanup()
-        joined = asyncio.run(
-            wait_isolated_registry_daemon_ops(admission, producers_complete=True)
-        )
+        assert entered.wait(timeout=5)
+
+        import integrations.wallet_editor_registry_async as async_mod
+
+        async def _drain() -> tuple[str, ...]:
+            wait_task = asyncio.create_task(
+                wait_isolated_registry_daemon_ops(
+                    admission, producers_complete=True
+                )
+            )
+            deadline = asyncio.get_running_loop().time() + 5
+            while asyncio.get_running_loop().time() < deadline:
+                with async_mod._daemon_ops_lock:
+                    if async_mod._daemon_ops_frozen:
+                        break
+                await asyncio.sleep(0)
+            release.set()
+            return await wait_task
+
+        joined = asyncio.run(_drain())
         assert joined == ("r14",)
         assert cleanup_thread.is_alive()
-        assert all(
-            not e.run_id.startswith("delayed")
-            for e in snapshot_isolated_registry_daemon_ops()
-        )
+        assert snapshot_isolated_registry_daemon_ops() == {}
     finally:
         hold.set()
         cleanup_thread.join(timeout=5)
