@@ -72,7 +72,7 @@
 | [TASK-2026-09-17-41](TASK-2026-09-17-41_antares_profile_worker_stop.md) | Production WE sentinel + join: GPT review на `6ae8f88…`, закрытие docs, Cursor 12, не полный graceful, Draft PR #44 |
 | [TASK-2026-09-17-42](TASK-2026-09-17-42_antares_registry_daemon.md) | Контракт isolated WE registry daemon drain/join: GPT review на `d0e73d5…`, закрытие docs, runtime нет, реализация TASK-43, Draft PR #45 |
 | [TASK-2026-09-17-43](TASK-2026-09-17-43_antares_registry_daemon_impl.md) | Registry daemon accounting/join: GPT review на `01e0c55…`, закрытие docs, Cursor 21/52/22, helper не wired, не полный graceful, Draft PR #46 |
-| [TASK-2026-09-17-44](TASK-2026-09-17-44_antares_sender_drain_stop.md) | Контракт isolated Telegram sender drain/stop ownership: process-global / refuse без gate; runtime нет; Draft PR (этот срез) |
+| [TASK-2026-09-17-44](TASK-2026-09-17-44_antares_sender_drain_stop.md) | Контракт isolated Telegram sender drain/stop ownership: process-global / refuse без gate; runtime нет; Draft PR #47 |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
