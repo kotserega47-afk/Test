@@ -324,7 +324,8 @@ def _build_app(assembled, token: str):
 
 def main() -> None:
     scenario = _scenario()
-    assembled, rules, token = _boot_prefix()
+    boot = _boot_prefix()
+    assembled, rules, token = boot.assembled, boot.rules, boot.token
     snap = _snapshot_local_rules(rules)
     app = _build_app(assembled, token)
     app.bot_data["antares_snap"] = snap

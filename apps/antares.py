@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
+from core.antares_sender_ownership import (
+    AntaresSenderOwnershipAttestation,
+    claim_antares_sender_ownership,
+)
 from core.project_profile_boot import enforce_antares_isolated_profile
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -15,6 +21,16 @@ _ENV_PATH = _REPO_ROOT / ".env"
 
 _BOOT_OK = "antares boot ok"
 _RUN_OK = "antares run ok"
+
+
+@dataclass(frozen=True, slots=True)
+class AntaresBootPrefix:
+    """Boot context after profile enforce + ownership claim + assembly."""
+
+    assembled: Any
+    rules: Any
+    token: str
+    sender_ownership: AntaresSenderOwnershipAttestation
 
 
 def _fail(message: str, code: int = 1) -> None:
@@ -71,8 +87,10 @@ def _print_run_ok(assembled, snap) -> None:
     )
 
 
-def _boot_prefix():
+def _boot_prefix() -> AntaresBootPrefix:
     enforce_antares_isolated_profile()
+    # Claim before dotenv/assemble/sender import (TASK-45/46).
+    sender_ownership = claim_antares_sender_ownership()
     load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
@@ -94,7 +112,12 @@ def _boot_prefix():
         _fail(f"antares assembly failed: {exc}")
     except Exception as exc:
         _fail(f"antares assembly failed: {type(exc).__name__}: {exc}")
-    return assembled, rules, token
+    return AntaresBootPrefix(
+        assembled=assembled,
+        rules=rules,
+        token=token,
+        sender_ownership=sender_ownership,
+    )
 
 
 def _snapshot_local_rules(rules):
@@ -121,13 +144,13 @@ def _build_and_attach(assembled, token: str) -> None:
 
 def main() -> None:
     mode = _command(sys.argv[1:])
-    assembled, rules, token = _boot_prefix()
+    boot = _boot_prefix()
     if mode == "boot":
-        _print_boot_ok(assembled)
+        _print_boot_ok(boot.assembled)
         return
-    snap = _snapshot_local_rules(rules)
-    _build_and_attach(assembled, token)
-    _print_run_ok(assembled, snap)
+    snap = _snapshot_local_rules(boot.rules)
+    _build_and_attach(boot.assembled, boot.token)
+    _print_run_ok(boot.assembled, snap)
 
 
 if __name__ == "__main__":

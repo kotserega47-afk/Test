@@ -34,6 +34,7 @@ _WRAP_AFTER_LOAD = frozenset(
         "core.access_rules",
         "core.rules_provider",
         "core.rules_v2.contract_publish",
+        "core.antares_sender_ownership",
         "modules.antares.handlers",
         "modules.antares.assembly",
         "dropbox",
@@ -52,7 +53,13 @@ _WRAP_AFTER_LOAD = frozenset(
     }
 )
 
-_injected = {"registry": False, "bind": False, "assemble": False, "add_ok": 0}
+_injected = {
+    "registry": False,
+    "bind": False,
+    "assemble": False,
+    "ownership": False,
+    "add_ok": 0,
+}
 _orig_create_connection = socket.create_connection
 
 
@@ -245,6 +252,23 @@ def _after_load(name: str, module: types.ModuleType) -> None:
             _observe.__qualname__ = orig.__qualname__
             module.assemble_antares = _observe
             _injected["assemble"] = True
+    elif name == "core.antares_sender_ownership":
+        if not _injected["ownership"]:
+            orig_claim = module.claim_antares_sender_ownership
+
+            def _observe_claim():
+                proof = orig_claim()
+                _event(
+                    "sender_ownership_claimed",
+                    proof_id=id(proof),
+                    telegram_bot_loaded="integrations.telegram_bot" in sys.modules,
+                )
+                return proof
+
+            _observe_claim.__name__ = orig_claim.__name__
+            _observe_claim.__qualname__ = orig_claim.__qualname__
+            module.claim_antares_sender_ownership = _observe_claim
+            _injected["ownership"] = True
     elif name == "core.access_rules":
         orig_snap = module.AccessRules.get_snapshot
 

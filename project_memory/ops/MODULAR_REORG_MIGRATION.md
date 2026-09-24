@@ -58,8 +58,9 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-42 registry daemon | docs-контракт drain/join `we-registry-*`; Draft PR #45; GPT review `d0e73d5…`; close `041825f…`; runtime нет; реализация TASK-43; **не выпущено** | pytest GPT не запускал; docs-only | **нет** |
 | TASK-43 registry daemon code | `RegistryDaemonLifecycle` + `wait_isolated_registry_daemon_ops`; identity TERMINAL reap; Draft PR #46; GPT review `01e0c55…`; close `c17eab2…`; **не** полный graceful; helper не wired; **не выпущено** | Cursor **21** TASK-43; related **52** profile+executor+AE; registry unit **22**; 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
 | TASK-44 sender drain/stop | docs-контракт ownership S1–S3; process-global → refuse без gate; Draft PR #47; GPT review `0e770a3…`; close `49193bb…`; runtime нет; O10 не закрывать; gate deps → TASK-45; **не выпущено** | pytest GPT не запускал / not applicable (docs-only) | **нет** |
-| TASK-45 sender gates | ownership **C+D** + PTB capability gate **B**; STOPPED fast-path; Draft PR #48; GPT review `a3b9599…`; close (этот docs-коммит); runtime нет; O10 не закрывать; **не выпущено** | pytest GPT не запускал / not applicable (docs-only) | **нет** |
-| Следующая | sender code (после gates close; не автостарт); executor shutdown; helper/serve; mixed-stop отдельно | — |
+| TASK-45 sender gates | ownership **C+D** + PTB capability gate **B**; STOPPED fast-path; Draft PR #48; GPT review `a3b9599…`; close `873c0a9…`; runtime нет; O10 не закрывать; **не выпущено** | pytest GPT не запускал / not applicable (docs-only) | **нет** |
+| TASK-46 sender gates runtime | ownership claim + PTB inspector; Draft PR (этот); base `873c0a9…`; `telegram_bot` не менялся; stop/mutation **нет**; docs-close **после** GPT; **не выпущено** | Cursor ownership **10** + PTB **12** + boot/profile + sender health/transport (3.12.10); GPT pytest TBD | **нет** |
+| Следующая | sender-stop slice (после TASK-46 accept; не автостарт); executor shutdown; helper/serve; mixed-stop отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -75,7 +76,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-42** закрыт docs-коммитом после GPT review `d0e73d5…`. Runtime нет. **TASK-43** закрыт docs-коммитом после GPT review `01e0c55…` (Cursor 21/52/22; GPT pytest не запускал); runtime между accepted HEAD и close не менялся; helper не wired; не полный graceful. **TASK-44** закрыт docs-коммитом после GPT review `0e770a3…` (pytest not applicable, docs-only); runtime нет. **TASK-45** закрыт docs-коммитом после GPT review `a3b9599…` (pytest not applicable, docs-only); ownership C+D + PTB capability B + STOPPED fast-path; runtime нет; O10 открыт. TASK-39–44 повторно не закрывать. Sender runtime / следующий code task — не стартовать автоматически.
+**TASK-42** закрыт docs-коммитом после GPT review `d0e73d5…`. Runtime нет. **TASK-43** закрыт docs-коммитом после GPT review `01e0c55…` (Cursor 21/52/22; GPT pytest не запускал); runtime между accepted HEAD и close не менялся; helper не wired; не полный graceful. **TASK-44** закрыт docs-коммитом после GPT review `0e770a3…` (pytest not applicable, docs-only); runtime нет. **TASK-45** закрыт docs-коммитом после GPT review `a3b9599…` (pytest not applicable, docs-only); ownership C+D + PTB capability B + STOPPED fast-path; runtime нет; O10 открыт. **TASK-46** — runtime foundation (ownership claim + read-only PTB inspector); Draft PR; docs-close **не** до GPT review; stop/mutation нет. TASK-39–45 повторно не закрывать. Sender-stop / следующий code task — не стартовать автоматически.
 
 ---
 

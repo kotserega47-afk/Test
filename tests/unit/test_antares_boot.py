@@ -212,6 +212,24 @@ def test_boot_accepts_parser_normalized_antares() -> None:
     for key in _SUCCESS_KEYS:
         assert key in result.stdout
     _assert_boot_isolation(result)
+    _assert_sender_ownership_claim_order(result)
+
+
+def _assert_sender_ownership_claim_order(result) -> None:
+    kinds = _event_kinds(result)
+    claim_events = _events_of(result, "sender_ownership_claimed")
+    assert len(claim_events) == 1, result.events
+    assert claim_events[0].get("telegram_bot_loaded") is False
+    claim_at = kinds.index("sender_ownership_claimed")
+    assemble_at = kinds.index("assembly_called")
+    assert claim_at < assemble_at, result.events
+
+
+def test_boot_profile_reject_does_not_claim_ownership() -> None:
+    result = _run(dotenv_lines={"PROJECT_PROFILE": "antares", "TELEGRAM_BOT_TOKEN": _PTB_TOKEN})
+    assert result.returncode == 2, result.stderr + result.stdout
+    assert _events_of(result, "sender_ownership_claimed") == []
+    _assert_boot_isolation(result)
 
 
 @pytest.mark.parametrize("token", ["", "   "])
@@ -222,6 +240,11 @@ def test_boot_rejects_empty_token_after_dotenv(token: str) -> None:
     )
     assert result.returncode == 1, result.stderr + result.stdout
     assert "antares boot ok" not in result.stdout
+    # Enforce succeeded → claim runs; assemble does not (token fail before import).
+    claim_events = _events_of(result, "sender_ownership_claimed")
+    assert len(claim_events) == 1, result.events
+    assert claim_events[0].get("telegram_bot_loaded") is False
+    assert "assembly_called" not in _event_kinds(result)
     _assert_boot_isolation(result)
 
 
@@ -254,6 +277,7 @@ def test_boot_success_seven_jobs_and_handlers() -> None:
     for key in _SUCCESS_KEYS:
         assert key in result.stdout
     _assert_boot_isolation(result)
+    _assert_sender_ownership_claim_order(result)
 
 
 def test_boot_refuses_polluted_registry() -> None:

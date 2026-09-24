@@ -74,6 +74,7 @@
 | [TASK-2026-09-17-43](TASK-2026-09-17-43_antares_registry_daemon_impl.md) | Registry daemon accounting/join: GPT review на `01e0c55…`, закрытие docs, Cursor 21/52/22, helper не wired, не полный graceful, Draft PR #46 |
 | [TASK-2026-09-17-44](TASK-2026-09-17-44_antares_sender_drain_stop.md) | Контракт isolated Telegram sender drain/stop ownership: GPT review на `0e770a3…`, закрытие docs, process-global / refuse без gate, runtime нет, Draft PR #47 |
 | [TASK-2026-09-17-45](TASK-2026-09-17-45_antares_sender_gates.md) | Ownership C+D + PTB capability gate: GPT review на `a3b9599…`, закрытие docs, STOPPED fast-path, claim side-effect-free, runtime нет, Draft PR #48 |
+| [TASK-2026-09-17-46](TASK-2026-09-17-46_antares_sender_gates_runtime.md) | Ownership claim + PTB inspector runtime foundation: Draft PR, docs-close **не** выполнен, `telegram_bot` не тронут, ожидание GPT review |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
