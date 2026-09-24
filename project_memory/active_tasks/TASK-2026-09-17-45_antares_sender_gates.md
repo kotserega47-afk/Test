@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-44 close `49193bb0d5353d3c528b5a6a382cf5ac22ceb718` (accepted `0e770a38eac570585ba698b30a39ef7162fe10b5`, Draft PR #47); [MODULAR_REORG_ANTARES_SENDER_GATES.md](../ops/MODULAR_REORG_ANTARES_SENDER_GATES.md); [SENDER_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) |
-| **PR** | Draft (этот срез) `docs/task-2026-09-17-45-antares-sender-gates`, base `docs/task-2026-09-17-44-antares-sender-drain-stop` |
+| **PR** | Draft [#48](https://github.com/deniskotdavydov1991-wq/Test/pull/48) `docs/task-2026-09-17-45-antares-sender-gates`, base `docs/task-2026-09-17-44-antares-sender-drain-stop` |
 | **Риск** | medium: wrong ownership proof spoofs shared sender stop; PTB private API misuse |
 
 Docs-only: закрыть ownership-gate shape и PTB compatibility strategy до sender runtime. Runtime **не** менять. Helper не wire. O10 не закрывать. TASK-39–44 повторно не закрывать. Docs-close пока **не** делать.
