@@ -49,6 +49,7 @@
 | Возвращает | строку `"antares"`; **не** создаёт process-local attestation object |
 | Читает env | в момент вызова (`project_profile_env_value`) — **mutable** после boot |
 | До Telegram/jobs | да: до `load_dotenv`, `assemble_antares`, Application build |
+| Token gate | сразу после enforce: пустой `TELEGRAM_BOT_TOKEN` → `_fail(...)` — successfully booted dedicated Antares **ожидает** token / sender Bot |
 
 ### 1.2 Legacy mixed `scheduler.py`
 
@@ -197,7 +198,7 @@ Private допустимы для discovery/leftover diagnostics; **не** ед�
 - для каждого owned request: public `shutdown` available **или** fail-closed;
 - можно диагностировать leftover после close.
 
-Если graph unavailable / ambiguous / required public shutdown missing → **`ptb_compatibility_unsupported`** (или эквивалент) → REFUSE **до** seal/stop/HTTP/loop.
+Если graph unavailable / ambiguous / required public shutdown missing / **sender Bot is None** → **`ptb_compatibility_unsupported`** или **`sender_bot_unavailable`** (точное Python-имя — code slice) → REFUSE **до** seal/stop/HTTP/loop.
 
 **Нельзя:** закрыть «что нашли» и объявить success без понятного full graph.
 
@@ -205,13 +206,15 @@ Private допустимы для discovery/leftover diagnostics; **не** ед�
 
 ### 4.4 Capability checklist (PASS requires all)
 
-1. Sender `Bot` object present (or explicit NO_TOKEN policy — code slice; если Bot None, stop semantics fail-closed or no-op documented — **default: fail-closed if stop requested with claim while Bot expected**).
+1. Sender `Bot` object **MUST** be present for claimed isolated Antares stop. `bot is None` / expected Bot unavailable → **fail-closed** preflight (**не** no-op success). Production: `apps.antares._boot_prefix` already `_fail`s without `TELEGRAM_BOT_TOKEN`; successfully claimed stop therefore expects a live module `bot`.
 2. `Bot.shutdown` public callable present.
 3. Full owned request graph enumerable and non-ambiguous.
 4. Each request in graph has public `shutdown` callable.
 5. Shutdown can be scheduled/awaited on **sender** event loop (structural: loop handle available — part of structural preflight § 5).
 
-Missing any → refuse before mutation.
+Missing any → refuse before mutation: no intake seal, no S1 mutation, no worker stop, no HTTP touch, no `loop.stop`, no shutdown thread join.
+
+Code slice **не** выбирает NO_TOKEN no-op policy — решение закрыто здесь.
 
 ---
 
@@ -268,9 +271,9 @@ stop_isolated_sender(ownership_proof, *, timeout=None) -> …
 | G6 | same valid proof repeatedly | idempotent **PASS** |
 | G7 | conflicting/foreign proof | **REFUSE**, no mutation |
 | G8 | ownership PASS, PTB FAIL | no seal / no worker stop / no HTTP close |
-| G9 | public `Bot.shutdown` / request `shutdown` missing | fail-closed preflight |
+| G9 | Bot absent (`bot is None` / expected Bot unavailable) **или** mandatory public `Bot.shutdown` / request `shutdown` missing | fail-closed preflight; **no mutation** |
 | G10 | Bot request graph unavailable/ambiguous | fail-closed preflight |
-| G11 | capable PTB + intelligible full graph | compatibility **PASS** |
+| G11 | capable Bot present + intelligible full graph | compatibility **PASS** |
 | G12 | preflight PASS; one request fails during actual close | per-request leftover; ≠ preflight fail |
 | G13 | already stopped + same owner | idempotent success |
 | G14 | already stopped + foreign/no proof | **REFUSE** (explicit); no mutation |
