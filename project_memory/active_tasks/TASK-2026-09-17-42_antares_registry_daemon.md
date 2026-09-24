@@ -15,18 +15,22 @@ Docs-контракт isolated drain/join daemon `schedule_registry_append`. Run
 
 ## Goal
 
-Зафиксировать учёт каждой принятой `we-registry-*` операции, terminal = join потока, freeze после конца producers, remainder на deadline; durable pending ≠ конец I/O.
+Зафиксировать учёт каждой принятой `we-registry-*` операции (REGISTERED / STARTED / TERMINAL), freeze после конца producers, remainder только на abnormal/in-flight; durable pending ≠ конец I/O.
 
 ---
 
 ## Success Criteria
 
 - [x] Обследованы prepare / schedule / append / outbox / locks / child sender / delayed_cleanup / replay / patch / mirror
-- [x] Принятие = register + `Thread.start`; terminal = join; бизнес-outbox отдельно
+- [x] Видимость до `start()`; успешный `start()` → STARTED; бизнес-outbox отдельно от resource terminal
 - [x] Freeze новой операции после `unfinished_tasks==0`; финальный snapshot после freeze
 - [x] Cancel wait не отменяет I/O; deadline = failure без retry
 - [x] Порядок: оба WE join и daemon join до sender; helper не подключать
-- [x] Матрица R1–R14
+- [x] Lifecycle REGISTERED → STARTED → TERMINAL; reap после наблюдения TERMINAL
+- [x] Already-finished STARTED thread = normal terminal, не remainder-failure
+- [x] `start()` exception не оставляет live daemon; drain не ждёт её
+- [x] Join ≠ business success; outbox shutdown не переписывает
+- [x] Матрица R1–R15 (R4/R8/R9 уточнены)
 - [ ] GPT review
 - [ ] runtime (следующий code-срез)
 - [ ] merge/deploy (намеренно открыто)
@@ -53,3 +57,4 @@ runtime; sender; executor shutdown; helper; serve; mixed-stop; merge/retarget/de
 | Дата | Событие |
 |------|---------|
 | 2026-09-24 | docs-контракт registry daemon drain/join; статус **review (подготовлено)** |
+| 2026-09-24 | уточнение: already-finished STARTED = success; lifecycle и remainder; R15 start-failure |

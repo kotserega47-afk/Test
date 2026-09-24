@@ -22,7 +22,7 @@
 3. Durable pending / replay later **не** разрешение игнорировать живой daemon (D29).
 4. `delayed_cleanup` **не** registry I/O (O4): не ждать, не join, не смешивать.
 5. Cancel/timeout **ожидания** не убивает thread, не меняет outbox, не снимает незавершённую запись с реестра операций.
-6. Deadline при живом daemon → **failure** + remainder, без retry/handoff/restart.
+6. Deadline при **STARTED** и всё ещё **alive** thread → **failure** + remainder, без retry. Уже finished после успешного `start()` — **не** failure.
 7. PTB loop **не** блокировать `Thread.join()`.
 8. Mixed-stop **не** этот контракт.
 
@@ -40,8 +40,8 @@
 |-----|-------|-----------------------------------|------|
 | `persist_durable_result_copy` | WE worker | синхронно до return prepare | тело WE item (`unfinished_tasks`) |
 | `create_outbox_record` → `PENDING` + `_outbox_lock` | WE worker | синхронно | durable index `{STATE_DIR}`; **не** daemon join |
-| `schedule_registry_append` | WE worker | `Thread.start()` затем return; **не** ждёт append | **принятая daemon operation** (этот контракт) |
-| `_run` → `append_run_to_dropbox_registry` | daemon `we-registry-{run_id}` | return `_run` / join thread | I/O; outbox `SYNCING`/`SYNCED`/`FAILED` — **бизнес** |
+| `schedule_registry_append` | WE worker | запись видна **до** `Thread.start()`; успешный `start()` → STARTED; return **не** ждёт append | **daemon accounting** (этот контракт) |
+| `_run` → `append_run_to_dropbox_registry` | daemon `we-registry-{run_id}` | wrapper `finally` → TERMINAL; join — resource | I/O; outbox `SYNCING`/`SYNCED`/`FAILED` — **бизнес** |
 | `delayed_cleanup` | отдельный daemon | sleep + `os.remove` | **исключение O4**; не этот реестр |
 
 `schedule_registry_append` **fire-and-forget**: thread `daemon=True`, имя `we-registry-{task.run_id}`. Process-local списка живых thread **нет**. Повторный `start` на каждый вызов; `sentinel_put`-аналога нет.
@@ -83,34 +83,65 @@ Join существующих thread **отсутствует**.
 
 ---
 
-## 2. Что считается принятой registry operation
+## 2. Lifecycle registry operation
 
-**Владелец реестра операций:** process-local модуль `wallet_editor_registry_async` (не `WorkAdmission`, не PTB Application). Isolated stop только если `bound_admission() is admission` — как TASK-41. Mixed/unbound: отказ, без freeze, без join чужих thread.
+**Владелец:** process-local модуль `wallet_editor_registry_async` (не `WorkAdmission`, не PTB Application). Isolated stop только если `bound_admission() is admission` — как TASK-41. Mixed/unbound: отказ, без freeze, без join чужих thread.
 
-**Принятие:** под коротким lock модуля: вставить запись (run_id, thread или placeholder), затем `Thread.start()`, затем выйти. Окна «thread жив, drain его не видит» быть не должно. Если `start()` бросил — записи нет или она сразу terminal failure создания; durable pending может остаться — это **не** in-flight daemon.
+Durable outbox **не** этот реестр. Только `create_outbox_record` / `PENDING` без `start()` — **не** daemon operation.
 
-**Не принятие:** только `create_outbox_record` / `PENDING` без `start()`. Outbox сам по себе drain daemon **не** закрывает и **не** открывает.
-
-**Состояния видимости (для тестов Event/barrier):**
+Точные enum/имена — code PR. Минимальная семантика записи:
 
 | Состояние | Смысл |
 |-----------|--------|
-| registered, thread not in `_run` body | started, append ещё не вошёл (аналог queued/not started — очереди daemons **нет**, только OS scheduling) |
-| in `append_run_to_dropbox_registry` | started I/O |
-| `_run` returned / thread dead after work | terminal ресурса |
-| already-done до observer | callback/join должен увидеть done без deadlock |
+| REGISTERED / starting | запись **уже видна** drain; `Thread.start()` ещё не успел |
+| STARTED | успешный `Thread.start()`; поток принят; `is_alive()` может стать False, когда `_run` закончится |
+| TERMINAL | resource-учёт закрыт: wrapper `finally` после работы **или** создание не стало STARTED (`start()` бросил) |
+
+Обязательные свойства:
+
+1. Operation видна в registry **до** `Thread.start()`.
+2. Успешный `Thread.start()` атомарно/однозначно переводит запись в STARTED (под тем же lock, что и видимость).
+3. Exception из `Thread.start()` **не** оставляет ложную live operation: запись не STARTED; её не ждут как in-flight daemon; accounting consistent (нет «висит REGISTERED навсегда»). Durable outbox может остаться pending/failed по бизнес-правилам — это **не** in-flight daemon.
+4. Wrapper `_run` в `finally` отмечает TERMINAL **независимо** от business success/failure append/outbox.
+5. TERMINAL не исчезает так, чтобы concurrent drain пропустил переход между snapshot и ожиданием.
+6. Уже TERMINAL к началу wait обрабатывается без deadlock: join уже finished thread допустим и **success**.
+
+**Reaping (выбрано):** бесконечную историю не хранить. Запись можно снять **только после** того, как drain (или сам terminal-учёт) **наблюдал** TERMINAL: join STARTED-thread **или** фиксация start-failure, так что операция больше не live. Снимать STARTED/`is_alive()==False` до этого наблюдения **запрещено** — иначе окно «started, но уже невидим drain». Имена/структура — code PR; точка reaping однозначна: **после наблюдения TERMINAL**, не по голому `is_alive()==False` до wait.
+
+Очереди daemons нет. «Queued/not started» в тестах = REGISTERED или STARTED, `_run` ещё не вошёл в append (OS scheduling).
+
+### 2.1 Already-finished STARTED thread — не failure
+
+Зарегистрированная operation, чей thread **успешно started** и уже завершился **до начала drain**, — **normal terminal**. Join такого thread допустим и должен завершиться **success**. Сам факт `is_alive() == False` после успешного `start()` **не** shutdown failure. «Dead before observer» **не** failure.
+
+Wait/join **failure** только при отдельно доказанном abnormal lifecycle:
+
+- deadline истёк, а **STARTED** thread всё ещё **alive**;
+- запись в невозможном/inconsistent состоянии (например REGISTERED зависла без `start()` и без terminal-учёта; STARTED без thread; accounting повреждён).
+
+`Thread.start()` бросил: операция **не** STARTED, живого daemon нет, drain её **не** ждёт (R15). Это **не** shutdown failure wait и **не** WE «dead worker». Если после исключения осталась live/REGISTERED запись — это уже inconsistent accounting (failure). Durable outbox shutdown **не** переписывает.
 
 ---
 
-## 3. Terminal vs бизнес vs durable
+## 3. Join, бизнес и durable
 
-| Сигнал | Значит |
-|--------|--------|
-| `thread.join` успешен / `is_alive() is False` после нашей работы | **resource** terminal этой operation |
-| outbox `SYNCED` | бизнес-успех append |
-| outbox `FAILED` / timeout / logged exception | бизнес-failure; shutdown join при этом **может** быть успешен |
-| outbox `PENDING`/`SYNCING` при **живом** thread | I/O ещё идёт; drain **не** успех |
-| outbox `PENDING` при **joined** thread | durable leftover для `/registry_replay`; **не** proof что I/O ещё бежит; **не** proof что внешний I/O когда-либо завершился успешно |
+`join` **не** доказательство business success. Shutdown **не** меняет автоматически outbox `PENDING` / `FAILED` / `SYNCED`.
+
+После **successful** `Thread.start()` (STARTED):
+
+| Наблюдение | Resource shutdown | Бизнес |
+|------------|-------------------|--------|
+| thread уже finished до wait | terminal / **success** | outbox как есть |
+| thread finished во время join | terminal / **success** | outbox как есть |
+| append/outbox `FAILED` | **может быть success** | failure отдельно |
+| deadline + STARTED thread **alive** | **failure** + remainder | не трогать outbox из-за shutdown |
+
+| Durable | Daemon |
+|---------|--------|
+| `PENDING`/`SYNCING` + STARTED **alive** | I/O ещё идёт; drain **не** успех |
+| `PENDING` + STARTED **joined/TERMINAL** | leftover для replay; **не** in-flight |
+| `SYNCED` | бизнес-успех append |
+| `FAILED` | бизнес-failure; join при этом может быть success |
 
 Replay later ≠ ignore in-flight (D29).
 
@@ -135,10 +166,10 @@ Producers `schedule_registry_append` на isolated disable-пути: тело WE
 1. Отказать mixed/unbound.
 2. Требовать те же предусловия producers, что и полное использование TASK-41 (sealed, attested PTB producers, idle Accepted executor, empty continuation, `unfinished_tasks==0`). Пустой outbox / пустой список thread **не** достаточны сами по себе, если freeze ещё не снят со snapshot.
 3. Freeze создания.
-4. Снять **финальный** список registered operations.
-5. `await asyncio.to_thread(thread.join, remaining)` для каждой живой; не sync join на PTB loop.
+4. Снять **финальный** список registered operations (включая уже TERMINAL, пока не reap после наблюдения).
+5. Для каждой **STARTED**: `await asyncio.to_thread(thread.join, remaining)`; не sync join на PTB loop. Если thread уже finished — join сразу возвращается, это **success**, не remainder.
 6. Повторный успешный wait не стартует новые thread и не дублирует учёт.
-7. Мёртвый thread до нашей работы / join deadline → remainder, **без retry**.
+7. Failure + remainder **без retry** только abnormal: deadline и STARTED всё ещё alive; inconsistent accounting. **Не** «dead before observer». `start()` exception — не live daemon; drain её **не** ждёт (R15).
 8. Helper `run_ptb_lifecycle` **не** вызывать API в этом срезе.
 
 ### Порядок относительно TASK-39 §5 и TASK-41
@@ -157,7 +188,20 @@ TASK-41 уже соединил проверку `unfinished_tasks==0` и join i
 
 ## 6. Remainder
 
-Минимум: SEALED?; frozen?; run_id → thread name / alive / outbox status; число живых `we-registry-*`. Не включать `delayed_cleanup`. Не считать pending outbox достаточным для success.
+Remainder — только **незавершённые или аномальные** operations. Нормально TERMINAL / already-finished STARTED **не** попадает в failure remainder лишь потому, что `is_alive() == False`.
+
+Минимум на каждую такую запись:
+
+- frozen;
+- run_id;
+- lifecycle state;
+- thread name;
+- started?;
+- alive?;
+- outbox status;
+- reason.
+
+Не включать `delayed_cleanup`. Durable `PENDING` сам по себе не заполняет remainder и не делает drain success.
 
 ---
 
@@ -170,17 +214,18 @@ TASK-41 уже соединил проверку `unfinished_tasks==0` и join i
 | R1 | WE disable вернулся (`task_done`), append ещё в barrier | wait не успех; remainder alive |
 | R2 | daemon started, вошёл в append | registered + started |
 | R3 | `start()` вернул, `_run` ещё не вошёл в append | операция в финальном списке; wait ждёт |
-| R4 | append done до регистрации observer | wait успех; нет deadlock; один terminal |
+| R4 | registered + **successful** `start()`; `_run` **полностью** завершился **до** начала wait | wait **success**; join finished thread ок; **нет** false failure из-за dead thread; без deadlock |
 | R5 | exception внутри append | join успех; бизнес-ошибка на outbox/log отдельно |
 | R6 | cancel/timeout wait | thread жив, работа продолжается; запись в реестре |
 | R7 | повторный wait после R6 | тот же thread; без второй регистрации |
-| R8 | deadline | failure + remainder; без retry |
-| R9 | успешный drain | все учтённые registry threads joined |
+| R8 | **STARTED** и после deadline thread **всё ещё alive** | failure + remainder; без retry. Finished-до-deadline **не** R8 |
+| R9 | успешный drain | нет незавершённых registered live operations; все **successfully started** threads TERMINAL / joined / reaped по § 2 |
 | R10 | freeze + попытка нового `schedule_registry_append` | reject; snapshot не растёт |
 | R11 | durable `PENDING`, thread уже joined (бизнес fail) | shutdown wait может быть успех; pending ≠ in-flight |
 | R12 | mixed/unbound | отказ; freeze нет |
 | R13 | helper source | `run_ptb_lifecycle` не содержит wait/join registry daemon |
 | R14 | `delayed_cleanup` жив | не в remainder и не блокирует success |
+| R15 | запись создана; `Thread.start()` **бросает** | живого daemon нет; нет зависшей live operation; drain **не** ждёт её и **не** failure из-за dead thread; outbox может остаться pending/failed по бизнесу — не in-flight |
 
 Business Telegram/browser — заглушки.
 
@@ -197,7 +242,7 @@ Runtime этого PR; sender stop; executor shutdown; `run_ptb_lifecycle` orche
 | # | Тема | Зафиксировано здесь | Остаётся открытым |
 |---|------|---------------------|-------------------|
 | Q1 | Владелец списка operations | process-local `wallet_editor_registry_async`, не `WorkAdmission` | точные имена API |
-| Q2 | Register vs `Thread.start` | insert под lock **до** `start()` | — |
+| Q2 | Register vs `Thread.start`; reaping | insert до `start()`; STARTED атомарно после успеха; reap **после наблюдения TERMINAL** | точные имена enum |
 | Q3 | Порядок WE join vs daemon join | invariant: оба до sender; helper: TASK-41 затем TASK-42 | менять TASK-41 API **нельзя** |
 | Q4 | `we-registry-mirror-*` | вне среза: append не вызывает `schedule_mirror_batch` | если code позже вызовет — отдельное уточнение |
 | Q5 | Replay | executor Future, не daemon | не переносить replay на `we-registry-*` этим docs |
