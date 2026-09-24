@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт **принят** (`69ae53c65b66a9ad918c294d3f6f1e53192c47a0`); code TASK-40 принят GPT на `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`, **не выпущен**; WE sentinel TASK-41 принят GPT на `6ae8f88de2d146e9a550ae750745214c7c36c136` (runtime `c5ad702…`), **не выпущен**, **не** полный graceful; registry daemon контракт TASK-42 принят GPT на `d0e73d5…`; code TASK-43 принят GPT на `01e0c55…`, **не выпущен**, helper не wired, **не** полный graceful |
+| **Статус** | контракт **принят** (`69ae53c65b66a9ad918c294d3f6f1e53192c47a0`); code TASK-40 принят GPT на `04c6f8f4b29460e792c41a6cd7c4aa098667a39f`, **не выпущен**; WE sentinel TASK-41 принят GPT на `6ae8f88de2d146e9a550ae750745214c7c36c136` (runtime `c5ad702…`), **не выпущен**, **не** полный graceful; registry daemon контракт TASK-42 принят GPT на `d0e73d5…`; code TASK-43 принят GPT на `01e0c55…`, **не выпущен**, helper не wired, **не** полный graceful; sender ownership TASK-44 docs (этот срез), process-global → refuse без gate, O10 открыт |
 | **База** | закрытие TASK-38 `9221f052f8b9bacda10a3041757fa72f7687202c` (принятый review HEAD `f12811035433bce0306ef9ef9d328db43652795a`, Draft PR #41) |
 | **Обследованный SHA** | runtime `f128110…`; принятый docs `69ae53c…` |
 | **Admission** | [MODULAR_REORG_ANTARES_WORK_ADMISSION.md](MODULAR_REORG_ANTARES_WORK_ADMISSION.md) |
@@ -10,7 +10,7 @@
 | **PTB helper** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / TASK-24 `run_ptb_lifecycle` |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
-Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Code TASK-40 (`wait_accepted_executor_work`) **не** полный drain. TASK-41 (принят `6ae8f88…`): production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers` (**не** полный graceful). Registry daemon join — [REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42 принят `d0e73d5…` (runtime нет); code TASK-43 принят `01e0c55…` (**не** полный graceful; helper не wired).
+Цель: полный учёт isolated Accepted work, разделение **work drain** и **resource shutdown**, один порядок со стыком PTB. Это **не** mixed-stop, **не** serve/polling, **не** `JOB_ACCEPT`. Code TASK-40 (`wait_accepted_executor_work`) **не** полный drain. TASK-41 (принят `6ae8f88…`): production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers` (**не** полный graceful). Registry daemon join — [REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42 принят `d0e73d5…` (runtime нет); code TASK-43 принят `01e0c55…` (**не** полный graceful; helper не wired). Sender — [SENDER_DRAIN_STOP.md](MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) TASK-44 docs (process-global; refuse без ownership gate; O10 открыт).
 
 Тестовый `_HarnessQueue.end_loop` TASK-38 **не** production stop и **не** доказательство остановки WE worker.
 
