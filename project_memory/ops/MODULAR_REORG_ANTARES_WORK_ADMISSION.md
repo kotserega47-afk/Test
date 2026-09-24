@@ -348,7 +348,7 @@ loop.call_soon_threadsafe(stop.set)   # не stop.set() напрямую
 | Остальные TG-команды, ingest, прямые ops | не первый code |
 | Внутренний Auto-Enable enqueue | § 7.2 |
 | Live polling / serve | STARTSTOP.md |
-| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39; TASK-40 `wait_accepted_executor_work` принят `04c6f8f…`; WE sentinel TASK-41 принят `6ae8f88…` (не полный graceful); registry daemon — TASK-42; sender/executor/serve отдельно |
+| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39; TASK-40 `wait_accepted_executor_work` принят `04c6f8f…`; WE sentinel TASK-41 принят `6ae8f88…` (не полный graceful); registry daemon — [REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42 (runtime нет); sender/executor/serve отдельно |
 | Reservation + download-then-put | меняет обещание «нет enqueue после seal» |
 | `JOB_ACCEPT` env cutover | другой процесс |
 
