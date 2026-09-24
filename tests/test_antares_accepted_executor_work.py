@@ -27,6 +27,9 @@ from modules.antares.work_admission import (
     watch_admitted_future,
 )
 
+_INVISIBLE_FUTURE_EXIT = 7
+_CALLBACK_UNDER_LOCK_READY = "CALLBACK_UNDER_LOCK_READY"
+_INVISIBLE_FUTURE = "INVISIBLE_FUTURE"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _THIS_FILE = Path(__file__).resolve()
 
@@ -47,6 +50,19 @@ def _open_bound() -> WorkAdmission:
     return admission
 
 
+def _join_thread(
+    thread: threading.Thread | None, bucket: list[BaseException]
+) -> None:
+    if thread is None:
+        return
+    try:
+        thread.join(timeout=5)
+        if thread.is_alive():
+            bucket.append(AssertionError(f"thread {thread.name!r} still alive"))
+    except BaseException as exc:
+        bucket.append(exc)
+
+
 def _join(thread: threading.Thread | None, errors: list[BaseException]) -> None:
     if thread is None:
         return
@@ -54,6 +70,16 @@ def _join(thread: threading.Thread | None, errors: list[BaseException]) -> None:
     assert not thread.is_alive(), f"thread {thread.name!r} still alive"
     if errors:
         raise errors[0]
+
+
+def _child_output(obj: object) -> str:
+    chunks: list[str] = []
+    for attr in ("stdout", "stderr", "output"):
+        raw = getattr(obj, attr, None)
+        if not raw:
+            continue
+        chunks.append(raw if isinstance(raw, str) else raw.decode())
+    return "".join(chunks)
 
 
 def _waiter_count(admission: WorkAdmission) -> int:
@@ -200,6 +226,7 @@ def test_lifecycle_helper_does_not_wait_accepted_executor_work() -> None:
 def test_controlled_submit_wins_seal_sees_registered_future() -> None:
     release = threading.Event()
     errors: list[BaseException] = []
+    pending: list[BaseException] = []
     result: dict[str, object] = {}
     submit_calls: list[int] = []
     submit_thread: threading.Thread | None = None
@@ -252,28 +279,37 @@ def test_controlled_submit_wins_seal_sees_registered_future() -> None:
         assert result.get("after_seal") is None
         gate.submit_may_release.set()
         gate.seal_may_release.set()
-        _join(seal_thread, errors)
+        _join_thread(seal_thread, pending)
+        _join_thread(submit_thread, pending)
         seal_thread = None
+        submit_thread = None
         after = result["after_seal"]
-        assert isinstance(after, tuple)
         outcome = result["outcome"]
+        assert isinstance(after, tuple)
         assert isinstance(outcome, AdmissionAccepted)
         assert outcome.future in after
         assert submit_calls == [1]
-        _join(submit_thread, errors)
-        submit_thread = None
         assert outcome.future in admission.accepted_executor_futures()
         release.set()
         asyncio.run(admission.wait_accepted_executor_work())
         assert outcome.future.result() == "ok"
+    except BaseException as exc:
+        pending.append(exc)
     finally:
-        gate.unlock_all()
+        try:
+            gate.unlock_all()
+        except BaseException as exc:
+            pending.append(exc)
         release.set()
-        _join(seal_thread, errors)
-        _join(submit_thread, errors)
-        pool.shutdown(wait=True)
-        if errors:
-            raise errors[0]
+        _join_thread(seal_thread, pending)
+        _join_thread(submit_thread, pending)
+        try:
+            pool.shutdown(wait=True)
+        except BaseException as exc:
+            pending.append(exc)
+        pending.extend(errors)
+        if pending:
+            raise pending[0]
 
 
 def test_controlled_seal_wins_executor_submit_not_called() -> None:
@@ -413,18 +449,28 @@ def test_already_done_future_callback_without_deadlock_subprocess() -> None:
 
 
 def test_mutation_callback_under_lock_fails_in_subprocess_not_hanging_pytest() -> None:
-    with pytest.raises(subprocess.TimeoutExpired):
-        _run_child("callback_under_lock", timeout=3)
+    try:
+        proc = _run_child("callback_under_lock", timeout=3)
+    except subprocess.TimeoutExpired as exc:
+        text = _child_output(exc)
+        assert _CALLBACK_UNDER_LOCK_READY in text
+        assert "UNEXPECTED_RETURN" not in text
+        return
+    raise AssertionError(
+        f"callback-under-lock child exited {proc.returncode}: {_child_output(proc)}"
+    )
 
 
 def test_mutation_register_after_unlock_detected_in_subprocess() -> None:
     try:
         proc = _run_child("register_after_unlock", timeout=15)
     except subprocess.TimeoutExpired as exc:
-        pytest.fail(f"register-after-unlock mutation hung: {exc}")
-    assert proc.returncode != 0
-    combined = proc.stdout + proc.stderr
-    assert "INVISIBLE_FUTURE" in combined or "AssertionError" in combined
+        raise AssertionError(
+            f"register-after-unlock harness hung: {_child_output(exc)}"
+        ) from exc
+    text = _child_output(proc)
+    assert _INVISIBLE_FUTURE in text, text
+    assert proc.returncode == _INVISIBLE_FUTURE_EXIT, text
 
 
 def test_submit_exception_does_not_register_or_leak_continuation() -> None:
@@ -553,14 +599,10 @@ def test_cancel_handler_after_real_wait_does_not_drop_accepted_work() -> None:
             errors.append(exc)
             raise
 
-    orig_wait = AdmittedJob.wait
-
-    async def _wait(self: AdmittedJob):
-        if self._done.is_set():
-            return self._take()
-        entered.set()
-        await self._af
-        return self._take()
+    class _EnteredWait(asyncio.Future):
+        def __await__(self):
+            entered.set()
+            return super().__await__()
 
     admission = _open_bound()
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="t40-h")
@@ -569,18 +611,16 @@ def test_cancel_handler_after_real_wait_does_not_drop_accepted_work() -> None:
         assert isinstance(outcome, AdmissionAccepted)
 
         async def _run() -> None:
-            AdmittedJob.wait = _wait  # type: ignore[method-assign]
-            try:
-                admitted = watch_admitted_future(
-                    outcome.future, MagicMock(), work="direct"
-                )
-                task = asyncio.create_task(admitted.wait())
-                await _await_thread_event(entered)
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-            finally:
-                AdmittedJob.wait = orig_wait  # type: ignore[method-assign]
+            admitted = watch_admitted_future(
+                outcome.future, MagicMock(), work="direct"
+            )
+            assert admitted.wait.__func__ is AdmittedJob.wait
+            admitted._af = _EnteredWait(loop=admitted._loop)
+            task = asyncio.create_task(admitted.wait())
+            await _await_thread_event(entered)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
             assert outcome.future.cancelled() is False
             assert outcome.future in admission.accepted_executor_futures()
             release.set()
@@ -590,7 +630,6 @@ def test_cancel_handler_after_real_wait_does_not_drop_accepted_work() -> None:
         asyncio.run(_run())
         assert outcome.future.result() == "kept"
     finally:
-        AdmittedJob.wait = orig_wait  # type: ignore[method-assign]
         entered.set()
         release.set()
         pool.shutdown(wait=True)
@@ -866,6 +905,7 @@ def _callback_under_lock_child() -> None:
             future.set_result(fn(*args, **kwargs))
             return future
 
+    print(_CALLBACK_UNDER_LOCK_READY, flush=True)
     admission.submit_if_open(_Inline(), lambda: "deadlock")
     print("UNEXPECTED_RETURN", flush=True)
 
@@ -936,16 +976,22 @@ def _register_after_unlock_child() -> None:
         after = result.get("after_seal")
         if after != ():
             raise AssertionError(f"expected empty registry at seal return, got {after!r}")
-        print("INVISIBLE_FUTURE", flush=True)
-        raise AssertionError("INVISIBLE_FUTURE")
+        print(_INVISIBLE_FUTURE, flush=True)
+        raise SystemExit(_INVISIBLE_FUTURE_EXIT)
     finally:
         gap.set()
         gate.unlock_all()
         release.set()
-        _join(seal_thread, errors)
-        _join(submit_thread, errors)
-        pool.shutdown(wait=True)
+        join_bucket: list[BaseException] = []
+        _join_thread(seal_thread, join_bucket)
+        _join_thread(submit_thread, join_bucket)
+        try:
+            pool.shutdown(wait=True)
+        except BaseException as exc:
+            join_bucket.append(exc)
         reset_antares_admission_for_tests()
+        if join_bucket and sys.exc_info()[0] is not SystemExit:
+            raise join_bucket[0]
 
 
 if __name__ == "__main__":

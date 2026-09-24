@@ -42,8 +42,8 @@
 | `test_controlled_seal_wins_executor_submit_not_called` | один lock: seal в CS, submit на inner acquire; `executor.submit` не вызывается |
 | `test_concurrent_submit_seal_keeps_registry_invariant` | доп. неуправляемая гонка Barrier |
 | `test_already_done_future_callback_without_deadlock_subprocess` | already-done в child 8s; timeout защищает pytest |
-| `test_mutation_callback_under_lock_fails_in_subprocess_not_hanging_pytest` | мутация callback под lock → TimeoutExpired (не коммитится) |
-| `test_mutation_register_after_unlock_detected_in_subprocess` | мутация register после unlock → INVISIBLE_FUTURE (не коммитится) |
+| `test_mutation_callback_under_lock_fails_in_subprocess_not_hanging_pytest` | helpers в test-файле; subprocess подменяет submit; READY-маркер, затем TimeoutExpired |
+| `test_mutation_register_after_unlock_detected_in_subprocess` | helpers в test-файле; subprocess подменяет submit; маркер INVISIBLE_FUTURE и exit 7 |
 | `test_submit_exception_does_not_register_or_leak_continuation` | submit raise; нет записи и continuation |
 | `test_queued_and_running_futures_stay_registered` | max_workers=1: running + queued учтены |
 | `test_callable_exception_completes_accounting_and_stays_visible` | wait успешен; `future.result()` бросает |
@@ -60,7 +60,7 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | усиление тестов (этот коммит): **15 passed** TASK-40, 3.12.10. Runtime не менялся. Остальные наборы исторические на `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5`: **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed** worker registry tests. Наборы не суммировать |
+| Cursor | исправление доказательств (этот коммит): **15 passed** TASK-40, 3.12.10. Runtime не менялся. Остальные наборы исторические на `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5`. |
 | GPT | pytest **не** запускал (ожидается review) |
 
 ---
@@ -76,4 +76,5 @@ WE sentinel/join; registry drain; sender stop; serve; mixed-stop; подключ
 | Дата | Событие |
 |------|---------|
 | 2026-09-24 | первый code-срез реестра Accepted executor Futures; статус **review (подготовлено)** |
-| 2026-09-24 | усиление тестов: управляемый submit/seal lock, already-done subprocess, cancel/timeout, мутации не в git |
+| 2026-09-24 | усиление тестов: управляемый submit/seal lock, already-done subprocess, cancel/timeout. Mutation helpers в test-файле, подмена только в subprocess; production-мутации не внесены |
+| 2026-09-24 | исправление доказательств: оригинальный AdmittedJob.wait; join обоих потоков до чтения outcome; точный INVISIBLE_FUTURE/exit 7; READY до callback-under-lock |
