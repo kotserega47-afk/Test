@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен** (этот срез); runtime **нет**; merge/deploy нет |
+| **Статус** | docs-контракт **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close (этот docs-коммит); runtime **нет**; merge/deploy нет; ownership gate shape и PTB version/compatibility gate — **открытые** dependencies |
 | **База** | закрытие TASK-43 `c17eab2fc7962f18b7702be73459afcd9d82133f` (accepted runtime `01e0c55dc84b9e6be78ff20f6b1f5b58be017601`, Draft PR #46) |
 | **Обследованный SHA** | `c17eab2…` |
 | **Drain/stop** | [MODULAR_REORG_ANTARES_DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 (S1–S3, D27/D28/D30, O3; **O10 не закрывать**) |
