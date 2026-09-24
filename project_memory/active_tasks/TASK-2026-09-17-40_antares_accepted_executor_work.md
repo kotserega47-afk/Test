@@ -38,16 +38,19 @@
 
 | Тест | Сценарий |
 |------|----------|
-| `test_submit_wins_seal_future_already_in_registry` | submit, затем seal: Future уже в реестре |
-| `test_seal_wins_submit_not_called` | seal, затем submit: `executor.submit` не вызывается |
-| `test_concurrent_submit_seal_keeps_registry_invariant` | гонка: Accepted ⇒ в реестре; Rejected ⇒ submit не было |
-| `test_already_done_future_callback_without_deadlock` | inline Future done до callback |
+| `test_controlled_submit_wins_seal_sees_registered_future` | один lock: submit держит CS после register; seal не возвращается раньше; после seal Future учтён |
+| `test_controlled_seal_wins_executor_submit_not_called` | один lock: seal в CS, submit на inner acquire; `executor.submit` не вызывается |
+| `test_concurrent_submit_seal_keeps_registry_invariant` | доп. неуправляемая гонка Barrier |
+| `test_already_done_future_callback_without_deadlock_subprocess` | already-done в child 8s; timeout защищает pytest |
+| `test_mutation_callback_under_lock_fails_in_subprocess_not_hanging_pytest` | мутация callback под lock → TimeoutExpired (не коммитится) |
+| `test_mutation_register_after_unlock_detected_in_subprocess` | мутация register после unlock → INVISIBLE_FUTURE (не коммитится) |
 | `test_submit_exception_does_not_register_or_leak_continuation` | submit raise; нет записи и continuation |
 | `test_queued_and_running_futures_stay_registered` | max_workers=1: running + queued учтены |
 | `test_callable_exception_completes_accounting_and_stays_visible` | wait успешен; `future.result()` бросает |
 | `test_submit_job_if_open_registers_future` | job-путь в том же реестре |
-| `test_cancel_handler_does_not_drop_accepted_work` | cancel `AdmittedJob.wait` |
-| `test_cancel_and_repeat_wait_does_not_cancel_queued_future` | cancel + повторный cancel wait; один callback |
+| `test_cancel_handler_after_real_wait_does_not_drop_accepted_work` | cancel `AdmittedJob.wait` после входа в await |
+| `test_wait_timeout_and_repeat_keeps_queued_future_once` | cancel + wait_for; ровно 2 callback; callable один раз |
+| `test_cancel_wait_keeps_ae_continuation_until_wrapper_done` | pending/active живы при cancel wait; revoke только в wrapper |
 | `test_pending_auto_enable_after_seal_starts_and_revokes` | queued AE после seal стартует и revoke |
 | `test_lifecycle_helper_does_not_wait_accepted_executor_work` | helper не подключён |
 
@@ -57,7 +60,7 @@
 
 | Кто | Что |
 |-----|-----|
-| Cursor | реализация `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5` + pytest 3.12.10: **12** TASK-40; **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed**: `test_disable_flow_unchanged`, `test_worker_passes_user_output_file_to_registry_schedule` (те же, что на `8efa1ec…` / TASK-38). Наборы не суммировать |
+| Cursor | усиление тестов (этот коммит): **15 passed** TASK-40, 3.12.10. Runtime не менялся. Остальные наборы исторические на `c3eaea0a832234d0f4f87d96fa2de5d45d1d4cd5`: **25** AE; **120** admission/handlers; **31** schedules; **52** boot/lifecycle. Прежние **2 failed** worker registry tests. Наборы не суммировать |
 | GPT | pytest **не** запускал (ожидается review) |
 
 ---
@@ -73,3 +76,4 @@ WE sentinel/join; registry drain; sender stop; serve; mixed-stop; подключ
 | Дата | Событие |
 |------|---------|
 | 2026-09-24 | первый code-срез реестра Accepted executor Futures; статус **review (подготовлено)** |
+| 2026-09-24 | усиление тестов: управляемый submit/seal lock, already-done subprocess, cancel/timeout, мутации не в git |
