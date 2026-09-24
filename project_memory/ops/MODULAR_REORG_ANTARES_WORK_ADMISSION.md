@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт; schedules TASK-36 закрыт; Auto-Enable continuation TASK-38 закрыт (`9221f05…` / review `f128110…`, не выпущен); drain/stop контракт TASK-39 принят (`69ae53c…`); Accepted executor registry TASK-40 принят (`04c6f8f…`); WE stop TASK-41; cutover-план **не** к исполнению |
+| **Статус** | контракт TASK-25 закрыт; TASK-30 принят на PR #35 `c420b590…`; TASK-31/32 закрыты; ingest TASK-34 закрыт; schedules TASK-36 закрыт; Auto-Enable continuation TASK-38 закрыт (`9221f05…` / review `f128110…`, не выпущен); drain/stop контракт TASK-39 принят (`69ae53c…`); Accepted executor registry TASK-40 принят (`04c6f8f…`); WE sentinel TASK-41 (этот срез, не полный graceful); cutover-план **не** к исполнению |
 | **База** | закрытие TASK-24 `364976424b1818e37a76bc0b1d10cb254e4479de` (принятый review HEAD `34ef7af33cc112d369e0c9ee860d66954268ce8c`, Draft PR #27) |
 | **Start/stop** | [MODULAR_REORG_ANTARES_STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **Lifecycle** | [MODULAR_REORG_ANTARES_LIFECYCLE.md](MODULAR_REORG_ANTARES_LIFECYCLE.md) |
@@ -274,7 +274,7 @@ Unbound: `run_polling` + `schedule_loop` без изменений.
 
 ### 7.2 Внутренние постановки Auto-Enable
 
-Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37; code TASK-38 принят `f128110…`, не выпущен). Drain/stop — [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 принят `69ae53c…`; executor wait TASK-40 принят `04c6f8f…`; WE stop TASK-41. Harness termination не stop API.
+Контракт: [MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md](MODULAR_REORG_ANTARES_AUTO_ENABLE_ENQUEUE.md) (TASK-37; code TASK-38 принят `f128110…`, не выпущен). Drain/stop — [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 принят `69ae53c…`; executor wait TASK-40 принят `04c6f8f…`; WE sentinel TASK-41 (этот срез). Harness termination не stop API.
 
 `run_auto_enable` → `enqueue_auto_enable_batch`. Isolated: continuation на том же `WorkAdmission`, wrapper в `executor.submit`, проверка **до** ensure/put. Seal не отзывает живой Accepted run. Прямой `enqueue_auto_enable_batch` при bound admission без token — отказ. Mixed unbound без изменения put. Произвольный `Queue.put` не закрыт. Dead worker с очередью — отложенный блокер.
 
@@ -348,7 +348,7 @@ loop.call_soon_threadsafe(stop.set)   # не stop.set() напрямую
 | Остальные TG-команды, ingest, прямые ops | не первый code |
 | Внутренний Auto-Enable enqueue | § 7.2 |
 | Live polling / serve | STARTSTOP.md |
-| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39; TASK-40 `wait_accepted_executor_work` принят `04c6f8f…`; WE sentinel — TASK-41 |
+| Sender stop / worker join / executor shutdown | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39; TASK-40 `wait_accepted_executor_work` принят `04c6f8f…`; WE sentinel TASK-41 (этот срез, не полный graceful); registry/sender/executor/serve отдельно |
 | Reservation + download-then-put | меняет обещание «нет enqueue после seal» |
 | `JOB_ACCEPT` env cutover | другой процесс |
 

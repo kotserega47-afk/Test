@@ -53,8 +53,9 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-37 Auto-Enable enqueue | docs-контракт принят; Draft PR #40 review GPT `741f5cc…`; close `8efa1ec…`; runtime нет; реализация TASK-38; already-dead worker — отложенный блокер; произвольный `Queue.put` не закрыт; **не выпущено** | pytest GPT не запускал | **нет** |
 | TASK-38 Auto-Enable enqueue code | continuation + bound gate + AE Future-once; Draft PR #41; GPT review `f128110…`; close `9221f05…`; не выпущено; harness end_loop ≠ production stop; already-dead worker — блокер TASK-39 | Cursor **25** AE; **120** admission/handlers; **52** boot/lifecycle на `f128110…`; **40 passed, 1 failed** / **36 passed, 1 failed** — прежние, те же на `8efa1ec…`; GPT pytest не запускал; наборы не суммировать | **нет** |
 | TASK-39 drain/stop | docs-контракт принят; Draft PR #42; GPT review `69ae53c…`; close `fa08d7d…`; runtime нет; матрица D1–D30; O1–O9 выбраны; **не выпущено** | pytest GPT не запускал | **нет** |
-| TASK-40 accepted executor work | реестр Accepted Futures + `wait_accepted_executor_work`; Draft PR #43; GPT review `04c6f8f…`; close этот коммит; **не** полный drain; **не выпущено** | Cursor **15** TASK-40 на `04c6f8f…`; **25 / 120 / 31 / 52** исторические на `c3eaea0…`; прежние **2 failed** worker registry; 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
-| Следующая | TASK-41: production WE sentinel + join; registry/sender/helper отдельно; mixed-stop отдельно | — |
+| TASK-40 accepted executor work | реестр Accepted Futures + `wait_accepted_executor_work`; Draft PR #43; GPT review `04c6f8f…`; close `85c0b75…`; **не** полный drain; **не выпущено** | Cursor **15** TASK-40 на `04c6f8f…`; **25 / 120 / 31 / 52** исторические на `c3eaea0…`; прежние **2 failed** worker registry; 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
+| TASK-41 WE sentinel/join | production `ProfileWorkerStopSentinel` + `stop_isolated_profile_workers`; freeze registry; не helper/registry daemon/sender/executor/serve; **не** полный graceful; Draft PR этого среза; **не выпущено** | Cursor **12** TASK-41; related **15** executor / **25** AE / **52** boot+lifecycle / **7** jobs; worker unit **8 passed, 1 failed** (`test_worker_passes_user_output_file_to_registry_schedule`, как на `8efa1ec…`); 3.12.10; GPT pytest не запускал; наборы не суммировать | **нет** |
+| Следующая | registry daemon join; sender stop; executor shutdown; helper/serve; mixed-stop отдельно | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
@@ -70,7 +71,7 @@ Draft PR #4…#30 **пока не сливать**.
 
 `JOB_ACCEPT` и `EXTERNAL_SIDE_EFFECTS` в коде **отсутствуют**. Isolated допуск (TASK-25) — in-process seal, не замена cutover-флага двух процессов.
 
-**TASK-40** закрыт docs-коммитом после GPT review `04c6f8f…`. Не полный drain. Следующий срез — TASK-41 (WE sentinel/join). TASK-39 повторно не закрывать.
+**TASK-40** закрыт docs-коммитом `85c0b75…` после GPT review `04c6f8f…`. Не полный drain. TASK-41 — production WE sentinel/join, не полный graceful. TASK-39/40 повторно не закрывать.
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import traceback
 import threading
@@ -43,12 +44,23 @@ icon, name = LOG_PROFILES["AUTOMATION"]
 log = get_logger(name, icon)
 
 _registry_lock = threading.Lock()
+_profile_workers_frozen = False
+_profile_workers_stop_done = False
+
+
+@dataclass(frozen=True)
+class ProfileWorkerStopSentinel:
+    """Production worker_loop stop token. Not a business item and not test end_loop."""
+
+
+PROFILE_WORKER_STOP = ProfileWorkerStopSentinel()
 
 ProfileQueueItem = Union[
     WalletEditorTask,
     WalletEditorAddWalletTask,
     WalletEditorEditWalletTask,
     "WalletEditorAutoEnableBatchTask",
+    ProfileWorkerStopSentinel,
 ]
 
 
@@ -71,6 +83,29 @@ class WalletEditorAutoEnableBatchTask:
 class _ProfileWorker:
     queue: Queue[ProfileQueueItem] = field(default_factory=Queue)
     thread: threading.Thread | None = None
+    sentinel_put: bool = False
+
+
+@dataclass(frozen=True)
+class ProfileWorkerRemainder:
+    sealed: bool
+    accepted_executor: int
+    continuation_states: tuple[str, ...]
+    profiles: tuple[tuple[str, int, int, bool], ...]
+    frozen: bool
+    reason: str
+
+
+class IsolatedProfileWorkerStopError(RuntimeError):
+    """Isolated WE worker stop refused or failed. Not a retry signal."""
+
+    def __init__(self, remainder: ProfileWorkerRemainder) -> None:
+        super().__init__(remainder.reason)
+        self.remainder = remainder
+
+
+class IsolatedProfileWorkerCreateRejected(RuntimeError):
+    """Registry frozen: no new isolated profile worker after the stop snapshot."""
 
 
 _profile_workers: dict[str, _ProfileWorker] = {}
@@ -86,6 +121,10 @@ def _ensure_profile_worker(profile_key: str) -> _ProfileWorker:
         worker = _profile_workers.get(profile_key)
         if worker is not None:
             return worker
+        if _profile_workers_frozen:
+            raise IsolatedProfileWorkerCreateRejected(
+                f"isolated profile worker create rejected after stop snapshot: {profile_key}"
+            )
 
         worker = _ProfileWorker(queue=Queue())
         thread = threading.Thread(
@@ -516,6 +555,9 @@ def worker_loop(profile_key: str, task_queue: Queue[ProfileQueueItem]) -> None:
     while True:
         item = task_queue.get()
         try:
+            if isinstance(item, ProfileWorkerStopSentinel):
+                log.info(f"🟢 [Worker] profile={profile_key} worker_loop stop")
+                break
             if _is_auto_enable_batch_item(item):
                 try:
                     _log_queue_wait(profile_key, item)
@@ -558,3 +600,126 @@ def worker_loop(profile_key: str, task_queue: Queue[ProfileQueueItem]) -> None:
                 )
         finally:
             task_queue.task_done()
+
+
+def snapshot_isolated_profile_workers() -> dict[str, _ProfileWorker]:
+    """Live registry copy. Observation during drain; not a stop."""
+
+    with _registry_lock:
+        return dict(_profile_workers)
+
+
+def _continuation_states(admission) -> tuple[str, ...]:
+    with admission._lock:
+        return tuple(record.state for record in admission._ae_continuations.values())
+
+
+def collect_profile_worker_remainder(admission, *, reason: str) -> ProfileWorkerRemainder:
+    from modules.antares.work_admission import AdmissionState, bound_admission
+
+    bound = bound_admission() is admission
+    sealed = bool(bound and admission.state is AdmissionState.SEALED)
+    accepted = len(admission.accepted_executor_futures()) if bound else 0
+    continuations = _continuation_states(admission) if bound else ()
+    profiles: list[tuple[str, int, int, bool]] = []
+    with _registry_lock:
+        frozen = _profile_workers_frozen
+        items = list(_profile_workers.items())
+    for key, worker in items:
+        thread = worker.thread
+        alive = bool(thread is not None and thread.is_alive())
+        profiles.append(
+            (key, worker.queue.qsize(), worker.queue.unfinished_tasks, alive)
+        )
+    return ProfileWorkerRemainder(
+        sealed=sealed,
+        accepted_executor=accepted,
+        continuation_states=continuations,
+        profiles=tuple(profiles),
+        frozen=frozen,
+        reason=reason,
+    )
+
+
+def _raise_stop(admission, reason: str) -> None:
+    raise IsolatedProfileWorkerStopError(
+        collect_profile_worker_remainder(admission, reason=reason)
+    )
+
+
+async def stop_isolated_profile_workers(
+    admission,
+    *,
+    producers_complete: bool,
+    timeout: float | None = None,
+) -> tuple[str, ...]:
+    """Put the production sentinel and join isolated WE workers.
+
+    Not a full graceful shutdown. Caller attests PTB producers are done via
+    ``producers_complete``. Empty Queue is not sufficient: ``unfinished_tasks``
+    must be 0 (no active item). Does not stop mixed/unbound workers.
+    """
+
+    global _profile_workers_frozen, _profile_workers_stop_done
+    from modules.antares.work_admission import AdmissionState, bound_admission
+
+    if bound_admission() is not admission:
+        _raise_stop(admission, "mixed/unbound profile workers are not stopped")
+    if not producers_complete:
+        _raise_stop(admission, "PTB producers are not complete")
+    if admission.state is not AdmissionState.SEALED:
+        _raise_stop(admission, "admission is not sealed")
+    if admission.accepted_executor_futures():
+        _raise_stop(admission, "accepted executor work remains")
+    if _continuation_states(admission):
+        _raise_stop(admission, "auto-enable continuation remains")
+
+    with _registry_lock:
+        if _profile_workers_stop_done:
+            return tuple(sorted(_profile_workers))
+        snapshot = dict(_profile_workers)
+
+    for key, worker in snapshot.items():
+        if worker.queue.unfinished_tasks:
+            _raise_stop(
+                admission,
+                f"profile {key} is not drained unfinished={worker.queue.unfinished_tasks}",
+            )
+        thread = worker.thread
+        if thread is None or not thread.is_alive():
+            _raise_stop(admission, f"profile {key} worker is dead")
+
+    with _registry_lock:
+        _profile_workers_frozen = True
+        snapshot = dict(_profile_workers)
+
+    for key, worker in snapshot.items():
+        if worker.queue.unfinished_tasks:
+            _raise_stop(
+                admission,
+                f"profile {key} gained work before freeze unfinished={worker.queue.unfinished_tasks}",
+            )
+        thread = worker.thread
+        if thread is None or not thread.is_alive():
+            _raise_stop(admission, f"profile {key} worker is dead")
+        if not worker.sentinel_put:
+            worker.queue.put(PROFILE_WORKER_STOP)
+            worker.sentinel_put = True
+
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else (loop.time() + timeout)
+    joined: list[str] = []
+    for key, worker in snapshot.items():
+        thread = worker.thread
+        if thread is None:
+            _raise_stop(admission, f"profile {key} worker is dead")
+        remaining = None if deadline is None else max(0.0, deadline - loop.time())
+        await asyncio.to_thread(thread.join, remaining)
+        if thread.is_alive():
+            _raise_stop(admission, f"profile {key} join deadline exceeded")
+        joined.append(key)
+
+    with _registry_lock:
+        _profile_workers_stop_done = True
+    return tuple(sorted(joined))
+
