@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** (`d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`); close `041825f…`; code TASK-43 (этот срез); merge/deploy нет |
+| **Статус** | docs-контракт **принят** (`d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`); close `041825f…`; code TASK-43 принят GPT на `01e0c55dc84b9e6be78ff20f6b1f5b58be017601`, **не выпущен**, helper не wired, **не** полный graceful; merge/deploy нет |
 | **База** | закрытие TASK-41 `655e14aac8413fce44a9d3ece1be653441ac700a` (принятый review HEAD `6ae8f88de2d146e9a550ae750745214c7c36c136`, runtime `c5ad7022d6d15773ad46b593486d0e4a6e94efc5`, Draft PR #44) |
 | **Обследованный SHA** | runtime `c5ad702…` / close `655e14a…` |
 | **Drain/stop** | [MODULAR_REORG_ANTARES_DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 принят `69ae53c…` |
