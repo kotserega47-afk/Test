@@ -24,6 +24,7 @@ from integrations.wallet_editor_registry_async import (
     IsolatedRegistryDaemonStopError,
     RegistryDaemonLifecycle,
     _reset_registry_daemon_ops_for_tests,
+    collect_registry_daemon_remainder,
     create_outbox_record,
     get_outbox_record,
     schedule_registry_append,
@@ -437,6 +438,98 @@ def test_r8_deadline_alive_fails(
             )
         )
     release.set()
+
+
+def test_remainder_excludes_normal_terminal_keeps_alive_started(
+    workers, monkeypatch, daemon_cleanup
+) -> None:
+    """Normal TERMINAL stays in accounting until reap but not in failure remainder."""
+
+    entered_b = threading.Event()
+    release_b = threading.Event()
+    errors: list[BaseException] = []
+
+    def _append(task, *_a, **_k) -> None:
+        try:
+            if task.run_id == "rem-b":
+                entered_b.set()
+                if not release_b.wait(timeout=30):
+                    errors.append(TimeoutError("rem-b hold not released"))
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
+        _append,
+    )
+    admission = _open_bound()
+    admission.seal()
+    _schedule(_task("rem-a"), append_impl=_append)
+    daemon_cleanup()
+    snap_a = snapshot_isolated_registry_daemon_ops()
+    assert "rem-a" in snap_a
+    snap_a["rem-a"].thread.join(timeout=5)
+    assert snap_a["rem-a"].thread.is_alive() is False
+    # finally marks TERMINAL before the thread exits; op may remain until drain reap.
+    snap = snapshot_isolated_registry_daemon_ops()
+    assert "rem-a" in snap
+    assert snap["rem-a"].state is RegistryDaemonLifecycle.TERMINAL
+
+    _schedule(_task("rem-b"), append_impl=_append)
+    daemon_cleanup()
+    assert entered_b.wait(timeout=5)
+    with pytest.raises(IsolatedRegistryDaemonStopError) as ei:
+        asyncio.run(
+            wait_isolated_registry_daemon_ops(
+                admission, producers_complete=True, timeout=0.05
+            )
+        )
+    rem_ids = {e.run_id for e in ei.value.remainder.entries}
+    assert "rem-b" in rem_ids
+    assert "rem-a" not in rem_ids
+    entry_b = next(e for e in ei.value.remainder.entries if e.run_id == "rem-b")
+    assert entry_b.alive is True
+    assert entry_b.lifecycle == RegistryDaemonLifecycle.STARTED.value
+    # rem-a still accounted until successful drain/reap
+    assert "rem-a" in snapshot_isolated_registry_daemon_ops()
+    assert (
+        snapshot_isolated_registry_daemon_ops()["rem-a"].state
+        is RegistryDaemonLifecycle.TERMINAL
+    )
+    release_b.set()
+    if errors:
+        raise errors[0]
+
+
+def test_remainder_only_terminal_excluded_on_refusal(
+    workers, monkeypatch, daemon_cleanup
+) -> None:
+    monkeypatch.setattr(
+        "integrations.wallet_editor_registry.append_run_to_dropbox_registry",
+        lambda *a, **k: None,
+    )
+    _schedule(_task("only-term"), append_impl=None)
+    daemon_cleanup()
+    snap = snapshot_isolated_registry_daemon_ops()
+    assert "only-term" in snap
+    snap["only-term"].thread.join(timeout=5)
+    assert snap["only-term"].thread.is_alive() is False
+    assert (
+        snapshot_isolated_registry_daemon_ops()["only-term"].state
+        is RegistryDaemonLifecycle.TERMINAL
+    )
+    foreign = WorkAdmission()
+    with pytest.raises(IsolatedRegistryDaemonStopError) as ei:
+        asyncio.run(
+            wait_isolated_registry_daemon_ops(foreign, producers_complete=True)
+        )
+    assert "mixed/unbound" in ei.value.remainder.reason
+    assert ei.value.remainder.entries == ()
+    # Direct collector probe with the same accounting snapshot
+    probe = collect_registry_daemon_remainder(reason="probe")
+    assert probe.entries == ()
+    assert "only-term" in snapshot_isolated_registry_daemon_ops()
 
 
 def test_r9_successful_drain_reaps(

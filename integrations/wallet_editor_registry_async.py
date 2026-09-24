@@ -371,11 +371,27 @@ def snapshot_isolated_registry_daemon_ops() -> dict[str, _RegistryDaemonOp]:
 
 
 def collect_registry_daemon_remainder(*, reason: str) -> RegistryDaemonRemainder:
+    """Build failure remainder: unfinished or abnormal ops only.
+
+    Normal TERMINAL resource-terminal ops stay in accounting until reap but are
+    not listed as failure remainder entries.
+
+    Included:
+    - REGISTERED (inconsistent during drain);
+    - STARTED alive (in-flight);
+    - STARTED dead without TERMINAL accounting (inconsistent).
+
+    Excluded:
+    - TERMINAL (normal resource-terminal).
+    """
+
     with _daemon_ops_lock:
         frozen = _daemon_ops_frozen
         items = list(_daemon_ops.values())
     entries: list[RegistryDaemonRemainderEntry] = []
     for op in items:
+        if op.state is RegistryDaemonLifecycle.TERMINAL:
+            continue
         thread = op.thread
         entries.append(
             RegistryDaemonRemainderEntry(
