@@ -917,12 +917,14 @@ def test_s13_observer_attach_error_keeps_accepted_no_duplicate(monkeypatch) -> N
     stub = _install_stub(monkeypatch)
     admission = _open()
     state = _due_interval(IsolatedScheduleState())
-    from concurrent.futures import Future as CFFuture
 
-    def _boom(self, cb):
+    def _boom(future, job_type):  # noqa: ANN001
         raise RuntimeError("callback attach")
 
-    monkeypatch.setattr(CFFuture, "add_done_callback", _boom)
+    monkeypatch.setattr(
+        "modules.antares.scheduler._observe_accepted_future",
+        _boom,
+    )
     result = tick(
         state,
         now_ts=50.0,

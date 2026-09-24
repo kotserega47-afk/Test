@@ -66,6 +66,9 @@ class WorkAdmission:
         self._lock = threading.Lock()
         self._state = AdmissionState.UNBOUND
         self._ae_continuations: dict[str, AutoEnableContinuationRecord] = {}
+        self._accepted_executor_futures: set[Future] = set()
+        self._accepted_executor_waiters: list[asyncio.Future] = []
+        self._accepted_executor_wait_armed = threading.Event()
 
     @property
     def state(self) -> AdmissionState:
@@ -94,6 +97,70 @@ class WorkAdmission:
                 raise AdmissionTransitionError("seal requires a bound admission")
             self._state = AdmissionState.SEALED
 
+    def _register_accepted_executor_future(self, future: Future) -> None:
+        """Insert under the same lock as the OPEN-check and executor.submit."""
+
+        self._accepted_executor_futures.add(future)
+
+    def _attach_accepted_executor_callback(self, future: Future) -> None:
+        """One accounting callback. Must run after releasing ``_lock``."""
+
+        future.add_done_callback(self._on_accepted_executor_future_done)
+
+    def _on_accepted_executor_future_done(self, future: Future) -> None:
+        with self._lock:
+            self._accepted_executor_futures.discard(future)
+            waiters: list[asyncio.Future] = []
+            if not self._accepted_executor_futures:
+                waiters = list(self._accepted_executor_waiters)
+                self._accepted_executor_waiters.clear()
+        for waiter in waiters:
+            self._complete_accepted_executor_waiter(waiter)
+
+    def _complete_accepted_executor_waiter(self, waiter: asyncio.Future) -> None:
+        def _set() -> None:
+            if not waiter.done():
+                waiter.set_result(None)
+
+        try:
+            waiter.get_loop().call_soon_threadsafe(_set)
+        except RuntimeError:
+            pass
+
+    def accepted_executor_futures(self) -> tuple[Future, ...]:
+        with self._lock:
+            return tuple(self._accepted_executor_futures)
+
+    async def wait_accepted_executor_work(self) -> None:
+        """Wait until no Accepted executor Futures remain on this admission.
+
+        This is **not** a full isolated drain. Completing after ``seal()``
+        does not prove WE queues, registry daemons, sender, or resource
+        shutdown are idle.
+
+        Cancelling or timing out this await does not cancel those Futures,
+        does not revoke Auto-Enable continuation, and does not unregister
+        live work. A later wait uses the same submit-time callback.
+        """
+
+        loop = asyncio.get_running_loop()
+        while True:
+            waiter: asyncio.Future = loop.create_future()
+            with self._lock:
+                if not self._accepted_executor_futures:
+                    return
+                self._accepted_executor_waiters.append(waiter)
+                self._accepted_executor_wait_armed.set()
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                with self._lock:
+                    try:
+                        self._accepted_executor_waiters.remove(waiter)
+                    except ValueError:
+                        pass
+                raise
+
     def submit_if_open(
         self,
         executor,
@@ -106,7 +173,9 @@ class WorkAdmission:
             if self._state is not AdmissionState.OPEN:
                 return AdmissionRejected(self._state)
             future = executor.submit(fn, *args, **kwargs)
-            return AdmissionAccepted(future)
+            self._register_accepted_executor_future(future)
+        self._attach_accepted_executor_callback(future)
+        return AdmissionAccepted(future)
 
     def submit_auto_enable_run_if_open(
         self,
@@ -130,7 +199,9 @@ class WorkAdmission:
                 record.state = "revoked"
                 raise
             record.orchestrator_future = future
-            return AdmissionAccepted(future)
+            self._register_accepted_executor_future(future)
+        self._attach_accepted_executor_callback(future)
+        return AdmissionAccepted(future)
 
     def activate_auto_enable_continuation(self, token: str) -> None:
         with self._lock:

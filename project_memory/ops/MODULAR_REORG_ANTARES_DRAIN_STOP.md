@@ -295,7 +295,7 @@ Admission lock не держать через шаги 2–8. Cancel шага 3 
 
 | Было | Решение | Срез (не этот PR) |
 |------|---------|-------------------|
-| O1 API | Реестр на `WorkAdmission`; WE stop = production sentinel + join; drain/shutdown — отдельные исходы | admission registry; worker sentinel; helper orchestration |
+| O1 API | Реестр на `WorkAdmission`; ожидание = `wait_accepted_executor_work` (**не** полный drain); WE stop = production sentinel + join | TASK-40 registry; later worker sentinel; helper |
 | O2 `stop.set` vs drain | Request: seal→set как сейчас. Drain **после** `stop.wait()`, **до** PTB cleanup | изменение `run_ptb_lifecycle` |
 | O3 sender | В полном graceful **обязателен**; rollback handoff при failure `call_soon`/put; intake seal вместе с idle | sender handoff + stop loop/thread/HTTP |
 | O4 `delayed_cleanup` | Явное исключение: не ждать, не смешивать с registry I/O | — |
