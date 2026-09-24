@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-42 close `041825f3d688847c917410e4d8f3cacb6c92073b` (review `d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`, Draft PR #45); [MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md](../ops/MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) |
-| **PR** | Draft (этот срез) `feat/task-2026-09-17-43-antares-registry-daemon-join-impl`, base `feat/task-2026-09-17-42-antares-registry-daemon-join` |
+| **PR** | Draft [#46](https://github.com/deniskotdavydov1991-wq/Test/pull/46) `feat/task-2026-09-17-43-antares-registry-daemon-join-impl`, base `feat/task-2026-09-17-42-antares-registry-daemon-join` |
 | **Риск** | medium: process-local daemon ops; race start vs finally; не полный graceful |
 
 Code: process-local accounting + `wait_isolated_registry_daemon_ops`. Helper не подключён. Sender/executor/serve вне среза. TASK-42 повторно не закрывать. Merge/deploy нет.
