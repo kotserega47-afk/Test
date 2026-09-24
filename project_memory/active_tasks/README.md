@@ -71,6 +71,7 @@
 | [TASK-2026-09-17-40](TASK-2026-09-17-40_antares_accepted_executor_work.md) | Isolated Accepted executor Future registry: GPT review на `04c6f8f…`, закрытие docs, Cursor 15, не полный drain, Draft PR #43 |
 | [TASK-2026-09-17-41](TASK-2026-09-17-41_antares_profile_worker_stop.md) | Production WE sentinel + join: GPT review на `6ae8f88…`, закрытие docs, Cursor 12, не полный graceful, Draft PR #44 |
 | [TASK-2026-09-17-42](TASK-2026-09-17-42_antares_registry_daemon.md) | Контракт isolated WE registry daemon drain/join: GPT review на `d0e73d5…`, закрытие docs, runtime нет, реализация TASK-43, Draft PR #45 |
+| [TASK-2026-09-17-43](TASK-2026-09-17-43_antares_registry_daemon_impl.md) | Code registry daemon accounting/join: не helper/sender; не полный graceful; Draft PR этого среза |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

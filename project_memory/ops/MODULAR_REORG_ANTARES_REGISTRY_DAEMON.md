@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** (`d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`); runtime **не** менялся; реализация TASK-43; merge/deploy нет |
+| **Статус** | docs-контракт **принят** (`d0e73d5ba4bc465e2245d18c206cf6ad99ebf9b1`); close `041825f…`; code TASK-43 (этот срез); merge/deploy нет |
 | **База** | закрытие TASK-41 `655e14aac8413fce44a9d3ece1be653441ac700a` (принятый review HEAD `6ae8f88de2d146e9a550ae750745214c7c36c136`, runtime `c5ad7022d6d15773ad46b593486d0e4a6e94efc5`, Draft PR #44) |
 | **Обследованный SHA** | runtime `c5ad702…` / close `655e14a…` |
 | **Drain/stop** | [MODULAR_REORG_ANTARES_DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 принят `69ae53c…` |
@@ -11,7 +11,7 @@
 
 Цель: учесть каждую **принятую** isolated daemon-операцию `we-registry-*`, дождаться её terminal (join) и запретить новую после конца producers. Это **не** полный graceful: sender, executor shutdown, helper, serve, mixed-stop **не** входят. Durable outbox **не** доказательство конца внешнего I/O.
 
-Имена функций code PR может уточнить; семантика этого docs обязательна. Runtime этого PR **нет**.
+Имена code PR (TASK-43): `RegistryDaemonLifecycle`, `wait_isolated_registry_daemon_ops`, `IsolatedRegistryDaemonCreateRejected`, `IsolatedRegistryDaemonStopError`. Runtime этого docs PR **нет**.
 
 ---
 

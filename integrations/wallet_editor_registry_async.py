@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import enum
 import json
 import os
 import shutil
@@ -34,6 +36,55 @@ log = get_logger(name, icon)
 
 _REGISTRY_RESULT_PREFIX = "we_registry_result_"
 _outbox_lock = threading.Lock()
+
+_daemon_ops_lock = threading.Lock()
+_daemon_ops_frozen = False
+_daemon_ops_wait_done = False
+_daemon_ops_joined: tuple[str, ...] = ()
+_daemon_ops: dict[str, "_RegistryDaemonOp"] = {}
+
+
+class RegistryDaemonLifecycle(enum.Enum):
+    REGISTERED = "registered"
+    STARTED = "started"
+    TERMINAL = "terminal"
+
+
+@dataclass
+class _RegistryDaemonOp:
+    run_id: str
+    thread: threading.Thread
+    state: RegistryDaemonLifecycle
+    started: bool = False
+
+
+@dataclass(frozen=True)
+class RegistryDaemonRemainderEntry:
+    run_id: str
+    lifecycle: str
+    thread_name: str
+    started: bool
+    alive: bool
+    outbox_status: str | None
+
+
+@dataclass(frozen=True)
+class RegistryDaemonRemainder:
+    frozen: bool
+    entries: tuple[RegistryDaemonRemainderEntry, ...]
+    reason: str
+
+
+class IsolatedRegistryDaemonStopError(RuntimeError):
+    """Isolated registry daemon wait refused or failed. Not a retry signal."""
+
+    def __init__(self, remainder: RegistryDaemonRemainder) -> None:
+        super().__init__(remainder.reason)
+        self.remainder = remainder
+
+
+class IsolatedRegistryDaemonCreateRejected(RuntimeError):
+    """Daemon registry frozen: no new we-registry-* after the stop freeze."""
 
 
 @dataclass
@@ -280,6 +331,86 @@ def prepare_registry_outbox_and_schedule(
     return durable_path
 
 
+def _outbox_status_for(run_id: str) -> str | None:
+    record = get_outbox_record(run_id)
+    return record.status if record is not None else None
+
+
+def _mark_daemon_terminal(run_id: str) -> None:
+    with _daemon_ops_lock:
+        op = _daemon_ops.get(run_id)
+        if op is None:
+            return
+        op.state = RegistryDaemonLifecycle.TERMINAL
+        if _daemon_ops_wait_done:
+            _daemon_ops.pop(run_id, None)
+
+
+def _continuation_states(admission) -> tuple[str, ...]:
+    with admission._lock:
+        return tuple(record.state for record in admission._ae_continuations.values())
+
+
+def _we_profiles_unfinished() -> list[tuple[str, int]]:
+    from automation import worker as worker_mod
+
+    with worker_mod._registry_lock:
+        items = list(worker_mod._profile_workers.items())
+    return [
+        (key, worker.queue.unfinished_tasks)
+        for key, worker in items
+        if worker.queue.unfinished_tasks
+    ]
+
+
+def snapshot_isolated_registry_daemon_ops() -> dict[str, _RegistryDaemonOp]:
+    """Live daemon-ops copy. Observation during drain; not a stop."""
+
+    with _daemon_ops_lock:
+        return dict(_daemon_ops)
+
+
+def collect_registry_daemon_remainder(*, reason: str) -> RegistryDaemonRemainder:
+    with _daemon_ops_lock:
+        frozen = _daemon_ops_frozen
+        items = list(_daemon_ops.values())
+    entries: list[RegistryDaemonRemainderEntry] = []
+    for op in items:
+        thread = op.thread
+        entries.append(
+            RegistryDaemonRemainderEntry(
+                run_id=op.run_id,
+                lifecycle=op.state.value,
+                thread_name=thread.name if thread is not None else "",
+                started=op.started,
+                alive=bool(thread is not None and thread.is_alive()),
+                outbox_status=_outbox_status_for(op.run_id),
+            )
+        )
+    return RegistryDaemonRemainder(
+        frozen=frozen,
+        entries=tuple(entries),
+        reason=reason,
+    )
+
+
+def _raise_daemon_stop(reason: str) -> None:
+    raise IsolatedRegistryDaemonStopError(
+        collect_registry_daemon_remainder(reason=reason)
+    )
+
+
+def _reset_registry_daemon_ops_for_tests() -> None:
+    """Test-only: clear process-local daemon accounting. Not a production API."""
+
+    global _daemon_ops_frozen, _daemon_ops_wait_done, _daemon_ops_joined
+    with _daemon_ops_lock:
+        _daemon_ops.clear()
+        _daemon_ops_frozen = False
+        _daemon_ops_wait_done = False
+        _daemon_ops_joined = ()
+
+
 def schedule_registry_append(
     task: WalletEditorTask,
     result_path: str,
@@ -291,8 +422,11 @@ def schedule_registry_append(
     output_file: str | None = None,
     from_durable_copy: bool = False,
 ) -> None:
-    """Fire-and-forget daemon thread; never blocks caller."""
+    """Fire-and-forget daemon thread with process-local accounting (TASK-43)."""
+
     from integrations.wallet_editor_registry import append_run_to_dropbox_registry
+
+    run_id = task.run_id
 
     def _run() -> None:
         try:
@@ -305,18 +439,136 @@ def schedule_registry_append(
                 output_file=output_file,
             )
         finally:
-            if is_staged_copy and not from_durable_copy:
-                remove_staged_result(result_path, is_staged_copy=True)
+            try:
+                if is_staged_copy and not from_durable_copy:
+                    remove_staged_result(result_path, is_staged_copy=True)
+            finally:
+                _mark_daemon_terminal(run_id)
 
     thread = threading.Thread(
         target=_run,
-        name=f"we-registry-{task.run_id}",
+        name=f"we-registry-{run_id}",
         daemon=True,
     )
-    thread.start()
+
+    with _daemon_ops_lock:
+        if _daemon_ops_frozen:
+            raise IsolatedRegistryDaemonCreateRejected(
+                f"isolated registry daemon create rejected after freeze: {run_id}"
+            )
+        existing = _daemon_ops.get(run_id)
+        if existing is not None and existing.state is not RegistryDaemonLifecycle.TERMINAL:
+            raise IsolatedRegistryDaemonCreateRejected(
+                f"registry daemon operation already live: {run_id}"
+            )
+        if existing is not None:
+            _daemon_ops.pop(run_id, None)
+
+        op = _RegistryDaemonOp(
+            run_id=run_id,
+            thread=thread,
+            state=RegistryDaemonLifecycle.REGISTERED,
+            started=False,
+        )
+        _daemon_ops[run_id] = op
+        try:
+            thread.start()
+        except BaseException:
+            op.state = RegistryDaemonLifecycle.TERMINAL
+            _daemon_ops.pop(run_id, None)
+            raise
+        # Child may have finished and set TERMINAL before we mark STARTED.
+        if op.state is not RegistryDaemonLifecycle.TERMINAL:
+            op.state = RegistryDaemonLifecycle.STARTED
+            op.started = True
+
     log.debug(
         "[WalletEditorRegistry] scheduled async append run_id=%s path=%s durable=%s",
-        task.run_id,
+        run_id,
         result_path,
         from_durable_copy,
     )
+
+
+async def wait_isolated_registry_daemon_ops(
+    admission,
+    *,
+    producers_complete: bool,
+    timeout: float | None = None,
+) -> tuple[str, ...]:
+    """Freeze daemon creation and join successfully started we-registry-* threads.
+
+    Not a full graceful shutdown. Join is not business success. Durable outbox
+    statuses are not rewritten. Does not stop mixed/unbound runtimes.
+    """
+
+    global _daemon_ops_frozen, _daemon_ops_wait_done, _daemon_ops_joined
+    from modules.antares.work_admission import AdmissionState, bound_admission
+
+    if bound_admission() is not admission:
+        _raise_daemon_stop("mixed/unbound registry daemons are not stopped")
+    if not producers_complete:
+        _raise_daemon_stop("PTB producers are not complete")
+    if admission.state is not AdmissionState.SEALED:
+        _raise_daemon_stop("admission is not sealed")
+    if admission.accepted_executor_futures():
+        _raise_daemon_stop("accepted executor work remains")
+    if _continuation_states(admission):
+        _raise_daemon_stop("auto-enable continuation remains")
+
+    unfinished = _we_profiles_unfinished()
+    if unfinished:
+        detail = ", ".join(f"{k} unfinished={n}" for k, n in unfinished)
+        _raise_daemon_stop(f"WE profile work is not drained: {detail}")
+
+    with _daemon_ops_lock:
+        if _daemon_ops_wait_done:
+            return _daemon_ops_joined
+        _daemon_ops_frozen = True
+        snapshot = list(_daemon_ops.values())
+
+    for op in snapshot:
+        if op.state is RegistryDaemonLifecycle.REGISTERED:
+            _raise_daemon_stop(
+                f"registry daemon accounting inconsistent registered={op.run_id}"
+            )
+        if op.started and op.thread is None:
+            _raise_daemon_stop(
+                f"registry daemon accounting inconsistent started_without_thread={op.run_id}"
+            )
+
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else (loop.time() + timeout)
+    joined: list[str] = []
+
+    for op in snapshot:
+        if not op.started:
+            # TERMINAL without successful start should already be reaped (R15).
+            # If still present, treat as inconsistent.
+            if op.state is RegistryDaemonLifecycle.TERMINAL:
+                continue
+            _raise_daemon_stop(
+                f"registry daemon accounting inconsistent not_started={op.run_id}"
+            )
+        thread = op.thread
+        while thread.is_alive():
+            if deadline is not None and loop.time() >= deadline:
+                _raise_daemon_stop(
+                    f"registry daemon {op.run_id} join deadline exceeded"
+                )
+            slice_timeout = 0.05
+            if deadline is not None:
+                slice_timeout = min(slice_timeout, max(0.0, deadline - loop.time()))
+            await asyncio.to_thread(thread.join, slice_timeout)
+        joined.append(op.run_id)
+
+    with _daemon_ops_lock:
+        for op in snapshot:
+            if op.started:
+                op.state = RegistryDaemonLifecycle.TERMINAL
+        for run_id, op in list(_daemon_ops.items()):
+            if op.state is RegistryDaemonLifecycle.TERMINAL:
+                _daemon_ops.pop(run_id, None)
+        _daemon_ops_wait_done = True
+        _daemon_ops_joined = tuple(sorted(joined))
+        return _daemon_ops_joined
