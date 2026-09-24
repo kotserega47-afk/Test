@@ -17,6 +17,8 @@ REASON_GENERAL_REQUEST_MISMATCH: Final = "general_request_mismatch"
 REASON_REQUEST_SHUTDOWN_UNAVAILABLE: Final = "request_shutdown_unavailable"
 REASON_LEFTOVER_DIAGNOSTIC_UNAVAILABLE: Final = "leftover_diagnostic_unavailable"
 
+_ABSENT: Final = object()
+
 
 @dataclass(frozen=True, slots=True)
 class SenderRequestRolePlan:
@@ -35,6 +37,14 @@ class SenderPtbCompatibilityResult:
     roles: tuple[SenderRequestRolePlan, ...]
     close_targets: tuple[Any, ...]
     telegram_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphProbe:
+    """Internal discovery outcome: roles XOR refuse_reason."""
+
+    roles: tuple[SenderRequestRolePlan, ...] | None = None
+    refuse_reason: str | None = None
 
 
 def _telegram_version() -> str | None:
@@ -60,34 +70,88 @@ def _refuse(
     )
 
 
-def _discover_owned_request_roles(bot: Any) -> tuple[SenderRequestRolePlan, ...] | None:
-    """Return recognized full graph or None if unavailable/unrecognized.
+def _probe_getattr(obj: Any, name: str) -> tuple[Any, bool]:
+    """Return ``(value_or_ABSENT, ok)``. ``ok=False`` when observation raises."""
 
-    Recognized shape (PTB Bot): ``bot._request`` is a tuple of length >= 2
-    ``(getUpdates request, general API request)``. Public-only ``bot.request``
-    without that pair is **not** accepted as full-graph proof (TASK-45/46).
+    try:
+        return getattr(obj, name, _ABSENT), True
+    except Exception:
+        return None, False
+
+
+def _discover_owned_request_roles(bot: Any) -> _GraphProbe:
+    """Recognize full owned Bot request graph or fail-closed reason.
+
+    Recognized PTB shape: ``bot._request`` is a tuple of **exactly** 2
+    ``(getUpdates request, general API request)``. Longer/shorter/non-tuple
+    shapes and public-only ``bot.request`` are not accepted (TASK-45/46).
     """
 
-    pair = getattr(bot, "_request", None)
-    if not isinstance(pair, tuple) or len(pair) < 2:
-        return None
+    pair, pair_ok = _probe_getattr(bot, "_request")
+    if not pair_ok:
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_AMBIGUOUS)
+
+    public, public_ok = _probe_getattr(bot, "request")
+    if not public_ok:
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_AMBIGUOUS)
+    public_observed = public is not _ABSENT
+
+    if pair is _ABSENT or pair is None:
+        if public_observed and public is not None:
+            return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_AMBIGUOUS)
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_UNAVAILABLE)
+
+    if not isinstance(pair, tuple):
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_UNAVAILABLE)
+
+    if len(pair) != 2:
+        # Trailing/extra (or short) request objects → ambiguous, not "first two".
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_AMBIGUOUS)
+
     get_updates, general = pair[0], pair[1]
     if get_updates is None or general is None:
-        return None
-    return (
-        SenderRequestRolePlan(role="get_updates_request", request=get_updates),
-        SenderRequestRolePlan(role="request", request=general),
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_UNAVAILABLE)
+
+    if public_observed and public is not general:
+        # Explicit contradiction between public request and private pair[1].
+        return _GraphProbe(refuse_reason=REASON_REQUEST_GRAPH_AMBIGUOUS)
+
+    return _GraphProbe(
+        roles=(
+            SenderRequestRolePlan(role="get_updates_request", request=get_updates),
+            SenderRequestRolePlan(role="request", request=general),
+        )
     )
 
 
-def _has_leftover_diagnostic(req: Any) -> bool:
-    # Recognized diagnostic path (same idea as application_lifecycle): _client / is_closed.
-    if not hasattr(req, "_client"):
+def _has_leftover_diagnostic(req: Any) -> bool | None:
+    """True/False for capability, or None if observation itself raises."""
+
+    client, client_ok = _probe_getattr(req, "_client")
+    if not client_ok:
+        return None
+    if client is _ABSENT:
         return False
-    client = getattr(req, "_client", None)
     if client is None:
+        # Recognized: client absent/cleared still allows closed-state diagnosis.
         return True
-    return hasattr(client, "is_closed")
+    closed, closed_ok = _probe_getattr(client, "is_closed")
+    if not closed_ok:
+        return None
+    if closed is _ABSENT:
+        return False
+    return True
+
+
+def _request_shutdown_callable(req: Any) -> bool | None:
+    """True/False for callable shutdown, or None if observation raises."""
+
+    shutdown, ok = _probe_getattr(req, "shutdown")
+    if not ok:
+        return None
+    if shutdown is _ABSENT:
+        return False
+    return callable(shutdown)
 
 
 def _dedupe_close_targets(roles: tuple[SenderRequestRolePlan, ...]) -> tuple[Any, ...]:
@@ -110,28 +174,29 @@ def inspect_sender_ptb_compatibility(
     """Read-only compatibility inspection for future sender HTTP close.
 
     Never calls ``shutdown`` / ``initialize`` / queue mutation.
+    Unknown PTB shapes and raising property probes → fail-closed result.
     """
 
     if bot is None:
         return _refuse(REASON_SENDER_BOT_UNAVAILABLE)
 
-    shutdown = getattr(bot, "shutdown", None)
-    if not callable(shutdown):
+    shutdown, shutdown_ok = _probe_getattr(bot, "shutdown")
+    if not shutdown_ok or shutdown is _ABSENT or not callable(shutdown):
         return _refuse(REASON_BOT_SHUTDOWN_UNAVAILABLE)
 
     if expected_general_request is None:
         return _refuse(REASON_GENERAL_REQUEST_MISMATCH)
 
     try:
-        roles = _discover_owned_request_roles(bot)
+        probe = _discover_owned_request_roles(bot)
     except Exception:
         return _refuse(REASON_REQUEST_GRAPH_AMBIGUOUS)
 
+    if probe.refuse_reason is not None:
+        return _refuse(probe.refuse_reason)
+
+    roles = probe.roles
     if roles is None:
-        # Missing/unrecognized private graph — fail-closed (do not guess via public request).
-        pair = getattr(bot, "_request", None)
-        if pair is None and getattr(bot, "request", None) is not None:
-            return _refuse(REASON_REQUEST_GRAPH_AMBIGUOUS)
         return _refuse(REASON_REQUEST_GRAPH_UNAVAILABLE)
 
     general_role = next((r for r in roles if r.role == "request"), None)
@@ -141,9 +206,11 @@ def inspect_sender_ptb_compatibility(
         return _refuse(REASON_GENERAL_REQUEST_MISMATCH, roles=roles)
 
     for role in roles:
-        if not callable(getattr(role.request, "shutdown", None)):
+        shutdown_ok = _request_shutdown_callable(role.request)
+        if shutdown_ok is None or not shutdown_ok:
             return _refuse(REASON_REQUEST_SHUTDOWN_UNAVAILABLE, roles=roles)
-        if not _has_leftover_diagnostic(role.request):
+        diagnostic = _has_leftover_diagnostic(role.request)
+        if diagnostic is None or not diagnostic:
             return _refuse(REASON_LEFTOVER_DIAGNOSTIC_UNAVAILABLE, roles=roles)
 
     return SenderPtbCompatibilityResult(

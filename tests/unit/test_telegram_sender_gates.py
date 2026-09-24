@@ -1,4 +1,4 @@
-"""TASK-46: read-only PTB sender compatibility inspector (P1–P12)."""
+"""TASK-46: read-only PTB sender compatibility inspector (P1–P12 + blockers)."""
 
 from __future__ import annotations
 
@@ -26,12 +26,10 @@ class _CallCounter:
 
 
 def _request(*, shutdown: bool = True, diagnostic: bool = True):
-    shutdown_fn: object = _CallCounter() if shutdown else object()
     if not shutdown:
-        # Explicit non-callable when shutdown=False for missing-capability cases.
         payload = SimpleNamespace(shutdown=None)
     else:
-        payload = SimpleNamespace(shutdown=shutdown_fn)
+        payload = SimpleNamespace(shutdown=_CallCounter())
     if diagnostic:
         payload._client = SimpleNamespace(is_closed=False)
     return payload
@@ -42,7 +40,7 @@ def _bot(*, graph, shutdown: bool = True):
     return SimpleNamespace(
         shutdown=bot_shutdown if shutdown else object(),
         _request=graph,
-        request=graph[1] if isinstance(graph, tuple) and len(graph) >= 2 else None,
+        request=graph[1] if isinstance(graph, tuple) and len(graph) == 2 else None,
     )
 
 
@@ -159,6 +157,142 @@ def test_p11_unknown_private_shape_fail_closed() -> None:
         REASON_REQUEST_GRAPH_UNAVAILABLE,
         REASON_REQUEST_GRAPH_AMBIGUOUS,
     )
+    assert result.close_targets == ()
+
+
+def test_p11b_tuple_length_three_fail_closed() -> None:
+    """BLOCKER 2: trailing third request must not PASS on first two."""
+
+    gu = _request()
+    general = _request()
+    extra = _request()
+    bot = SimpleNamespace(
+        shutdown=_CallCounter(),
+        _request=(gu, general, extra),
+        request=general,
+    )
+    result = inspect_sender_ptb_compatibility(bot=bot, expected_general_request=general)
+    assert result.supported is False
+    assert result.reason == REASON_REQUEST_GRAPH_AMBIGUOUS
+    assert result.close_targets == ()
+    assert bot.shutdown.calls == 0
+    assert gu.shutdown.calls == 0
+    assert general.shutdown.calls == 0
+    assert extra.shutdown.calls == 0
+
+
+def test_p11c_raising_property_probes_fail_closed() -> None:
+    """BLOCKER 3: raising capability properties → fail-closed, no crash."""
+
+    gu = _request()
+    general = _request()
+
+    class _BotShutdownRaises:
+        _request = (gu, general)
+        request = general
+
+        @property
+        def shutdown(self):
+            raise RuntimeError("bot.shutdown boom")
+
+    r1 = inspect_sender_ptb_compatibility(
+        bot=_BotShutdownRaises(), expected_general_request=general
+    )
+    assert r1.supported is False
+    assert r1.reason == REASON_BOT_SHUTDOWN_UNAVAILABLE
+    assert r1.close_targets == ()
+
+    class _BotRequestAttrRaises:
+        shutdown = _CallCounter()
+
+        @property
+        def _request(self):
+            raise RuntimeError("_request boom")
+
+        @property
+        def request(self):
+            raise RuntimeError("request boom")
+
+    r2 = inspect_sender_ptb_compatibility(
+        bot=_BotRequestAttrRaises(), expected_general_request=general
+    )
+    assert r2.supported is False
+    assert r2.reason in (
+        REASON_REQUEST_GRAPH_AMBIGUOUS,
+        REASON_REQUEST_GRAPH_UNAVAILABLE,
+    )
+    assert r2.close_targets == ()
+
+    class _ReqShutdownRaises:
+        _client = SimpleNamespace(is_closed=False)
+
+        @property
+        def shutdown(self):
+            raise RuntimeError("request.shutdown boom")
+
+    bad_shutdown = _ReqShutdownRaises()
+    bot3 = SimpleNamespace(
+        shutdown=_CallCounter(),
+        _request=(gu, bad_shutdown),
+        request=bad_shutdown,
+    )
+    r3 = inspect_sender_ptb_compatibility(bot=bot3, expected_general_request=bad_shutdown)
+    assert r3.supported is False
+    assert r3.reason == REASON_REQUEST_SHUTDOWN_UNAVAILABLE
+    assert r3.close_targets == ()
+
+    class _ClientRaises:
+        shutdown = _CallCounter()
+
+        @property
+        def _client(self):
+            raise RuntimeError("_client boom")
+
+    bad_diag = _ClientRaises()
+    bot4 = SimpleNamespace(
+        shutdown=_CallCounter(),
+        _request=(gu, bad_diag),
+        request=bad_diag,
+    )
+    r4 = inspect_sender_ptb_compatibility(bot=bot4, expected_general_request=bad_diag)
+    assert r4.supported is False
+    assert r4.reason == REASON_LEFTOVER_DIAGNOSTIC_UNAVAILABLE
+    assert r4.close_targets == ()
+
+    class _ClientIsClosedRaises:
+        @property
+        def is_closed(self):
+            raise RuntimeError("is_closed boom")
+
+    class _ReqWithBadIsClosed:
+        shutdown = _CallCounter()
+        _client = _ClientIsClosedRaises()
+
+    bad_is_closed = _ReqWithBadIsClosed()
+    bot5 = SimpleNamespace(
+        shutdown=_CallCounter(),
+        _request=(gu, bad_is_closed),
+        request=bad_is_closed,
+    )
+    r5 = inspect_sender_ptb_compatibility(bot=bot5, expected_general_request=bad_is_closed)
+    assert r5.supported is False
+    assert r5.reason == REASON_LEFTOVER_DIAGNOSTIC_UNAVAILABLE
+    assert r5.close_targets == ()
+
+
+def test_p11d_public_request_contradicts_pair_fail_closed() -> None:
+    gu = _request()
+    general = _request()
+    other = _request()
+    bot = SimpleNamespace(
+        shutdown=_CallCounter(),
+        _request=(gu, general),
+        request=other,
+    )
+    result = inspect_sender_ptb_compatibility(bot=bot, expected_general_request=general)
+    assert result.supported is False
+    assert result.reason == REASON_REQUEST_GRAPH_AMBIGUOUS
+    assert result.close_targets == ()
 
 
 def test_p12_version_string_does_not_alter_pass(monkeypatch) -> None:

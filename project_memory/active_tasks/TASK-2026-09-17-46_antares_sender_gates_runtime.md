@@ -81,4 +81,5 @@ Fail-closed reasons: `sender_bot_unavailable`, `bot_shutdown_unavailable`, `requ
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-24 | CODE: ownership + PTB inspector + boot claim wiring; Draft PR; ожидание GPT review |
+| 2026-09-24 | CODE: ownership + PTB inspector + boot claim wiring; Draft PR #49; ожидание GPT review |
+| 2026-09-24 | GPT review BLOCKED: (1) PR base=`test_main` — **не** retarget без явного разрешения; (2) tuple `len>=2` → fix EXACTLY-2; (3) raising property probes → fail-closed |
