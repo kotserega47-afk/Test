@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close (этот docs-коммит); runtime **нет**; merge/deploy нет; ownership gate shape и PTB version/compatibility gate — **открытые** dependencies |
+| **Статус** | docs-контракт **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close `49193bb…`; runtime **нет**; merge/deploy нет; ownership/PTB gate **decisions** → [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-45 (этот follow-on docs) |
 | **База** | закрытие TASK-43 `c17eab2fc7962f18b7702be73459afcd9d82133f` (accepted runtime `01e0c55dc84b9e6be78ff20f6b1f5b58be017601`, Draft PR #46) |
 | **Обследованный SHA** | `c17eab2…` |
 | **Drain/stop** | [MODULAR_REORG_ANTARES_DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 (S1–S3, D27/D28/D30, O3; **O10 не закрывать**) |
@@ -214,7 +214,7 @@ Future ownership state (сохранять handles): loop thread; worker Task; l
 
 Future sender shutdown **не** строит молча на предположении «production всегда 22.8».
 
-**Dependency / open question:** *PTB version contract / compatibility gate* — либо future code slice **доказывает/pins** supported PTB version(s), либо shutdown **version-tolerant** и **fail-closed**, если ожидаемая public request shutdown API / request graph недоступна.
+**Dependency / PTB gate:** закрыто TASK-45 — runtime capability gate + fail-closed; см. [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md). Surveyed 22.8 observation only; `requirements.txt` `>=20.7` unchanged by TASK-44/45.
 
 ### 8.2 Public lifecycle API vs private diagnostics
 
@@ -339,10 +339,15 @@ Open question: если ownership gate = refuse, helper **не** должен п
 
 ---
 
-## 13. Open questions
+## 13. Open questions / follow-ons
 
-1. **Ownership gate shape** для future code: как аттестовать dedicated Antares process (entrypoint-only? profile? explicit process flag?) не принимая seal admission за ownership.
-2. **PTB version contract / compatibility gate:** pin supported version(s) vs version-tolerant fail-closed shutdown (`requirements.txt` = `>=20.7`; surveyed 22.8 не pin).
+**Закрыты TASK-45** (см. [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md)):
+
+1. Ownership gate shape → **C+D** process-local immutable attestation + explicit proof to stop API.
+2. PTB strategy → **B** runtime capability gate + fail-closed (pin not required by contract).
+
+Остаются (не GATE design):
+
 3. Нужен ли отдельный accounting для in-flight `send_photo_sync` / `send_message_direct`, если появятся production callers.
 4. Должен ли future stop сохранять worker Task / thread handles при **первом** import refactor, или отдельный lazy-start slice.
 5. Взаимодействие refuse-sender-stop с helper «полный graceful» claim (не ослаблять; не wire сейчас).
