@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен** (этот срез); runtime **нет**; merge/deploy нет |
+| **Статус** | docs-контракт **принят** (`a3b95990b09a52848498d7518d2bc234a8f19800`); close (этот docs-коммит); runtime **нет**; merge/deploy нет; O10 открыт |
 | **База** | закрытие TASK-44 `49193bb0d5353d3c528b5a6a382cf5ac22ceb718` (accepted review `0e770a38eac570585ba698b30a39ef7162fe10b5`, Draft PR #47) |
 | **Обследованный SHA** | `49193bb…` |
 | **Sender drain** | [MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md](MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) TASK-44 — ownership **B** + S1–S3; **открытые** gate dependencies **закрываются здесь** |
