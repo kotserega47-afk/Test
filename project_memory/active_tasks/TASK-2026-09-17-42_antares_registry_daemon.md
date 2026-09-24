@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-41 close `655e14aac8413fce44a9d3ece1be653441ac700a` (review `6ae8f88de2d146e9a550ae750745214c7c36c136`, runtime `c5ad702…`, Draft PR #44); [MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md](../ops/MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md); [DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md) § 1.7 / O4b |
-| **PR** | Draft (этот срез) `feat/task-2026-09-17-42-antares-registry-daemon-join`, base `feat/task-2026-09-17-41-antares-profile-worker-stop` |
+| **PR** | Draft [#45](https://github.com/deniskotdavydov1991-wq/Test/pull/45) `feat/task-2026-09-17-42-antares-registry-daemon-join`, base `feat/task-2026-09-17-41-antares-profile-worker-stop` |
 | **Риск** | medium: fire-and-forget `we-registry-*`; sender handoff из append; не полный graceful |
 
 Docs-контракт isolated drain/join daemon `schedule_registry_append`. Runtime **не** менялся. TASK-41 повторно не реализовывать. TASK-39/40/41 повторно не закрывать. Merge/deploy нет.
