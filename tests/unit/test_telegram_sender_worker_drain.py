@@ -491,7 +491,8 @@ def test_sent1_scheduled_not_yet_enqueued(monkeypatch) -> None:
     assert tg._sentinel_state == tg._SENTINEL_SCHEDULED
     assert len(held) == 1
     # Complete pending submission so fixture reset can restart cleanly.
-    held[0][0](*held[0][1])
+    # Use unbound `real` — monkeypatch still wraps tg._real_call_soon_threadsafe.
+    real(held[0][0], *held[0][1])
     _wait_until(lambda: tg._sentinel_state == tg._SENTINEL_ENQUEUED)
 
 
@@ -563,7 +564,8 @@ def test_sent4_pending_sentinel_no_duplicate_on_repeat(monkeypatch) -> None:
         for _ in range(20):
             await asyncio.sleep(0)
         assert len(held) == 1
-        held[0][0](*held[0][1])
+        # Use unbound `real` — monkeypatch still wraps tg._real_call_soon_threadsafe.
+        real(held[0][0], *held[0][1])
         return await task
 
     second = _run(continue_drain())
@@ -721,3 +723,141 @@ def test_sf1_sentinel_put_failure_not_intake_counter(monkeypatch) -> None:
     assert second.ok is True, second
     assert second.worker_stopped is True
     assert tg._terminal_intake_failure_total == before
+
+
+def test_wt2_worker_cancelled_structured_not_caller_cancel() -> None:
+    """Worker Task cancel during terminal observe → structured failure, not CancelledError."""
+
+    release = threading.Event()
+
+    async def body():
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+
+    async def start():
+        return asyncio.create_task(body(), name="wt2-worker")
+
+    owned = asyncio.run_coroutine_threadsafe(start(), tg.loop).result(timeout=2.0)
+    prev = tg._worker_task
+    tg._worker_task = owned
+    try:
+
+        async def observe_then_cancel_worker():
+            wait_task = asyncio.create_task(
+                tg._run_on_sender_loop(
+                    tg._await_worker_terminal, time.monotonic() + 5.0
+                )
+            )
+            for _ in range(10):
+                await asyncio.sleep(0)
+            tg._real_call_soon_threadsafe(owned.cancel)
+            outcome = await wait_task
+            assert isinstance(outcome, tg.WorkerTerminalOutcome)
+            assert outcome.clean is False
+            assert outcome.reason == "unexpected_dead_worker"
+            assert outcome.diagnostic == "worker_cancelled"
+            return outcome
+
+        outcome = _run(observe_then_cancel_worker())
+        assert outcome.clean is False
+        assert owned.cancelled()
+    finally:
+        tg._worker_task = prev
+        release.set()
+
+    # Fresh worker for full drain path after ENQUEUED.
+    with tg._lifecycle_lock:
+        tg._lifecycle_state = "DRAINING"
+        tg._intake_sealed = True
+        tg._sentinel_state = tg._SENTINEL_ENQUEUED
+        tg._sentinel_ack.set()
+    tg._reset_sender_worker_lifecycle_for_tests()
+    proof = _claim()
+
+    real_enqueue = tg._enqueue_sentinel_on_loop
+
+    def enqueue_then_cancel_worker() -> None:
+        real_enqueue()
+        worker = tg._worker_task
+        if worker is not None and not worker.done():
+            worker.cancel()
+
+    async def drain_cancel_worker():
+        tg._enqueue_sentinel_on_loop = enqueue_then_cancel_worker  # type: ignore[assignment]
+        try:
+            return await tg.drain_and_stop_sender_worker(proof, timeout=5.0)
+        finally:
+            tg._enqueue_sentinel_on_loop = real_enqueue  # type: ignore[assignment]
+
+    result = _run(drain_cancel_worker())
+    assert result.ok is False, result
+    assert result.reason == "unexpected_dead_worker"
+    assert result.worker_terminal is True
+    assert result.worker_stopped is False
+    assert result.full_resource_stopped is False
+    assert tg._lifecycle_state == "DRAINING"
+
+
+def test_wt3_worker_exception_structured_no_raw_escape() -> None:
+    """Worker Task exception during terminal observe → structured failure."""
+
+    async def boom():
+        raise RuntimeError("worker boom")
+
+    async def start():
+        return asyncio.create_task(boom(), name="wt3-worker")
+
+    owned = asyncio.run_coroutine_threadsafe(start(), tg.loop).result(timeout=2.0)
+    _wait_until(lambda: owned.done())
+    prev = tg._worker_task
+    tg._worker_task = owned
+    try:
+
+        async def observe():
+            return await tg._run_on_sender_loop(
+                tg._await_worker_terminal, time.monotonic() + 2.0
+            )
+
+        outcome = _run(observe())
+        assert isinstance(outcome, tg.WorkerTerminalOutcome)
+        assert outcome.clean is False
+        assert outcome.reason == "unexpected_dead_worker"
+        assert outcome.diagnostic == "RuntimeError"
+    finally:
+        tg._worker_task = prev
+
+    with tg._lifecycle_lock:
+        tg._lifecycle_state = "DRAINING"
+        tg._intake_sealed = True
+        tg._sentinel_state = tg._SENTINEL_ENQUEUED
+        tg._sentinel_ack.set()
+    tg._reset_sender_worker_lifecycle_for_tests()
+    proof = _claim()
+
+    real_enqueue = tg._enqueue_sentinel_on_loop
+
+    def enqueue_then_swap_failed_worker() -> None:
+        real_enqueue()
+
+        async def boom2():
+            raise RuntimeError("worker boom")
+
+        failed = asyncio.get_running_loop().create_task(
+            boom2(), name="wt3-drain-worker"
+        )
+        # Attach failure synchronously on this loop tick before waiter observes.
+        tg._worker_task = failed
+
+    async def drain_with_failed_worker():
+        tg._enqueue_sentinel_on_loop = enqueue_then_swap_failed_worker  # type: ignore[assignment]
+        try:
+            return await tg.drain_and_stop_sender_worker(proof, timeout=5.0)
+        finally:
+            tg._enqueue_sentinel_on_loop = real_enqueue  # type: ignore[assignment]
+
+    result = _run(drain_with_failed_worker())
+    assert result.ok is False, result
+    assert result.reason == "unexpected_dead_worker"
+    assert result.worker_terminal is True
+    assert result.worker_stopped is False
+    assert tg._lifecycle_state == "DRAINING"

@@ -845,12 +845,54 @@ async def _run_on_sender_loop(coro_factory, deadline: float):
     return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=remaining)
 
 
-async def _await_worker_terminal() -> None:
+@dataclass(frozen=True, slots=True)
+class WorkerTerminalOutcome:
+    """Result of observing sender-loop owned `_worker_task` termination."""
+
+    terminal: bool
+    clean: bool
+    reason: str | None = None
+    diagnostic: str | None = None
+
+
+async def _await_worker_terminal() -> WorkerTerminalOutcome:
+    """Observe worker Task completion without cancelling it (shield).
+
+    Distinguishes caller-waiter cancellation (re-raise) from unexpected
+    worker cancel/exception (structured unclean outcome).
+    """
+
     task = _worker_task
     if task is None:
-        raise RuntimeError("worker_task_unavailable")
-    # Shield: waiter timeout/cancel must not cancel the production worker Task.
-    await asyncio.shield(task)
+        return WorkerTerminalOutcome(
+            terminal=True,
+            clean=False,
+            reason="unexpected_dead_worker",
+            diagnostic="worker_task_unavailable",
+        )
+
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Worker itself cancelled → structured SND13 remainder.
+        # Waiter cancelled while worker still alive → re-raise for caller.
+        if task.cancelled():
+            return WorkerTerminalOutcome(
+                terminal=True,
+                clean=False,
+                reason="unexpected_dead_worker",
+                diagnostic="worker_cancelled",
+            )
+        raise
+    except Exception as exc:
+        return WorkerTerminalOutcome(
+            terminal=True,
+            clean=False,
+            reason="unexpected_dead_worker",
+            diagnostic=type(exc).__name__,
+        )
+
+    return WorkerTerminalOutcome(terminal=True, clean=True, reason=None)
 
 
 async def _ensure_sentinel_enqueued(deadline: float) -> BaseException | None:
@@ -1131,7 +1173,7 @@ async def drain_and_stop_sender_worker(
             )
 
         try:
-            await _run_on_sender_loop(_await_worker_terminal, deadline)
+            outcome = await _run_on_sender_loop(_await_worker_terminal, deadline)
         except TimeoutError:
             return _snapshot_drain_fields(
                 ok=False,
@@ -1142,6 +1184,24 @@ async def drain_and_stop_sender_worker(
                 queue_drained=True,
                 sentinel_submitted=True,
                 worker_terminal=False,
+            )
+
+        if not isinstance(outcome, WorkerTerminalOutcome) or not outcome.clean:
+            reason = (
+                outcome.reason
+                if isinstance(outcome, WorkerTerminalOutcome) and outcome.reason
+                else "unexpected_dead_worker"
+            )
+            # Abnormal Task termination: stay DRAINING; never claim WORKER_STOPPED.
+            return _snapshot_drain_fields(
+                ok=False,
+                reason=reason,
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+                sentinel_submitted=True,
+                worker_terminal=True,
             )
 
         with _lifecycle_lock:
