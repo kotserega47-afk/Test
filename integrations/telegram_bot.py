@@ -449,7 +449,7 @@ def _enqueue_sentinel_on_loop() -> None:
         with _lifecycle_lock:
             _sentinel_state = _SENTINEL_FAILED
             _sentinel_failure = exc
-            _record_terminal_intake_failure_locked("sentinel_put", str(exc))
+            # Control/resource failure — NOT a D27/D28 user intake failure.
             _sentinel_ack.set()
         return
     with _lifecycle_lock:
@@ -462,16 +462,25 @@ async def _queue_join_watching_worker() -> None:
     """Join owned queue on sender loop; fail fast if worker dies mid-drain."""
 
     target = _worker_owned_queue if _worker_owned_queue is not None else queue
-    join_task = asyncio.create_task(target.join())
+    join_task = asyncio.create_task(
+        target.join(),
+        name="telegram-sender-queue-join-waiter",
+    )
+
+    async def _cancel_join_waiter() -> None:
+        if join_task.done():
+            return
+        join_task.cancel()
+        try:
+            await join_task
+        except asyncio.CancelledError:
+            pass
+
     try:
         while True:
             worker = _worker_task
             if worker is not None and worker.done() and not join_task.done():
-                join_task.cancel()
-                try:
-                    await join_task
-                except asyncio.CancelledError:
-                    pass
+                await _cancel_join_waiter()
                 raise RuntimeError("unexpected_dead_worker")
             if join_task.done():
                 await join_task
@@ -480,13 +489,11 @@ async def _queue_join_watching_worker() -> None:
             if done:
                 await join_task
                 return
+    except asyncio.CancelledError:
+        await _cancel_join_waiter()
+        raise
     except Exception:
-        if not join_task.done():
-            join_task.cancel()
-            try:
-                await join_task
-            except asyncio.CancelledError:
-                pass
+        await _cancel_join_waiter()
         raise
 
 
@@ -842,7 +849,8 @@ async def _await_worker_terminal() -> None:
     task = _worker_task
     if task is None:
         raise RuntimeError("worker_task_unavailable")
-    await task
+    # Shield: waiter timeout/cancel must not cancel the production worker Task.
+    await asyncio.shield(task)
 
 
 async def _ensure_sentinel_enqueued(deadline: float) -> BaseException | None:
@@ -874,7 +882,7 @@ async def _ensure_sentinel_enqueued(deadline: float) -> BaseException | None:
             except Exception as exc:
                 _sentinel_state = _SENTINEL_FAILED
                 _sentinel_failure = exc
-                _record_terminal_intake_failure_locked("sentinel_schedule", str(exc))
+                # Control/resource failure — NOT a D27/D28 user intake failure.
                 _sentinel_ack.set()
                 return exc
             _sentinel_state = _SENTINEL_SCHEDULED

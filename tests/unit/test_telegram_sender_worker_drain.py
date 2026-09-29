@@ -570,3 +570,154 @@ def test_sent4_pending_sentinel_no_duplicate_on_repeat(monkeypatch) -> None:
     assert second.ok is True, second
     assert len(held) == 1
     assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
+
+
+def test_wt1_waiter_cancel_does_not_cancel_owned_task() -> None:
+    """BLOCKER 1: shield — cancelling terminal waiter must not cancel owned Task."""
+
+    hold = threading.Event()
+    done_flag = threading.Event()
+
+    async def owned_body():
+        while not hold.is_set():
+            await asyncio.sleep(0.01)
+        done_flag.set()
+
+    async def _start_named_owned():
+        return asyncio.create_task(owned_body(), name="wt1-owned-task")
+
+    fut = asyncio.run_coroutine_threadsafe(_start_named_owned(), tg.loop)
+    owned_task = fut.result(timeout=2.0)
+    assert not owned_task.done()
+
+    # Temporarily point module worker task at the owned task so production
+    # `_await_worker_terminal` (shield) is exercised.
+    previous = tg._worker_task
+    tg._worker_task = owned_task
+    try:
+
+        async def cancel_waiter():
+            deadline = time.monotonic() + 5.0
+            wait_task = asyncio.create_task(
+                tg._run_on_sender_loop(tg._await_worker_terminal, deadline)
+            )
+            for _ in range(10):
+                await asyncio.sleep(0)
+            wait_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await wait_task
+            for _ in range(20):
+                await asyncio.sleep(0)
+
+        _run(cancel_waiter())
+        assert not owned_task.done()
+        assert not owned_task.cancelled()
+        hold.set()
+        _wait_until(lambda: done_flag.is_set())
+        _wait_until(lambda: owned_task.done())
+        assert not owned_task.cancelled()
+    finally:
+        tg._worker_task = previous
+
+
+def test_wt1b_drain_timeout_path_does_not_cancel_worker() -> None:
+    """Timeout of `_run_on_sender_loop(_await_worker_terminal)` must not cancel worker."""
+
+    worker = tg._worker_task
+    assert worker is not None and not worker.done()
+
+    async def timeout_terminal_wait():
+        # Near-zero deadline after scheduling wait — wait_for cancels the
+        # concurrent future / waiter coroutine, which must not cancel worker.
+        with pytest.raises(TimeoutError):
+            await tg._run_on_sender_loop(tg._await_worker_terminal, time.monotonic() + 0.05)
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+    _run(timeout_terminal_wait())
+    assert tg._worker_task is worker
+    assert not worker.done()
+    assert not worker.cancelled()
+
+
+def test_qj1_queue_join_watcher_cancel_cleans_orphan() -> None:
+    """BLOCKER 2: cancelling join watcher must not leave orphan join Task."""
+
+    proof = _claim()
+    hold = threading.Event()
+
+    async def blocked_send(chat_id: str, text: str):
+        while not hold.is_set():
+            await asyncio.sleep(0.01)
+
+    tg._send_message = blocked_send  # type: ignore[assignment]
+    tg.send_message_sync("qj1", chat_id="-100")
+    _wait_until(lambda: tg._active_user_sends >= 1)
+
+    def count_join_waiters() -> int:
+        fut = asyncio.run_coroutine_threadsafe(_count_named_join_waiters(), tg.loop)
+        return fut.result(timeout=2.0)
+
+    async def cancel_during_join():
+        drain_task = asyncio.create_task(
+            tg.drain_and_stop_sender_worker(proof, timeout=5.0)
+        )
+        for _ in range(200):
+            if tg._intake_sealed and tg._active_user_sends >= 1:
+                break
+            await asyncio.sleep(0)
+        assert tg._intake_sealed
+        for _ in range(50):
+            if count_join_waiters() >= 1:
+                break
+            await asyncio.sleep(0)
+        assert count_join_waiters() >= 1
+        drain_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await drain_task
+        for _ in range(40):
+            await asyncio.sleep(0)
+        assert count_join_waiters() == 0
+        assert tg._intake_sealed is True
+        assert tg._lifecycle_state == "DRAINING"
+        assert tg._active_user_sends >= 1
+
+    _run(cancel_during_join())
+    hold.set()
+    _wait_until(lambda: tg._active_user_sends == 0)
+    result = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert result.ok is True, result
+
+
+async def _count_named_join_waiters() -> int:
+    return sum(
+        1
+        for t in asyncio.all_tasks()
+        if t.get_name() == "telegram-sender-queue-join-waiter" and not t.done()
+    )
+
+
+def test_sf1_sentinel_put_failure_not_intake_counter(monkeypatch) -> None:
+    """BLOCKER 3: sentinel put failure must not bump D27/D28 intake total."""
+
+    proof = _claim()
+    before = tg._terminal_intake_failure_total
+    owned = tg._worker_owned_queue or tg.queue
+    real_put = owned.put_nowait
+
+    def boom(item):
+        if isinstance(item, tg._WorkerStopSentinel):
+            raise RuntimeError("sentinel put boom")
+        return real_put(item)
+
+    monkeypatch.setattr(owned, "put_nowait", boom)
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=3.0))
+    assert first.ok is False
+    assert first.reason.startswith("sentinel_submit_failed:")
+    assert tg._terminal_intake_failure_total == before
+    assert not any("sentinel_put" in e for e in tg._recent_intake_failures)
+    monkeypatch.setattr(owned, "put_nowait", real_put)
+    second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert second.ok is True, second
+    assert second.worker_stopped is True
+    assert tg._terminal_intake_failure_total == before
