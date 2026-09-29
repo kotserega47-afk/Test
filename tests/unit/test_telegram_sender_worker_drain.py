@@ -861,3 +861,159 @@ def test_wt3_worker_exception_structured_no_raw_escape() -> None:
     assert result.worker_terminal is True
     assert result.worker_stopped is False
     assert tg._lifecycle_state == "DRAINING"
+
+
+def _patch_first_terminal_wait_timeout(monkeypatch) -> None:
+    real = tg._run_on_sender_loop
+    calls = {"n": 0}
+
+    async def run(factory, deadline):
+        if factory is tg._await_worker_terminal:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("wt synthetic terminal wait timeout")
+        return await real(factory, deadline)
+
+    monkeypatch.setattr(tg, "_run_on_sender_loop", run)
+
+
+def _stop_previous_worker_task() -> None:
+    prev = tg._worker_task
+    if prev is not None and not prev.done():
+        tg._real_call_soon_threadsafe(prev.cancel)
+        _wait_until(lambda: prev.done())
+
+
+def _install_hang_after_sentinel_worker() -> tuple[asyncio.Event, asyncio.Task]:
+    """Worker consumes sentinel (queue join ok) then hangs until released."""
+
+    _stop_previous_worker_task()
+    hang_holder: list[asyncio.Event] = []
+
+    async def hang_worker() -> None:
+        hang = asyncio.Event()
+        hang_holder.append(hang)
+        owned = tg.queue
+        tg._worker_owned_queue = owned
+        while True:
+            item = await owned.get()
+            try:
+                if isinstance(item, tg._WorkerStopSentinel):
+                    break
+            finally:
+                owned.task_done()
+        await hang.wait()
+
+    async def start():
+        return asyncio.create_task(hang_worker(), name="wt-hang-after-sentinel")
+
+    owned = asyncio.run_coroutine_threadsafe(start(), tg.loop).result(timeout=2.0)
+    tg._worker_task = owned
+    _wait_until(lambda: len(hang_holder) == 1)
+    return hang_holder[0], owned
+
+
+def _install_crash_after_sentinel_accounted_worker() -> asyncio.Task:
+    """Worker finishes sentinel queue accounting then exits with RuntimeError."""
+
+    _stop_previous_worker_task()
+
+    async def crash_worker() -> None:
+        owned = tg.queue
+        tg._worker_owned_queue = owned
+        while True:
+            item = await owned.get()
+            try:
+                if isinstance(item, tg._WorkerStopSentinel):
+                    break
+            finally:
+                owned.task_done()
+        raise RuntimeError("wt5 repeat boom")
+
+    async def start():
+        return asyncio.create_task(crash_worker(), name="wt-crash-after-sentinel")
+
+    owned = asyncio.run_coroutine_threadsafe(start(), tg.loop).result(timeout=2.0)
+    tg._worker_task = owned
+    return owned
+
+
+def _release_hang_on_sender_loop(hang: asyncio.Event) -> None:
+    tg._real_call_soon_threadsafe(hang.set)
+
+
+def test_wt4_repeat_after_terminal_timeout_worker_cancelled(monkeypatch) -> None:
+    """Repeat path: ENQUEUED + abnormal worker cancel must not claim WORKER_STOPPED."""
+
+    proof = _claim()
+    _install_hang_after_sentinel_worker()
+    _patch_first_terminal_wait_timeout(monkeypatch)
+
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert first.ok is False, first
+    assert first.reason == "deadline_worker_terminal"
+    assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
+    assert tg._lifecycle_state == "DRAINING"
+
+    worker = tg._worker_task
+    assert worker is not None and not worker.done()
+    tg._real_call_soon_threadsafe(worker.cancel)
+    _wait_until(lambda: worker.done())
+    assert worker.cancelled()
+
+    second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert second.ok is False, second
+    assert second.reason == "unexpected_dead_worker"
+    assert second.worker_terminal is True
+    assert second.worker_stopped is False
+    assert tg._lifecycle_state == "DRAINING"
+
+
+def test_wt5_repeat_after_terminal_timeout_worker_exception(monkeypatch) -> None:
+    """Repeat path: ENQUEUED + worker exception must stay structured failure."""
+
+    proof = _claim()
+    owned = _install_crash_after_sentinel_accounted_worker()
+    _patch_first_terminal_wait_timeout(monkeypatch)
+
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert first.ok is False, first
+    assert first.reason == "deadline_worker_terminal"
+    assert tg._lifecycle_state == "DRAINING"
+
+    _wait_until(lambda: owned.done())
+    assert owned.exception() is not None
+
+    second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert second.ok is False, second
+    assert second.reason == "unexpected_dead_worker"
+    assert second.worker_terminal is True
+    assert second.worker_stopped is False
+    assert tg._lifecycle_state == "DRAINING"
+
+
+def test_wt6_repeat_after_terminal_timeout_clean_worker_success(monkeypatch) -> None:
+    """Repeat path: ENQUEUED + clean worker terminal promotes WORKER_STOPPED."""
+
+    proof = _claim()
+    hang, worker = _install_hang_after_sentinel_worker()
+    _patch_first_terminal_wait_timeout(monkeypatch)
+
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert first.ok is False, first
+    assert first.reason == "deadline_worker_terminal"
+    assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
+    assert tg._lifecycle_state == "DRAINING"
+    assert not worker.done()
+
+    _release_hang_on_sender_loop(hang)
+    _wait_until(lambda: worker.done())
+    assert worker.exception() is None
+    assert not worker.cancelled()
+
+    second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert second.ok is True, second
+    assert second.worker_stopped is True
+    assert tg._lifecycle_state == "WORKER_STOPPED"
+    assert second.loop_running is True
+    assert second.loop_thread_alive is True

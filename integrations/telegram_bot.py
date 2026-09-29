@@ -480,8 +480,11 @@ async def _queue_join_watching_worker() -> None:
         while True:
             worker = _worker_task
             if worker is not None and worker.done() and not join_task.done():
-                await _cancel_join_waiter()
-                raise RuntimeError("unexpected_dead_worker")
+                # Worker may already be cleanly terminal with queue fully accounted.
+                unfinished = getattr(target, "_unfinished_tasks", 0)
+                if target.qsize() > 0 or unfinished > 0:
+                    await _cancel_join_waiter()
+                    raise RuntimeError("unexpected_dead_worker")
             if join_task.done():
                 await join_task
                 return
@@ -895,6 +898,80 @@ async def _await_worker_terminal() -> WorkerTerminalOutcome:
     return WorkerTerminalOutcome(terminal=True, clean=True, reason=None)
 
 
+def _apply_worker_terminal_outcome(
+    outcome: object,
+    *,
+    ptb_passed: bool,
+    structural_passed: bool,
+    sentinel_submitted: bool,
+) -> SenderWorkerDrainResult:
+    """Map WorkerTerminalOutcome to drain snapshot; sole DRAINING→WORKER_STOPPED gate."""
+
+    global _lifecycle_state
+
+    if not isinstance(outcome, WorkerTerminalOutcome) or not outcome.clean:
+        reason = (
+            outcome.reason
+            if isinstance(outcome, WorkerTerminalOutcome) and outcome.reason
+            else "unexpected_dead_worker"
+        )
+        return _snapshot_drain_fields(
+            ok=False,
+            reason=reason,
+            ownership_passed=True,
+            ptb_passed=ptb_passed,
+            structural_passed=structural_passed,
+            queue_drained=True,
+            sentinel_submitted=sentinel_submitted,
+            worker_terminal=True,
+        )
+
+    with _lifecycle_lock:
+        _lifecycle_state = "WORKER_STOPPED"
+
+    return _snapshot_drain_fields(
+        ok=True,
+        reason=None,
+        ownership_passed=True,
+        ptb_passed=ptb_passed,
+        structural_passed=structural_passed,
+        queue_drained=True,
+        sentinel_submitted=sentinel_submitted,
+        worker_terminal=True,
+    )
+
+
+async def _observe_worker_terminal_after_sentinel(
+    deadline: float,
+    *,
+    ptb_passed: bool,
+    structural_passed: bool,
+    sentinel_submitted: bool,
+) -> SenderWorkerDrainResult:
+    """Await (or immediately classify) worker terminal after sentinel ENQUEUED."""
+
+    try:
+        outcome = await _run_on_sender_loop(_await_worker_terminal, deadline)
+    except TimeoutError:
+        return _snapshot_drain_fields(
+            ok=False,
+            reason="deadline_worker_terminal",
+            ownership_passed=True,
+            ptb_passed=ptb_passed,
+            structural_passed=structural_passed,
+            queue_drained=True,
+            sentinel_submitted=sentinel_submitted,
+            worker_terminal=False,
+        )
+
+    return _apply_worker_terminal_outcome(
+        outcome,
+        ptb_passed=ptb_passed,
+        structural_passed=structural_passed,
+        sentinel_submitted=sentinel_submitted,
+    )
+
+
 async def _ensure_sentinel_enqueued(deadline: float) -> BaseException | None:
     """Schedule sentinel put once; wait for loop-side ENQUEUED/FAILED ack.
 
@@ -1141,17 +1218,11 @@ async def drain_and_stop_sender_worker(
                 worker_terminal=True,
             )
         if dead_before_sentinel and sentinel_enqueued_already:
-            with _lifecycle_lock:
-                _lifecycle_state = "WORKER_STOPPED"
-            return _snapshot_drain_fields(
-                ok=True,
-                reason=None,
-                ownership_passed=True,
+            return await _observe_worker_terminal_after_sentinel(
+                deadline,
                 ptb_passed=ptb_passed,
                 structural_passed=structural_passed,
-                queue_drained=True,
                 sentinel_submitted=True,
-                worker_terminal=True,
             )
 
         sentinel_err = await _ensure_sentinel_enqueued(deadline)
@@ -1172,50 +1243,11 @@ async def drain_and_stop_sender_worker(
                 worker_terminal=False,
             )
 
-        try:
-            outcome = await _run_on_sender_loop(_await_worker_terminal, deadline)
-        except TimeoutError:
-            return _snapshot_drain_fields(
-                ok=False,
-                reason="deadline_worker_terminal",
-                ownership_passed=True,
-                ptb_passed=ptb_passed,
-                structural_passed=structural_passed,
-                queue_drained=True,
-                sentinel_submitted=True,
-                worker_terminal=False,
-            )
-
-        if not isinstance(outcome, WorkerTerminalOutcome) or not outcome.clean:
-            reason = (
-                outcome.reason
-                if isinstance(outcome, WorkerTerminalOutcome) and outcome.reason
-                else "unexpected_dead_worker"
-            )
-            # Abnormal Task termination: stay DRAINING; never claim WORKER_STOPPED.
-            return _snapshot_drain_fields(
-                ok=False,
-                reason=reason,
-                ownership_passed=True,
-                ptb_passed=ptb_passed,
-                structural_passed=structural_passed,
-                queue_drained=True,
-                sentinel_submitted=True,
-                worker_terminal=True,
-            )
-
-        with _lifecycle_lock:
-            _lifecycle_state = "WORKER_STOPPED"
-
-        return _snapshot_drain_fields(
-            ok=True,
-            reason=None,
-            ownership_passed=True,
+        return await _observe_worker_terminal_after_sentinel(
+            deadline,
             ptb_passed=ptb_passed,
             structural_passed=structural_passed,
-            queue_drained=True,
             sentinel_submitted=True,
-            worker_terminal=True,
         )
     except asyncio.CancelledError:
         # SND8: leave sealed/DRAINING; accepted work continues.
