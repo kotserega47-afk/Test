@@ -75,6 +75,7 @@
 | [TASK-2026-09-17-44](TASK-2026-09-17-44_antares_sender_drain_stop.md) | Контракт isolated Telegram sender drain/stop ownership: GPT review на `0e770a3…`, закрытие docs, process-global / refuse без gate, runtime нет, Draft PR #47 |
 | [TASK-2026-09-17-45](TASK-2026-09-17-45_antares_sender_gates.md) | Ownership C+D + PTB capability gate: GPT review на `a3b9599…`, закрытие docs, STOPPED fast-path, claim side-effect-free, runtime нет, Draft PR #48 |
 | [TASK-2026-09-17-46](TASK-2026-09-17-46_antares_sender_gates_runtime.md) | Ownership claim + PTB inspector: GPT ACCEPTED `0d80bb2…`, docs-close, Cursor 25/64/19/14, Draft PR #49 layered base, runtime foundation only |
+| [TASK-2026-09-17-47](TASK-2026-09-17-47_antares_sender_worker_drain.md) | Sender intake seal + S1/S3 drain + worker stop: Draft PR, not full resource stop, docs-close **не** выполнен, ожидание GPT review |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

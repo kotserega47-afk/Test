@@ -1,7 +1,7 @@
 """Telegram outbound sender health (Option B)."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -22,7 +22,11 @@ def with_token(monkeypatch):
 
 
 def test_enqueue_increments_enqueued_not_sent(with_token, monkeypatch):
-    monkeypatch.setattr(tg, "loop", MagicMock())
+    def run_soon(cb, *args):
+        cb(*args)
+
+    monkeypatch.setattr(tg.loop, "call_soon_threadsafe", run_soon)
+    monkeypatch.setattr(tg.queue, "put_nowait", lambda _item: None)
 
     tg.send_message_sync("hello", chat_id="-100")
 

@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -346,6 +347,39 @@ bot = Bot(token=TELEGRAM_TOKEN, request=request) if TELEGRAM_TOKEN else None
 loop = asyncio.new_event_loop()
 queue = asyncio.Queue()
 
+_WORKER_READY_TIMEOUT_SECONDS = 5.0
+_RECENT_INTAKE_FAILURE_LIMIT = 32
+
+_lifecycle_lock = threading.Lock()
+_lifecycle_state = "RUNNING"  # RUNNING | DRAINING | WORKER_STOPPED
+_intake_sealed = False
+_pending_loop_handoffs = 0  # S1
+_active_user_sends = 0  # S3
+_terminal_intake_failure_total = 0
+_recent_intake_failures: list[str] = []
+_s1_idle = threading.Event()
+_s1_idle.set()
+_s3_idle = threading.Event()
+_s3_idle.set()
+_worker_task: asyncio.Task | None = None
+_worker_owned_queue: asyncio.Queue | None = None
+_worker_ready = threading.Event()
+_sentinel_submitted = False
+_drain_owner_proof: object | None = None
+
+
+class TelegramSenderIntakeClosedError(RuntimeError):
+    """Raised when send_* is attempted after intake seal."""
+
+
+class _WorkerStopSentinel:
+    """Private control item; not a user (func, args) payload."""
+
+    __slots__ = ()
+
+
+_WORKER_STOP_SENTINEL = _WorkerStopSentinel()
+
 
 def _loop_runner():
     """Фоновый поток, который крутит event loop постоянно."""
@@ -353,7 +387,84 @@ def _loop_runner():
     loop.run_forever()
 
 
-threading.Thread(target=_loop_runner, daemon=True).start()
+_loop_thread = threading.Thread(target=_loop_runner, daemon=True, name="telegram-sender-loop")
+_loop_thread.start()
+_real_call_soon_threadsafe = loop.call_soon_threadsafe
+
+
+def _record_terminal_intake_failure_locked(kind: str, detail: str) -> None:
+    global _terminal_intake_failure_total
+    _terminal_intake_failure_total += 1
+    entry = f"{kind}:{_sanitize_error_message(detail)}"
+    _recent_intake_failures.append(entry)
+    if len(_recent_intake_failures) > _RECENT_INTAKE_FAILURE_LIMIT:
+        del _recent_intake_failures[: len(_recent_intake_failures) - _RECENT_INTAKE_FAILURE_LIMIT]
+
+
+def _close_s1_handoff(*, failure: BaseException | None, kind: str) -> None:
+    global _pending_loop_handoffs
+    with _lifecycle_lock:
+        if _pending_loop_handoffs > 0:
+            _pending_loop_handoffs -= 1
+        if _pending_loop_handoffs == 0:
+            _s1_idle.set()
+        if failure is not None:
+            _record_terminal_intake_failure_locked(kind, str(failure))
+
+
+def _loop_side_enqueue(payload: object, message_kind: str) -> None:
+    """Owner-loop enqueue: close S1 after put attempt (D28)."""
+
+    target = _worker_owned_queue if _worker_owned_queue is not None else queue
+    try:
+        target.put_nowait(payload)
+    except Exception as exc:
+        _close_s1_handoff(failure=exc, kind="d28_put")
+        return
+
+    _close_s1_handoff(failure=None, kind="d28_put")
+    # Health/diagnostics are best-effort after successful queue put.
+    try:
+        _record_enqueue(message_kind)
+    except Exception:
+        pass
+
+
+def _submit_sentinel_on_loop() -> None:
+    target = _worker_owned_queue if _worker_owned_queue is not None else queue
+    target.put_nowait(_WORKER_STOP_SENTINEL)
+
+
+async def _queue_join_on_sender_loop() -> None:
+    target = _worker_owned_queue if _worker_owned_queue is not None else queue
+    await target.join()
+
+
+def _admit_user_send(func, args: tuple, message_kind: str) -> None:
+    """Atomic seal check + S1 increment, then schedule loop-side enqueue."""
+
+    payload = (func, args)
+    with _lifecycle_lock:
+        if _intake_sealed:
+            raise TelegramSenderIntakeClosedError(
+                "telegram sender intake is sealed; send rejected"
+            )
+        global _pending_loop_handoffs
+        _pending_loop_handoffs += 1
+        _s1_idle.clear()
+
+    try:
+        loop.call_soon_threadsafe(_loop_side_enqueue, payload, message_kind)
+    except Exception as exc:
+        # D27: scheduling failed after +handoff — decrement exactly once.
+        _close_s1_handoff(failure=exc, kind="d27_schedule")
+        raise
+
+
+def _start_worker_on_loop() -> None:
+    global _worker_task
+    _worker_task = loop.create_task(_worker(), name="telegram-sender-worker")
+    _worker_ready.set()
 
 
 # =====================================================
@@ -365,34 +476,67 @@ def _message_kind_for_func(func) -> str:
 
 
 async def _worker():
+    # Bind queue for this worker lifetime so test resets replacing ``queue``
+    # cannot make task_done hit a different Queue object.
+    global _worker_owned_queue
+    owned_queue = queue
+    _worker_owned_queue = owned_queue
     while True:
-        func, args = await queue.get()
-        _record_dequeue()
-        message_kind = _message_kind_for_func(func)
-        chat_id = str(args[0])
-
+        item = await owned_queue.get()
         try:
-            if bot is None:
-                raise RuntimeError("NO_TOKEN")
+            if isinstance(item, _WorkerStopSentinel):
+                return
 
-            await func(*args)
+            func, args = item
+            try:
+                _record_dequeue()
+            except Exception:
+                pass
 
-            if func is _send_message:
-                _, text = args
-                logger.info(f"📤 Отправлено сообщение (chat_id={chat_id}): {text[:80]}")
-            else:
-                _, path, _caption = args
-                logger.info(f"📁 Отправлен файл (chat_id={chat_id}): {path}")
+            global _active_user_sends
+            with _lifecycle_lock:
+                _active_user_sends += 1
+                _s3_idle.clear()
 
-            _record_delivery_success(chat_id, message_kind)
+            message_kind = _message_kind_for_func(func)
+            chat_id = str(args[0])
+            try:
+                await func(*args)
 
-        except Exception as e:
-            _record_delivery_failure(chat_id, message_kind, e)
+                try:
+                    if func is _send_message:
+                        _, text = args
+                        logger.info(
+                            f"📤 Отправлено сообщение (chat_id={chat_id}): {text[:80]}"
+                        )
+                    else:
+                        _, path, _caption = args
+                        logger.info(f"📁 Отправлен файл (chat_id={chat_id}): {path}")
+                except Exception:
+                    pass
 
-        queue.task_done()
+                try:
+                    _record_delivery_success(chat_id, message_kind)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                try:
+                    _record_delivery_failure(chat_id, message_kind, e)
+                except Exception:
+                    pass
+            finally:
+                with _lifecycle_lock:
+                    if _active_user_sends > 0:
+                        _active_user_sends -= 1
+                    if _active_user_sends == 0:
+                        _s3_idle.set()
+        finally:
+            # Exact-once unfinished accounting for every successful queue.get().
+            owned_queue.task_done()
 
 
-loop.call_soon_threadsafe(loop.create_task, _worker())
+loop.call_soon_threadsafe(_start_worker_on_loop)
 
 
 # =====================================================
@@ -429,13 +573,10 @@ def send_message_sync(text: str, chat_id: str):
         return
 
     try:
-        loop.call_soon_threadsafe(
-            queue.put_nowait,
-            (_send_message, (chat_id, text))
-        )
-        _record_enqueue("text")
+        _admit_user_send(_send_message, (chat_id, text), "text")
         logger.info(f"📨 Добавлено в очередь сообщение ({chat_id}): {text[:60]}")
-
+    except TelegramSenderIntakeClosedError:
+        raise
     except Exception as e:
         logger.error(
             f"❌ Ошибка постановки в очередь send_message: "
@@ -478,18 +619,471 @@ def send_file_sync(path: str, caption: str | None, chat_id: str):
         return
 
     try:
-        loop.call_soon_threadsafe(
-            queue.put_nowait,
-            (_send_file, (chat_id, path, caption))
-        )
-        _record_enqueue("document")
+        _admit_user_send(_send_file, (chat_id, path, caption), "document")
         logger.info(f"📨 Файл поставлен в очередь ({chat_id}): {path}")
-
+    except TelegramSenderIntakeClosedError:
+        raise
     except Exception as e:
         logger.error(
             f"❌ Ошибка постановки в очередь send_file: "
             f"{_sanitize_error_message(str(e))}"
         )
+
+
+# =====================================================
+#   Worker drain (TASK-47) — NOT full resource stop
+# =====================================================
+
+from core.antares_sender_ownership import validate_antares_sender_ownership  # noqa: E402
+from integrations.telegram_sender_gates import inspect_sender_ptb_compatibility  # noqa: E402
+
+
+@dataclass(frozen=True, slots=True)
+class SenderWorkerDrainResult:
+    """Structured worker-drain outcome. Never claims full sender resource stop."""
+
+    ok: bool
+    reason: str | None
+    ownership_passed: bool
+    ptb_passed: bool
+    structural_passed: bool
+    intake_sealed: bool
+    lifecycle_state: str
+    pending_loop_handoffs: int
+    active_user_sends: int
+    queue_drained: bool
+    sentinel_submitted: bool
+    worker_terminal: bool
+    loop_running: bool
+    loop_thread_alive: bool
+    worker_stopped: bool
+    full_resource_stopped: bool
+    terminal_intake_failure_total: int
+    recent_intake_failures: tuple[str, ...]
+
+
+def _snapshot_drain_fields(
+    *,
+    ok: bool,
+    reason: str | None,
+    ownership_passed: bool,
+    ptb_passed: bool,
+    structural_passed: bool,
+    queue_drained: bool = False,
+    sentinel_submitted: bool | None = None,
+    worker_terminal: bool | None = None,
+) -> SenderWorkerDrainResult:
+    with _lifecycle_lock:
+        sealed = _intake_sealed
+        state = _lifecycle_state
+        s1 = _pending_loop_handoffs
+        s3 = _active_user_sends
+        total_fail = _terminal_intake_failure_total
+        recent = tuple(_recent_intake_failures)
+        sent_flag = _sentinel_submitted if sentinel_submitted is None else sentinel_submitted
+        task = _worker_task
+    terminal = worker_terminal
+    if terminal is None:
+        terminal = task is not None and task.done()
+    loop_running = bool(loop.is_running())
+    thread_alive = bool(_loop_thread.is_alive())
+    worker_stopped = state == "WORKER_STOPPED" and bool(terminal)
+    return SenderWorkerDrainResult(
+        ok=ok,
+        reason=reason,
+        ownership_passed=ownership_passed,
+        ptb_passed=ptb_passed,
+        structural_passed=structural_passed,
+        intake_sealed=sealed,
+        lifecycle_state=state,
+        pending_loop_handoffs=s1,
+        active_user_sends=s3,
+        queue_drained=queue_drained,
+        sentinel_submitted=sent_flag,
+        worker_terminal=bool(terminal),
+        loop_running=loop_running,
+        loop_thread_alive=thread_alive,
+        worker_stopped=worker_stopped,
+        full_resource_stopped=False,
+        terminal_intake_failure_total=total_fail,
+        recent_intake_failures=recent,
+    )
+
+
+def _structural_preflight(*, ready_timeout: float) -> tuple[bool, str | None]:
+    if loop is None or not loop.is_running():
+        return False, "sender_loop_unavailable"
+    if _loop_thread is None or not _loop_thread.is_alive():
+        return False, "loop_thread_unavailable"
+    if not _worker_ready.wait(timeout=ready_timeout):
+        return False, "worker_not_ready"
+    task = _worker_task
+    if task is None:
+        return False, "worker_task_unavailable"
+    if task.done():
+        return False, "worker_already_dead"
+    if queue is None:
+        return False, "queue_unavailable"
+    with _lifecycle_lock:
+        if _lifecycle_state not in ("RUNNING", "DRAINING"):
+            if _lifecycle_state == "WORKER_STOPPED":
+                return True, None
+            return False, "lifecycle_refuses_drain"
+    return True, None
+
+
+async def _wait_event(event: threading.Event, deadline: float) -> bool:
+    while not event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.02, remaining))
+    return True
+
+
+async def _run_on_sender_loop(coro_factory, deadline: float):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("sender drain deadline exceeded")
+    fut = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
+    return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=remaining)
+
+
+async def _await_worker_terminal() -> None:
+    task = _worker_task
+    if task is None:
+        raise RuntimeError("worker_task_unavailable")
+    await task
+
+
+async def _wait_worker_terminal_from_caller(deadline: float) -> None:
+    """Wait for worker Task completion without nesting on the sender loop."""
+
+    task = _worker_task
+    if task is None:
+        raise RuntimeError("worker_task_unavailable")
+    if task.done():
+        return
+    done = threading.Event()
+
+    def _on_done(_t: asyncio.Task) -> None:
+        done.set()
+
+    task.add_done_callback(_on_done)
+    if task.done():
+        done.set()
+    if not await _wait_event(done, deadline):
+        raise TimeoutError("sender drain deadline exceeded")
+
+
+async def drain_and_stop_sender_worker(
+    ownership_proof: object,
+    *,
+    timeout: float = 30.0,
+) -> SenderWorkerDrainResult:
+    """Seal intake, drain accepted queue work, stop worker Task.
+
+    Does **not** close Bot/HTTP/loop/thread. Success ⇒ WORKER_STOPPED only.
+    """
+
+    global _intake_sealed, _lifecycle_state, _drain_owner_proof, _sentinel_submitted
+
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    ownership = validate_antares_sender_ownership(ownership_proof)
+    if not ownership.ok:
+        return _snapshot_drain_fields(
+            ok=False,
+            reason=f"ownership_{ownership.reason or 'refused'}",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+        )
+
+    with _lifecycle_lock:
+        state = _lifecycle_state
+        sealed = _intake_sealed
+        owner = _drain_owner_proof
+
+    if state == "WORKER_STOPPED":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="ownership_foreign_after_worker_stopped",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                queue_drained=True,
+                sentinel_submitted=True,
+                worker_terminal=True,
+            )
+        return _snapshot_drain_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            queue_drained=True,
+            sentinel_submitted=True,
+            worker_terminal=True,
+        )
+
+    already_draining = state == "DRAINING" and sealed
+    ptb_passed = True
+    structural_passed = True
+
+    if not already_draining:
+        ptb = inspect_sender_ptb_compatibility(
+            bot=bot,
+            expected_general_request=request,
+        )
+        if not ptb.supported:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason=f"ptb_{ptb.reason or 'refused'}",
+                ownership_passed=True,
+                ptb_passed=False,
+                structural_passed=False,
+            )
+
+        ready_budget = min(
+            _WORKER_READY_TIMEOUT_SECONDS,
+            max(0.0, deadline - time.monotonic()),
+        )
+        structural_ok, structural_reason = _structural_preflight(ready_timeout=ready_budget)
+        if not structural_ok:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason=structural_reason or "structural_refused",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=False,
+            )
+
+        with _lifecycle_lock:
+            if _lifecycle_state == "WORKER_STOPPED":
+                already_draining = False
+                # Race: another waiter finished; fall through to idempotent path below.
+            elif _lifecycle_state == "DRAINING" and _intake_sealed:
+                already_draining = True
+            else:
+                # Atomic seal + enter DRAINING under lifecycle lock.
+                _intake_sealed = True
+                _lifecycle_state = "DRAINING"
+                _drain_owner_proof = ownership_proof
+                already_draining = True
+
+        with _lifecycle_lock:
+            if _lifecycle_state == "WORKER_STOPPED":
+                return _snapshot_drain_fields(
+                    ok=True,
+                    reason=None,
+                    ownership_passed=True,
+                    ptb_passed=True,
+                    structural_passed=True,
+                    queue_drained=True,
+                    sentinel_submitted=True,
+                    worker_terminal=True,
+                )
+    else:
+        # Partial repeat: ownership already validated; do not unseal/rollback.
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="ownership_foreign_during_drain",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+            )
+
+    try:
+        if not await _wait_event(_s1_idle, deadline):
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="deadline_s1_pending",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=False,
+            )
+
+        try:
+            await _run_on_sender_loop(_queue_join_on_sender_loop, deadline)
+        except TimeoutError:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="deadline_queue_join",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=False,
+            )
+
+        if not await _wait_event(_s3_idle, deadline):
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="deadline_s3_active",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+            )
+
+        with _lifecycle_lock:
+            s3_nonzero = _active_user_sends != 0
+            task = _worker_task
+            # Capture death *before* sentinel submit so a fast worker exit after
+            # sentinel is not misclassified as unexpected_dead_worker.
+            dead_before_sentinel = task is None or task.done()
+            sentinel_error = None
+            if (
+                not s3_nonzero
+                and not dead_before_sentinel
+                and not _sentinel_submitted
+            ):
+                try:
+                    _real_call_soon_threadsafe(_submit_sentinel_on_loop)
+                    _sentinel_submitted = True
+                except Exception as exc:
+                    sentinel_error = exc
+            sentinel_done = _sentinel_submitted
+
+        if s3_nonzero:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="active_s3_nonzero",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+            )
+        if dead_before_sentinel and not sentinel_done:
+            # SND13: worker died after seal without our stop sentinel.
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="unexpected_dead_worker",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+                worker_terminal=True,
+            )
+        if dead_before_sentinel and sentinel_done:
+            # Prior attempt already stopped the worker — idempotent success.
+            with _lifecycle_lock:
+                _lifecycle_state = "WORKER_STOPPED"
+            return _snapshot_drain_fields(
+                ok=True,
+                reason=None,
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+                sentinel_submitted=True,
+                worker_terminal=True,
+            )
+        if sentinel_error is not None:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason=f"sentinel_submit_failed:{type(sentinel_error).__name__}",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+                sentinel_submitted=False,
+            )
+
+        try:
+            await _wait_worker_terminal_from_caller(deadline)
+        except TimeoutError:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="deadline_worker_terminal",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+                sentinel_submitted=sentinel_done,
+                worker_terminal=False,
+            )
+
+        with _lifecycle_lock:
+            _lifecycle_state = "WORKER_STOPPED"
+
+        return _snapshot_drain_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=ptb_passed,
+            structural_passed=structural_passed,
+            queue_drained=True,
+            sentinel_submitted=True,
+            worker_terminal=True,
+        )
+    except asyncio.CancelledError:
+        # SND8: leave sealed/DRAINING; accepted work continues.
+        raise
+
+
+_reset_lifecycle_gate = threading.Lock()
+
+
+def _reset_sender_worker_lifecycle_for_tests() -> None:
+    """Test-only: clear seal/accounting and restart worker Task if stopped."""
+
+    global _lifecycle_state, _intake_sealed, _pending_loop_handoffs
+    global _active_user_sends, _terminal_intake_failure_total, _recent_intake_failures
+    global _sentinel_submitted, _drain_owner_proof, _worker_task, queue
+
+    with _reset_lifecycle_gate:
+        with _lifecycle_lock:
+            need_restart = (
+                _lifecycle_state != "RUNNING"
+                or _intake_sealed
+                or _sentinel_submitted
+                or (_worker_task is not None and _worker_task.done())
+            )
+            _intake_sealed = False
+            _lifecycle_state = "RUNNING"
+            _pending_loop_handoffs = 0
+            _active_user_sends = 0
+            _terminal_intake_failure_total = 0
+            _recent_intake_failures = []
+            _sentinel_submitted = False
+            _drain_owner_proof = None
+            _s1_idle.set()
+            _s3_idle.set()
+            task = _worker_task
+
+        if not need_restart:
+            return
+        if not loop.is_running():
+            return
+
+        def _flush_and_restart() -> None:
+            global _worker_task, queue, _worker_owned_queue
+            # Abandon previous worker/queue for test isolation. Do not cancel the
+            # prior Task (cancel races caused flaky unexpected_dead_worker).
+            queue = asyncio.Queue()
+            _worker_owned_queue = None
+            _worker_ready.clear()
+            _start_worker_on_loop()
+
+        try:
+            done = threading.Event()
+
+            def _run() -> None:
+                try:
+                    _flush_and_restart()
+                finally:
+                    done.set()
+
+            _real_call_soon_threadsafe(_run)
+            done.wait(timeout=_WORKER_READY_TIMEOUT_SECONDS)
+            _worker_ready.wait(timeout=_WORKER_READY_TIMEOUT_SECONDS)
+            time.sleep(0.05)
+        except Exception:
+            # Tests may temporarily patch call_soon_threadsafe (D27); best-effort.
+            pass
 
 
 # =====================================================

@@ -96,7 +96,11 @@ def test_send_message_sync_queue_error_is_sanitized(with_token, monkeypatch, cap
         tg.send_message_sync("hello", chat_id="-100")
 
     assert any(TOKEN not in r.message for r in caplog.records)
-    assert any("bot<redacted>" in r.message for r in caplog.records)
+    # Module sanitize uses bot<redacted>; utils.logger filter may rewrite to ***REDACTED***.
+    assert any(
+        ("bot<redacted>" in r.message) or ("bot***REDACTED***" in r.message)
+        for r in caplog.records
+    )
 
 
 def test_send_file_sync_queue_error_is_sanitized(with_token, monkeypatch, caplog):
@@ -108,7 +112,10 @@ def test_send_file_sync_queue_error_is_sanitized(with_token, monkeypatch, caplog
         tg.send_file_sync("/tmp/file.xlsx", "caption", chat_id="-100")
 
     assert any(TOKEN not in r.message for r in caplog.records)
-    assert any("bot<redacted>" in r.message for r in caplog.records)
+    assert any(
+        ("bot<redacted>" in r.message) or ("bot***REDACTED***" in r.message)
+        for r in caplog.records
+    )
 
 
 def test_send_message_direct_request_exception_is_sanitized(with_token, monkeypatch):
