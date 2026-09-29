@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; docs-close **не** выполнен) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-46 close `63cd1f1e94df79369a0d2e2f82b03b4074e7efab` (accepted runtime `0d80bb291114344d13bc3064fa9d4d76e95c7221`, Draft PR #49); [SENDER_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md); [SENDER_GATES.md](../ops/MODULAR_REORG_ANTARES_SENDER_GATES.md) |
-| **PR** | Draft (этот) `feat/task-2026-09-17-47-antares-sender-worker-drain`, base `feat/task-2026-09-17-46-antares-sender-gates-runtime` |
+| **PR** | Draft [#50](https://github.com/deniskotdavydov1991-wq/Test/pull/50) `feat/task-2026-09-17-47-antares-sender-worker-drain`, base `feat/task-2026-09-17-46-antares-sender-gates-runtime` @ `63cd1f1…` |
 | **Риск** | medium: incorrect S1/S3 or seal race could drop accepted sends or hang drain |
 
 CODE: Telegram sender **intake accounting + drain + worker stop**. **Не** full resource shutdown (HTTP/loop/thread remain). **Не** docs-close до GPT review.
