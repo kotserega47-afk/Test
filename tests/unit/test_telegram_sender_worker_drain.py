@@ -44,7 +44,8 @@ def _isolate_sender_lifecycle(monkeypatch):
     with tg._lifecycle_lock:
         tg._lifecycle_state = "DRAINING"
         tg._intake_sealed = True
-        tg._sentinel_submitted = True
+        tg._sentinel_state = tg._SENTINEL_ENQUEUED
+        tg._sentinel_ack.set()
     tg._reset_sender_worker_lifecycle_for_tests()
     monkeypatch.setattr(tg, "TELEGRAM_TOKEN", "123456:ABC-TEST")
     monkeypatch.setattr(tg, "inspect_sender_ptb_compatibility", _ptb_pass)
@@ -63,7 +64,8 @@ def _isolate_sender_lifecycle(monkeypatch):
     with tg._lifecycle_lock:
         tg._lifecycle_state = "DRAINING"
         tg._intake_sealed = True
-        tg._sentinel_submitted = True
+        tg._sentinel_state = tg._SENTINEL_ENQUEUED
+        tg._sentinel_ack.set()
     tg._reset_sender_worker_lifecycle_for_tests()
     _reset_antares_sender_ownership_for_tests()
     tg._reset_telegram_sender_health_for_tests()
@@ -354,7 +356,9 @@ def test_t18_snd13_unexpected_dead_worker_after_seal(monkeypatch) -> None:
         tg._intake_sealed = True
         tg._lifecycle_state = "DRAINING"
         tg._drain_owner_proof = proof
-        tg._sentinel_submitted = False
+        tg._sentinel_state = tg._SENTINEL_NOT_SUBMITTED
+        tg._sentinel_ack.clear()
+        tg._sentinel_failure = None
     dead = MagicMock()
     dead.done.return_value = True
     monkeypatch.setattr(tg, "_worker_task", dead)
@@ -378,7 +382,7 @@ def test_t19_repeat_partial_no_duplicate_sentinel() -> None:
     _wait_until(lambda: tg._active_user_sends >= 1)
     first = _run(tg.drain_and_stop_sender_worker(proof, timeout=0.2))
     assert first.ok is False
-    assert tg._sentinel_submitted is False
+    assert tg._sentinel_state == tg._SENTINEL_NOT_SUBMITTED
     assert tg._intake_sealed is True
     hold.set()
     _wait_until(lambda: tg._active_user_sends == 0)
@@ -388,7 +392,7 @@ def test_t19_repeat_partial_no_duplicate_sentinel() -> None:
     assert tg._worker_task is not None and not tg._worker_task.done()
     second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
     assert second.ok is True, second
-    assert tg._sentinel_submitted is True
+    assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
 
 
 def test_t20_worker_stopped_idempotent_not_final_stopped() -> None:
@@ -432,3 +436,137 @@ def test_t22_intake_failure_still_allows_worker_success(monkeypatch) -> None:
     assert result.terminal_intake_failure_total >= 1
     assert result.worker_stopped is True
     assert result.full_resource_stopped is False
+
+
+def test_worker_ready_wait_keeps_caller_loop_responsive() -> None:
+    """BLOCKER 1: drain must not Event.wait()-block the caller asyncio loop."""
+
+    proof = _claim()
+    tg._worker_ready.clear()
+
+    async def scenario():
+        ticks: list[int] = []
+
+        async def ticker() -> None:
+            for i in range(8):
+                ticks.append(i)
+                await asyncio.sleep(0)
+
+        drain_task = asyncio.create_task(
+            tg.drain_and_stop_sender_worker(proof, timeout=3.0)
+        )
+        tick_task = asyncio.create_task(ticker())
+        # Yield repeatedly until ticker proves the loop is responsive.
+        for _ in range(100):
+            if ticks:
+                break
+            await asyncio.sleep(0)
+        assert ticks, "caller event loop did not progress during worker_ready wait"
+        tg._worker_ready.set()
+        result = await drain_task
+        await tick_task
+        return result
+
+    result = _run(scenario())
+    assert result.ok is True, result
+    assert result.worker_stopped is True
+
+
+def test_sent1_scheduled_not_yet_enqueued(monkeypatch) -> None:
+    proof = _claim()
+    held: list[tuple] = []
+    real = tg._real_call_soon_threadsafe
+
+    def capture(cb, *args):
+        if cb is tg._enqueue_sentinel_on_loop:
+            held.append((cb, args))
+            return None
+        return real(cb, *args)
+
+    monkeypatch.setattr(tg, "_real_call_soon_threadsafe", capture)
+    result = _run(tg.drain_and_stop_sender_worker(proof, timeout=0.25))
+    assert result.ok is False
+    assert result.reason == "deadline_sentinel_ack"
+    assert result.sentinel_submitted is False
+    assert tg._sentinel_state == tg._SENTINEL_SCHEDULED
+    assert len(held) == 1
+    # Complete pending submission so fixture reset can restart cleanly.
+    held[0][0](*held[0][1])
+    _wait_until(lambda: tg._sentinel_state == tg._SENTINEL_ENQUEUED)
+
+
+def test_sent2_loop_side_put_failure(monkeypatch) -> None:
+    proof = _claim()
+    owned = tg._worker_owned_queue or tg.queue
+    real_put = owned.put_nowait
+
+    def boom(item):
+        if isinstance(item, tg._WorkerStopSentinel):
+            raise RuntimeError("sentinel put boom")
+        return real_put(item)
+
+    monkeypatch.setattr(owned, "put_nowait", boom)
+    result = _run(tg.drain_and_stop_sender_worker(proof, timeout=3.0))
+    assert result.ok is False
+    assert result.reason.startswith("sentinel_submit_failed:")
+    assert result.sentinel_submitted is False
+    assert tg._sentinel_state == tg._SENTINEL_FAILED
+    assert tg._lifecycle_state == "DRAINING"
+    assert tg._worker_task is not None and not tg._worker_task.done()
+
+
+def test_sent3_repeat_after_put_failure(monkeypatch) -> None:
+    proof = _claim()
+    owned = tg._worker_owned_queue or tg.queue
+    real_put = owned.put_nowait
+    fail_once = {"n": 0}
+
+    def boom_once(item):
+        if isinstance(item, tg._WorkerStopSentinel) and fail_once["n"] == 0:
+            fail_once["n"] += 1
+            raise RuntimeError("sentinel put boom")
+        return real_put(item)
+
+    monkeypatch.setattr(owned, "put_nowait", boom_once)
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=3.0))
+    assert first.ok is False
+    assert first.sentinel_submitted is False
+    assert tg._sentinel_state == tg._SENTINEL_FAILED
+    monkeypatch.setattr(owned, "put_nowait", real_put)
+    second = _run(tg.drain_and_stop_sender_worker(proof, timeout=5.0))
+    assert second.ok is True, second
+    assert second.sentinel_submitted is True
+    assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
+    assert second.worker_stopped is True
+
+
+def test_sent4_pending_sentinel_no_duplicate_on_repeat(monkeypatch) -> None:
+    proof = _claim()
+    held: list[tuple] = []
+    real = tg._real_call_soon_threadsafe
+
+    def capture(cb, *args):
+        if cb is tg._enqueue_sentinel_on_loop:
+            held.append((cb, args))
+            return None
+        return real(cb, *args)
+
+    monkeypatch.setattr(tg, "_real_call_soon_threadsafe", capture)
+    first = _run(tg.drain_and_stop_sender_worker(proof, timeout=0.2))
+    assert first.ok is False
+    assert tg._sentinel_state == tg._SENTINEL_SCHEDULED
+    assert len(held) == 1
+
+    async def continue_drain():
+        task = asyncio.create_task(tg.drain_and_stop_sender_worker(proof, timeout=3.0))
+        # Let repeat observe SCHEDULED and wait — must not schedule a second callback.
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert len(held) == 1
+        held[0][0](*held[0][1])
+        return await task
+
+    second = _run(continue_drain())
+    assert second.ok is True, second
+    assert len(held) == 1
+    assert tg._sentinel_state == tg._SENTINEL_ENQUEUED

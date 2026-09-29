@@ -364,8 +364,16 @@ _s3_idle.set()
 _worker_task: asyncio.Task | None = None
 _worker_owned_queue: asyncio.Queue | None = None
 _worker_ready = threading.Event()
-_sentinel_submitted = False
 _drain_owner_proof: object | None = None
+
+# Sentinel protocol: NOT_SUBMITTED → SCHEDULED → ENQUEUED | FAILED
+_SENTINEL_NOT_SUBMITTED = "NOT_SUBMITTED"
+_SENTINEL_SCHEDULED = "SCHEDULED"
+_SENTINEL_ENQUEUED = "ENQUEUED"
+_SENTINEL_FAILED = "FAILED"
+_sentinel_state = _SENTINEL_NOT_SUBMITTED
+_sentinel_ack = threading.Event()  # set on ENQUEUED or FAILED
+_sentinel_failure: BaseException | None = None
 
 
 class TelegramSenderIntakeClosedError(RuntimeError):
@@ -430,14 +438,65 @@ def _loop_side_enqueue(payload: object, message_kind: str) -> None:
         pass
 
 
-def _submit_sentinel_on_loop() -> None:
+def _enqueue_sentinel_on_loop() -> None:
+    """Owner-loop: put sentinel and publish ENQUEUED/FAILED ack (never silent)."""
+
+    global _sentinel_state, _sentinel_failure
     target = _worker_owned_queue if _worker_owned_queue is not None else queue
-    target.put_nowait(_WORKER_STOP_SENTINEL)
+    try:
+        target.put_nowait(_WORKER_STOP_SENTINEL)
+    except Exception as exc:
+        with _lifecycle_lock:
+            _sentinel_state = _SENTINEL_FAILED
+            _sentinel_failure = exc
+            _record_terminal_intake_failure_locked("sentinel_put", str(exc))
+            _sentinel_ack.set()
+        return
+    with _lifecycle_lock:
+        _sentinel_state = _SENTINEL_ENQUEUED
+        _sentinel_failure = None
+        _sentinel_ack.set()
 
 
-async def _queue_join_on_sender_loop() -> None:
+async def _queue_join_watching_worker() -> None:
+    """Join owned queue on sender loop; fail fast if worker dies mid-drain."""
+
     target = _worker_owned_queue if _worker_owned_queue is not None else queue
-    await target.join()
+    join_task = asyncio.create_task(target.join())
+    try:
+        while True:
+            worker = _worker_task
+            if worker is not None and worker.done() and not join_task.done():
+                join_task.cancel()
+                try:
+                    await join_task
+                except asyncio.CancelledError:
+                    pass
+                raise RuntimeError("unexpected_dead_worker")
+            if join_task.done():
+                await join_task
+                return
+            done, _pending = await asyncio.wait({join_task}, timeout=0.05)
+            if done:
+                await join_task
+                return
+    except Exception:
+        if not join_task.done():
+            join_task.cancel()
+            try:
+                await join_task
+            except asyncio.CancelledError:
+                pass
+        raise
+
+
+async def _worker_status_on_sender_loop() -> dict[str, bool]:
+    task = _worker_task
+    return {
+        "task_missing": task is None,
+        "task_done": task is None or task.done(),
+        "queue_ok": queue is not None,
+    }
 
 
 def _admit_user_send(func, args: tuple, message_kind: str) -> None:
@@ -680,7 +739,12 @@ def _snapshot_drain_fields(
         s3 = _active_user_sends
         total_fail = _terminal_intake_failure_total
         recent = tuple(_recent_intake_failures)
-        sent_flag = _sentinel_submitted if sentinel_submitted is None else sentinel_submitted
+        # Truthful: only ENQUEUED means sentinel is on the queue.
+        sent_flag = (
+            (_sentinel_state == _SENTINEL_ENQUEUED)
+            if sentinel_submitted is None
+            else sentinel_submitted
+        )
         task = _worker_task
     terminal = worker_terminal
     if terminal is None:
@@ -710,19 +774,44 @@ def _snapshot_drain_fields(
     )
 
 
-def _structural_preflight(*, ready_timeout: float) -> tuple[bool, str | None]:
+def _structural_observations() -> tuple[bool, str | None]:
+    """Non-blocking structural checks (lifecycle/loop only; no Event.wait)."""
+
     if loop is None or not loop.is_running():
         return False, "sender_loop_unavailable"
     if _loop_thread is None or not _loop_thread.is_alive():
         return False, "loop_thread_unavailable"
-    if not _worker_ready.wait(timeout=ready_timeout):
+    if not _worker_ready.is_set():
         return False, "worker_not_ready"
-    task = _worker_task
-    if task is None:
-        return False, "worker_task_unavailable"
-    if task.done():
-        return False, "worker_already_dead"
     if queue is None:
+        return False, "queue_unavailable"
+    with _lifecycle_lock:
+        if _lifecycle_state not in ("RUNNING", "DRAINING"):
+            if _lifecycle_state == "WORKER_STOPPED":
+                return True, None
+            return False, "lifecycle_refuses_drain"
+    return True, None
+
+
+async def _structural_preflight_async(deadline: float) -> tuple[bool, str | None]:
+    """Async structural preflight: never blocks the caller event loop."""
+
+    if loop is None or not loop.is_running():
+        return False, "sender_loop_unavailable"
+    if _loop_thread is None or not _loop_thread.is_alive():
+        return False, "loop_thread_unavailable"
+    # Use the ONE overall drain deadline (no independent wait budget).
+    if not await _wait_event(_worker_ready, deadline):
+        return False, "worker_not_ready"
+    try:
+        status = await _run_on_sender_loop(_worker_status_on_sender_loop, deadline)
+    except TimeoutError:
+        return False, "worker_status_deadline"
+    if status["task_missing"]:
+        return False, "worker_task_unavailable"
+    if status["task_done"]:
+        return False, "worker_already_dead"
+    if not status["queue_ok"]:
         return False, "queue_unavailable"
     with _lifecycle_lock:
         if _lifecycle_state not in ("RUNNING", "DRAINING"):
@@ -756,24 +845,50 @@ async def _await_worker_terminal() -> None:
     await task
 
 
-async def _wait_worker_terminal_from_caller(deadline: float) -> None:
-    """Wait for worker Task completion without nesting on the sender loop."""
+async def _ensure_sentinel_enqueued(deadline: float) -> BaseException | None:
+    """Schedule sentinel put once; wait for loop-side ENQUEUED/FAILED ack.
 
-    task = _worker_task
-    if task is None:
-        raise RuntimeError("worker_task_unavailable")
-    if task.done():
-        return
-    done = threading.Event()
+    Returns None on ENQUEUED, exception on failure/timeout. Never reports
+    enqueued merely because call_soon accepted the callback.
+    """
 
-    def _on_done(_t: asyncio.Task) -> None:
-        done.set()
+    global _sentinel_state, _sentinel_failure
 
-    task.add_done_callback(_on_done)
-    if task.done():
-        done.set()
-    if not await _wait_event(done, deadline):
-        raise TimeoutError("sender drain deadline exceeded")
+    with _lifecycle_lock:
+        state = _sentinel_state
+        if state == _SENTINEL_ENQUEUED:
+            return None
+        if state == _SENTINEL_FAILED:
+            # Terminal put failure already known — clear for same-owner retry.
+            err = _sentinel_failure or RuntimeError("sentinel_put_failed")
+            _sentinel_state = _SENTINEL_NOT_SUBMITTED
+            _sentinel_failure = None
+            _sentinel_ack.clear()
+            # Fall through to schedule a new attempt.
+            state = _SENTINEL_NOT_SUBMITTED
+        if state == _SENTINEL_NOT_SUBMITTED:
+            _sentinel_ack.clear()
+            _sentinel_failure = None
+            try:
+                _real_call_soon_threadsafe(_enqueue_sentinel_on_loop)
+            except Exception as exc:
+                _sentinel_state = _SENTINEL_FAILED
+                _sentinel_failure = exc
+                _record_terminal_intake_failure_locked("sentinel_schedule", str(exc))
+                _sentinel_ack.set()
+                return exc
+            _sentinel_state = _SENTINEL_SCHEDULED
+        # SCHEDULED: wait for existing/new acknowledgement only.
+
+    if not await _wait_event(_sentinel_ack, deadline):
+        return TimeoutError("deadline_sentinel_ack")
+
+    with _lifecycle_lock:
+        if _sentinel_state == _SENTINEL_ENQUEUED:
+            return None
+        if _sentinel_state == _SENTINEL_FAILED:
+            return _sentinel_failure or RuntimeError("sentinel_put_failed")
+        return RuntimeError(f"sentinel_ack_inconsistent:{_sentinel_state}")
 
 
 async def drain_and_stop_sender_worker(
@@ -786,7 +901,7 @@ async def drain_and_stop_sender_worker(
     Does **not** close Bot/HTTP/loop/thread. Success ⇒ WORKER_STOPPED only.
     """
 
-    global _intake_sealed, _lifecycle_state, _drain_owner_proof, _sentinel_submitted
+    global _intake_sealed, _lifecycle_state, _drain_owner_proof
 
     deadline = time.monotonic() + max(0.0, float(timeout))
     ownership = validate_antares_sender_ownership(ownership_proof)
@@ -845,11 +960,7 @@ async def drain_and_stop_sender_worker(
                 structural_passed=False,
             )
 
-        ready_budget = min(
-            _WORKER_READY_TIMEOUT_SECONDS,
-            max(0.0, deadline - time.monotonic()),
-        )
-        structural_ok, structural_reason = _structural_preflight(ready_timeout=ready_budget)
+        structural_ok, structural_reason = await _structural_preflight_async(deadline)
         if not structural_ok:
             return _snapshot_drain_fields(
                 ok=False,
@@ -907,7 +1018,7 @@ async def drain_and_stop_sender_worker(
             )
 
         try:
-            await _run_on_sender_loop(_queue_join_on_sender_loop, deadline)
+            await _run_on_sender_loop(_queue_join_watching_worker, deadline)
         except TimeoutError:
             return _snapshot_drain_fields(
                 ok=False,
@@ -917,6 +1028,18 @@ async def drain_and_stop_sender_worker(
                 structural_passed=structural_passed,
                 queue_drained=False,
             )
+        except RuntimeError as exc:
+            if str(exc) == "unexpected_dead_worker":
+                return _snapshot_drain_fields(
+                    ok=False,
+                    reason="unexpected_dead_worker",
+                    ownership_passed=True,
+                    ptb_passed=ptb_passed,
+                    structural_passed=structural_passed,
+                    queue_drained=False,
+                    worker_terminal=True,
+                )
+            raise
 
         if not await _wait_event(_s3_idle, deadline):
             return _snapshot_drain_fields(
@@ -930,22 +1053,6 @@ async def drain_and_stop_sender_worker(
 
         with _lifecycle_lock:
             s3_nonzero = _active_user_sends != 0
-            task = _worker_task
-            # Capture death *before* sentinel submit so a fast worker exit after
-            # sentinel is not misclassified as unexpected_dead_worker.
-            dead_before_sentinel = task is None or task.done()
-            sentinel_error = None
-            if (
-                not s3_nonzero
-                and not dead_before_sentinel
-                and not _sentinel_submitted
-            ):
-                try:
-                    _real_call_soon_threadsafe(_submit_sentinel_on_loop)
-                    _sentinel_submitted = True
-                except Exception as exc:
-                    sentinel_error = exc
-            sentinel_done = _sentinel_submitted
 
         if s3_nonzero:
             return _snapshot_drain_fields(
@@ -956,8 +1063,24 @@ async def drain_and_stop_sender_worker(
                 structural_passed=structural_passed,
                 queue_drained=True,
             )
-        if dead_before_sentinel and not sentinel_done:
-            # SND13: worker died after seal without our stop sentinel.
+
+        try:
+            status = await _run_on_sender_loop(_worker_status_on_sender_loop, deadline)
+        except TimeoutError:
+            return _snapshot_drain_fields(
+                ok=False,
+                reason="deadline_worker_status",
+                ownership_passed=True,
+                ptb_passed=ptb_passed,
+                structural_passed=structural_passed,
+                queue_drained=True,
+            )
+
+        with _lifecycle_lock:
+            sentinel_enqueued_already = _sentinel_state == _SENTINEL_ENQUEUED
+
+        dead_before_sentinel = status["task_done"]
+        if dead_before_sentinel and not sentinel_enqueued_already:
             return _snapshot_drain_fields(
                 ok=False,
                 reason="unexpected_dead_worker",
@@ -967,8 +1090,7 @@ async def drain_and_stop_sender_worker(
                 queue_drained=True,
                 worker_terminal=True,
             )
-        if dead_before_sentinel and sentinel_done:
-            # Prior attempt already stopped the worker — idempotent success.
+        if dead_before_sentinel and sentinel_enqueued_already:
             with _lifecycle_lock:
                 _lifecycle_state = "WORKER_STOPPED"
             return _snapshot_drain_fields(
@@ -981,19 +1103,27 @@ async def drain_and_stop_sender_worker(
                 sentinel_submitted=True,
                 worker_terminal=True,
             )
-        if sentinel_error is not None:
+
+        sentinel_err = await _ensure_sentinel_enqueued(deadline)
+        if sentinel_err is not None:
+            reason = (
+                "deadline_sentinel_ack"
+                if isinstance(sentinel_err, TimeoutError)
+                else f"sentinel_submit_failed:{type(sentinel_err).__name__}"
+            )
             return _snapshot_drain_fields(
                 ok=False,
-                reason=f"sentinel_submit_failed:{type(sentinel_error).__name__}",
+                reason=reason,
                 ownership_passed=True,
                 ptb_passed=ptb_passed,
                 structural_passed=structural_passed,
                 queue_drained=True,
                 sentinel_submitted=False,
+                worker_terminal=False,
             )
 
         try:
-            await _wait_worker_terminal_from_caller(deadline)
+            await _run_on_sender_loop(_await_worker_terminal, deadline)
         except TimeoutError:
             return _snapshot_drain_fields(
                 ok=False,
@@ -1002,7 +1132,7 @@ async def drain_and_stop_sender_worker(
                 ptb_passed=ptb_passed,
                 structural_passed=structural_passed,
                 queue_drained=True,
-                sentinel_submitted=sentinel_done,
+                sentinel_submitted=True,
                 worker_terminal=False,
             )
 
@@ -1032,14 +1162,14 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
 
     global _lifecycle_state, _intake_sealed, _pending_loop_handoffs
     global _active_user_sends, _terminal_intake_failure_total, _recent_intake_failures
-    global _sentinel_submitted, _drain_owner_proof, _worker_task, queue
+    global _sentinel_state, _sentinel_failure, _drain_owner_proof, _worker_task, queue
 
     with _reset_lifecycle_gate:
         with _lifecycle_lock:
             need_restart = (
                 _lifecycle_state != "RUNNING"
                 or _intake_sealed
-                or _sentinel_submitted
+                or _sentinel_state != _SENTINEL_NOT_SUBMITTED
                 or (_worker_task is not None and _worker_task.done())
             )
             _intake_sealed = False
@@ -1048,7 +1178,9 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
             _active_user_sends = 0
             _terminal_intake_failure_total = 0
             _recent_intake_failures = []
-            _sentinel_submitted = False
+            _sentinel_state = _SENTINEL_NOT_SUBMITTED
+            _sentinel_failure = None
+            _sentinel_ack.clear()
             _drain_owner_proof = None
             _s1_idle.set()
             _s3_idle.set()
