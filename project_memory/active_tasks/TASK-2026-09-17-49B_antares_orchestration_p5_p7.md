@@ -32,6 +32,12 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 | Ownership | `ShutdownSession` (49.S) = orchestration owner; WE stop = process-local owner Task; registry wait = TASK-43 API |
 | Q-HLP1 | **Separate module** `modules.antares.shutdown_orchestration` — does not duplicate ShutdownSession; lifecycle helper remains shell until later full wire |
 
+### Known entry-path gap (not closed in 49.B)
+
+- `apps/antares.py` / default sandbox build still use default `asyncio.Queue` — **not** `AntaresUpdateIntakeQueue`; Q-PTB1 host cannot attest on that graph until build injects Antares intake + pre-initialize install.
+- `run_ptb_lifecycle` still seals → `_await_cleanup` after `stop.wait()` and does **not** yet call `run_owner_drain_p4_to_p7` (partial boundary: drain API exists; full helper wire deferred).
+- Do **not** pass invented `producers_complete=True` into WE/registry on the unwired entry path.
+
 ### Wiring conditions retained
 
 1. Single producer-host install before initialize/start  
