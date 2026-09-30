@@ -2,13 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52 @ `e331c677…`; slice **49.S** GPT ACCEPTED `f7dd672…` / docs-close Draft PR #53; slice **49.A** CODE in review (`ptb_producer_wait`); production wiring **нет**; полный shutdown **не** реализован; **Q-PTB1 OPEN** until GPT accept |
+| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52 @ `e331c677…`; slice **49.S** GPT ACCEPTED `f7dd672…` / docs-close Draft PR #53; slice **49.A** GPT ACCEPTED `2f1435b…` / docs-close Draft PR #54 (`ptb_producer_wait`; Q-PTB1 accepted supported-mode; **не** wired); production wiring **нет**; полный shutdown **не** реализован |
 | **База** | TASK-48 docs-close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51) |
 | **Принятый docs SHA** | `237b20efeb2aed76d24f620a9a1cc2110145344c` |
 | **Обследованный SHA** | `90cda7c…` (+ worker stop API на том же дереве); stop APIs приняты на `7f6b5a8…` |
 | **PR** | Draft [#52](https://github.com/deniskotdavydov1991-wq/Test/pull/52) |
 | **Проверка** | GPT — документы/diff + соответствие обследованным API; pytest GPT не запускал (docs-only); CI PASS не заявлять (runs/statuses не найдены) |
-| **Открытые gates** | Q-PTB1, Q-EX2, Q-OWN1, Q-HLP1, Q-REC1, O10 |
+| **Открытые gates** | Q-EX2, Q-OWN1, Q-HLP1, Q-REC1, O10 |
 | **PTB helper** | [STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / `modules.antares.application_lifecycle.run_ptb_lifecycle` |
 | **Drain/stop** | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 |
 | **WE stop** | TASK-41 `automation.worker.stop_isolated_profile_workers` |
@@ -44,7 +44,7 @@
 15. `delayed_cleanup` — документированное исключение.
 16. Staged PTB cleanup **startup failure** (до OPEN) сохранить отдельным путём; PTB Application Bot ≠ module sender Bot.
 17. Модель owner-session / ошибок / structured result **обязана** быть принята **до** wiring (§10); нельзя откладывать целиком в 49.E.
-18. Q-PTB1 — design gate: **запрещён** зависимый wiring P4+/P6+/P7+ с `producers_complete=True`, пока primitive не принят.
+18. Q-PTB1 — supported-mode producer-wait primitive **принят** (`2f1435b…` / PR #54); зависимый wiring P4+/P5+ **обязан** соблюдать условия install/seal/binding/entry-gate и сверять реальный lifecycle graph (не заявлять полный shutdown).
 19. После SESSION_TERMINAL (success или failure) повтор **не** стартует новую destructive session и **не** выдаёт новый shutdown deadline (§1.3).
 
 ---
@@ -341,8 +341,8 @@ Owner-session / cancel / result / cleanup-observer model — **в 49.S**, не �
 | Slice | Content | Depends on | Gate |
 |-------|---------|------------|------|
 | **49.S** | Shutdown-session primitive: arm on request-stop **and** cancel-after-OPEN; waiter detach; primary CancelledError; snapshot vs SESSION_TERMINAL; cleanup observer + observe budget; structured skeleton result — **ACCEPTED** `f7dd672…` / Draft PR #53 (**не** wired) | TASK-24 helper shape | **before** any P3–P9 wiring |
-| **49.A** | Q-PTB1 producer-wait primitive + truthful producers_complete — **CODE in review** (Draft PR base 49.S; **not** wired; gate stays OPEN until GPT accept) | 49.S | **blocks** 49.B+ until accepted |
-| **49.B** | Wire P5–P7; WE **owner-session** observe (may extend TASK-41 API in **that** future code PR, not this docs PR) | 49.A accepted; TASK-40/41/43 | no wiring with false producers |
+| **49.A** | Q-PTB1 producer-wait primitive + truthful producers_complete — **ACCEPTED** `2f1435b…` / Draft PR #54 (supported mode; **не** wired; lifecycle graph must match install/seal/binding/entry-gate conditions at wiring) | 49.S | **unblocks** 49.B planning; wiring still future |
+| **49.B** | Wire P5–P7; WE **owner-session** observe (may extend TASK-41 API in **that** future code PR, not this docs PR) | 49.A accepted; TASK-40/41/43 | verify Q-PTB1 supported-mode conditions on real lifecycle graph |
 | **49.C** | P8 sender + proof plumbing from `AntaresBootPrefix.sender_ownership` | 49.B; TASK-48 | |
 | **49.D** | Production executor shutdown + EX1 | 49.C | |
 | **49.E** | Full Orc* suite + result polish | 49.S–D | |
@@ -356,7 +356,7 @@ Do **not** start automatically.
 | ID | Status | Decision / remainder |
 |----|--------|----------------------|
 | **EX1** | **CLOSED** | P9 after partial sender only if SEALED + producers + Accepted/continuation empty + WE session success + registry success + sender attempted (§4.4) |
-| Q-PTB1 | OPEN (design gate) | concrete producer-wait API; **no dependent wiring** until accepted |
+| Q-PTB1 | **ACCEPTED** (supported-mode primitive @ `2f1435b…` / Test SHA `6ab07757…`; Draft PR #54) | `ptb_producer_wait` + intake seal; wiring must keep: single pre-initialize install; Antares intake + supported PTB graph; no untracked background producers; Application/issuer binding; permanent post-COMPLETE entry refuse. Lifecycle **not** wired; full shutdown / production readiness **not** claimed |
 | Q-EX2 | OPEN | public name of production executor shutdown |
 | Q-OWN1 | OPEN (narrowed) | holder exists: `AntaresBootPrefix.sender_ownership`; open = how helper receives proof |
 | Q-HLP1 | OPEN | orchestrator inside helper vs sibling |

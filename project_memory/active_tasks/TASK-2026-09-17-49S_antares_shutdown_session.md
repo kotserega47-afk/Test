@@ -11,7 +11,7 @@
 
 Review **пройден**. GPT **ACCEPTED** review HEAD `f7dd672b879eab847d6a9143be24e0b474ff3d37` (код/diff/regression-тесты; pytest GPT **не** запускал). Cursor pytest Python **3.12.10** на Test SHA `bab805868e37a977b1303774478bc64265d1936d`: shutdown_session **33**; + accepted_executor_work + work_admission **132**; lifecycle unit **19** (наборы **не** суммировать). CI PASS **не** заявлять. Этот docs-коммит — **DOCS-CLOSED** TASK-49.S. Runtime между accepted HEAD и close **не** менялся (docs-only).
 
-Owner shutdown-session primitive **принят**, **не выпущен**. PR #53 остаётся Draft/open. Production wiring в `run_ptb_lifecycle` / stop callers **нет**. Полный shutdown Antares **не** реализован. Q-PTB1 и прочие orchestration gates **открыты**. **49.A** — следующий запланированный этап (**не** начат). 49.B–E **не** автостарт. Merge/Ready/retarget/deploy **нет**. TASK-39–49 повторно **не** закрывать.
+Owner shutdown-session primitive **принят**, **не выпущен**. PR #53 остаётся Draft/open. Production wiring в `run_ptb_lifecycle` / stop callers **нет**. Полный shutdown Antares **не** реализован. Q-PTB1 producer-wait primitive **принят** в TASK-49.A (Draft PR #54; lifecycle **не** wired). **49.B** — следующий запланированный этап (**не** начат). 49.C–E **не** автостарт. Merge/Ready/retarget/deploy **нет**. TASK-39–49 повторно **не** закрывать.
 
 ---
 
@@ -56,7 +56,7 @@ Owner shutdown-session primitive **принят**, **не выпущен**. PR #
 - [x] docs-close (этот коммит)
 - [ ] merge/deploy (намеренно открыто)
 - [ ] production wiring (future; **не** этот PR)
-- [ ] 49.A Q-PTB1 (следующий этап; **не** начат)
+- [ ] 49.B wire P5–P7 (следующий этап; **не** начат)
 
 ---
 
