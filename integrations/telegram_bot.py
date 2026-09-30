@@ -2029,16 +2029,23 @@ async def _run_loop_stop_phase(
             refuse_reason = f"lifecycle_refuses_loop_stop:{state}"
             refuse_structural = False
         else:
-            if state == "HTTP_STOPPED":
-                _lifecycle_state = "LOOP_STOPPING"
-            if not _loop_stop_requested:
-                _loop_stop_requested = True
-                try:
-                    _real_call_soon_threadsafe(loop.stop)
-                except Exception:
-                    _loop_stop_requested = False
-                    # Remain LOOP_STOPPING for repeat; do not claim STOPPED.
-                    schedule_failed = True
+            # One overall deadline. A new loop.stop must not be scheduled
+            # once that deadline is already exhausted. An already-requested
+            # stop is left in place and only observed.
+            deadline_exhausted = time.monotonic() >= deadline
+            if (not _loop_stop_requested) and deadline_exhausted:
+                refuse_reason = "deadline_before_loop_stop"
+            else:
+                if state == "HTTP_STOPPED":
+                    _lifecycle_state = "LOOP_STOPPING"
+                if not _loop_stop_requested:
+                    _loop_stop_requested = True
+                    try:
+                        _real_call_soon_threadsafe(loop.stop)
+                    except Exception:
+                        _loop_stop_requested = False
+                        # Remain LOOP_STOPPING for repeat; do not claim STOPPED.
+                        schedule_failed = True
 
     if already_stopped:
         return _snapshot_full_stop_fields(

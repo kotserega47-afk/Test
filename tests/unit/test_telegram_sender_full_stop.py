@@ -1,4 +1,4 @@
-"""TASK-48: stop_isolated_sender full resource stop (FS1–FS25, HC1–HC5, HD1).
+"""TASK-48: stop_isolated_sender full resource stop (FS1–FS25, HC1–HC5, HD1–HD3).
 
 CRITICAL: never permanently stop the module-global sender loop/thread in the
 main pytest process. Loop-stop success is simulated via ``LoopStopHarness``;
@@ -1520,3 +1520,89 @@ def test_hd1_owner_session_owns_deadline_without_extra_30s(monkeypatch) -> None:
         hold.set()
         tg._http_phase_ack.wait(timeout=2.0)
     assert _real_loop_is_running()
+
+
+def test_hd2_expired_deadline_does_not_start_loop_stop(monkeypatch) -> None:
+    """timeout=0 at HTTP_STOPPED must not schedule loop.stop."""
+
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, gu, gen = _install_fake_bot(monkeypatch)
+    real_loop_phase = tg._run_loop_stop_phase
+    monkeypatch.setattr(
+        tg, "_run_loop_stop_phase", _abort_loop_result("loop_aborted_hd2_setup")
+    )
+    prepared = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert prepared.lifecycle_state == "HTTP_STOPPED"
+    assert prepared.http_stopped is True
+    assert tg._lifecycle_state == "HTTP_STOPPED"
+    assert tg._loop_stop_requested is False
+    assert bot.shutdown_calls == 1
+    http_calls = (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls)
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", real_loop_phase)
+
+    with without_killing_sender_loop(monkeypatch) as harness:
+        expired = _run(tg.stop_isolated_sender(proof, timeout=0))
+        assert expired.ok is False
+        assert expired.reason == "deadline_before_loop_stop"
+        assert expired.full_resource_stopped is False
+        assert expired.http_stopped is True
+        assert expired.lifecycle_state == "HTTP_STOPPED"
+        assert expired.loop_stop_requested is False
+        assert tg._lifecycle_state == "HTTP_STOPPED"
+        assert tg._loop_stop_requested is False
+        assert harness.stop_schedule_count == 0
+        assert _real_loop_is_running()
+        assert _real_thread_is_alive()
+        assert (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls) == http_calls
+
+        resumed = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+        assert harness.stop_schedule_count == 1
+        assert resumed.ok is True
+        assert resumed.full_resource_stopped is True
+        assert resumed.lifecycle_state == "STOPPED"
+        assert (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls) == http_calls
+
+
+def test_hd3_expired_deadline_does_not_retry_failed_loop_schedule(
+    monkeypatch,
+) -> None:
+    """timeout=0 must not retry loop.stop after a previous schedule failure."""
+
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, gu, gen = _install_fake_bot(monkeypatch)
+    failed = LoopStopHarness()
+    failed.fail_schedule = True
+    with without_killing_sender_loop(monkeypatch, failed):
+        first = _run(tg.stop_isolated_sender(proof, timeout=5.0))
+    assert first.reason == "loop_stop_schedule_failed"
+    assert first.lifecycle_state == "LOOP_STOPPING"
+    assert tg._lifecycle_state == "LOOP_STOPPING"
+    assert tg._loop_stop_requested is False
+    assert failed.stop_schedule_count == 1
+    http_calls = (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls)
+
+    expired_harness = LoopStopHarness()
+    with without_killing_sender_loop(monkeypatch, expired_harness):
+        expired = _run(tg.stop_isolated_sender(proof, timeout=0))
+    assert expired.ok is False
+    assert expired.reason == "deadline_before_loop_stop"
+    assert expired.lifecycle_state == "LOOP_STOPPING"
+    assert expired.full_resource_stopped is False
+    assert expired.loop_stop_requested is False
+    assert tg._lifecycle_state == "LOOP_STOPPING"
+    assert tg._loop_stop_requested is False
+    assert expired_harness.stop_schedule_count == 0
+    assert _real_loop_is_running()
+    assert _real_thread_is_alive()
+    assert (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls) == http_calls
+
+    resumed_harness = LoopStopHarness()
+    with without_killing_sender_loop(monkeypatch, resumed_harness):
+        resumed = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert resumed_harness.stop_schedule_count == 1
+    assert resumed.ok is True
+    assert resumed.full_resource_stopped is True
+    assert resumed.lifecycle_state == "STOPPED"
+    assert (bot.shutdown_calls, gu.shutdown_calls, gen.shutdown_calls) == http_calls
