@@ -6,7 +6,7 @@
 | **Статус** | review (CODE; GPT review pending; Q-PTB1 **не** закрыт; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.S ACCEPTED/docs-close `1f078eb7704c3f3d6cfd90a59b5f16ce9dc0b6c5` (accepted review `f7dd672…`, Test SHA `bab80586…`, Draft PR #53); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md); [STARTSTOP.md](../ops/MODULAR_REORG_ANTARES_STARTSTOP.md) |
-| **PR** | Draft (creating) `feat/task-2026-09-17-49a-antares-producer-wait`, base `feat/task-2026-09-17-49s-antares-shutdown-session` @ `1f078eb…` |
+| **PR** | Draft [#54](https://github.com/deniskotdavydov1991-wq/Test/pull/54) `feat/task-2026-09-17-49a-antares-producer-wait`, base `feat/task-2026-09-17-49s-antares-shutdown-session` @ `1f078eb…` |
 | **Риск** | medium: false producers_complete / seal races / foreign attestation |
 
 CODE: Q-PTB1 producer-wait primitive. **Production wiring в lifecycle/P5–P9 отсутствует**. WE/registry/sender/executor shutdown **не** подключены. **Q-PTB1 остаётся OPEN** до GPT acceptance. 49.B–E **не** начаты. TASK-39–49S повторно не закрывать.
