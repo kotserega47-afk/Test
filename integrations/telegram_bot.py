@@ -376,6 +376,7 @@ _bot_shutdown_error_type: str | None = None
 _bot_shutdown_error_text: str | None = None
 _http_phase_ack = threading.Event()  # set when leaving HTTP_STOPPING
 _http_close_session_task: asyncio.Task | None = None  # owner-loop HTTP close session
+_http_close_session_deadline: float | None = None  # absolute monotonic deadline owned by that session
 _loop_stop_requested = False
 _loop_stopped = threading.Event()
 
@@ -1749,30 +1750,61 @@ def _publish_http_phase_locked(*, success: bool) -> None:
     """Leave HTTP_STOPPING; success→HTTP_STOPPED else repeatable WORKER_STOPPED.
 
     Only the owner-loop HTTP close session may call this when the session is
-    actually terminal.
+    actually terminal. Callers must not publish on their own deadline.
     """
 
-    global _lifecycle_state, _http_close_session_task
+    global _lifecycle_state, _http_close_session_task, _http_close_session_deadline
     if _lifecycle_state == "HTTP_STOPPING":
         _lifecycle_state = "HTTP_STOPPED" if success else "WORKER_STOPPED"
     _http_close_session_task = None
+    _http_close_session_deadline = None
     _http_phase_ack.set()
 
 
-async def _owner_http_close_session(deadline: float) -> bool:
-    """Owner-loop HTTP close session. Publishes phase terminal on exit."""
+def _record_http_session_start_failure(exc: BaseException) -> None:
+    """Publish fail-closed terminal when the owner session cannot be scheduled."""
 
+    global _bot_shutdown_error_type, _bot_shutdown_error_text
+    with _lifecycle_lock:
+        if _bot_shutdown_error_type is None:
+            _bot_shutdown_error_type = type(exc).__name__
+            _bot_shutdown_error_text = _sanitize_error_message(str(exc))
+        if _lifecycle_state == "HTTP_STOPPING":
+            _publish_http_phase_locked(success=False)
+
+
+async def _owner_http_close_session() -> bool:
+    """Owner-loop HTTP close session. Owns its captured deadline and publishes terminal.
+
+    The deadline is the absolute monotonic timestamp stored at claim time.
+    In-flight close work is bounded on this loop; callers never cancel this Task.
+    """
+
+    global _bot_shutdown_error_type, _bot_shutdown_error_text
     success = False
     try:
-        success = bool(await _http_close_on_sender_loop(deadline))
+        with _lifecycle_lock:
+            deadline = _http_close_session_deadline
+        if deadline is None:
+            success = False
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                success = False
+            else:
+                success = bool(
+                    await asyncio.wait_for(
+                        _http_close_on_sender_loop(deadline),
+                        timeout=remaining,
+                    )
+                )
     except asyncio.CancelledError:
         with _lifecycle_lock:
             _publish_http_phase_locked(success=False)
         raise
     except Exception as exc:
-        global _bot_shutdown_error_type, _bot_shutdown_error_text
         with _lifecycle_lock:
-            if _bot_shutdown_error_type is None:
+            if not isinstance(exc, TimeoutError) and _bot_shutdown_error_type is None:
                 _bot_shutdown_error_type = type(exc).__name__
                 _bot_shutdown_error_text = _sanitize_error_message(str(exc))
             _publish_http_phase_locked(success=False)
@@ -1783,19 +1815,33 @@ async def _owner_http_close_session(deadline: float) -> bool:
         return success
 
 
-async def _start_http_close_session_on_loop(deadline: float) -> asyncio.Task:
+def _spawn_http_close_session() -> None:
+    """Sender-loop callback. Not a Future the caller can cancel."""
+
+    try:
+        asyncio.get_running_loop().create_task(
+            _start_http_close_session_on_loop(),
+            name="telegram-sender-http-close-start",
+        )
+    except Exception as exc:
+        _record_http_session_start_failure(exc)
+
+
+async def _start_http_close_session_on_loop() -> None:
     """Create the single owner-loop HTTP close Task. Must run on sender loop."""
 
     global _http_close_session_task
-    existing = _http_close_session_task
-    if existing is not None and not existing.done():
-        raise RuntimeError("http_close_session_already_running")
-    task = asyncio.create_task(
-        _owner_http_close_session(deadline),
-        name="telegram-sender-http-close",
-    )
-    _http_close_session_task = task
-    return task
+    try:
+        existing = _http_close_session_task
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.create_task(
+            _owner_http_close_session(),
+            name="telegram-sender-http-close",
+        )
+        _http_close_session_task = task
+    except Exception as exc:
+        _record_http_session_start_failure(exc)
 
 
 async def _await_http_phase_terminal(
@@ -1805,9 +1851,15 @@ async def _await_http_phase_terminal(
 ) -> SenderFullStopResult | None:
     """Wait for `_http_phase_ack`. None ⇒ HTTP_STOPPED (continue to loop phase).
 
-    Caller CancelledError does **not** publish HTTP phase terminal and does
-    **not** cancel the owner-loop session.
+    Caller cancellation detaches this waiter only. It does not publish the HTTP
+    phase and does not cancel the owner-loop session. The session enforces the
+    deadline it captured at start; this waiter does not add time past ``deadline``.
+
+    ``cancel_owner_on_deadline`` distinguishes the claimer from an observer.
+    It must not touch the HTTP Task (no caller-thread ``done()`` / ``cancel()``).
     """
+
+    _ = cancel_owner_on_deadline
 
     try:
         if await _wait_event(_http_phase_ack, deadline):
@@ -1826,23 +1878,6 @@ async def _await_http_phase_terminal(
     except asyncio.CancelledError:
         # Detach waiter only; owner session continues and publishes later.
         raise
-
-    # Deadline while waiting for terminal.
-    if cancel_owner_on_deadline:
-        with _lifecycle_lock:
-            task = _http_close_session_task
-        if task is not None and not task.done():
-            try:
-                loop.call_soon_threadsafe(task.cancel)
-            except Exception:
-                pass
-            # Wait until owner session publishes terminal (must not strand HTTP_STOPPING).
-            await _wait_event(_http_phase_ack, time.monotonic() + 30.0)
-        elif not _http_phase_ack.is_set():
-            # No live session and no ack — publish fail-closed terminal.
-            with _lifecycle_lock:
-                if _lifecycle_state == "HTTP_STOPPING":
-                    _publish_http_phase_locked(success=False)
 
     with _lifecycle_lock:
         state = _lifecycle_state
@@ -1864,7 +1899,7 @@ async def _run_http_close_phase(
 ) -> SenderFullStopResult | None:
     """Claim or observe HTTP phase. None means continue to loop phase (HTTP_STOPPED)."""
 
-    global _lifecycle_state
+    global _lifecycle_state, _http_close_session_deadline
 
     claimed = False
     # ``_lifecycle_lock`` is non-reentrant; never call ``_snapshot_full_stop_fields``
@@ -1896,13 +1931,14 @@ async def _run_http_close_phase(
                 refuse_ptb = False
                 refuse_structural = False
             else:
-                existing = _http_close_session_task
-                if existing is not None and not existing.done():
+                # Caller thread must not query the HTTP Task.
+                if _http_close_session_task is not None:
                     refuse_reason = "http_close_session_already_running"
                     refuse_structural = False
                 else:
                     _lifecycle_state = "HTTP_STOPPING"
                     _http_phase_ack.clear()
+                    _http_close_session_deadline = deadline
                     claimed = True
         else:
             refuse_reason = f"lifecycle_refuses_http_stop:{state}"
@@ -1930,7 +1966,8 @@ async def _run_http_close_phase(
         return None
 
     if claimed:
-        # Start owner session on sender loop; do not bind waiter cancel to session.
+        # Schedule session start on the sender loop. This is synchronous
+        # queueing: caller cancellation cannot cancel the start callback.
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             with _lifecycle_lock:
@@ -1945,36 +1982,9 @@ async def _run_http_close_phase(
                 worker_terminal=True,
             )
         try:
-            start_fut = asyncio.run_coroutine_threadsafe(
-                _start_http_close_session_on_loop(deadline),
-                loop,
-            )
-            await asyncio.wait_for(asyncio.wrap_future(start_fut), timeout=remaining)
-        except TimeoutError:
-            with _lifecycle_lock:
-                if _lifecycle_state == "HTTP_STOPPING" and (
-                    _http_close_session_task is None or _http_close_session_task.done()
-                ):
-                    _publish_http_phase_locked(success=False)
-            return _snapshot_full_stop_fields(
-                ok=False,
-                reason="deadline_http_close",
-                ownership_passed=True,
-                ptb_passed=True,
-                structural_passed=True,
-                worker_terminal=True,
-            )
-        except asyncio.CancelledError:
-            # Session may already be running; leave HTTP_STOPPING for owner publish.
-            raise
+            _real_call_soon_threadsafe(_spawn_http_close_session)
         except Exception as exc:
-            with _lifecycle_lock:
-                global _bot_shutdown_error_type, _bot_shutdown_error_text
-                if _bot_shutdown_error_type is None:
-                    _bot_shutdown_error_type = type(exc).__name__
-                    _bot_shutdown_error_text = _sanitize_error_message(str(exc))
-                if _lifecycle_state == "HTTP_STOPPING":
-                    _publish_http_phase_locked(success=False)
+            _record_http_session_start_failure(exc)
             return _snapshot_full_stop_fields(
                 ok=False,
                 reason=f"http_close_session_start_failed:{type(exc).__name__}",
@@ -2371,7 +2381,7 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
     global _http_close_plan, _http_request_results
     global _bot_shutdown_attempted, _bot_shutdown_ok
     global _bot_shutdown_error_type, _bot_shutdown_error_text
-    global _loop_stop_requested, _http_close_session_task
+    global _loop_stop_requested, _http_close_session_task, _http_close_session_deadline
 
     with _reset_lifecycle_gate:
         with _lifecycle_lock:
@@ -2401,6 +2411,7 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
             _bot_shutdown_error_text = None
             _http_phase_ack.clear()
             _http_close_session_task = None
+            _http_close_session_deadline = None
             _loop_stop_requested = False
             task = _worker_task
 

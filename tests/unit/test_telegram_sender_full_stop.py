@@ -1,4 +1,4 @@
-"""TASK-48: stop_isolated_sender full resource stop (FS1–FS25).
+"""TASK-48: stop_isolated_sender full resource stop (FS1–FS25, HC1–HC5, HD1).
 
 CRITICAL: never permanently stop the module-global sender loop/thread in the
 main pytest process. Loop-stop success is simulated via ``LoopStopHarness``;
@@ -240,6 +240,7 @@ def _ensure_worker_alive(*, timeout: float = 3.0) -> None:
         tg._bot_shutdown_error_type = None
         tg._bot_shutdown_error_text = None
         tg._http_close_session_task = None
+        tg._http_close_session_deadline = None
         tg._http_phase_ack.clear()
     tg._loop_stopped.clear()
     if not _real_loop_is_running() or not _real_thread_is_alive():
@@ -1097,7 +1098,7 @@ def test_subprocess_public_wiring_reaches_real_stopped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# HC1–HC3 + probe hardening (GPT review regressions)
+# HC1–HC5 + HD1 + probe hardening (GPT review regressions)
 # ---------------------------------------------------------------------------
 
 
@@ -1314,3 +1315,208 @@ def test_hc_request_shutdown_probe_raises_structured_terminal(monkeypatch) -> No
     again = _run(tg.stop_isolated_sender(proof, timeout=3.0))
     assert again.lifecycle_state == "WORKER_STOPPED"
     assert tg._lifecycle_state != "HTTP_STOPPING"
+
+
+def _abort_loop_result(reason: str):
+    async def abort_loop(*_a, **_k):
+        return tg._snapshot_full_stop_fields(
+            ok=False,
+            reason=reason,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    return abort_loop
+
+
+def test_hc4_session_start_independent_of_caller_cancel(monkeypatch) -> None:
+    """Cancelling the caller during session start must not cancel that start."""
+
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, gu, gen = _install_fake_bot(monkeypatch)
+    hold = threading.Event()
+    entered = threading.Event()
+    bot._hold = hold
+    bot._entered = entered
+
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    start_finished = threading.Event()
+    real_start = tg._start_http_close_session_on_loop
+
+    async def delayed_start() -> None:
+        start_entered.set()
+        while not release_start.is_set():
+            await asyncio.sleep(0.01)
+        try:
+            await real_start()
+        finally:
+            start_finished.set()
+
+    monkeypatch.setattr(tg, "_start_http_close_session_on_loop", delayed_start)
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", _abort_loop_result("loop_aborted_hc4"))
+
+    async def scenario():
+        first = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
+        assert await asyncio.to_thread(start_entered.wait, 3.0)
+        with tg._lifecycle_lock:
+            assert tg._lifecycle_state == "HTTP_STOPPING"
+            assert tg._http_close_session_task is None
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert not start_finished.is_set()
+        with tg._lifecycle_lock:
+            assert tg._lifecycle_state == "HTTP_STOPPING"
+            assert tg._http_close_session_task is None
+        release_start.set()
+        assert await asyncio.to_thread(entered.wait, 3.0)
+        assert await asyncio.to_thread(start_finished.wait, 3.0)
+        assert bot.shutdown_calls == 1
+        with tg._lifecycle_lock:
+            assert tg._lifecycle_state == "HTTP_STOPPING"
+            assert tg._http_close_session_task is not None
+        assert not tg._http_phase_ack.is_set()
+        hold.set()
+        assert await asyncio.to_thread(tg._http_phase_ack.wait, 3.0)
+        assert tg._lifecycle_state == "HTTP_STOPPED"
+        assert bot.shutdown_calls == 1
+        result = await tg.stop_isolated_sender(proof, timeout=3.0)
+        assert result.reason == "loop_aborted_hc4"
+        assert result.http_stopped is True
+        assert bot.shutdown_calls == 1
+        return result
+
+    try:
+        _run(scenario())
+    finally:
+        release_start.set()
+        hold.set()
+        start_finished.wait(timeout=2.0)
+        tg._http_phase_ack.wait(timeout=2.0)
+    assert gu.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert _real_loop_is_running()
+
+
+def test_hc5_caller_thread_does_not_touch_http_task(monkeypatch) -> None:
+    """Caller thread must not call Task.done()/Task.cancel() on the HTTP session."""
+
+    import inspect
+
+    await_src = inspect.getsource(tg._await_http_phase_terminal)
+    phase_src = inspect.getsource(tg._run_http_close_phase)
+    for src in (await_src, phase_src):
+        assert ".done()" not in src
+        assert ".cancel(" not in src
+        assert "+ 30" not in src
+        assert "task.cancel" not in src
+
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, _gu, _gen = _install_fake_bot(monkeypatch)
+    hold = threading.Event()
+    entered = threading.Event()
+    bot._hold = hold
+    bot._entered = entered
+
+    class _TaskProxy:
+        def __init__(self, inner: asyncio.Task) -> None:
+            self._inner = inner
+            self.ops: list[tuple[str, bool]] = []
+
+        def done(self) -> bool:
+            self.ops.append(("done", threading.current_thread() is tg._loop_thread))
+            return self._inner.done()
+
+        def cancel(self, msg=None) -> bool:
+            self.ops.append(("cancel", threading.current_thread() is tg._loop_thread))
+            return self._inner.cancel(msg)
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
+
+    proxies: list[_TaskProxy] = []
+    real_start = tg._start_http_close_session_on_loop
+
+    async def wrapping_start() -> None:
+        await real_start()
+        with tg._lifecycle_lock:
+            task = tg._http_close_session_task
+            if isinstance(task, asyncio.Task):
+                proxy = _TaskProxy(task)
+                proxies.append(proxy)
+                tg._http_close_session_task = proxy
+
+    monkeypatch.setattr(tg, "_start_http_close_session_on_loop", wrapping_start)
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", _abort_loop_result("loop_aborted_hc5"))
+
+    try:
+        result = _run(tg.stop_isolated_sender(proof, timeout=0.4))
+        assert result.ok is False
+        assert result.reason in {"deadline_http_close", "http_close_incomplete"}
+        assert proxies, "HTTP session task was not created"
+        off_loop = [op for op in proxies[0].ops if not op[1]]
+        assert off_loop == []
+        _wait_until(lambda: tg._lifecycle_state == "WORKER_STOPPED", timeout=1.5)
+        assert tg._http_phase_ack.is_set()
+        assert entered.is_set()
+        assert bot.shutdown_calls == 1
+    finally:
+        hold.set()
+        tg._http_phase_ack.wait(timeout=2.0)
+    assert _real_loop_is_running()
+
+
+def test_hd1_owner_session_owns_deadline_without_extra_30s(monkeypatch) -> None:
+    """Session deadline is the captured caller deadline, with no extra 30s wait."""
+
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, _gu, _gen = _install_fake_bot(monkeypatch)
+    hold = threading.Event()
+    entered = threading.Event()
+    bot._hold = hold
+    bot._entered = entered
+    captured: dict = {}
+    real_owner = tg._owner_http_close_session
+
+    async def spy_owner() -> bool:
+        with tg._lifecycle_lock:
+            captured["deadline"] = tg._http_close_session_deadline
+        captured["seen_at"] = time.monotonic()
+        return await real_owner()
+
+    monkeypatch.setattr(tg, "_owner_http_close_session", spy_owner)
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", _abort_loop_result("loop_aborted_hd1"))
+
+    timeout = 0.45
+    t0 = time.monotonic()
+    try:
+        result = _run(tg.stop_isolated_sender(proof, timeout=timeout))
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.5, elapsed
+        assert result.ok is False
+        assert result.reason in {"deadline_http_close", "http_close_incomplete"}
+        assert captured["deadline"] is not None
+        assert t0 < captured["deadline"] <= t0 + timeout + 1.0
+        assert captured["seen_at"] - t0 < 2.0
+        _wait_until(lambda: tg._lifecycle_state == "WORKER_STOPPED", timeout=1.5)
+        assert tg._http_phase_ack.is_set()
+        assert tg._http_close_session_deadline is None
+        assert entered.is_set()
+        assert _real_loop_is_running()
+        hold.set()
+        _wait_until(lambda: tg._http_close_session_task is None, timeout=1.5)
+        second = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+        assert second.reason == "loop_aborted_hd1"
+        assert second.lifecycle_state == "HTTP_STOPPED"
+        assert second.http_stopped is True
+        assert bot.shutdown_calls == 2
+    finally:
+        hold.set()
+        tg._http_phase_ack.wait(timeout=2.0)
+    assert _real_loop_is_running()
