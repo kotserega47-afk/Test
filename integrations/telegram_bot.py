@@ -351,7 +351,8 @@ _WORKER_READY_TIMEOUT_SECONDS = 5.0
 _RECENT_INTAKE_FAILURE_LIMIT = 32
 
 _lifecycle_lock = threading.Lock()
-_lifecycle_state = "RUNNING"  # RUNNING | DRAINING | WORKER_STOPPED
+# RUNNING | DRAINING | WORKER_STOPPED | HTTP_STOPPING | HTTP_STOPPED | LOOP_STOPPING | STOPPED
+_lifecycle_state = "RUNNING"
 _intake_sealed = False
 _pending_loop_handoffs = 0  # S1
 _active_user_sends = 0  # S3
@@ -366,6 +367,27 @@ _worker_owned_queue: asyncio.Queue | None = None
 _worker_ready = threading.Event()
 _drain_owner_proof: object | None = None
 
+# Full-stop HTTP / loop phase (TASK-48); owner is `_drain_owner_proof`.
+_http_close_plan: tuple[tuple[Any, ...], tuple[Any, ...]] | None = None  # (roles, close_targets)
+_http_request_results: dict[int, Any] = {}  # id(target) → SenderRequestCloseResult
+_bot_shutdown_attempted = False
+_bot_shutdown_ok = False
+_bot_shutdown_error_type: str | None = None
+_bot_shutdown_error_text: str | None = None
+_http_phase_ack = threading.Event()  # set when leaving HTTP_STOPPING
+_loop_stop_requested = False
+_loop_stopped = threading.Event()
+
+_POST_WORKER_STATES = frozenset(
+    {
+        "WORKER_STOPPED",
+        "HTTP_STOPPING",
+        "HTTP_STOPPED",
+        "LOOP_STOPPING",
+        "STOPPED",
+    }
+)
+
 # Sentinel protocol: NOT_SUBMITTED → SCHEDULED → ENQUEUED | FAILED
 _SENTINEL_NOT_SUBMITTED = "NOT_SUBMITTED"
 _SENTINEL_SCHEDULED = "SCHEDULED"
@@ -374,6 +396,8 @@ _SENTINEL_FAILED = "FAILED"
 _sentinel_state = _SENTINEL_NOT_SUBMITTED
 _sentinel_ack = threading.Event()  # set on ENQUEUED or FAILED
 _sentinel_failure: BaseException | None = None
+
+_ATTR_ABSENT = object()
 
 
 class TelegramSenderIntakeClosedError(RuntimeError):
@@ -391,8 +415,11 @@ _WORKER_STOP_SENTINEL = _WorkerStopSentinel()
 
 def _loop_runner():
     """Фоновый поток, который крутит event loop постоянно."""
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
+    try:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+    finally:
+        _loop_stopped.set()
 
 
 _loop_thread = threading.Thread(target=_loop_runner, daemon=True, name="telegram-sender-loop")
@@ -758,10 +785,16 @@ def _snapshot_drain_fields(
         task = _worker_task
     terminal = worker_terminal
     if terminal is None:
-        terminal = task is not None and task.done()
+        if state in _POST_WORKER_STATES:
+            terminal = True
+        else:
+            terminal = task is not None and task.done()
     loop_running = bool(loop.is_running())
     thread_alive = bool(_loop_thread.is_alive())
-    worker_stopped = state == "WORKER_STOPPED" and bool(terminal)
+    worker_stopped = state in _POST_WORKER_STATES and bool(terminal)
+    full_resource_stopped = (
+        state == "STOPPED" and (not loop_running) and (not thread_alive)
+    )
     return SenderWorkerDrainResult(
         ok=ok,
         reason=reason,
@@ -778,7 +811,7 @@ def _snapshot_drain_fields(
         loop_running=loop_running,
         loop_thread_alive=thread_alive,
         worker_stopped=worker_stopped,
-        full_resource_stopped=False,
+        full_resource_stopped=full_resource_stopped,
         terminal_intake_failure_total=total_fail,
         recent_intake_failures=recent,
     )
@@ -797,7 +830,7 @@ def _structural_observations() -> tuple[bool, str | None]:
         return False, "queue_unavailable"
     with _lifecycle_lock:
         if _lifecycle_state not in ("RUNNING", "DRAINING"):
-            if _lifecycle_state == "WORKER_STOPPED":
+            if _lifecycle_state in _POST_WORKER_STATES:
                 return True, None
             return False, "lifecycle_refuses_drain"
     return True, None
@@ -825,7 +858,7 @@ async def _structural_preflight_async(deadline: float) -> tuple[bool, str | None
         return False, "queue_unavailable"
     with _lifecycle_lock:
         if _lifecycle_state not in ("RUNNING", "DRAINING"):
-            if _lifecycle_state == "WORKER_STOPPED":
+            if _lifecycle_state in _POST_WORKER_STATES:
                 return True, None
             return False, "lifecycle_refuses_drain"
     return True, None
@@ -1046,7 +1079,8 @@ async def drain_and_stop_sender_worker(
         sealed = _intake_sealed
         owner = _drain_owner_proof
 
-    if state == "WORKER_STOPPED":
+    # Post-worker states: worker already stopped; no sentinel / PTB / restart.
+    if state in _POST_WORKER_STATES:
         if owner is not None and ownership_proof is not owner:
             return _snapshot_drain_fields(
                 ok=False,
@@ -1098,7 +1132,7 @@ async def drain_and_stop_sender_worker(
             )
 
         with _lifecycle_lock:
-            if _lifecycle_state == "WORKER_STOPPED":
+            if _lifecycle_state in _POST_WORKER_STATES:
                 already_draining = False
                 # Race: another waiter finished; fall through to idempotent path below.
             elif _lifecycle_state == "DRAINING" and _intake_sealed:
@@ -1111,7 +1145,7 @@ async def drain_and_stop_sender_worker(
                 already_draining = True
 
         with _lifecycle_lock:
-            if _lifecycle_state == "WORKER_STOPPED":
+            if _lifecycle_state in _POST_WORKER_STATES:
                 return _snapshot_drain_fields(
                     ok=True,
                     reason=None,
@@ -1254,6 +1288,909 @@ async def drain_and_stop_sender_worker(
         raise
 
 
+# =====================================================
+#   Full sender resource stop (TASK-48) — after WORKER_STOPPED
+# =====================================================
+
+
+@dataclass(frozen=True, slots=True)
+class SenderRequestCloseResult:
+    """Per close-target outcome for sender Bot request HTTP shutdown."""
+
+    role: str
+    target_index: int
+    shutdown_attempted: bool
+    shutdown_ok: bool
+    already_closed: bool
+    leftover_open: bool
+    timed_out: bool
+    error_type: str | None
+    error_text: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SenderFullStopResult:
+    """Structured full sender resource stop outcome (worker + HTTP + loop + thread)."""
+
+    ok: bool
+    reason: str | None
+    ownership_passed: bool
+    ptb_passed: bool
+    structural_passed: bool
+    lifecycle_state: str
+    intake_sealed: bool
+    worker_stopped: bool
+    worker_terminal: bool
+    bot_shutdown_attempted: bool
+    bot_shutdown_ok: bool
+    request_close_results: tuple[SenderRequestCloseResult, ...]
+    http_stopped: bool
+    loop_stop_requested: bool
+    loop_running: bool
+    loop_thread_alive: bool
+    thread_joined: bool
+    full_resource_stopped: bool
+    terminal_intake_failure_total: int
+    recent_intake_failures: tuple[str, ...]
+
+
+def _probe_attr(obj: Any, name: str) -> tuple[Any, bool]:
+    try:
+        return getattr(obj, name, _ATTR_ABSENT), True
+    except Exception:
+        return None, False
+
+
+def _request_leftover_open(req: Any) -> tuple[bool | None, bool]:
+    """Return ``(leftover_open, diagnostic_known)``. Unknown → fail-closed."""
+
+    client, client_ok = _probe_attr(req, "_client")
+    if not client_ok or client is _ATTR_ABSENT:
+        return None, False
+    if client is None:
+        return False, True
+    closed, closed_ok = _probe_attr(client, "is_closed")
+    if not closed_ok or closed is _ATTR_ABSENT:
+        return None, False
+    try:
+        return (not bool(closed)), True
+    except Exception:
+        return None, False
+
+
+def _role_name_for_target(roles: tuple[Any, ...], target: Any) -> str:
+    for role in roles:
+        if getattr(role, "request", None) is target:
+            return str(getattr(role, "role", "unknown"))
+    return "unknown"
+
+
+def _ordered_close_results() -> tuple[SenderRequestCloseResult, ...]:
+    with _lifecycle_lock:
+        plan = _http_close_plan
+        results_map = dict(_http_request_results)
+    if plan is None:
+        return tuple(results_map[k] for k in sorted(results_map))
+    _roles, close_targets = plan
+    ordered: list[SenderRequestCloseResult] = []
+    for idx, target in enumerate(close_targets):
+        item = results_map.get(id(target))
+        if item is not None:
+            ordered.append(item)
+        else:
+            ordered.append(
+                SenderRequestCloseResult(
+                    role=_role_name_for_target(_roles, target),
+                    target_index=idx,
+                    shutdown_attempted=False,
+                    shutdown_ok=False,
+                    already_closed=False,
+                    leftover_open=False,
+                    timed_out=False,
+                    error_type=None,
+                    error_text=None,
+                )
+            )
+    return tuple(ordered)
+
+
+def _snapshot_full_stop_fields(
+    *,
+    ok: bool,
+    reason: str | None,
+    ownership_passed: bool,
+    ptb_passed: bool,
+    structural_passed: bool,
+    worker_terminal: bool | None = None,
+) -> SenderFullStopResult:
+    with _lifecycle_lock:
+        sealed = _intake_sealed
+        state = _lifecycle_state
+        total_fail = _terminal_intake_failure_total
+        recent = tuple(_recent_intake_failures)
+        task = _worker_task
+        bot_attempted = _bot_shutdown_attempted
+        bot_ok = _bot_shutdown_ok
+        loop_stop_req = _loop_stop_requested
+    terminal = worker_terminal
+    if terminal is None:
+        if state in _POST_WORKER_STATES:
+            terminal = True
+        else:
+            terminal = task is not None and task.done()
+    loop_running = bool(loop.is_running())
+    thread_alive = bool(_loop_thread.is_alive())
+    worker_stopped = state in _POST_WORKER_STATES and bool(terminal)
+    http_stopped = state in ("HTTP_STOPPED", "LOOP_STOPPING", "STOPPED")
+    thread_joined = (not thread_alive) and state == "STOPPED"
+    full_resource_stopped = (
+        state == "STOPPED" and (not loop_running) and (not thread_alive)
+    )
+    return SenderFullStopResult(
+        ok=ok,
+        reason=reason,
+        ownership_passed=ownership_passed,
+        ptb_passed=ptb_passed,
+        structural_passed=structural_passed,
+        lifecycle_state=state,
+        intake_sealed=sealed,
+        worker_stopped=worker_stopped,
+        worker_terminal=bool(terminal),
+        bot_shutdown_attempted=bot_attempted,
+        bot_shutdown_ok=bot_ok,
+        request_close_results=_ordered_close_results(),
+        http_stopped=http_stopped,
+        loop_stop_requested=loop_stop_req,
+        loop_running=loop_running,
+        loop_thread_alive=thread_alive,
+        thread_joined=thread_joined,
+        full_resource_stopped=full_resource_stopped,
+        terminal_intake_failure_total=total_fail,
+        recent_intake_failures=recent,
+    )
+
+
+def _full_stop_from_drain(drain: SenderWorkerDrainResult) -> SenderFullStopResult:
+    return SenderFullStopResult(
+        ok=drain.ok,
+        reason=drain.reason,
+        ownership_passed=drain.ownership_passed,
+        ptb_passed=drain.ptb_passed,
+        structural_passed=drain.structural_passed,
+        lifecycle_state=drain.lifecycle_state,
+        intake_sealed=drain.intake_sealed,
+        worker_stopped=drain.worker_stopped,
+        worker_terminal=drain.worker_terminal,
+        bot_shutdown_attempted=False,
+        bot_shutdown_ok=False,
+        request_close_results=(),
+        http_stopped=False,
+        loop_stop_requested=False,
+        loop_running=drain.loop_running,
+        loop_thread_alive=drain.loop_thread_alive,
+        thread_joined=False,
+        full_resource_stopped=False,
+        terminal_intake_failure_total=drain.terminal_intake_failure_total,
+        recent_intake_failures=drain.recent_intake_failures,
+    )
+
+
+def _structural_for_http_mutation() -> tuple[bool, str | None]:
+    """Structural checks required before first HTTP close mutation."""
+
+    if loop is None or not loop.is_running():
+        return False, "sender_loop_unavailable"
+    if _loop_thread is None or not _loop_thread.is_alive():
+        return False, "loop_thread_unavailable"
+    with _lifecycle_lock:
+        sealed = _intake_sealed
+        state = _lifecycle_state
+        task = _worker_task
+    if not sealed:
+        return False, "intake_not_sealed"
+    if state != "WORKER_STOPPED":
+        return False, "lifecycle_refuses_http_stop"
+    if task is None or not task.done():
+        return False, "worker_not_terminal"
+    return True, None
+
+
+def _prior_target_fully_closed(prev: SenderRequestCloseResult | None) -> bool:
+    if prev is None:
+        return False
+    if prev.timed_out or prev.leftover_open:
+        return False
+    if prev.error_type is not None and not prev.already_closed and not prev.shutdown_ok:
+        return False
+    return bool(prev.already_closed or prev.shutdown_ok) and not prev.leftover_open
+
+
+async def _http_close_on_sender_loop(deadline: float) -> bool:
+    """Run Bot + request shutdowns on the sender loop. Returns HTTP success."""
+
+    global _bot_shutdown_attempted, _bot_shutdown_ok
+    global _bot_shutdown_error_type, _bot_shutdown_error_text
+    global _http_request_results
+
+    with _lifecycle_lock:
+        plan = _http_close_plan
+        prior = dict(_http_request_results)
+    if plan is None:
+        return False
+    roles, close_targets = plan
+
+    bot_ok = False
+    shutdown = getattr(bot, "shutdown", None) if bot is not None else None
+    if callable(shutdown):
+        _bot_shutdown_attempted = True
+        try:
+            await shutdown()
+            bot_ok = True
+            _bot_shutdown_ok = True
+            _bot_shutdown_error_type = None
+            _bot_shutdown_error_text = None
+        except Exception as exc:
+            bot_ok = False
+            _bot_shutdown_ok = False
+            _bot_shutdown_error_type = type(exc).__name__
+            _bot_shutdown_error_text = _sanitize_error_message(str(exc))
+    else:
+        _bot_shutdown_attempted = False
+        _bot_shutdown_ok = False
+        _bot_shutdown_error_type = "bot_shutdown_unavailable"
+        _bot_shutdown_error_text = None
+
+    results: dict[int, SenderRequestCloseResult] = dict(prior)
+    for idx, target in enumerate(close_targets):
+        key = id(target)
+        role_name = _role_name_for_target(roles, target)
+        prev = results.get(key)
+        if _prior_target_fully_closed(prev):
+            # Repeat: skip already-closed / successfully closed targets.
+            continue
+
+        if time.monotonic() >= deadline:
+            for j in range(idx, len(close_targets)):
+                tgt = close_targets[j]
+                results[id(tgt)] = SenderRequestCloseResult(
+                    role=_role_name_for_target(roles, tgt),
+                    target_index=j,
+                    shutdown_attempted=False,
+                    shutdown_ok=False,
+                    already_closed=False,
+                    leftover_open=True,
+                    timed_out=True,
+                    error_type="TimeoutError",
+                    error_text="deadline_http_close",
+                )
+            break
+
+        is_open, known = _request_leftover_open(target)
+        if not known or is_open is None:
+            results[key] = SenderRequestCloseResult(
+                role=role_name,
+                target_index=idx,
+                shutdown_attempted=False,
+                shutdown_ok=False,
+                already_closed=False,
+                leftover_open=True,
+                timed_out=False,
+                error_type="leftover_diagnostic_unavailable",
+                error_text=None,
+            )
+            continue
+        if not is_open:
+            results[key] = SenderRequestCloseResult(
+                role=role_name,
+                target_index=idx,
+                shutdown_attempted=False,
+                shutdown_ok=True,
+                already_closed=True,
+                leftover_open=False,
+                timed_out=False,
+                error_type=None,
+                error_text=None,
+            )
+            continue
+
+        shutdown_fn = getattr(target, "shutdown", None)
+        if not callable(shutdown_fn):
+            results[key] = SenderRequestCloseResult(
+                role=role_name,
+                target_index=idx,
+                shutdown_attempted=False,
+                shutdown_ok=False,
+                already_closed=False,
+                leftover_open=True,
+                timed_out=False,
+                error_type="request_shutdown_unavailable",
+                error_text=None,
+            )
+            continue
+
+        try:
+            await shutdown_fn()
+            post_open, post_known = _request_leftover_open(target)
+            leftover = bool(post_open) if post_known and post_open is not None else True
+            results[key] = SenderRequestCloseResult(
+                role=role_name,
+                target_index=idx,
+                shutdown_attempted=True,
+                shutdown_ok=post_known and not leftover,
+                already_closed=False,
+                leftover_open=leftover or not post_known,
+                timed_out=False,
+                error_type=(
+                    None
+                    if post_known and not leftover
+                    else (
+                        "leftover_diagnostic_unavailable"
+                        if not post_known
+                        else "leftover_open"
+                    )
+                ),
+                error_text=None,
+            )
+        except Exception as exc:
+            post_open, post_known = _request_leftover_open(target)
+            leftover = True if not post_known or post_open is None else bool(post_open)
+            results[key] = SenderRequestCloseResult(
+                role=role_name,
+                target_index=idx,
+                shutdown_attempted=True,
+                shutdown_ok=False,
+                already_closed=False,
+                leftover_open=leftover,
+                timed_out=False,
+                error_type=type(exc).__name__,
+                error_text=_sanitize_error_message(str(exc)),
+            )
+
+    # Final leftover re-check for success claim.
+    any_live = False
+    any_unknown = False
+    for target in close_targets:
+        is_open, known = _request_leftover_open(target)
+        if not known or is_open is None:
+            any_unknown = True
+            key = id(target)
+            prev = results.get(key)
+            if prev is not None and not prev.leftover_open:
+                results[key] = SenderRequestCloseResult(
+                    role=prev.role,
+                    target_index=prev.target_index,
+                    shutdown_attempted=prev.shutdown_attempted,
+                    shutdown_ok=False,
+                    already_closed=prev.already_closed,
+                    leftover_open=True,
+                    timed_out=prev.timed_out,
+                    error_type="leftover_diagnostic_unavailable",
+                    error_text=prev.error_text,
+                )
+            continue
+        if is_open:
+            any_live = True
+            key = id(target)
+            prev = results.get(key)
+            if prev is not None:
+                results[key] = SenderRequestCloseResult(
+                    role=prev.role,
+                    target_index=prev.target_index,
+                    shutdown_attempted=prev.shutdown_attempted,
+                    shutdown_ok=False,
+                    already_closed=False,
+                    leftover_open=True,
+                    timed_out=prev.timed_out,
+                    error_type=prev.error_type or "leftover_open",
+                    error_text=prev.error_text,
+                )
+
+    with _lifecycle_lock:
+        _http_request_results = results
+        _bot_shutdown_ok = bot_ok
+
+    return bool(bot_ok) and (not any_live) and (not any_unknown)
+
+
+def _publish_http_phase_locked(*, success: bool) -> None:
+    """Leave HTTP_STOPPING; success→HTTP_STOPPED else repeatable WORKER_STOPPED."""
+
+    global _lifecycle_state
+    if _lifecycle_state == "HTTP_STOPPING":
+        _lifecycle_state = "HTTP_STOPPED" if success else "WORKER_STOPPED"
+    _http_phase_ack.set()
+
+
+async def _run_http_close_phase(
+    ownership_proof: object,
+    deadline: float,
+) -> SenderFullStopResult | None:
+    """Claim or observe HTTP phase. None means continue to loop phase (HTTP_STOPPED)."""
+
+    global _lifecycle_state
+
+    claimed = False
+    # ``_lifecycle_lock`` is non-reentrant; never call ``_snapshot_full_stop_fields``
+    # while holding it.
+    refuse_reason: str | None = None
+    refuse_ownership = True
+    refuse_ptb = True
+    refuse_structural = True
+    already_stopped = False
+    skip_to_loop = False
+    with _lifecycle_lock:
+        state = _lifecycle_state
+        owner = _drain_owner_proof
+        if owner is not None and ownership_proof is not owner:
+            refuse_reason = "ownership_foreign_during_http_stop"
+            refuse_ownership = False
+            refuse_ptb = False
+            refuse_structural = False
+        elif state == "STOPPED":
+            already_stopped = True
+        elif state in ("HTTP_STOPPED", "LOOP_STOPPING"):
+            skip_to_loop = True
+        elif state == "HTTP_STOPPING":
+            claimed = False
+        elif state == "WORKER_STOPPED":
+            if _http_close_plan is None:
+                # Plan stored by caller before claim; refuse if missing.
+                refuse_reason = "http_close_plan_missing"
+                refuse_ptb = False
+                refuse_structural = False
+            else:
+                _lifecycle_state = "HTTP_STOPPING"
+                _http_phase_ack.clear()
+                claimed = True
+        else:
+            refuse_reason = f"lifecycle_refuses_http_stop:{state}"
+            refuse_structural = False
+
+    if already_stopped:
+        return _snapshot_full_stop_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+    if refuse_reason is not None:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=refuse_reason,
+            ownership_passed=refuse_ownership,
+            ptb_passed=refuse_ptb,
+            structural_passed=refuse_structural,
+            worker_terminal=True,
+        )
+    if skip_to_loop:
+        return None
+
+    if not claimed:
+        if not await _wait_event(_http_phase_ack, deadline):
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="deadline_http_phase",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                worker_terminal=True,
+            )
+        with _lifecycle_lock:
+            state = _lifecycle_state
+        if state == "HTTP_STOPPED":
+            return None
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="http_close_incomplete",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    success = False
+    try:
+        try:
+            success = bool(
+                await _run_on_sender_loop(
+                    lambda: _http_close_on_sender_loop(deadline),
+                    deadline,
+                )
+            )
+        except TimeoutError:
+            success = False
+            reason = "deadline_http_close"
+        else:
+            reason = None if success else "http_close_incomplete"
+
+        with _lifecycle_lock:
+            _publish_http_phase_locked(success=success)
+
+        if success:
+            return None
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=reason or "http_close_incomplete",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+    except asyncio.CancelledError:
+        with _lifecycle_lock:
+            _publish_http_phase_locked(success=False)
+        raise
+
+
+async def _run_loop_stop_phase(
+    ownership_proof: object,
+    deadline: float,
+) -> SenderFullStopResult:
+    """HTTP_STOPPED → LOOP_STOPPING → STOPPED (or remain LOOP_STOPPING)."""
+
+    global _lifecycle_state, _loop_stop_requested
+
+    # ``_lifecycle_lock`` is non-reentrant; never call ``_snapshot_full_stop_fields``
+    # while holding it.
+    refuse_reason: str | None = None
+    refuse_ownership = True
+    refuse_ptb = True
+    refuse_structural = True
+    already_stopped = False
+    schedule_failed = False
+    with _lifecycle_lock:
+        state = _lifecycle_state
+        owner = _drain_owner_proof
+        if owner is not None and ownership_proof is not owner:
+            refuse_reason = "ownership_foreign_during_loop_stop"
+            refuse_ownership = False
+            refuse_ptb = False
+            refuse_structural = False
+        elif state == "STOPPED":
+            already_stopped = True
+        elif state not in ("HTTP_STOPPED", "LOOP_STOPPING"):
+            refuse_reason = f"lifecycle_refuses_loop_stop:{state}"
+            refuse_structural = False
+        else:
+            if state == "HTTP_STOPPED":
+                _lifecycle_state = "LOOP_STOPPING"
+            if not _loop_stop_requested:
+                _loop_stop_requested = True
+                try:
+                    _real_call_soon_threadsafe(loop.stop)
+                except Exception:
+                    _loop_stop_requested = False
+                    # Remain LOOP_STOPPING for repeat; do not claim STOPPED.
+                    schedule_failed = True
+
+    if already_stopped:
+        return _snapshot_full_stop_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+    if refuse_reason is not None:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=refuse_reason,
+            ownership_passed=refuse_ownership,
+            ptb_passed=refuse_ptb,
+            structural_passed=refuse_structural,
+            worker_terminal=True,
+        )
+    if schedule_failed:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="loop_stop_schedule_failed",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    try:
+        if not await _wait_event(_loop_stopped, deadline):
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="deadline_loop_stopped",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                worker_terminal=True,
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining < 0:
+            remaining = 0.0
+        await asyncio.to_thread(_loop_thread.join, remaining)
+
+        thread_alive = bool(_loop_thread.is_alive())
+        loop_running = bool(loop.is_running())
+        with _lifecycle_lock:
+            if (not thread_alive) and (not loop_running):
+                _lifecycle_state = "STOPPED"
+            # else remain LOOP_STOPPING
+
+        if thread_alive or loop_running:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="deadline_thread_join" if thread_alive else "loop_still_running",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                worker_terminal=True,
+            )
+        return _snapshot_full_stop_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+    except asyncio.CancelledError:
+        # Loop stop may already be requested; leave LOOP_STOPPING for repeat.
+        raise
+
+
+async def _prepare_http_plan_and_structural(
+    ownership_proof: object,
+) -> SenderFullStopResult | None:
+    """PTB inspect + store plan + structural for first HTTP entry. None = proceed."""
+
+    global _http_close_plan
+
+    with _lifecycle_lock:
+        owner = _drain_owner_proof
+        state = _lifecycle_state
+        plan = _http_close_plan
+    if owner is not None and ownership_proof is not owner:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="ownership_foreign_after_worker_stopped",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+            worker_terminal=True,
+        )
+    if state != "WORKER_STOPPED":
+        # HTTP_STOPPING/HTTP_STOPPED handled by caller branches.
+        return None
+
+    if plan is None:
+        ptb = inspect_sender_ptb_compatibility(
+            bot=bot,
+            expected_general_request=request,
+        )
+        if not ptb.supported:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason=f"ptb_{ptb.reason or 'refused'}",
+                ownership_passed=True,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        with _lifecycle_lock:
+            # Store exact roles/close_targets; refuse if raced away from WORKER_STOPPED.
+            if _lifecycle_state != "WORKER_STOPPED":
+                return None
+            if _http_close_plan is None:
+                _http_close_plan = (tuple(ptb.roles), tuple(ptb.close_targets))
+
+    structural_ok, structural_reason = _structural_for_http_mutation()
+    if not structural_ok:
+        with _lifecycle_lock:
+            advanced = _lifecycle_state in (
+                "HTTP_STOPPING",
+                "HTTP_STOPPED",
+                "LOOP_STOPPING",
+                "STOPPED",
+            )
+        if advanced:
+            return None
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=structural_reason or "structural_refused",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=False,
+            worker_terminal=True,
+        )
+    return None
+
+
+async def stop_isolated_sender(
+    ownership_proof: object,
+    *,
+    timeout: float = 30.0,
+) -> SenderFullStopResult:
+    """Full sender resource stop: worker drain (if needed) → HTTP → loop → thread.
+
+    Async/non-blocking for the caller asyncio loop. One overall monotonic deadline.
+    """
+
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    ownership = validate_antares_sender_ownership(ownership_proof)
+    if not ownership.ok:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=f"ownership_{ownership.reason or 'refused'}",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+        )
+
+    with _lifecycle_lock:
+        state = _lifecycle_state
+        owner = _drain_owner_proof
+
+    # --- Terminal / in-flight branches ---
+    if state == "STOPPED":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="ownership_foreign_after_stopped",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        return _snapshot_full_stop_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    if state == "LOOP_STOPPING":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="ownership_foreign_during_loop_stop",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        return await _run_loop_stop_phase(ownership_proof, deadline)
+
+    if state == "HTTP_STOPPED":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="ownership_foreign_during_loop_stop",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        return await _run_loop_stop_phase(ownership_proof, deadline)
+
+    if state == "HTTP_STOPPING":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="ownership_foreign_during_http_stop",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        http_result = await _run_http_close_phase(ownership_proof, deadline)
+        if http_result is not None:
+            return http_result
+        return await _run_loop_stop_phase(ownership_proof, deadline)
+
+    if state == "WORKER_STOPPED":
+        if owner is not None and ownership_proof is not owner:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="ownership_foreign_after_worker_stopped",
+                ownership_passed=False,
+                ptb_passed=False,
+                structural_passed=False,
+                worker_terminal=True,
+            )
+        prep = await _prepare_http_plan_and_structural(ownership_proof)
+        if prep is not None:
+            return prep
+        http_result = await _run_http_close_phase(ownership_proof, deadline)
+        if http_result is not None:
+            return http_result
+        return await _run_loop_stop_phase(ownership_proof, deadline)
+
+    # RUNNING / DRAINING: PTB + structural, then worker drain, then HTTP onward.
+    if state not in ("RUNNING", "DRAINING"):
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=f"lifecycle_refuses_full_stop:{state}",
+            ownership_passed=True,
+            ptb_passed=False,
+            structural_passed=False,
+        )
+
+    with _lifecycle_lock:
+        sealed_now = _intake_sealed
+        owner_now = _drain_owner_proof
+    already_draining = state == "DRAINING" and sealed_now
+    if already_draining and owner_now is not None and ownership_proof is not owner_now:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="ownership_foreign_during_drain",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+        )
+
+    if not already_draining:
+        ptb = inspect_sender_ptb_compatibility(
+            bot=bot,
+            expected_general_request=request,
+        )
+        if not ptb.supported:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason=f"ptb_{ptb.reason or 'refused'}",
+                ownership_passed=True,
+                ptb_passed=False,
+                structural_passed=False,
+            )
+        structural_ok, structural_reason = await _structural_preflight_async(deadline)
+        if not structural_ok:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason=structural_reason or "structural_refused",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=False,
+            )
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="deadline_before_drain",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+        )
+
+    drain = await drain_and_stop_sender_worker(
+        ownership_proof,
+        timeout=remaining,
+    )
+
+    if not drain.ok or not drain.worker_stopped:
+        return _full_stop_from_drain(drain)
+
+    with _lifecycle_lock:
+        state = _lifecycle_state
+    if state != "WORKER_STOPPED":
+        # Concurrent same-owner stop may have advanced past WORKER_STOPPED.
+        if state in ("HTTP_STOPPING", "HTTP_STOPPED", "LOOP_STOPPING", "STOPPED"):
+            return await stop_isolated_sender(
+                ownership_proof,
+                timeout=max(0.0, deadline - time.monotonic()),
+            )
+        return _full_stop_from_drain(drain)
+
+    prep = await _prepare_http_plan_and_structural(ownership_proof)
+    if prep is not None:
+        return prep
+    http_result = await _run_http_close_phase(ownership_proof, deadline)
+    if http_result is not None:
+        return http_result
+    return await _run_loop_stop_phase(ownership_proof, deadline)
+
+
 _reset_lifecycle_gate = threading.Lock()
 
 
@@ -1263,6 +2200,10 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
     global _lifecycle_state, _intake_sealed, _pending_loop_handoffs
     global _active_user_sends, _terminal_intake_failure_total, _recent_intake_failures
     global _sentinel_state, _sentinel_failure, _drain_owner_proof, _worker_task, queue
+    global _http_close_plan, _http_request_results
+    global _bot_shutdown_attempted, _bot_shutdown_ok
+    global _bot_shutdown_error_type, _bot_shutdown_error_text
+    global _loop_stop_requested
 
     with _reset_lifecycle_gate:
         with _lifecycle_lock:
@@ -1284,11 +2225,20 @@ def _reset_sender_worker_lifecycle_for_tests() -> None:
             _drain_owner_proof = None
             _s1_idle.set()
             _s3_idle.set()
+            _http_close_plan = None
+            _http_request_results = {}
+            _bot_shutdown_attempted = False
+            _bot_shutdown_ok = False
+            _bot_shutdown_error_type = None
+            _bot_shutdown_error_text = None
+            _http_phase_ack.clear()
+            _loop_stop_requested = False
             task = _worker_task
 
         if not need_restart:
             return
         if not loop.is_running():
+            # Loop already stopped (e.g. after full STOPPED) — do not restart.
             return
 
         def _flush_and_restart() -> None:
