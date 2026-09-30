@@ -44,8 +44,8 @@ CODE: owner shutdown-session primitive. **Production wiring отсутствуе
 
 | Кто | Что |
 |-----|-----|
-| Cursor | см. отчёт PR после push (Python 3.12.10; наборы не суммировать) |
-| GPT | ACCEPTED pending re-review |
+| Cursor | Python **3.12.10** @ `91b612dbcbbe8a7bbc49474c8a7e1c06789f2668`: shutdown_session **29**; + accepted_executor_work + work_admission = **128**; lifecycle unit **20** (наборы не суммировать) |
+| GPT | re-review pending |
 
 ---
 
