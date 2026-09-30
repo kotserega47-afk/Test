@@ -96,8 +96,8 @@ Do **not** invent `producers_complete=True` on the unwired entry path.
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ Test SHA `cf48534a2b0b341e0381ac34688eeb7a746a99f9`: orchestration+WE **15**; related 40/41/43/49A/49S+49B = **110** (do not sum) |
-| GPT | prior CHANGES on `f7477f8…`; re-review pending on this HEAD |
+| Cursor | Python **3.12.10** @ Test SHA `cf48534a2b0b341e0381ac34688eeb7a746a99f9`; review-fix HEAD `a470a9750f8fa05baa1d94d1d80c74e7d8754e0a`: orchestration+WE **15**; related 40/41/43/49A/49S+49B = **110** (do not sum) |
+| GPT | prior CHANGES on `f7477f8…`; re-review pending on `a470a97…` |
 
 ---
 
@@ -112,4 +112,4 @@ Do **not** invent `producers_complete=True` on the unwired entry path.
 | Дата | Событие |
 |------|---------|
 | 2026-09-30 | CODE: P5–P7 + WE owner-session; Draft PR #55; Test SHA `0867b48…` |
-| 2026-09-30 | Review-fix: session-bound owner + WE create/join + design blocker; Test SHA `cf48534…`; Draft for GPT re-review |
+| 2026-09-30 | Review-fix HEAD `a470a97…`: session-bound owner + WE create/join + design blocker; Test SHA `cf48534…` (15/110); Draft for GPT re-review |
