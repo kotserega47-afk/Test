@@ -1,8 +1,8 @@
-"""TASK-49.B: post-OPEN drain orchestration P4–P7 (Q-HLP1 sibling module).
+"""TASK-49.B/C: post-OPEN drain orchestration P4–P8 (Q-HLP1 sibling module).
 
 Layout (Q-HLP1): **separate module** under ``modules.antares``, not inlined into
 ``run_ptb_lifecycle``. ``ShutdownSession`` / ``ShutdownSessionHost`` remain the
-single owner-session primitive (49.S); this module binds **one** P4–P7 owner
+single owner-session primitive (49.S); this module binds **one** drain owner
 Task to that session. Public callers only join/observe it. Cancelling a waiter
 detaches that waiter only — phase transitions continue. Concurrent / repeat
 callers never start a second orchestration for the same session.
@@ -10,22 +10,16 @@ callers never start a second orchestration for the same session.
 Deadline snapshot vs owner completion: expiry publishes a **waiter-side** partial
 without caching a terminal owner error. The same owner keeps observing late
 producer proof and already-accepted work; no new ``shutdown_deadline`` is issued.
-After expiry, new destructive phases (P6/P7) are not started. Started P6/P7 join
-continues; waiters may take a partial and later re-join the same procedure.
+After expiry, new destructive phases are not started. Started P6–P8 ops continue
+to be observed; waiters may take a partial and later re-join the same procedure.
 
-Supported path requires TASK-49.A conditions: producer host installed once
-before ``Application.initialize()``, Antares intake queue, Application/issuer
-binding, no untracked producers, permanent entry refuse after COMPLETE.
-
-Partial boundary: successful P7 does **not** mean full Antares shutdown,
-production readiness, or SESSION_TERMINAL. P8 sender / P9 executor remain
-future slices. Direct PTB cleanup must not bypass these phases.
-
-Integration boundary (49.B): the real ``apps/antares`` / default sandbox entry
-still uses a plain ``asyncio.Queue`` and ``run_ptb_lifecycle`` still seals →
-cleanup without calling this module. Safe partial wire of P4–P7 without
-bypassing P8/P9 via direct cleanup is a **design blocker** in this scope —
-lifecycle wiring is **not** marked done and the unsafe path is **not** enabled.
+TASK-49.C adds **P8** after successful P7: ``stop_isolated_sender`` with an
+explicit ``sender_ownership_proof`` (from ``AntaresBootPrefix.sender_ownership``
+or equivalent claim). Proof identity is checked before side effects and before
+returning any cached result. Remaining budget comes only from
+``session.shutdown_deadline``. P8 success is not SESSION_TERMINAL / full shutdown;
+P9 executor remains 49.D. Production lifecycle wiring that would bypass P9 is
+**not** enabled; the 49.B integration blocker remains.
 """
 
 from __future__ import annotations
@@ -41,6 +35,7 @@ from automation.worker import (
     snapshot_isolated_profile_workers,
     stop_isolated_profile_workers,
 )
+from core.antares_sender_ownership import validate_antares_sender_ownership
 from integrations.wallet_editor_registry_async import (
     IsolatedRegistryDaemonStopError,
     wait_isolated_registry_daemon_ops,
@@ -63,6 +58,7 @@ class DrainPhase(enum.Enum):
     P5_ACCEPTED_ITEMS = "p5_accepted_items"
     P6_WE_STOP = "p6_we_stop"
     P7_REGISTRY = "p7_registry"
+    P8_SENDER = "p8_sender"
 
 
 @dataclass(frozen=True)
@@ -75,17 +71,24 @@ class DrainPhasesResult:
     registry_joined: tuple[str, ...]
     last_completed_phase: DrainPhase | None
     remainder: tuple[str, ...]
+    # P8 / EX1 diagnostics (False/None when P8 not attempted).
+    sender_attempted: bool = False
+    sender_ok: bool | None = None
+    sender_reason: str | None = None
+    sender_full_resource_stopped: bool = False
+    sender_lifecycle_state: str | None = None
 
 
 @dataclass(frozen=True)
 class DrainOrchestrationSnapshot:
-    """Public read-only progress of the session-bound P4–P7 owner procedure."""
+    """Public read-only progress of the session-bound drain owner procedure."""
 
     last_completed_phase: DrainPhase | None
     producers_attested: bool
     p5_complete: bool
     p6_started: bool
     p7_started: bool
+    p8_started: bool
     we_joined: tuple[str, ...]
     registry_joined: tuple[str, ...]
     remainder: tuple[str, ...]
@@ -94,6 +97,11 @@ class DrainOrchestrationSnapshot:
     may_start_new_destructive_phases: bool
     has_terminal_result: bool
     has_terminal_error: bool
+    sender_attempted: bool
+    sender_ok: bool | None
+    sender_reason: str | None
+    sender_full_resource_stopped: bool
+    include_p8: bool
 
 
 @dataclass
@@ -102,6 +110,8 @@ class _DrainOwnerState:
 
     session: ShutdownSession
     producer_wait: PtbProducerWaitHost
+    include_p8: bool = False
+    sender_ownership_proof: object | None = None
     owner_task: asyncio.Task[Any] | None = None
     waiters: list[asyncio.Future] = field(default_factory=list)
     last_completed_phase: DrainPhase | None = None
@@ -113,6 +123,12 @@ class _DrainOwnerState:
     error: BaseException | None = None
     p6_started: bool = False
     p7_started: bool = False
+    p8_started: bool = False
+    sender_attempted: bool = False
+    sender_ok: bool | None = None
+    sender_reason: str | None = None
+    sender_full_resource_stopped: bool = False
+    sender_lifecycle_state: str | None = None
     # Waiters that already received a deadline partial for this procedure.
     deadline_partial_delivered: set[int] = field(default_factory=set)
     # One deadline snapshot wave for waiters present when expiry is first noticed;
@@ -128,6 +144,7 @@ class _DrainOwnerState:
             DrainPhase.P5_ACCEPTED_ITEMS,
             DrainPhase.P6_WE_STOP,
             DrainPhase.P7_REGISTRY,
+            DrainPhase.P8_SENDER,
         )
         rem = list(self.remainder)
         if self.session._drain_deadline_passed():  # noqa: SLF001
@@ -142,6 +159,11 @@ class _DrainOwnerState:
             registry_joined=self.registry_joined,
             last_completed_phase=self.last_completed_phase,
             remainder=tuple(rem),
+            sender_attempted=self.sender_attempted,
+            sender_ok=self.sender_ok,
+            sender_reason=self.sender_reason,
+            sender_full_resource_stopped=self.sender_full_resource_stopped,
+            sender_lifecycle_state=self.sender_lifecycle_state,
         )
 
 
@@ -219,7 +241,7 @@ def _get_owner_state(session: ShutdownSession) -> _DrainOwnerState | None:
 def observe_drain_orchestration(
     session: ShutdownSession,
 ) -> DrainOrchestrationSnapshot | None:
-    """Public read-only progress of the P4–P7 owner (None if not armed)."""
+    """Public read-only progress of the drain owner (None if not armed)."""
 
     state = _get_owner_state(session)
     if state is None:
@@ -233,6 +255,7 @@ def observe_drain_orchestration(
         p5_complete=snap.p5_complete,
         p6_started=state.p6_started,
         p7_started=state.p7_started,
+        p8_started=state.p8_started,
         we_joined=state.we_joined,
         registry_joined=state.registry_joined,
         remainder=snap.remainder,
@@ -244,6 +267,11 @@ def observe_drain_orchestration(
         has_terminal_result=state.result is not None,
         has_terminal_error=state.error is not None
         and (owner is None or owner.done()),
+        sender_attempted=state.sender_attempted,
+        sender_ok=state.sender_ok,
+        sender_reason=state.sender_reason,
+        sender_full_resource_stopped=state.sender_full_resource_stopped,
+        include_p8=state.include_p8,
     )
 
 
@@ -287,6 +315,10 @@ def _deadline_partial_error(state: _DrainOwnerState) -> DrainOrchestrationError:
         rem.append("p6_started")
     if state.p7_started and "p7_started" not in rem:
         rem.append("p7_started")
+    if state.p8_started and "p8_started" not in rem:
+        rem.append("p8_started")
+    if state.sender_attempted and "sender_attempted" not in rem:
+        rem.append("sender_attempted")
     if state.last_completed_phase is not None:
         tag = f"last_{state.last_completed_phase.value}"
         if tag not in rem:
@@ -302,6 +334,53 @@ def _deadline_partial_error(state: _DrainOwnerState) -> DrainOrchestrationError:
         "Accepted/continuation and started owner ops were not cancelled",
         remainder=tuple(rem),
     )
+
+
+def _remaining_from_session(session: ShutdownSession) -> float:
+    """Remaining seconds until ``session.shutdown_deadline`` (no new budget)."""
+
+    deadline = session.shutdown_deadline
+    if deadline is None:
+        return 0.0
+    return max(0.0, float(deadline) - float(session._host.clock.monotonic()))  # noqa: SLF001
+
+
+def _bind_sender_ownership_proof(
+    state: _DrainOwnerState, proof: object | None, *, require: bool
+) -> None:
+    """Validate and bind exact proof identity before side effects / cached return."""
+
+    if not require:
+        return
+    if proof is None:
+        raise DrainOrchestrationError(
+            "sender ownership proof required for P8",
+            remainder=("sender_proof_missing",),
+        )
+    validation = validate_antares_sender_ownership(proof)
+    if not validation.ok:
+        raise DrainOrchestrationError(
+            f"sender ownership refused: {validation.reason}",
+            remainder=(f"ownership_{validation.reason or 'refused'}",),
+        )
+    if state.sender_ownership_proof is None:
+        state.sender_ownership_proof = proof
+        return
+    if state.sender_ownership_proof is not proof:
+        raise DrainOrchestrationError(
+            "sender ownership proof does not match bound orchestration proof",
+            remainder=("ownership_foreign",),
+        )
+
+
+def _record_sender_outcome(state: _DrainOwnerState, outcome: Any) -> None:
+    state.sender_attempted = True
+    state.sender_ok = bool(getattr(outcome, "ok", False))
+    state.sender_reason = getattr(outcome, "reason", None)
+    state.sender_full_resource_stopped = bool(
+        getattr(outcome, "full_resource_stopped", False)
+    )
+    state.sender_lifecycle_state = getattr(outcome, "lifecycle_state", None)
 
 
 def _publish_deadline_wave(state: _DrainOwnerState) -> bool:
@@ -446,14 +525,64 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
             ) from exc
         state.last_completed_phase = DrainPhase.P7_REGISTRY
         state.remainder = []
-        result = DrainPhasesResult(
-            producers_attested=True,
-            p5_complete=True,
-            we_joined=state.we_joined,
-            registry_joined=state.registry_joined,
-            last_completed_phase=DrainPhase.P7_REGISTRY,
-            remainder=(),
-        )
+        state.pulse()
+
+        if not state.include_p8:
+            result = DrainPhasesResult(
+                producers_attested=True,
+                p5_complete=True,
+                we_joined=state.we_joined,
+                registry_joined=state.registry_joined,
+                last_completed_phase=DrainPhase.P7_REGISTRY,
+                remainder=(),
+            )
+            state.result = result
+            return result
+
+        if not session._may_start_new_destructive_phases():  # noqa: SLF001
+            state.remainder = ["drain_deadline_passed", "p7_complete"]
+            result = state.build_partial_result()
+            state.result = result
+            return result
+
+        # --- P8: sender stop (lazy import — avoid arming telegram_bot on P4–P7) ---
+        from integrations.telegram_bot import stop_isolated_sender
+
+        proof = state.sender_ownership_proof
+        assert proof is not None
+        state.p8_started = True
+        state.pulse()
+        remaining = _remaining_from_session(session)
+        outcome = await stop_isolated_sender(proof, timeout=remaining)
+        _record_sender_outcome(state, outcome)
+        state.pulse()
+
+        if outcome.ok and outcome.full_resource_stopped:
+            state.last_completed_phase = DrainPhase.P8_SENDER
+            state.remainder = []
+            result = DrainPhasesResult(
+                producers_attested=True,
+                p5_complete=True,
+                we_joined=state.we_joined,
+                registry_joined=state.registry_joined,
+                last_completed_phase=DrainPhase.P8_SENDER,
+                remainder=(),
+                sender_attempted=True,
+                sender_ok=True,
+                sender_reason=None,
+                sender_full_resource_stopped=True,
+                sender_lifecycle_state=outcome.lifecycle_state,
+            )
+            state.result = result
+            return result
+
+        # Structured partial / refuse from TASK-48 API — not SESSION_TERMINAL.
+        rem = ["sender_partial"]
+        if outcome.reason:
+            rem.append(str(outcome.reason))
+        state.remainder = rem
+        state.last_completed_phase = DrainPhase.P7_REGISTRY
+        result = state.build_partial_result()
         state.result = result
         return result
     except BaseException as exc:
@@ -466,24 +595,25 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         _publish_drain_waiters(state)
 
 
-async def run_owner_drain_p4_to_p7(
+async def _join_owner_drain(
     session: ShutdownSession,
     producer_wait: PtbProducerWaitHost,
+    *,
+    include_p8: bool,
+    sender_ownership_proof: object | None,
 ) -> DrainPhasesResult:
-    """Join/observe the single P4→P7 owner Task bound to ``session``.
-
-    Uses only ``session.shutdown_deadline`` (no separate per-phase drain budget).
-    Waiter cancellation does not interrupt owner phases. Deadline publishes a
-    waiter-side partial without terminating the owner. Repeat/concurrent callers
-    share the same procedure. P7 success does not publish SESSION_TERMINAL.
-    """
+    """Shared join/observe for the single session-bound drain owner Task."""
 
     _assert_drain_identity(session, producer_wait)
     loop = asyncio.get_running_loop()
 
     state = _get_owner_state(session)
     if state is None:
-        state = _DrainOwnerState(session=session, producer_wait=producer_wait)
+        state = _DrainOwnerState(
+            session=session,
+            producer_wait=producer_wait,
+            include_p8=include_p8,
+        )
         setattr(session, _ATTR, state)
     else:
         if state.producer_wait is not producer_wait:
@@ -496,6 +626,16 @@ async def run_owner_drain_p4_to_p7(
                 "drain owner bound to another ShutdownSession",
                 remainder=("session_mismatch",),
             )
+        if state.include_p8 != include_p8:
+            raise DrainOrchestrationError(
+                "drain owner already armed with a different P8 include mode",
+                remainder=("include_p8_mismatch",),
+            )
+
+    # Proof identity before side effects and before any cached outcome.
+    _bind_sender_ownership_proof(
+        state, sender_ownership_proof, require=include_p8
+    )
 
     _retrieve_drain_owner_exception(state)
     if state.result is not None:
@@ -514,7 +654,7 @@ async def run_owner_drain_p4_to_p7(
                 raise state.error
         state.owner_task = loop.create_task(
             _owner_drain_p4_to_p7(state),
-            name="antares-drain-p4-p7-owner",
+            name="antares-drain-p4-p8-owner" if include_p8 else "antares-drain-p4-p7-owner",
         )
 
         def _on_owner_done(task: asyncio.Task) -> None:
@@ -593,12 +733,9 @@ async def run_owner_drain_p4_to_p7(
                 and session._drain_deadline_passed()  # noqa: SLF001
             )
             if deadline_passed and not state.deadline_partial_wave_done:
-                # Waiter-side partial wave; owner keeps observing / joining.
                 _publish_deadline_wave(state)
                 break
 
-            # After the deadline wave, new joiners observe until owner settles
-            # (late proof / late P5 / started P6–P7 join) — no new deadline budget.
             wait_tasks: list[asyncio.Future[Any]] = []
             try:
                 wait_tasks = [
@@ -636,10 +773,45 @@ async def run_owner_drain_p4_to_p7(
         if not waiter.done():
             waiter.cancel()
         await _cancel_own_helpers()
-        # Owner, producers, Accepted Futures, continuations are not cancelled.
         raise
     finally:
         await _cancel_own_helpers()
+
+
+async def run_owner_drain_p4_to_p7(
+    session: ShutdownSession,
+    producer_wait: PtbProducerWaitHost,
+) -> DrainPhasesResult:
+    """Join/observe the single P4→P7 owner Task bound to ``session`` (no P8)."""
+
+    return await _join_owner_drain(
+        session,
+        producer_wait,
+        include_p8=False,
+        sender_ownership_proof=None,
+    )
+
+
+async def run_owner_drain_p4_to_p8(
+    session: ShutdownSession,
+    producer_wait: PtbProducerWaitHost,
+    *,
+    sender_ownership_proof: object,
+) -> DrainPhasesResult:
+    """Join/observe P4→P8 under one session-bound owner.
+
+    ``sender_ownership_proof`` must be the exact process attestation (e.g.
+    ``AntaresBootPrefix.sender_ownership``). Identity is checked before side
+    effects and before cached results. Timeout is only the remaining
+    ``session.shutdown_deadline``. P8 success is not SESSION_TERMINAL; P9 is 49.D.
+    """
+
+    return await _join_owner_drain(
+        session,
+        producer_wait,
+        include_p8=True,
+        sender_ownership_proof=sender_ownership_proof,
+    )
 
 
 def require_producer_host_pre_initialize(application: Any) -> None:

@@ -771,20 +771,39 @@ def test_late_continuation_and_we_before_freeze_counted() -> None:
         host.seal_intake()
         await host.wait_and_accept(session, deadline=None)
 
-        # Inject unfinished WE work after P4; P5 must observe it before P6 freeze.
         q = worker_mod.ensure_profile_queue("DENIS")
+        held = threading.Event()
+        release = threading.Event()
+        orig_get = q.get
+
+        def _get(*args, **kwargs):
+            item = orig_get(*args, **kwargs)
+            if not isinstance(item, worker_mod.ProfileWorkerStopSentinel):
+                held.set()
+                release.wait(timeout=10)
+            return item
+
+        q.get = _get  # type: ignore[method-assign]
+        # Recycle past in-flight native get, then hold the next business item.
         q.put(object())
+        for _ in range(400):
+            if q.unfinished_tasks == 0 and q.empty():
+                break
+            await asyncio.sleep(0.01)
+        q.put(object())
+        for _ in range(400):
+            if held.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert held.is_set()
+        assert q.unfinished_tasks >= 1
         assert worker_mod._profile_workers_frozen is False
 
         drain = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
         await asyncio.sleep(0.05)
         assert worker_mod._profile_workers_frozen is False
         assert not drain.done()
-        try:
-            q.get_nowait()
-            q.task_done()
-        except Exception:
-            pass
+        release.set()
         result = await drain
         assert result.last_completed_phase is DrainPhase.P7_REGISTRY
         await _shutdown_app(app)
