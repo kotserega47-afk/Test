@@ -419,7 +419,9 @@ class ShutdownSession:
             primary_exc_type=_exc_type_name(self._primary),
             cleanup_error_type=_exc_type_name(self._cleanup_error),
             owner_task_alive_at_publish=self._owner_alive(),
-            cleanup_task_alive_at_publish=False,
+            # Callback return/abort and asyncio.Task.done() are distinct;
+            # freeze the Task liveness observed at this publish call.
+            cleanup_task_alive_at_publish=self._cleanup_alive(),
         )
         self._terminal = ShutdownTerminalResult(
             snapshot=snap,

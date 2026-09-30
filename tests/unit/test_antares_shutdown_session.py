@@ -600,6 +600,15 @@ def test_cleanup_task_cancelled_before_callback_runs() -> None:
         await s.wait_arm_effects()
         s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
         started = asyncio.Event()
+        at_publish: dict[str, bool] = {}
+        orig_set_terminal = s._set_terminal
+
+        def capture_then_terminal() -> None:
+            at_publish["owner"] = s._owner_alive()  # noqa: SLF001
+            at_publish["cleanup"] = s._cleanup_alive()  # noqa: SLF001
+            orig_set_terminal()
+
+        s._set_terminal = capture_then_terminal  # type: ignore[method-assign]
 
         async def never() -> str:
             started.set()
@@ -617,7 +626,12 @@ def test_cleanup_task_cancelled_before_callback_runs() -> None:
         assert "cleanup_task_cancelled" in term.snapshot.remainder or (
             "cleanup_cancelled" in term.snapshot.remainder
         )
+        # Terminal published from Task done-callback: cleanup Task already finished.
+        assert at_publish["cleanup"] is False
+        assert term.snapshot.cleanup_task_alive_at_publish is at_publish["cleanup"]
+        assert term.snapshot.owner_task_alive_at_publish is at_publish["owner"]
         assert s.owner_task is not None and s.owner_task.done()
+        assert s.current_task_liveness().cleanup_task_alive is False
 
     asyncio.run(_main())
 
@@ -872,6 +886,15 @@ def test_frozen_terminal_task_alive_at_publish_vs_current_liveness() -> None:
         s = host.arm_request_stop(had_open=True)
         await s.wait_arm_effects()
         s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+        at_publish: dict[str, bool] = {}
+        orig_set_terminal = s._set_terminal
+
+        def capture_then_terminal() -> None:
+            at_publish["owner"] = s._owner_alive()  # noqa: SLF001
+            at_publish["cleanup"] = s._cleanup_alive()  # noqa: SLF001
+            orig_set_terminal()
+
+        s._set_terminal = capture_then_terminal  # type: ignore[method-assign]
 
         async def ok() -> str:
             return "ok"
@@ -880,13 +903,23 @@ def test_frozen_terminal_task_alive_at_publish_vs_current_liveness() -> None:
         term = await s.wait_terminal()
         frozen = term.snapshot
         assert frozen is s.snapshot()
-        assert frozen.owner_task_alive_at_publish is True
-        assert frozen.cleanup_task_alive_at_publish is False
+        # Successful path publishes terminal from inside the cleanup coroutine,
+        # so the asyncio.Task is still alive at publish (callback already returned).
+        assert at_publish["cleanup"] is True
+        assert at_publish["owner"] is True
+        assert frozen.owner_task_alive_at_publish is at_publish["owner"]
+        assert frozen.cleanup_task_alive_at_publish is at_publish["cleanup"]
         assert s.owner_task is not None
-        await asyncio.wait_for(asyncio.shield(s.owner_task), timeout=2)
+        assert s.cleanup_task is not None
+        await asyncio.wait_for(
+            asyncio.gather(s.owner_task, s.cleanup_task),
+            timeout=2,
+        )
         assert s.owner_task.done()
+        assert s.cleanup_task.done()
         assert s.snapshot() is frozen
-        assert s.snapshot().owner_task_alive_at_publish is True
+        assert s.snapshot().owner_task_alive_at_publish is at_publish["owner"]
+        assert s.snapshot().cleanup_task_alive_at_publish is at_publish["cleanup"]
         live = s.current_task_liveness()
         assert isinstance(live, TaskLiveness)
         assert live.owner_task_alive is False
