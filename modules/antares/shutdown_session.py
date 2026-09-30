@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -68,38 +69,59 @@ class ShutdownPath(enum.Enum):
 class ProducersCompleteAttestation:
     """Opaque proof that PTB producers are complete.
 
-    Production code must obtain this from the accepted Q-PTB1 primitive
-    (:meth:`mint_for_application`). Tests may build one via :meth:`for_tests`
-    only when the shutdown host has **no** bound Application.
+    Production attestations are issued only by a completed
+    :class:`~modules.antares.ptb_producer_wait.PtbProducerWaitHost` procedure
+    (not a public factory over ``id(app)``). Tests may use :meth:`for_tests`
+    only while the shutdown host has **no** bound producer-wait issuer.
     """
 
     _mark: str = field(default="producers_complete", repr=False)
+    _issuer_id: int | None = field(default=None, repr=False)
+    _procedure_id: int | None = field(default=None, repr=False)
     _application_token: int | None = field(default=None, repr=False)
     _intake_generation: int | None = field(default=None, repr=False)
+    _secret: bytes | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def for_tests(cls) -> ProducersCompleteAttestation:
         return cls(_mark="test")
 
     @classmethod
-    def mint_for_application(
-        cls, *, application_token: int, intake_generation: int
+    def _issue_from_producer_wait(
+        cls,
+        *,
+        issuer_id: int,
+        procedure_id: int,
+        application_token: int,
+        intake_generation: int,
+        secret: bytes,
     ) -> ProducersCompleteAttestation:
-        """Mint a production attestation bound to an Application + intake seal."""
-
-        if application_token == 0:
-            raise ValueError("application_token required")
+        if issuer_id == 0 or procedure_id == 0 or application_token == 0:
+            raise ValueError("issuer/procedure/application tokens required")
         if intake_generation <= 0:
             raise ValueError("intake_generation required")
+        if not secret:
+            raise ValueError("secret required")
         return cls(
             _mark="ptb_producer_wait",
+            _issuer_id=int(issuer_id),
+            _procedure_id=int(procedure_id),
             _application_token=int(application_token),
             _intake_generation=int(intake_generation),
+            _secret=bytes(secret),
         )
 
     @property
     def is_test_harness(self) -> bool:
         return self._mark == "test"
+
+    @property
+    def issuer_id(self) -> int | None:
+        return self._issuer_id
+
+    @property
+    def procedure_id(self) -> int | None:
+        return self._procedure_id
 
     @property
     def application_token(self) -> int | None:
@@ -108,6 +130,13 @@ class ProducersCompleteAttestation:
     @property
     def intake_generation(self) -> int | None:
         return self._intake_generation
+
+    def matches_secret(self, other: ProducersCompleteAttestation) -> bool:
+        return (
+            self._secret is not None
+            and other._secret is not None
+            and secrets.compare_digest(self._secret, other._secret)
+        )
 
 
 @dataclass(frozen=True)
@@ -598,26 +627,25 @@ class ShutdownSession:
             raise ShutdownSessionError("producers attestation only for post-OPEN path")
         if self._terminal is not None:
             raise ShutdownSessionError("session already terminal")
-        bound = self._host.application_token
-        if bound is not None:
+        issuer = self._host.producer_wait
+        if issuer is not None:
             if attestation.is_test_harness:
                 raise ShutdownSessionError(
-                    "for_tests attestation rejected when Application is bound"
+                    "for_tests attestation rejected when producer-wait is bound"
                 )
-            if attestation.application_token != bound:
-                raise ShutdownSessionError("foreign Application attestation rejected")
-            if attestation._mark != "ptb_producer_wait":  # noqa: SLF001
+            if not issuer.validate_attestation(attestation):
                 raise ShutdownSessionError(
-                    "attestation must be minted by Q-PTB1 producer-wait"
+                    "foreign, forged, or stale producers attestation rejected"
                 )
-        elif not attestation.is_test_harness:
-            # Unbound host (shutdown_session unit tests): only for_tests harness.
-            if attestation._mark != "ptb_producer_wait":  # noqa: SLF001
-                raise ShutdownSessionError("unrecognized producers attestation")
+        elif attestation.is_test_harness:
+            pass
+        else:
             raise ShutdownSessionError(
-                "Application-bound attestation requires ShutdownSessionHost.bind_application"
+                "production attestation requires ShutdownSessionHost.bind_producer_wait"
             )
         self._producers_attested = True
+        if attestation.is_test_harness:
+            self._host._accepted_test_attestation = True  # noqa: SLF001
         self._publish()
 
     def start_cleanup(self, callback: CleanupCallback) -> asyncio.Task[None]:
@@ -794,14 +822,59 @@ class ShutdownSessionHost:
         self._session: ShutdownSession | None = None
         self._application: Any | None = None
         self._application_token: int | None = None
+        self._producer_wait: Any | None = None
+        self._accepted_test_attestation = False
+
+    def require_owner_loop(self) -> None:
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise ShutdownSessionError(
+                "shutdown session arm/await requires the owner running loop"
+            ) from exc
+        if running is not self._loop:
+            raise ShutdownSessionError("foreign event loop rejected")
 
     def bind_application(self, application: Any) -> None:
-        """Bind the observed PTB Application for attestation checks (once)."""
+        """Bind Application identity (owner loop). Prefer :meth:`bind_producer_wait`."""
 
+        self.require_owner_loop()
+        if self._accepted_test_attestation:
+            raise ShutdownSessionError(
+                "cannot bind Application after for_tests attestation was accepted"
+            )
+        if self._session is not None and self._session.snapshot().producers_complete_attested:
+            raise ShutdownSessionError(
+                "cannot rebind Application after producers were attested"
+            )
         token = id(application)
         if self._application is not None and self._application_token != token:
             raise ShutdownSessionError("Application already bound to a different instance")
         self._application = application
+        self._application_token = token
+
+    def bind_producer_wait(self, producer_wait: Any) -> None:
+        """Bind Q-PTB1 issuer; freezes Application identity for attestation checks."""
+
+        self.require_owner_loop()
+        if self._accepted_test_attestation:
+            raise ShutdownSessionError(
+                "cannot bind producer-wait after for_tests attestation was accepted"
+            )
+        if self._session is not None and self._session.snapshot().producers_complete_attested:
+            raise ShutdownSessionError(
+                "cannot bind producer-wait after producers were attested"
+            )
+        app = getattr(producer_wait, "application", None)
+        if app is None:
+            raise ShutdownSessionError("producer-wait host missing application")
+        token = id(app)
+        if self._producer_wait is not None and self._producer_wait is not producer_wait:
+            raise ShutdownSessionError("producer-wait issuer already bound")
+        if self._application is not None and self._application_token != token:
+            raise ShutdownSessionError("Application identity conflicts with producer-wait")
+        self._producer_wait = producer_wait
+        self._application = app
         self._application_token = token
 
     @property
@@ -811,6 +884,10 @@ class ShutdownSessionHost:
     @property
     def application_token(self) -> int | None:
         return self._application_token
+
+    @property
+    def producer_wait(self) -> Any | None:
+        return self._producer_wait
 
     @property
     def admission(self) -> WorkAdmission:
@@ -827,16 +904,6 @@ class ShutdownSessionHost:
     @property
     def session(self) -> ShutdownSession | None:
         return self._session
-
-    def require_owner_loop(self) -> None:
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError as exc:
-            raise ShutdownSessionError(
-                "shutdown session arm/await requires the owner running loop"
-            ) from exc
-        if running is not self._loop:
-            raise ShutdownSessionError("foreign event loop rejected")
 
     def _arm(
         self,
