@@ -81,7 +81,7 @@
 | [TASK-2026-09-17-49S](TASK-2026-09-17-49S_antares_shutdown_session.md) | Owner shutdown-session primitive: GPT ACCEPTED `f7dd672…`, docs-close, Cursor 33/132/19 @ `bab80586…`, Draft PR #53, production wiring нет; 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
 | [TASK-2026-09-17-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md) | Q-PTB1 producer-wait: GPT ACCEPTED `2f1435b…`, docs-close, Cursor 14/146/19 @ `6ab07757…`, Draft PR #54, wiring нет; next → [TASK-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) |
 | [TASK-2026-09-17-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) | P4–P7 API GPT ACCEPTED `e02314a…` / Test `5b62d6b…` (18/113); Draft PR #55; **open** (integration blocker); docs-close нет; next → [TASK-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) |
-| [TASK-2026-09-17-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) | P8 sender + proof plumbing: CODE Draft PR base 49.B; Test SHA `00e43a4…` (7/120 + ownership 10 isolated); 49.B blocker сохранён; P9 не начат |
+| [TASK-2026-09-17-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) | P8 sender + proof plumbing: Draft PR #56 base 49.B; Test SHA `00e43a4…` (7/120 + ownership 10 isolated); 49.B blocker сохранён; P9 не начат |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

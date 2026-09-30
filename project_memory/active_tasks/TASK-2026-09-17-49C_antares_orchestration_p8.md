@@ -6,7 +6,7 @@
 | **Статус** | review (CODE; Draft PR; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.B open @ `65afd735dfb305f445d3dcf10dfc3497a6392f31` (P4–P7 ACCEPTED; integration blocker); TASK-48 ACCEPTED `7f6b5a8…`; [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) |
-| **PR** | Draft base `feat/task-2026-09-17-49b-antares-orchestration-p5-p7` @ `65afd73…` |
+| **PR** | Draft [#56](https://github.com/deniskotdavydov1991-wq/Test/pull/56) `feat/task-2026-09-17-49c-antares-orchestration-p8`, base `feat/task-2026-09-17-49b-antares-orchestration-p5-p7` @ `65afd73…` |
 | **Риск** | medium: false P8 before P7 / foreign proof / false full sender success |
 
 CODE: P8 after successful P7 + explicit sender ownership proof plumbing. **P9 / production lifecycle wiring / SESSION_TERMINAL / full shutdown не заявлять**. **49.B не закрывать**. **49.D–E не начаты**.
@@ -80,4 +80,4 @@ P9/executor; docs-close 49.B/49.C; Ready/merge/retarget/deploy; lifecycle wire b
 
 | Дата | Событие |
 |------|---------|
-| 2026-10-01 | CODE: P8 + proof plumbing; Test SHA `00e43a4…` (7/120 + ownership 10); Draft PR base 49.B |
+| 2026-10-01 | CODE: P8 + proof plumbing; Test SHA `00e43a4…` (7/120 + ownership 10); Draft PR #56 base 49.B |
