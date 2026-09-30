@@ -2,10 +2,13 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен** (GPT CHANGES REQUESTED → правки в этом PR); runtime **нет**; helper **не** wired; merge/deploy нет; TASK-49 **не** закрыт |
+| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52; runtime **нет**; helper **не** wired; merge/deploy нет; следующий этап **49.S** (**не** начат) |
 | **База** | TASK-48 docs-close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51) |
+| **Принятый docs SHA** | `237b20efeb2aed76d24f620a9a1cc2110145344c` |
 | **Обследованный SHA** | `90cda7c…` (+ worker stop API на том же дереве); stop APIs приняты на `7f6b5a8…` |
 | **PR** | Draft [#52](https://github.com/deniskotdavydov1991-wq/Test/pull/52) |
+| **Проверка** | GPT — документы/diff + соответствие обследованным API; pytest GPT не запускал (docs-only); CI PASS не заявлять (runs/statuses не найдены) |
+| **Открытые gates** | Q-PTB1, Q-EX2, Q-OWN1, Q-HLP1, Q-REC1, O10 |
 | **PTB helper** | [STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / `modules.antares.application_lifecycle.run_ptb_lifecycle` |
 | **Drain/stop** | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 |
 | **WE stop** | TASK-41 `automation.worker.stop_isolated_profile_workers` |
