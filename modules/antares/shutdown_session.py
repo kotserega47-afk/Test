@@ -80,7 +80,17 @@ class ProducersCompleteAttestation:
 
 @dataclass(frozen=True)
 class ShutdownSnapshot:
-    """Immutable intermediate or terminal view. ``is_terminal`` distinguishes."""
+    """Immutable intermediate or terminal view.
+
+    ``snapshot()`` is **read-only**: it never mutates session state or publishes
+    Events. ``drain_expired`` / ``may_start_new_destructive_phases`` are derived
+    from the current clock (watcher is not required for permission truth).
+
+    ``owner_task_alive_at_publish`` / ``cleanup_task_alive_at_publish`` are
+    values frozen at the moment this snapshot object was built. For a terminal
+    snapshot they stay fixed; use :meth:`ShutdownSession.current_task_liveness`
+    for current Task liveness.
+    """
 
     session_state: SessionState
     path: ShutdownPath
@@ -97,6 +107,14 @@ class ShutdownSnapshot:
     remainder: tuple[str, ...]
     primary_exc_type: str | None
     cleanup_error_type: str | None
+    owner_task_alive_at_publish: bool
+    cleanup_task_alive_at_publish: bool
+
+
+@dataclass(frozen=True)
+class TaskLiveness:
+    """Current Task liveness (not frozen into a terminal snapshot)."""
+
     owner_task_alive: bool
     cleanup_task_alive: bool
 
@@ -200,7 +218,7 @@ class ShutdownSession:
         self._cleanup_error: BaseException | None = None
         self._cleanup_result: Any = None
         self._terminal: ShutdownTerminalResult | None = None
-        self._remainder: list[str] = []
+        self._error_tags: list[str] = []
 
         self._owner_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
@@ -277,33 +295,63 @@ class ShutdownSession:
             return False
         return True
 
-    def _note_drain_expired(self) -> None:
-        """Mark drain expiry from clock and/or watcher (idempotent)."""
+    def _effective_session_state(self) -> SessionState:
+        """Derived view for read-only snapshots (does not mutate ``_state``)."""
 
-        if self._terminal is not None or self._cleanup_started:
+        if self._terminal is not None:
+            return SessionState.SESSION_TERMINAL
+        if self._cleanup_started:
+            return self._state
+        if (
+            self._path is ShutdownPath.POST_OPEN
+            and self._drain_deadline_passed()
+            and self._state is SessionState.RUNNING
+        ):
+            return SessionState.DRAIN_SNAPSHOT
+        return self._state
+
+    def _compute_remainder(self) -> tuple[str, ...]:
+        """Current remainders + durable diagnostics (not stale cleared leftovers)."""
+
+        out: list[str] = []
+        if self._drain_deadline_passed():
+            out.append("drain_deadline_exceeded")
+        if self._path is ShutdownPath.POST_OPEN and not self._producers_attested:
+            out.append("producers_incomplete")
+        if self._cleanup_status is CleanupStatus.NOT_STARTED:
+            out.append("ptb_cleanup_not_started")
+        elif self._cleanup_status in (
+            CleanupStatus.IN_PROGRESS,
+            CleanupStatus.IN_PROGRESS_OBSERVE_EXCEEDED,
+        ):
+            out.append("ptb_cleanup_in_progress")
+        if self._application_http is ApplicationHttpState.OPEN:
+            # Still-open HTTP is a real leftover only until successful cleanup close.
+            if self._cleanup_status is CleanupStatus.NOT_STARTED:
+                out.append("application_http_open")
+            elif self._cleanup_status in (
+                CleanupStatus.IN_PROGRESS,
+                CleanupStatus.IN_PROGRESS_OBSERVE_EXCEEDED,
+            ):
+                out.append("application_http_open")
+            elif self._cleanup_error is not None:
+                out.append("application_http_open")
+        for tag in self._error_tags:
+            if tag not in out:
+                out.append(tag)
+        return tuple(out)
+
+    def _note_drain_expired(self) -> None:
+        """Owner-loop only: persist drain expiry flag / state (idempotent)."""
+
+        self._require_owner_loop()
+        if self._terminal is not None:
             self._drain_expired = True
             return
         newly = not self._drain_expired
         self._drain_expired = True
-        if newly:
-            if "drain_deadline_exceeded" not in self._remainder:
-                self._remainder.append("drain_deadline_exceeded")
-            if not self._producers_attested:
-                if "producers_incomplete" not in self._remainder:
-                    self._remainder.append("producers_incomplete")
-                if "ptb_cleanup_not_started" not in self._remainder:
-                    self._remainder.append("ptb_cleanup_not_started")
-                if "application_http_open" not in self._remainder:
-                    self._remainder.append("application_http_open")
-            if self._state is SessionState.RUNNING:
-                self._state = SessionState.DRAIN_SNAPSHOT
-
-    def _sync_drain_from_clock(self) -> None:
-        if self._path is ShutdownPath.POST_OPEN and self._drain_deadline_passed():
-            before = self._drain_expired
-            self._note_drain_expired()
-            if not before and self._drain_expired and self._terminal is None:
-                self._publish()
+        if newly and not self._cleanup_started and self._state is SessionState.RUNNING:
+            self._state = SessionState.DRAIN_SNAPSHOT
 
     def _build_snapshot(self) -> ShutdownSnapshot:
         overall: bool | None
@@ -311,33 +359,40 @@ class ShutdownSession:
             overall = None
         else:
             overall = False if self._cleanup_error is not None else None
-        drain_expired = self._drain_deadline_passed()
         return ShutdownSnapshot(
-            session_state=self._state,
+            session_state=self._effective_session_state(),
             path=self._path,
             cause=self._cause,
             shutdown_deadline=self._shutdown_deadline,
             cleanup_observe_deadline=self._cleanup_observe_deadline,
             cleanup_status=self._cleanup_status,
             application_http=self._application_http,
-            drain_expired=drain_expired,
+            drain_expired=self._drain_deadline_passed(),
             may_start_new_destructive_phases=self._may_start_new_destructive_phases(),
             producers_complete_attested=self._producers_attested,
             is_terminal=self._terminal is not None,
             overall_ok=overall,
-            remainder=tuple(self._remainder),
+            remainder=self._compute_remainder(),
             primary_exc_type=_exc_type_name(self._primary),
             cleanup_error_type=_exc_type_name(self._cleanup_error),
-            owner_task_alive=self._owner_alive(),
-            cleanup_task_alive=self._cleanup_alive(),
+            owner_task_alive_at_publish=self._owner_alive(),
+            cleanup_task_alive_at_publish=self._cleanup_alive(),
         )
 
     def snapshot(self) -> ShutdownSnapshot:
+        """Read-only view. Never mutates state or publishes Events."""
+
         if self._terminal is not None:
-            # Frozen terminal view stays authoritative and consistent.
             return self._terminal.snapshot
-        self._sync_drain_from_clock()
         return self._build_snapshot()
+
+    def current_task_liveness(self) -> TaskLiveness:
+        """Current owner/cleanup Task liveness (not the frozen terminal fields)."""
+
+        return TaskLiveness(
+            owner_task_alive=self._owner_alive(),
+            cleanup_task_alive=self._cleanup_alive(),
+        )
 
     def terminal_result(self) -> ShutdownTerminalResult | None:
         return self._terminal
@@ -346,7 +401,6 @@ class ShutdownSession:
         if self._terminal is not None:
             return
         self._state = SessionState.SESSION_TERMINAL
-        # Terminal forbids new destructive phases regardless of drain clock.
         overall: bool | None = False if self._cleanup_error is not None else None
         snap = ShutdownSnapshot(
             session_state=SessionState.SESSION_TERMINAL,
@@ -361,11 +415,11 @@ class ShutdownSession:
             producers_complete_attested=self._producers_attested,
             is_terminal=True,
             overall_ok=overall,
-            remainder=tuple(self._remainder),
+            remainder=self._compute_remainder(),
             primary_exc_type=_exc_type_name(self._primary),
             cleanup_error_type=_exc_type_name(self._cleanup_error),
-            owner_task_alive=self._owner_alive(),
-            cleanup_task_alive=False,
+            owner_task_alive_at_publish=self._owner_alive(),
+            cleanup_task_alive_at_publish=False,
         )
         self._terminal = ShutdownTerminalResult(
             snapshot=snap,
@@ -377,13 +431,16 @@ class ShutdownSession:
         self._cleanup_finished.set()
         self._publish()
 
+    def _add_error_tag(self, tag: str) -> None:
+        if tag not in self._error_tags:
+            self._error_tags.append(tag)
+
     def _note_cleanup_aborted(
         self, exc: BaseException, remainder_key: str
     ) -> None:
         if self._cleanup_error is None:
             self._cleanup_error = exc
-        if remainder_key not in self._remainder:
-            self._remainder.append(remainder_key)
+        self._add_error_tag(remainder_key)
         # Task finished / aborted — not "still in progress"; no successful HTTP claim.
         self._cleanup_status = CleanupStatus.DONE
         self._application_http = ApplicationHttpState.OPEN
@@ -404,8 +461,7 @@ class ShutdownSession:
             exc = task.exception()
             if exc is not None and self._cleanup_error is None:
                 self._cleanup_error = exc
-                if "cleanup_task_exception" not in self._remainder:
-                    self._remainder.append("cleanup_task_exception")
+                self._add_error_tag("cleanup_task_exception")
                 self._cleanup_status = CleanupStatus.DONE
                 self._application_http = ApplicationHttpState.OPEN
                 self._set_terminal()
@@ -429,9 +485,7 @@ class ShutdownSession:
             return
         exc = task.exception()
         if exc is not None:
-            rem = "owner_task_exception"
-            if rem not in self._remainder:
-                self._remainder.append(rem)
+            self._add_error_tag("owner_task_exception")
             if self._primary is None:
                 self._primary = exc
             self._publish()
@@ -568,8 +622,7 @@ class ShutdownSession:
             except BaseException as exc:
                 aborted = True
                 self._cleanup_error = exc
-                if "cleanup_failed" not in self._remainder:
-                    self._remainder.append("cleanup_failed")
+                self._add_error_tag("cleanup_failed")
                 self._cleanup_status = CleanupStatus.DONE
                 self._application_http = ApplicationHttpState.OPEN
             finally:
@@ -602,8 +655,6 @@ class ShutdownSession:
             and self._terminal is None
         ):
             self._cleanup_status = CleanupStatus.IN_PROGRESS_OBSERVE_EXCEEDED
-            if "cleanup_observe_exceeded" not in self._remainder:
-                self._remainder.append("cleanup_observe_exceeded")
             self._state = SessionState.CLEANUP_IN_PROGRESS
             self._publish()
 

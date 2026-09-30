@@ -16,6 +16,7 @@ from modules.antares.shutdown_session import (
     ShutdownPath,
     ShutdownSessionError,
     ShutdownSessionHost,
+    TaskLiveness,
 )
 from modules.antares.work_admission import (
     WorkAdmission,
@@ -326,7 +327,11 @@ def test_cleanup_error_reflected_in_terminal() -> None:
         assert term.cleanup_error is not None
         assert isinstance(term.cleanup_error, ValueError)
         assert term.snapshot.overall_ok is False
+        assert term.snapshot.application_http is ApplicationHttpState.OPEN
         assert "cleanup_failed" in term.snapshot.remainder
+        assert "application_http_open" in term.snapshot.remainder
+        assert "producers_incomplete" not in term.snapshot.remainder
+        assert "ptb_cleanup_not_started" not in term.snapshot.remainder
 
     asyncio.run(_main())
 
@@ -409,7 +414,10 @@ def test_drain_expiry_snapshot_no_terminal_without_cleanup() -> None:
         assert snap.drain_expired
         assert not snap.may_start_new_destructive_phases
         assert not snap.is_terminal
+        assert "drain_deadline_exceeded" in snap.remainder
         assert "producers_incomplete" in snap.remainder
+        assert "ptb_cleanup_not_started" in snap.remainder
+        assert "application_http_open" in snap.remainder
         assert s.terminal_result() is None
         assert s.owner_task is not None
         s.owner_task.cancel()
@@ -735,5 +743,153 @@ def test_cleanup_started_forbids_new_drain_phases() -> None:
         assert s.snapshot().may_start_new_destructive_phases is False
         release.set()
         await s.wait_terminal()
+
+    asyncio.run(_main())
+
+
+def test_foreign_thread_snapshot_after_deadline_does_not_mutate() -> None:
+    async def _main() -> None:
+        import threading
+
+        host, _a, _stop, clk = _make_host(drain_timeout=2.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        assert s.snapshot().may_start_new_destructive_phases is True
+        clk.advance(2.0)
+
+        # Do not await here: that would let the owner-loop drain watcher mutate.
+        state_before = s._state  # noqa: SLF001 — mutation probe
+        drain_flag_before = s._drain_expired  # noqa: SLF001
+        changed_before = s._changed  # noqa: SLF001
+        box: dict[str, object] = {}
+
+        def foreign_snapshot() -> None:
+            box["snap"] = s.snapshot()
+            box["host_snap"] = host.snapshot()
+            box["changed_after"] = s._changed  # noqa: SLF001
+            box["state_after"] = s._state  # noqa: SLF001
+            box["drain_after"] = s._drain_expired  # noqa: SLF001
+
+        thread = threading.Thread(target=foreign_snapshot)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+        snap = box["snap"]
+        host_snap = box["host_snap"]
+        assert snap.drain_expired is True  # type: ignore[union-attr]
+        assert snap.may_start_new_destructive_phases is False  # type: ignore[union-attr]
+        assert snap.session_state is SessionState.DRAIN_SNAPSHOT  # type: ignore[union-attr]
+        assert host_snap is not None
+        assert host_snap.session_state is SessionState.DRAIN_SNAPSHOT  # type: ignore[union-attr]
+        assert box["state_after"] is state_before
+        assert box["drain_after"] is drain_flag_before
+        assert box["changed_after"] is changed_before
+        assert s._state is state_before  # noqa: SLF001
+        assert s._drain_expired is drain_flag_before  # noqa: SLF001
+        assert s._changed is changed_before  # noqa: SLF001
+        assert s.terminal_result() is None
+        assert s.owner_task is not None
+        s.owner_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await s.owner_task
+
+    asyncio.run(_main())
+
+
+def test_late_successful_cleanup_after_drain_snapshot_remainder() -> None:
+    async def _main() -> None:
+        host, _a, _stop, clk = _make_host(drain_timeout=2.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        clk.advance(2.0)
+        snap = await s.wait_until(
+            lambda s_: s_.session_state is SessionState.DRAIN_SNAPSHOT
+        )
+        assert "producers_incomplete" in snap.remainder
+        assert "ptb_cleanup_not_started" in snap.remainder
+        assert "application_http_open" in snap.remainder
+
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+        mid = s.snapshot()
+        assert mid.producers_complete_attested is True
+        assert "producers_incomplete" not in mid.remainder
+        assert "drain_deadline_exceeded" in mid.remainder
+        assert "ptb_cleanup_not_started" in mid.remainder
+        assert "application_http_open" in mid.remainder
+
+        async def ok() -> str:
+            return "cleaned"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        rem = term.snapshot.remainder
+        assert term.snapshot.producers_complete_attested is True
+        assert term.snapshot.cleanup_status is CleanupStatus.DONE
+        assert term.snapshot.application_http is ApplicationHttpState.CLEANUP_DONE
+        assert "drain_deadline_exceeded" in rem
+        assert "producers_incomplete" not in rem
+        assert "ptb_cleanup_not_started" not in rem
+        assert "application_http_open" not in rem
+        assert "ptb_cleanup_in_progress" not in rem
+        assert s.snapshot() is term.snapshot
+        assert host.snapshot() is term.snapshot
+
+    asyncio.run(_main())
+
+
+def test_late_failed_cleanup_after_drain_keeps_open_http_remainder() -> None:
+    async def _main() -> None:
+        host, _a, _stop, clk = _make_host(drain_timeout=2.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        clk.advance(2.0)
+        await s.wait_until(lambda s_: s_.session_state is SessionState.DRAIN_SNAPSHOT)
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def boom() -> None:
+            raise RuntimeError("late cleanup fail")
+
+        s.start_cleanup(boom)
+        term = await s.wait_terminal()
+        rem = term.snapshot.remainder
+        assert term.snapshot.producers_complete_attested is True
+        assert term.snapshot.cleanup_status is CleanupStatus.DONE
+        assert term.snapshot.application_http is ApplicationHttpState.OPEN
+        assert "drain_deadline_exceeded" in rem
+        assert "cleanup_failed" in rem
+        assert "application_http_open" in rem
+        assert "producers_incomplete" not in rem
+        assert "ptb_cleanup_not_started" not in rem
+        assert s.snapshot().remainder == rem
+
+    asyncio.run(_main())
+
+
+def test_frozen_terminal_task_alive_at_publish_vs_current_liveness() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def ok() -> str:
+            return "ok"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        frozen = term.snapshot
+        assert frozen is s.snapshot()
+        assert frozen.owner_task_alive_at_publish is True
+        assert frozen.cleanup_task_alive_at_publish is False
+        assert s.owner_task is not None
+        await asyncio.wait_for(asyncio.shield(s.owner_task), timeout=2)
+        assert s.owner_task.done()
+        assert s.snapshot() is frozen
+        assert s.snapshot().owner_task_alive_at_publish is True
+        live = s.current_task_liveness()
+        assert isinstance(live, TaskLiveness)
+        assert live.owner_task_alive is False
+        assert live.cleanup_task_alive is False
 
     asyncio.run(_main())
