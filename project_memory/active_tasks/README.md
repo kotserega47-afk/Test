@@ -79,7 +79,8 @@
 | [TASK-2026-09-17-48](TASK-2026-09-17-48_antares_sender_full_stop.md) | Sender full resource stop (HTTP+loop+thread→STOPPED): GPT ACCEPTED `7f6b5a8…`, docs-close, Cursor 36/36/25/27/53, Draft PR #51, helper не wired, не полный graceful |
 | [TASK-2026-09-17-49](TASK-2026-09-17-49_antares_shutdown_orchestration.md) | Контракт общей остановки isolated Antares + `run_ptb_lifecycle`: GPT ACCEPTED `237b20e…`, docs-close, docs-only, Draft PR #52, helper не wired; 49.S ACCEPTED → [TASK-49S](TASK-2026-09-17-49S_antares_shutdown_session.md); 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
 | [TASK-2026-09-17-49S](TASK-2026-09-17-49S_antares_shutdown_session.md) | Owner shutdown-session primitive: GPT ACCEPTED `f7dd672…`, docs-close, Cursor 33/132/19 @ `bab80586…`, Draft PR #53, production wiring нет; 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
-| [TASK-2026-09-17-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md) | Q-PTB1 producer-wait: GPT ACCEPTED `2f1435b…`, docs-close, Cursor 14/146/19 @ `6ab07757…`, Draft PR #54, wiring нет; next 49.B |
+| [TASK-2026-09-17-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md) | Q-PTB1 producer-wait: GPT ACCEPTED `2f1435b…`, docs-close, Cursor 14/146/19 @ `6ab07757…`, Draft PR #54, wiring нет; next → [TASK-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) |
+| [TASK-2026-09-17-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) | Orchestration P5–P7 + WE owner-session: CODE in review, Draft PR base 49.A @ `e80aa6c…`, P8/P9 не wired |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

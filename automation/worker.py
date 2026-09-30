@@ -46,6 +46,14 @@ log = get_logger(name, icon)
 _registry_lock = threading.Lock()
 _profile_workers_frozen = False
 _profile_workers_stop_done = False
+_we_stop_owner_task: asyncio.Task | None = None
+_we_stop_owner_loop: asyncio.AbstractEventLoop | None = None
+_we_stop_result: tuple[str, ...] | None = None
+_we_stop_error: BaseException | None = None
+_we_stop_waiters: list[asyncio.Future] = []
+_we_stop_sentinel_keys: set[str] = set()
+_we_stop_joined_keys: set[str] = set()
+_we_stop_admission_token: int | None = None
 
 
 @dataclass(frozen=True)
@@ -647,20 +655,141 @@ def _raise_stop(admission, reason: str) -> None:
     )
 
 
+def _reset_we_stop_owner_for_tests() -> None:
+    """Test-only: clear WE stop owner-session state (not production)."""
+
+    global _we_stop_owner_task, _we_stop_owner_loop, _we_stop_result, _we_stop_error
+    global _we_stop_waiters, _we_stop_sentinel_keys, _we_stop_joined_keys
+    global _we_stop_admission_token, _profile_workers_frozen, _profile_workers_stop_done
+    _we_stop_owner_task = None
+    _we_stop_owner_loop = None
+    _we_stop_result = None
+    _we_stop_error = None
+    _we_stop_waiters = []
+    _we_stop_sentinel_keys = set()
+    _we_stop_joined_keys = set()
+    _we_stop_admission_token = None
+
+
+def _publish_we_stop_waiters(result: tuple[str, ...] | None, error: BaseException | None) -> None:
+    waiters = list(_we_stop_waiters)
+    _we_stop_waiters.clear()
+    for fut in waiters:
+        if fut.done():
+            continue
+        if error is not None:
+            fut.set_exception(error)
+        else:
+            assert result is not None
+            fut.set_result(result)
+
+
+async def _owner_stop_isolated_profile_workers(
+    admission,
+    *,
+    timeout: float | None,
+) -> tuple[str, ...]:
+    """Owner procedure: freeze, sentinel once per profile, join; publish to waiters."""
+
+    global _profile_workers_frozen, _profile_workers_stop_done
+    global _we_stop_result, _we_stop_error
+
+    try:
+        with _registry_lock:
+            if _profile_workers_stop_done and _we_stop_result is not None:
+                return _we_stop_result
+            snapshot = dict(_profile_workers)
+
+        for key, worker in snapshot.items():
+            if worker.queue.unfinished_tasks:
+                _raise_stop(
+                    admission,
+                    f"profile {key} is not drained unfinished={worker.queue.unfinished_tasks}",
+                )
+            thread = worker.thread
+            alive = bool(thread is not None and thread.is_alive())
+            if not alive and key not in _we_stop_sentinel_keys:
+                # Dead before this owner-session placed a sentinel.
+                _raise_stop(admission, f"profile {key} worker is dead")
+
+        with _registry_lock:
+            _profile_workers_frozen = True
+            snapshot = dict(_profile_workers)
+
+        for key, worker in snapshot.items():
+            if worker.queue.unfinished_tasks:
+                _raise_stop(
+                    admission,
+                    f"profile {key} gained work before freeze unfinished={worker.queue.unfinished_tasks}",
+                )
+            thread = worker.thread
+            alive = bool(thread is not None and thread.is_alive())
+            if not alive:
+                if key in _we_stop_sentinel_keys or key in _we_stop_joined_keys:
+                    # Exited after our sentinel (or already joined) — observe as done.
+                    _we_stop_joined_keys.add(key)
+                    continue
+                _raise_stop(admission, f"profile {key} worker is dead")
+            if not worker.sentinel_put:
+                worker.queue.put(PROFILE_WORKER_STOP)
+                worker.sentinel_put = True
+                _we_stop_sentinel_keys.add(key)
+
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else (loop.time() + timeout)
+        joined: list[str] = []
+        for key, worker in snapshot.items():
+            if key in _we_stop_joined_keys:
+                joined.append(key)
+                continue
+            thread = worker.thread
+            if thread is None:
+                if key in _we_stop_sentinel_keys:
+                    _we_stop_joined_keys.add(key)
+                    joined.append(key)
+                    continue
+                _raise_stop(admission, f"profile {key} worker is dead")
+            while thread.is_alive():
+                remaining = None if deadline is None else max(0.0, deadline - loop.time())
+                if deadline is not None and remaining == 0.0 and thread.is_alive():
+                    _raise_stop(admission, f"profile {key} join deadline exceeded")
+                slice_timeout = 0.05 if remaining is None else min(0.05, remaining)
+                await asyncio.to_thread(thread.join, slice_timeout)
+            _we_stop_joined_keys.add(key)
+            joined.append(key)
+
+        with _registry_lock:
+            _profile_workers_stop_done = True
+        result = tuple(sorted(set(joined) | _we_stop_joined_keys))
+        _we_stop_result = result
+        return result
+    except BaseException as exc:
+        _we_stop_error = exc
+        raise
+    finally:
+        _publish_we_stop_waiters(_we_stop_result, _we_stop_error)
+
+
 async def stop_isolated_profile_workers(
     admission,
     *,
     producers_complete: bool,
     timeout: float | None = None,
 ) -> tuple[str, ...]:
-    """Put the production sentinel and join isolated WE workers.
+    """Lifecycle-owned WE stop session: sentinel + join (not full graceful shutdown).
 
-    Not a full graceful shutdown. Caller attests PTB producers are done via
-    ``producers_complete``. Empty Queue is not sufficient: ``unfinished_tasks``
-    must be 0 (no active item). Does not stop mixed/unbound workers.
+    Caller attests PTB producers are done via ``producers_complete`` (must reflect
+    accepted Q-PTB1 proof — never invent True). Empty Queue is not sufficient:
+    ``unfinished_tasks`` must be 0. Does not stop mixed/unbound workers.
+
+    One owner procedure per process: repeat/concurrent waiters observe the same
+    session (no second sentinel, no second destructive freeze). Cancelling a
+    waiter detaches only that waiter; the owner continues. Workers that exit
+    after this session's sentinel are observed as joined; workers dead *before*
+    the sentinel are failure/remainder — not success.
     """
 
-    global _profile_workers_frozen, _profile_workers_stop_done
+    global _we_stop_owner_task, _we_stop_owner_loop, _we_stop_admission_token
     from modules.antares.work_admission import AdmissionState, bound_admission
 
     if bound_admission() is not admission:
@@ -674,52 +803,65 @@ async def stop_isolated_profile_workers(
     if _continuation_states(admission):
         _raise_stop(admission, "auto-enable continuation remains")
 
-    with _registry_lock:
-        if _profile_workers_stop_done:
-            return tuple(sorted(_profile_workers))
-        snapshot = dict(_profile_workers)
+    # Terminal success is idempotent across loops (observe-only; no new owner).
+    if _profile_workers_stop_done and _we_stop_result is not None:
+        return _we_stop_result
+    # Terminal failure: re-raise without starting a new owner on another loop.
+    if _we_stop_error is not None and (
+        _we_stop_owner_task is None or _we_stop_owner_task.done()
+    ):
+        raise _we_stop_error
 
+    loop = asyncio.get_running_loop()
+    token = id(admission)
+    if _we_stop_admission_token is not None and _we_stop_admission_token != token:
+        _raise_stop(admission, "WE stop owner-session bound to another admission")
+    if _we_stop_owner_loop is not None and _we_stop_owner_loop is not loop:
+        _raise_stop(admission, "WE stop owner-session bound to another event loop")
+
+    # Pre-check unfinished before arming owner (fail closed without freeze).
+    with _registry_lock:
+        snapshot = dict(_profile_workers)
     for key, worker in snapshot.items():
         if worker.queue.unfinished_tasks:
             _raise_stop(
                 admission,
                 f"profile {key} is not drained unfinished={worker.queue.unfinished_tasks}",
             )
-        thread = worker.thread
-        if thread is None or not thread.is_alive():
-            _raise_stop(admission, f"profile {key} worker is dead")
 
-    with _registry_lock:
-        _profile_workers_frozen = True
-        snapshot = dict(_profile_workers)
+    _we_stop_admission_token = token
+    _we_stop_owner_loop = loop
 
-    for key, worker in snapshot.items():
-        if worker.queue.unfinished_tasks:
-            _raise_stop(
-                admission,
-                f"profile {key} gained work before freeze unfinished={worker.queue.unfinished_tasks}",
-            )
-        thread = worker.thread
-        if thread is None or not thread.is_alive():
-            _raise_stop(admission, f"profile {key} worker is dead")
-        if not worker.sentinel_put:
-            worker.queue.put(PROFILE_WORKER_STOP)
-            worker.sentinel_put = True
+    if _we_stop_owner_task is None or _we_stop_owner_task.done():
+        if _we_stop_result is not None:
+            return _we_stop_result
+        _we_stop_owner_task = loop.create_task(
+            _owner_stop_isolated_profile_workers(admission, timeout=timeout),
+            name="antares-we-stop-owner",
+        )
 
-    loop = asyncio.get_running_loop()
-    deadline = None if timeout is None else (loop.time() + timeout)
-    joined: list[str] = []
-    for key, worker in snapshot.items():
-        thread = worker.thread
-        if thread is None:
-            _raise_stop(admission, f"profile {key} worker is dead")
-        remaining = None if deadline is None else max(0.0, deadline - loop.time())
-        await asyncio.to_thread(thread.join, remaining)
-        if thread.is_alive():
-            _raise_stop(admission, f"profile {key} join deadline exceeded")
-        joined.append(key)
+    waiter: asyncio.Future = loop.create_future()
+    _we_stop_waiters.append(waiter)
+    # If owner already finished between checks, publish immediately.
+    if _we_stop_owner_task.done() and not waiter.done():
+        if _we_stop_error is not None:
+            if not waiter.done():
+                waiter.set_exception(_we_stop_error)
+        elif _we_stop_result is not None:
+            if not waiter.done():
+                waiter.set_result(_we_stop_result)
 
-    with _registry_lock:
-        _profile_workers_stop_done = True
-    return tuple(sorted(joined))
+    try:
+        return await waiter
+    except asyncio.CancelledError:
+        try:
+            _we_stop_waiters.remove(waiter)
+        except ValueError:
+            pass
+        if not waiter.done():
+            waiter.cancel()
+        raise
+
+
+# Owner-session entry point (see ``_owner_stop_isolated_profile_workers``).
 

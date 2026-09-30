@@ -59,6 +59,7 @@ def workers():
     worker_mod._profile_workers = {}
     worker_mod._profile_workers_frozen = False
     worker_mod._profile_workers_stop_done = False
+    worker_mod._reset_we_stop_owner_for_tests()
     errors: list[BaseException] = []
     try:
         yield worker_mod
@@ -76,6 +77,7 @@ def workers():
         worker_mod._profile_workers = orig
         worker_mod._profile_workers_frozen = orig_frozen
         worker_mod._profile_workers_stop_done = orig_done
+        worker_mod._reset_we_stop_owner_for_tests()
         if errors:
             raise errors[0]
 
