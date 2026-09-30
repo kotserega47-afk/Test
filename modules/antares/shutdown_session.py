@@ -628,24 +628,30 @@ class ShutdownSession:
         if self._terminal is not None:
             raise ShutdownSessionError("session already terminal")
         issuer = self._host.producer_wait
-        if issuer is not None:
-            if attestation.is_test_harness:
+        app_bound = self._host.application_token is not None
+        if attestation.is_test_harness:
+            if app_bound or issuer is not None:
                 raise ShutdownSessionError(
-                    "for_tests attestation rejected when producer-wait is bound"
+                    "for_tests attestation rejected when Application is bound"
                 )
+            self._producers_attested = True
+            self._host._accepted_test_attestation = True  # noqa: SLF001
+            self._publish()
+            return
+        if issuer is not None:
             if not issuer.validate_attestation(attestation):
                 raise ShutdownSessionError(
                     "foreign, forged, or stale producers attestation rejected"
                 )
-        elif attestation.is_test_harness:
-            pass
+        elif app_bound:
+            raise ShutdownSessionError(
+                "production attestation requires ShutdownSessionHost.bind_producer_wait"
+            )
         else:
             raise ShutdownSessionError(
                 "production attestation requires ShutdownSessionHost.bind_producer_wait"
             )
         self._producers_attested = True
-        if attestation.is_test_harness:
-            self._host._accepted_test_attestation = True  # noqa: SLF001
         self._publish()
 
     def start_cleanup(self, callback: CleanupCallback) -> asyncio.Task[None]:
@@ -671,6 +677,13 @@ class ShutdownSession:
         self._cleanup_callback = callback
         self._cleanup_status = CleanupStatus.IN_PROGRESS
         self._state = SessionState.CLEANUP_IN_PROGRESS
+        # Entry gates stay closed for new producers until cleanup phase opens them
+        # for PTB stop/shutdown internals.
+        pw = self._host.producer_wait
+        if pw is not None:
+            enter = getattr(pw, "enter_cleanup_phase", None)
+            if callable(enter):
+                enter()
         self._cleanup_observe_deadline = (
             self._clock.monotonic() + self._cleanup_observe_timeout
         )

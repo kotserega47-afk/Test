@@ -109,27 +109,39 @@ def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
                 f2.set()
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(8_000.0)
+        clk.bind_loop()
+        host = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
         await queue.put(object())
         await queue.put(object())
         await e1.wait()
         await e2.wait()
         host.seal_intake()
-        live_before = list(app._Application__create_task_tasks)  # noqa: SLF001
-        assert len([t for t in live_before if not t.done()]) >= 2
+        live_before = [t for t in app._Application__create_task_tasks if not t.done()]  # noqa: SLF001
+        assert len(live_before) >= 2
+        waiter = asyncio.create_task(host.wait_producers_complete(deadline=8_030.0))
+        await asyncio.sleep(0)
+        assert host.owner_task is not None and not host.owner_task.done()
+        # First producer finishes while owner observes — second must not be cancelled;
+        # proof must remain absent until the second finishes.
         r1.set()
         await _await_true(lambda: f1.is_set())
         still = [t for t in live_before if not t.done()]
         assert still, "second producer must still be alive"
         assert not any(t.cancelled() for t in still)
         assert not f2.is_set()
+        assert host.snapshot().producers_complete is False
+        assert host._issued is None  # noqa: SLF001
+        assert waiter.done() is False
         r2.set()
-        out = await host.wait_producers_complete()
+        out = await waiter
         assert f2.is_set()
         assert out.attestation is not None
         assert out.snapshot.producers_complete is True
         assert out.snapshot.status is ProducerWaitStatus.COMPLETE
         assert host.snapshot() == out.snapshot
+        host.enter_cleanup_phase()
         await _shutdown_app(app)
 
     asyncio.run(_main())
@@ -387,7 +399,23 @@ def test_foreign_forged_stale_and_bind_rules() -> None:
         await s2.wait_arm_effects()
         s2.accept_producers_complete(ProducersCompleteAttestation.for_tests())
         with pytest.raises(ShutdownSessionError, match="for_tests attestation"):
+            shut2.bind_application(app)
+        with pytest.raises(ShutdownSessionError, match="for_tests attestation"):
             shut2.bind_producer_wait(host)
+
+        # bind_application (without producer-wait) → for_tests refused
+        reset_antares_admission_for_tests()
+        admission3 = WorkAdmission()
+        bind_antares_admission(admission3)
+        admission3.open()
+        shut3 = ShutdownSessionHost(
+            admission=admission3, stop=asyncio.Event(), loop=loop
+        )
+        shut3.bind_application(app)
+        s3 = shut3.arm_request_stop(had_open=True)
+        await s3.wait_arm_effects()
+        with pytest.raises(ShutdownSessionError, match="for_tests"):
+            s3.accept_producers_complete(ProducersCompleteAttestation.for_tests())
 
         # foreign loop bind
         foreign = asyncio.new_event_loop()
@@ -504,6 +532,107 @@ def test_unsupported_plain_queue_rejected() -> None:
             await app.start()
         with pytest.raises(PtbProducerWaitError, match="update_queue"):
             PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_post_complete_process_update_and_create_task_refused() -> None:
+    async def _main() -> None:
+        app, queue = await _running_app()
+        ran = {"process": False, "task": False}
+
+        async def handler(_update, _context) -> None:
+            return None
+
+        app.add_handler(TypeHandler(object, handler, block=True))
+        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        host.seal_intake()
+        out = await host.wait_producers_complete(deadline=None)
+        assert out.attestation is not None
+        assert out.snapshot.producers_complete is True
+
+        async def late_handler(_update, _context) -> None:
+            ran["process"] = True
+
+        app.add_handler(TypeHandler(object, late_handler, block=True), group=1)
+        with pytest.raises(PtbProducerWaitError, match="process_update refused"):
+            await app.process_update(object())
+        assert ran["process"] is False
+
+        async def late_task() -> None:
+            ran["task"] = True
+
+        with pytest.raises(PtbProducerWaitError, match="create_task refused"):
+            app.create_task(late_task())
+        assert ran["task"] is False
+
+        # Gates survive until cleanup phase; then stop may proceed.
+        host.enter_cleanup_phase()
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_host_install_refuses_when_producer_already_in_flight() -> None:
+    async def _main() -> None:
+        app, queue = await _running_app(concurrent_updates=False)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler(_update, _context) -> None:
+            entered.set()
+            await release.wait()
+
+        app.add_handler(TypeHandler(object, handler, block=True))
+        await queue.put(object())
+        await entered.wait()
+        with pytest.raises(PtbProducerWaitError, match="before producers are in flight"):
+            PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        release.set()
+        await _await_true(lambda: queue._unfinished_tasks == 0)  # noqa: SLF001
+        # After drain, install is allowed.
+        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        host.seal_intake()
+        out = await host.wait_producers_complete(deadline=None)
+        assert out.attestation is not None
+        host.enter_cleanup_phase()
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_entry_gates_remain_until_session_cleanup() -> None:
+    async def _main() -> None:
+        app, queue = await _running_app()
+        loop = asyncio.get_running_loop()
+        host = PtbProducerWaitHost(application=app, loop=loop)
+        host.seal_intake()
+        out = await host.wait_producers_complete(deadline=None)
+        admission = WorkAdmission()
+        bind_antares_admission(admission)
+        admission.open()
+        shut = ShutdownSessionHost(admission=admission, stop=asyncio.Event(), loop=loop)
+        attach_producer_wait_to_shutdown_host(shut, host)
+        session = shut.arm_request_stop(had_open=True)
+        await session.wait_arm_effects()
+        session.accept_producers_complete(out.attestation)
+        ran = {"v": False}
+
+        async def boom(_update, _context) -> None:
+            ran["v"] = True
+
+        app.add_handler(TypeHandler(object, boom, block=True))
+        with pytest.raises(PtbProducerWaitError, match="process_update refused"):
+            await app.process_update(object())
+        assert ran["v"] is False
+
+        async def cleanup() -> str:
+            return "ok"
+
+        session.start_cleanup(cleanup)
+        await session.wait_terminal()
+        # After cleanup phase opened, stop/shutdown path is allowed.
         await _shutdown_app(app)
 
     asyncio.run(_main())
