@@ -3,63 +3,40 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-49S |
-| **Статус** | review (подготовлено; merge/deploy не выполнены) |
+| **Статус** | review (GPT CHANGES REQUESTED → правки; merge/deploy не выполнены; 49.S **не** закрыт) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49 close `e331c677e15ae765db5eb97fe686ec91679c0a6d` (accepted docs `237b20efeb2aed76d24f620a9a1cc2110145344c`, Draft PR #52); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) |
 | **PR** | Draft [#53](https://github.com/deniskotdavydov1991-wq/Test/pull/53) `feat/task-2026-09-17-49s-antares-shutdown-session`, base `docs/task-2026-09-17-49-antares-shutdown-orchestration` @ `e331c677…` |
-| **Риск** | medium: owner-session semantics; false overall_ok; premature cleanup without Q-PTB1 |
+| **Риск** | medium: deadline/snapshot truth; foreign-loop guards; cleanup cancel terminal; arm primary merge |
 
-CODE: owner shutdown-session primitive. **Production wiring отсутствует** (`run_ptb_lifecycle` / `request_antares_stop` callers / boot / handlers **не** подключены). WE/registry/sender/executor этим PR **не** останавливаются. Полный graceful Antares **не** завершён. Q-PTB1 **открыт** и блокирует зависимое подключение full cleanup. 49.A–E **не** автостарт. TASK-39–49 повторно не закрывать. 49.S **не** закрывать до GPT review.
+CODE: owner shutdown-session primitive. **Production wiring отсутствует**. WE/registry/sender/executor **не** останавливаются. Q-PTB1 **открыт** (не реализован / не закрыт). 49.A–E **не** автостарт. TASK-39–49 повторно не закрывать. 49.S **не** закрывать до GPT accept.
 
 ---
 
 ## Goal
 
-Реализовать `modules.antares.shutdown_session`: одна owner-session на lifecycle host, arm request-stop / cancel-after-OPEN / startup-failure, snapshot vs SESSION_TERMINAL, cleanup observer + observe budget, без wiring.
+`modules.antares.shutdown_session`: owner-session host, arm paths, snapshot/terminal, cleanup observer — без wiring.
 
 ---
 
-## Delivered
+## Review fixes (post `86d467b…`)
 
-| Piece | Location |
-|-------|----------|
-| Host + session | `modules/antares/shutdown_session.py` |
-| Arm APIs | `arm_request_stop` / `arm_cancel_after_open` / `arm_startup_failure` |
-| Cleanup gate | `ProducersCompleteAttestation` + `accept_producers_complete` / `start_cleanup` |
-| Controllable clock | `ControllableClock` for deterministic deadlines |
-| Tests | `tests/unit/test_antares_shutdown_session.py` |
-
-### Ownership / Tasks
-
-- `ShutdownSessionHost` owned by future lifecycle context (no global completed-session registry).
-- First arm creates one owner `asyncio.Task`; repeats join the same session.
-- Strong refs: `session.owner_task`, `session.cleanup_task`.
-- Host documents: caller must keep owner loop alive; primitive does not close/start loops or promise process exit.
-
-### Semantics (this slice)
-
-- Post-OPEN arm: `seal()` → `stop.set()` on owner loop; `had_open` required (SEALED alone insufficient).
-- Startup failure: separate path; no post-OPEN drain; staged cleanup via `start_cleanup` without producers attestation.
-- Waiter cancel ≠ owner/cleanup cancel; does not cancel Accepted/continuation (not touched here).
-- Drain deadline ≠ cleanup observe deadline; observe exceeded → snapshot only; SESSION_TERMINAL only after cleanup Task finishes.
-- `overall_ok` never True without mandatory phase results (None on clean terminal; False on cleanup error).
-- After SESSION_TERMINAL: repeat returns stored result; no new deadline; no recovery (Q-REC1).
+1. **Deadline / terminal snapshot** — `may_start_new_destructive_phases` uses monotonic deadline + terminal + cleanup-started; watcher not sole source; stored terminal snapshot is authoritative for later `snapshot()`.
+2. **Owner loop / context** — mutating/async APIs require owner loop; admission/stop/loop identity frozen on host/session.
+3. **Cleanup CancelledError** — owned cleanup abort/cancel reaches SESSION_TERMINAL with remainder; HTTP not claimed cleaned; owner does not hang.
+4. **wait_until** — if already terminal and predicate false, return terminal snapshot (no hang).
+5. **Repeat arm / primary** — compatible join keeps deadline; cancel/error after request-stop recorded as primary/`caller_causes`; waiter cancel ≠ session primary; incompatible startup/post-OPEN refused; startup seals bound admission and refuses actual OPEN.
 
 ---
 
 ## Success Criteria
 
-- [x] One session / one owner Task; concurrent arm join
-- [x] Deadline fixed once
-- [x] Cancel waiter isolation
-- [x] Cancel-after-OPEN seal→set; startup ≠ post-OPEN
-- [x] Foreign loop refused before side effects
-- [x] Cleanup once; observe timeout snapshot; late terminal; cleanup error
-- [x] No recovery after terminal; no false overall_ok
-- [x] Unit tests + admission/lifecycle regressions
-- [ ] GPT review
+- [x] Prior 49.S deliverables
+- [x] Review regressions for items 1–5
+- [x] Unit + admission/lifecycle regressions
+- [ ] GPT re-review
 - [ ] merge/deploy (открыто)
-- [ ] production wiring (future slices)
+- [ ] production wiring (future)
 
 ---
 
@@ -67,14 +44,14 @@ CODE: owner shutdown-session primitive. **Production wiring отсутствуе
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ `9fb9d271a4d9a0663ea95c81030a666de0e9ad04`: shutdown_session **18**; + accepted_executor_work + work_admission = **117**; lifecycle unit **20** |
-| GPT | pending review |
+| Cursor | см. отчёт PR после push (Python 3.12.10; наборы не суммировать) |
+| GPT | ACCEPTED pending re-review |
 
 ---
 
 ## Out Of Scope
 
-Production wiring; Q-PTB1 implementation; P3–P9 phases; WE/registry/sender/executor stop; Ready/merge/retarget/deploy; live polling; requirements; mixed behavior; 49.A–E auto-start; Q-REC1 recovery.
+Production wiring; Q-PTB1; P3–P9; WE/registry/sender/executor stop; Ready/merge/retarget/deploy; live polling; requirements; 49.A–E auto-start; Q-REC1.
 
 ---
 
@@ -82,4 +59,5 @@ Production wiring; Q-PTB1 implementation; P3–P9 phases; WE/registry/sender/exe
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-30 | CODE: shutdown-session primitive; Draft PR; ожидание GPT review |
+| 2026-09-30 | CODE: shutdown-session primitive; Draft PR #53 |
+| 2026-09-30 | GPT CHANGES REQUESTED: deadline/snapshot, loop guards, cleanup cancel, wait_until, arm primary |

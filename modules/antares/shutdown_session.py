@@ -18,11 +18,11 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from modules.antares.work_admission import WorkAdmission
+from modules.antares.work_admission import AdmissionState, WorkAdmission
 
 CleanupCallback = Callable[[], Awaitable[Any]]
 
@@ -109,6 +109,7 @@ class ShutdownTerminalResult:
     primary: BaseException | None
     cleanup_error: BaseException | None
     cleanup_result: Any
+    caller_causes: tuple[BaseException, ...] = ()
 
 
 class Clock:
@@ -176,9 +177,14 @@ class ShutdownSession:
         had_open: bool,
     ) -> None:
         self._host = host
+        # Frozen lifecycle context identity (no swap after create).
+        self._admission = host.admission
+        self._stop = host.stop
+        self._loop = host.loop
         self._path = path
         self._cause = cause
         self._primary = primary
+        self._caller_causes: list[BaseException] = []
         self._drain_timeout = float(drain_timeout)
         self._cleanup_observe_timeout = float(cleanup_observe_timeout)
         self._clock = clock
@@ -200,6 +206,7 @@ class ShutdownSession:
         self._cleanup_task: asyncio.Task[None] | None = None
         self._cleanup_callback: CleanupCallback | None = None
         self._cleanup_started = False
+        self._cleanup_finalize_lock = False
 
         self._changed = asyncio.Event()
         self._cleanup_finished = asyncio.Event()
@@ -225,9 +232,16 @@ class ShutdownSession:
     def cause(self) -> ShutdownCause:
         return self._cause
 
+    @property
+    def primary(self) -> BaseException | None:
+        return self._primary
+
+    @property
+    def caller_causes(self) -> tuple[BaseException, ...]:
+        return tuple(self._caller_causes)
+
     def _publish(self) -> None:
         self._changed.set()
-        # Allow subsequent waiters to block again after consuming a pulse.
         self._changed = asyncio.Event()
 
     def _owner_alive(self) -> bool:
@@ -236,13 +250,68 @@ class ShutdownSession:
     def _cleanup_alive(self) -> bool:
         return self._cleanup_task is not None and not self._cleanup_task.done()
 
-    def snapshot(self) -> ShutdownSnapshot:
+    def _require_owner_loop(self) -> None:
+        self._host.require_owner_loop()
+        if (
+            self._host.admission is not self._admission
+            or self._host.stop is not self._stop
+            or self._host.loop is not self._loop
+        ):
+            raise ShutdownSessionError("lifecycle context identity changed")
+
+    def _drain_deadline_passed(self) -> bool:
+        if self._drain_expired:
+            return True
+        if self._shutdown_deadline is None:
+            return False
+        return self._clock.monotonic() >= self._shutdown_deadline
+
+    def _may_start_new_destructive_phases(self) -> bool:
+        if self._terminal is not None:
+            return False
+        if self._cleanup_started:
+            return False
+        if self._path is not ShutdownPath.POST_OPEN:
+            return False
+        if self._drain_deadline_passed():
+            return False
+        return True
+
+    def _note_drain_expired(self) -> None:
+        """Mark drain expiry from clock and/or watcher (idempotent)."""
+
+        if self._terminal is not None or self._cleanup_started:
+            self._drain_expired = True
+            return
+        newly = not self._drain_expired
+        self._drain_expired = True
+        if newly:
+            if "drain_deadline_exceeded" not in self._remainder:
+                self._remainder.append("drain_deadline_exceeded")
+            if not self._producers_attested:
+                if "producers_incomplete" not in self._remainder:
+                    self._remainder.append("producers_incomplete")
+                if "ptb_cleanup_not_started" not in self._remainder:
+                    self._remainder.append("ptb_cleanup_not_started")
+                if "application_http_open" not in self._remainder:
+                    self._remainder.append("application_http_open")
+            if self._state is SessionState.RUNNING:
+                self._state = SessionState.DRAIN_SNAPSHOT
+
+    def _sync_drain_from_clock(self) -> None:
+        if self._path is ShutdownPath.POST_OPEN and self._drain_deadline_passed():
+            before = self._drain_expired
+            self._note_drain_expired()
+            if not before and self._drain_expired and self._terminal is None:
+                self._publish()
+
+    def _build_snapshot(self) -> ShutdownSnapshot:
         overall: bool | None
         if self._terminal is None:
             overall = None
         else:
-            # Without mandatory phase results, graceful success is unavailable.
             overall = False if self._cleanup_error is not None else None
+        drain_expired = self._drain_deadline_passed()
         return ShutdownSnapshot(
             session_state=self._state,
             path=self._path,
@@ -251,10 +320,8 @@ class ShutdownSession:
             cleanup_observe_deadline=self._cleanup_observe_deadline,
             cleanup_status=self._cleanup_status,
             application_http=self._application_http,
-            drain_expired=self._drain_expired,
-            may_start_new_destructive_phases=(
-                self._path is ShutdownPath.POST_OPEN and not self._drain_expired
-            ),
+            drain_expired=drain_expired,
+            may_start_new_destructive_phases=self._may_start_new_destructive_phases(),
             producers_complete_attested=self._producers_attested,
             is_terminal=self._terminal is not None,
             overall_ok=overall,
@@ -265,6 +332,13 @@ class ShutdownSession:
             cleanup_task_alive=self._cleanup_alive(),
         )
 
+    def snapshot(self) -> ShutdownSnapshot:
+        if self._terminal is not None:
+            # Frozen terminal view stays authoritative and consistent.
+            return self._terminal.snapshot
+        self._sync_drain_from_clock()
+        return self._build_snapshot()
+
     def terminal_result(self) -> ShutdownTerminalResult | None:
         return self._terminal
 
@@ -272,24 +346,23 @@ class ShutdownSession:
         if self._terminal is not None:
             return
         self._state = SessionState.SESSION_TERMINAL
-        snap = self.snapshot()
-        # Recompute overall on the terminal snapshot object.
+        # Terminal forbids new destructive phases regardless of drain clock.
         overall: bool | None = False if self._cleanup_error is not None else None
         snap = ShutdownSnapshot(
             session_state=SessionState.SESSION_TERMINAL,
-            path=snap.path,
-            cause=snap.cause,
-            shutdown_deadline=snap.shutdown_deadline,
-            cleanup_observe_deadline=snap.cleanup_observe_deadline,
+            path=self._path,
+            cause=self._cause,
+            shutdown_deadline=self._shutdown_deadline,
+            cleanup_observe_deadline=self._cleanup_observe_deadline,
             cleanup_status=self._cleanup_status,
             application_http=self._application_http,
-            drain_expired=snap.drain_expired,
+            drain_expired=self._drain_deadline_passed(),
             may_start_new_destructive_phases=False,
-            producers_complete_attested=snap.producers_complete_attested,
+            producers_complete_attested=self._producers_attested,
             is_terminal=True,
             overall_ok=overall,
             remainder=tuple(self._remainder),
-            primary_exc_type=snap.primary_exc_type,
+            primary_exc_type=_exc_type_name(self._primary),
             cleanup_error_type=_exc_type_name(self._cleanup_error),
             owner_task_alive=self._owner_alive(),
             cleanup_task_alive=False,
@@ -299,19 +372,45 @@ class ShutdownSession:
             primary=self._primary,
             cleanup_error=self._cleanup_error,
             cleanup_result=self._cleanup_result,
+            caller_causes=tuple(self._caller_causes),
         )
         self._cleanup_finished.set()
         self._publish()
 
-    def _consume_task_exception(self, task: asyncio.Task[Any]) -> None:
-        if not task.done() or task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None and self._cleanup_error is None and task is self._cleanup_task:
+    def _note_cleanup_aborted(
+        self, exc: BaseException, remainder_key: str
+    ) -> None:
+        if self._cleanup_error is None:
             self._cleanup_error = exc
-            rem = "cleanup_task_exception"
-            if rem not in self._remainder:
-                self._remainder.append(rem)
+        if remainder_key not in self._remainder:
+            self._remainder.append(remainder_key)
+        # Task finished / aborted — not "still in progress"; no successful HTTP claim.
+        self._cleanup_status = CleanupStatus.DONE
+        self._application_http = ApplicationHttpState.OPEN
+
+    def _finalize_cleanup_task_end(self, task: asyncio.Task[Any]) -> None:
+        """Ensure SESSION_TERMINAL when owned cleanup Task ends (incl. pre-start cancel)."""
+
+        if self._terminal is not None or self._cleanup_finalize_lock:
+            return
+        self._cleanup_finalize_lock = True
+        try:
+            if task.cancelled():
+                self._note_cleanup_aborted(
+                    asyncio.CancelledError(), "cleanup_task_cancelled"
+                )
+                self._set_terminal()
+                return
+            exc = task.exception()
+            if exc is not None and self._cleanup_error is None:
+                self._cleanup_error = exc
+                if "cleanup_task_exception" not in self._remainder:
+                    self._remainder.append("cleanup_task_exception")
+                self._cleanup_status = CleanupStatus.DONE
+                self._application_http = ApplicationHttpState.OPEN
+                self._set_terminal()
+        finally:
+            self._cleanup_finalize_lock = False
 
     def _start_owner_task(self) -> None:
         if self._owner_task is not None:
@@ -320,7 +419,7 @@ class ShutdownSession:
             self._shutdown_deadline = None
         else:
             self._shutdown_deadline = self._clock.monotonic() + self._drain_timeout
-        self._owner_task = asyncio.create_task(
+        self._owner_task = self._loop.create_task(
             self._owner_main(), name="antares-shutdown-session-owner"
         )
         self._owner_task.add_done_callback(self._on_owner_done)
@@ -335,7 +434,6 @@ class ShutdownSession:
                 self._remainder.append(rem)
             if self._primary is None:
                 self._primary = exc
-            # Ensure exception is retrieved (done_callback already did).
             self._publish()
 
     async def _owner_main(self) -> None:
@@ -344,7 +442,7 @@ class ShutdownSession:
                 await self._post_open_arm_effects()
                 self._arm_effects_done.set()
                 self._publish()
-                drain_watch = asyncio.create_task(
+                drain_watch = self._loop.create_task(
                     self._watch_drain_deadline(), name="antares-shutdown-drain-watch"
                 )
                 try:
@@ -356,17 +454,22 @@ class ShutdownSession:
                     except asyncio.CancelledError:
                         pass
             else:
+                await self._startup_arm_effects()
                 self._arm_effects_done.set()
-                # Startup: cleanup must be started by host; wait for terminal.
+                self._publish()
                 await self._cleanup_finished.wait()
         finally:
-            if self._cleanup_task is not None:
-                self._consume_task_exception(self._cleanup_task)
+            if self._cleanup_task is not None and self._cleanup_task.done():
+                self._finalize_cleanup_task_end(self._cleanup_task)
 
     async def _post_open_arm_effects(self) -> None:
-        # seal → stop.set on owner loop (idempotent if request_stop already did).
-        self._host.admission.seal()
-        self._host.stop.set()
+        self._admission.seal()
+        self._stop.set()
+
+    async def _startup_arm_effects(self) -> None:
+        # Contract: seal if admission is bound; no post-OPEN drain.
+        if self._admission.state is not AdmissionState.UNBOUND:
+            self._admission.seal()
 
     async def _watch_drain_deadline(self) -> None:
         deadline = self._shutdown_deadline
@@ -375,24 +478,32 @@ class ShutdownSession:
         await self._clock.sleep_until(deadline)
         if self._terminal is not None:
             return
-        if self._cleanup_started:
-            return
-        self._drain_expired = True
-        if "drain_deadline_exceeded" not in self._remainder:
-            self._remainder.append("drain_deadline_exceeded")
-        if not self._producers_attested:
-            if "producers_incomplete" not in self._remainder:
-                self._remainder.append("producers_incomplete")
-            if "ptb_cleanup_not_started" not in self._remainder:
-                self._remainder.append("ptb_cleanup_not_started")
-            if "application_http_open" not in self._remainder:
-                self._remainder.append("application_http_open")
-        self._state = SessionState.DRAIN_SNAPSHOT
+        self._note_drain_expired()
+        self._publish()
+
+    def record_lifecycle_primary(self, primary: BaseException, cause: ShutdownCause) -> None:
+        """Merge cancel/error primary into a live post-OPEN session (not waiter detach)."""
+
+        self._require_owner_loop()
+        if self._terminal is not None:
+            raise ShutdownSessionError("session already terminal")
+        if self._path is not ShutdownPath.POST_OPEN:
+            raise ShutdownSessionError("lifecycle primary only for post-OPEN session")
+        if self._primary is None:
+            self._primary = primary
+        else:
+            self._caller_causes.append(primary)
+        if self._cause is ShutdownCause.REQUEST_STOP and cause in (
+            ShutdownCause.CANCEL_AFTER_OPEN,
+            ShutdownCause.ERROR_AFTER_OPEN,
+        ):
+            self._cause = cause
         self._publish()
 
     def accept_producers_complete(
         self, attestation: ProducersCompleteAttestation
     ) -> None:
+        self._require_owner_loop()
         if not isinstance(attestation, ProducersCompleteAttestation):
             raise ShutdownSessionError("producers attestation required")
         if self._path is not ShutdownPath.POST_OPEN:
@@ -403,12 +514,13 @@ class ShutdownSession:
         self._publish()
 
     def start_cleanup(self, callback: CleanupCallback) -> asyncio.Task[None]:
-        """Start cleanup at most once.
+        """Start cleanup at most once on the owner loop.
 
         Post-OPEN full cleanup requires a prior :meth:`accept_producers_complete`.
         Startup path uses this without producers attestation.
         """
 
+        self._require_owner_loop()
         if self._cleanup_started:
             if self._cleanup_task is None:
                 raise ShutdownSessionError("cleanup started without task")
@@ -419,11 +531,6 @@ class ShutdownSession:
             raise ShutdownSessionError(
                 "post-OPEN cleanup requires ProducersCompleteAttestation (Q-PTB1 open)"
             )
-        if self._path is ShutdownPath.POST_OPEN and self._drain_expired:
-            # Full cleanup after drain expiry is still allowed once producers are
-            # attested on the same non-terminal session (contract §5.4 late path);
-            # it does not renew the drain budget.
-            pass
 
         self._cleanup_started = True
         self._cleanup_callback = callback
@@ -432,7 +539,7 @@ class ShutdownSession:
         self._cleanup_observe_deadline = (
             self._clock.monotonic() + self._cleanup_observe_timeout
         )
-        self._cleanup_task = asyncio.create_task(
+        self._cleanup_task = self._loop.create_task(
             self._run_cleanup_observer(), name="antares-shutdown-cleanup"
         )
         self._cleanup_task.add_done_callback(self._on_cleanup_task_done)
@@ -440,26 +547,31 @@ class ShutdownSession:
         return self._cleanup_task
 
     def _on_cleanup_task_done(self, task: asyncio.Task[None]) -> None:
-        self._consume_task_exception(task)
+        self._finalize_cleanup_task_end(task)
 
     async def _run_cleanup_observer(self) -> None:
         assert self._cleanup_callback is not None
         observe_deadline = self._cleanup_observe_deadline
         assert observe_deadline is not None
 
-        observe_watch = asyncio.create_task(
+        observe_watch = self._loop.create_task(
             self._watch_cleanup_observe(observe_deadline),
             name="antares-shutdown-cleanup-observe",
         )
+        aborted = False
         try:
             try:
                 self._cleanup_result = await self._cleanup_callback()
-            except asyncio.CancelledError:
-                raise
+            except asyncio.CancelledError as exc:
+                aborted = True
+                self._note_cleanup_aborted(exc, "cleanup_cancelled")
             except BaseException as exc:
+                aborted = True
                 self._cleanup_error = exc
                 if "cleanup_failed" not in self._remainder:
                     self._remainder.append("cleanup_failed")
+                self._cleanup_status = CleanupStatus.DONE
+                self._application_http = ApplicationHttpState.OPEN
             finally:
                 observe_watch.cancel()
                 try:
@@ -467,39 +579,48 @@ class ShutdownSession:
                 except asyncio.CancelledError:
                     pass
 
-            self._cleanup_status = CleanupStatus.DONE
-            if self._path is ShutdownPath.STARTUP:
-                self._application_http = ApplicationHttpState.STARTUP_CLEANED
-            else:
-                self._application_http = ApplicationHttpState.CLEANUP_DONE
-            self._set_terminal()
-        except asyncio.CancelledError:
-            if "cleanup_cancelled" not in self._remainder:
-                self._remainder.append("cleanup_cancelled")
-            raise
+            if not aborted and self._cleanup_error is None:
+                self._cleanup_status = CleanupStatus.DONE
+                if self._path is ShutdownPath.STARTUP:
+                    self._application_http = ApplicationHttpState.STARTUP_CLEANED
+                else:
+                    self._application_http = ApplicationHttpState.CLEANUP_DONE
+            if self._terminal is None:
+                self._set_terminal()
+        except asyncio.CancelledError as exc:
+            # Outer cancel (task cancelled while in finally/await observe).
+            if self._terminal is None:
+                self._note_cleanup_aborted(exc, "cleanup_task_cancelled")
+                self._set_terminal()
+            # Do not re-raise: terminal is published; owner must not hang.
 
     async def _watch_cleanup_observe(self, deadline: float) -> None:
         await self._clock.sleep_until(deadline)
-        if self._cleanup_task is not None and not self._cleanup_task.done():
+        if (
+            self._cleanup_task is not None
+            and not self._cleanup_task.done()
+            and self._terminal is None
+        ):
             self._cleanup_status = CleanupStatus.IN_PROGRESS_OBSERVE_EXCEEDED
             if "cleanup_observe_exceeded" not in self._remainder:
                 self._remainder.append("cleanup_observe_exceeded")
-            # Still CLEANUP_IN_PROGRESS session-wise; not SESSION_TERMINAL.
             self._state = SessionState.CLEANUP_IN_PROGRESS
             self._publish()
 
     async def wait_arm_effects(self) -> None:
+        self._require_owner_loop()
         await self._arm_effects_done.wait()
 
     async def wait_terminal(self) -> ShutdownTerminalResult:
         """Wait for SESSION_TERMINAL. Cancelling this await does not cancel owner/cleanup."""
 
+        self._require_owner_loop()
         if self._terminal is not None:
             return self._terminal
         while self._terminal is None:
             changed = self._changed
-            finished = asyncio.create_task(self._cleanup_finished.wait())
-            pulsed = asyncio.create_task(changed.wait())
+            finished = self._loop.create_task(self._cleanup_finished.wait())
+            pulsed = self._loop.create_task(changed.wait())
             try:
                 done, pending = await asyncio.wait(
                     {finished, pulsed},
@@ -509,13 +630,11 @@ class ShutdownSession:
                 finished.cancel()
                 pulsed.cancel()
                 await asyncio.gather(finished, pulsed, return_exceptions=True)
-                # Detach this waiter only; session continues.
                 raise
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             for task in done:
-                # Retrieve results/exceptions so they are not left pending.
                 if not task.cancelled():
                     task.result()
         assert self._terminal is not None
@@ -524,10 +643,17 @@ class ShutdownSession:
     async def wait_until(
         self, predicate: Callable[[ShutdownSnapshot], bool]
     ) -> ShutdownSnapshot:
-        """Wait until snapshot matches ``predicate``. Cancel detaches this waiter only."""
+        """Wait until snapshot matches ``predicate``. Cancel detaches this waiter only.
 
+        If the session is already terminal and ``predicate`` is false, returns the
+        terminal snapshot (same as after a wake) instead of hanging.
+        """
+
+        self._require_owner_loop()
         snap = self.snapshot()
         if predicate(snap):
+            return snap
+        if snap.is_terminal:
             return snap
         while True:
             changed = self._changed
@@ -543,7 +669,7 @@ class ShutdownSession:
 
 
 class ShutdownSessionHost:
-    """Lifecycle-owned host: at most one session; no global completed-session registry."""
+    """Lifecycle-owned host: at most one session; frozen admission/stop/loop identity."""
 
     def __init__(
         self,
@@ -555,26 +681,38 @@ class ShutdownSessionHost:
         cleanup_observe_timeout: float = 5.0,
         clock: Clock | None = None,
     ) -> None:
-        self.admission = admission
-        self.stop = stop
-        self.loop = loop
+        self._admission = admission
+        self._stop = stop
+        self._loop = loop
         self.drain_timeout = float(drain_timeout)
         self.cleanup_observe_timeout = float(cleanup_observe_timeout)
         self.clock = clock if clock is not None else Clock()
         self._session: ShutdownSession | None = None
 
     @property
+    def admission(self) -> WorkAdmission:
+        return self._admission
+
+    @property
+    def stop(self) -> asyncio.Event:
+        return self._stop
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop:
+        return self._loop
+
+    @property
     def session(self) -> ShutdownSession | None:
         return self._session
 
-    def _require_owner_loop(self) -> None:
+    def require_owner_loop(self) -> None:
         try:
             running = asyncio.get_running_loop()
         except RuntimeError as exc:
             raise ShutdownSessionError(
                 "shutdown session arm/await requires the owner running loop"
             ) from exc
-        if running is not self.loop:
+        if running is not self._loop:
             raise ShutdownSessionError("foreign event loop rejected")
 
     def _arm(
@@ -585,24 +723,37 @@ class ShutdownSessionHost:
         primary: BaseException | None,
         had_open: bool,
     ) -> ShutdownSession:
-        self._require_owner_loop()
-        if self._session is not None:
-            existing = self._session
-            if existing.terminal_result() is not None:
-                # Repeat after terminal: observe only; no new deadline / destructive arm.
-                return existing
-            # Join same live session (no deadline refresh, no second owner Task).
-            return existing
+        self.require_owner_loop()
 
         if path is ShutdownPath.POST_OPEN and not had_open:
             raise ShutdownSessionError(
                 "post-OPEN arm requires proof that admission was OPEN; "
                 "current SEALED alone is insufficient"
             )
-        if path is ShutdownPath.STARTUP and had_open:
-            raise ShutdownSessionError(
-                "startup failure path cannot be used after admission was OPEN"
-            )
+        if path is ShutdownPath.STARTUP:
+            if had_open:
+                raise ShutdownSessionError(
+                    "startup failure path cannot be used after admission was OPEN"
+                )
+            # Actual admission state: cannot bypass producer gate while OPEN.
+            if self._admission.state is AdmissionState.OPEN:
+                raise ShutdownSessionError(
+                    "startup failure refused while admission is OPEN"
+                )
+
+        if self._session is not None:
+            existing = self._session
+            if existing.terminal_result() is not None:
+                # Read-only repeat: no new deadline, no mutation of result.
+                return existing
+            if existing.path is not path:
+                raise ShutdownSessionError(
+                    f"incompatible arm path {path.value} for live "
+                    f"{existing.path.value} session"
+                )
+            if primary is not None and path is ShutdownPath.POST_OPEN:
+                existing.record_lifecycle_primary(primary, cause)
+            return existing
 
         session = ShutdownSession(
             host=self,
@@ -648,15 +799,11 @@ class ShutdownSessionHost:
     def arm_startup_failure(
         self, primary: BaseException, *, had_open: bool = False
     ) -> ShutdownSession:
-        if had_open:
-            raise ShutdownSessionError(
-                "startup failure must not be used when admission was OPEN"
-            )
         return self._arm(
             path=ShutdownPath.STARTUP,
             cause=ShutdownCause.STARTUP_FAILURE,
             primary=primary,
-            had_open=False,
+            had_open=had_open,
         )
 
     def snapshot(self) -> ShutdownSnapshot | None:

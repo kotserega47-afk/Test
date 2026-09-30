@@ -203,7 +203,8 @@ def test_startup_failure_does_not_take_post_open_path() -> None:
         assert s.shutdown_deadline is None
         await s.wait_arm_effects()
         assert not stop.is_set()
-        assert admission.state.value == "bound_closed"
+        # Contract: seal if admission bound (startup path).
+        assert admission.state.value == "sealed"
 
         with pytest.raises(ShutdownSessionError):
             s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
@@ -463,5 +464,276 @@ def test_waiter_cancel_preserves_cancelled_error_type() -> None:
         s.owner_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await s.owner_task
+
+    asyncio.run(_main())
+
+
+def test_deadline_permission_false_before_watcher_yields() -> None:
+    async def _main() -> None:
+        host, _a, _stop, clk = _make_host(drain_timeout=2.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        assert s.snapshot().may_start_new_destructive_phases is True
+        # Advance past deadline without awaiting the drain watcher.
+        clk.advance(2.0)
+        snap = s.snapshot()
+        assert snap.drain_expired is True
+        assert snap.may_start_new_destructive_phases is False
+        assert s.owner_task is not None
+        s.owner_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await s.owner_task
+
+    asyncio.run(_main())
+
+
+def test_terminal_before_deadline_forbids_destructive_phases() -> None:
+    async def _main() -> None:
+        host, _a, _stop, clk = _make_host(drain_timeout=100.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def ok() -> str:
+            return "done"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        assert clk.monotonic() < s.shutdown_deadline  # type: ignore[operator]
+        assert term.snapshot.may_start_new_destructive_phases is False
+        assert s.snapshot() is term.snapshot
+        assert s.snapshot().may_start_new_destructive_phases is False
+        assert s.snapshot().is_terminal is True
+
+    asyncio.run(_main())
+
+
+def test_foreign_loop_after_arm_rejects_mutating_apis() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        owner = s.owner_task
+        attested_before = s.snapshot().producers_complete_attested
+        cleanup_before = s.cleanup_task
+
+        foreign = asyncio.new_event_loop()
+        errors: list[BaseException] = []
+
+        def run_foreign() -> None:
+            asyncio.set_event_loop(foreign)
+            try:
+
+                async def bad_accept() -> None:
+                    s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+                async def bad_cleanup() -> None:
+                    async def cb() -> str:
+                        return "x"
+
+                    s.start_cleanup(cb)
+
+                async def bad_wait() -> None:
+                    await s.wait_terminal()
+
+                for coro_factory in (bad_accept, bad_cleanup, bad_wait):
+                    try:
+                        foreign.run_until_complete(coro_factory())
+                    except BaseException as exc:
+                        errors.append(exc)
+            finally:
+                foreign.close()
+
+        import threading
+
+        thread = threading.Thread(target=run_foreign)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert len(errors) == 3
+        assert all(isinstance(e, ShutdownSessionError) for e in errors)
+        assert s.snapshot().producers_complete_attested is attested_before
+        assert s.cleanup_task is cleanup_before
+        assert s.owner_task is owner
+        assert owner is not None and not owner.done()
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+
+    asyncio.run(_main())
+
+
+def test_cleanup_callback_cancelled_error_reaches_terminal() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def boom_cancel() -> None:
+            raise asyncio.CancelledError()
+
+        s.start_cleanup(boom_cancel)
+        term = await asyncio.wait_for(s.wait_terminal(), timeout=2)
+        assert term.snapshot.cleanup_status is CleanupStatus.DONE
+        assert term.snapshot.application_http is ApplicationHttpState.OPEN
+        assert isinstance(term.cleanup_error, asyncio.CancelledError)
+        assert "cleanup_cancelled" in term.snapshot.remainder
+        assert term.snapshot.overall_ok is False
+        assert s.owner_task is not None and s.owner_task.done()
+
+    asyncio.run(_main())
+
+
+def test_cleanup_task_cancelled_before_callback_runs() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+        started = asyncio.Event()
+
+        async def never() -> str:
+            started.set()
+            await asyncio.Event().wait()
+            return "no"
+
+        task = s.start_cleanup(never)
+        # Cancel before the callback body can observe started (best-effort pre-run).
+        task.cancel()
+        term = await asyncio.wait_for(s.wait_terminal(), timeout=2)
+        assert term.snapshot.is_terminal
+        assert term.snapshot.cleanup_status is CleanupStatus.DONE
+        assert term.snapshot.application_http is ApplicationHttpState.OPEN
+        assert term.cleanup_error is not None
+        assert "cleanup_task_cancelled" in term.snapshot.remainder or (
+            "cleanup_cancelled" in term.snapshot.remainder
+        )
+        assert s.owner_task is not None and s.owner_task.done()
+
+    asyncio.run(_main())
+
+
+def test_waiter_cancel_does_not_become_session_primary() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        assert s.primary is None
+        waiter = asyncio.create_task(s.wait_terminal())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert s.primary is None
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def ok() -> str:
+            return "ok"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        assert term.primary is None
+
+    asyncio.run(_main())
+
+
+def test_cancel_after_request_stop_preserves_primary() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        assert s.primary is None
+        original = asyncio.CancelledError()
+        s2 = host.arm_cancel_after_open(original, had_open=True)
+        assert s2 is s
+        assert s.primary is original
+        assert s.cause is ShutdownCause.CANCEL_AFTER_OPEN
+        deadline = s.shutdown_deadline
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def ok() -> str:
+            return "ok"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        assert term.primary is original
+        assert s.shutdown_deadline == deadline
+        # Read-only after terminal.
+        again = host.arm_cancel_after_open(asyncio.CancelledError(), had_open=True)
+        assert again is s
+        assert again.terminal_result() is term
+        assert again.primary is original
+
+    asyncio.run(_main())
+
+
+def test_incompatible_startup_arm_on_live_post_open_refused() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        with pytest.raises(ShutdownSessionError, match="incompatible"):
+            host.arm_startup_failure(RuntimeError("x"), had_open=False)
+        assert host.session is s
+        assert s.owner_task is not None and not s.owner_task.done()
+        s.owner_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await s.owner_task
+
+    asyncio.run(_main())
+
+
+def test_startup_arm_refused_when_admission_actually_open() -> None:
+    async def _main() -> None:
+        host, admission, _stop, _clk = _make_host(open_admission=True)
+        assert admission.state.value == "open"
+        with pytest.raises(ShutdownSessionError, match="OPEN"):
+            host.arm_startup_failure(RuntimeError("x"), had_open=False)
+        assert host.session is None
+
+    asyncio.run(_main())
+
+
+def test_wait_until_after_terminal_with_false_predicate() -> None:
+    async def _main() -> None:
+        host, _a, _stop, _clk = _make_host()
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+
+        async def ok() -> str:
+            return "ok"
+
+        s.start_cleanup(ok)
+        term = await s.wait_terminal()
+        snap = await asyncio.wait_for(
+            s.wait_until(lambda s_: s_.cleanup_status is CleanupStatus.IN_PROGRESS),
+            timeout=1,
+        )
+        assert snap.is_terminal
+        assert snap is term.snapshot
+
+    asyncio.run(_main())
+
+
+def test_cleanup_started_forbids_new_drain_phases() -> None:
+    async def _main() -> None:
+        host, _a, _stop, clk = _make_host(drain_timeout=50.0)
+        s = host.arm_request_stop(had_open=True)
+        await s.wait_arm_effects()
+        s.accept_producers_complete(ProducersCompleteAttestation.for_tests())
+        release = asyncio.Event()
+
+        async def slow() -> str:
+            await release.wait()
+            return "x"
+
+        s.start_cleanup(slow)
+        assert s.snapshot().may_start_new_destructive_phases is False
+        clk.advance(1.0)
+        assert s.snapshot().may_start_new_destructive_phases is False
+        release.set()
+        await s.wait_terminal()
 
     asyncio.run(_main())
