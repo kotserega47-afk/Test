@@ -18,12 +18,14 @@ How **new** producers are stopped (closed set):
 - Seal :class:`~modules.antares.ptb_update_intake.AntaresUpdateIntakeQueue`
   (refuses update ``put``; allows PTB ``_STOP_SIGNAL`` for later ``app.stop``).
 - Updater must not be running (polling/webhook feed refused).
-- Host must be installed **before** producers are in flight (explicit refuse
-  otherwise — untracked sequential work cannot wake observation safely).
+- Host must be installed **once**, **before** ``Application.initialize()`` /
+  ``start()``. Queue/create_task/processor counters alone cannot prove absence of
+  a direct ``process_update`` already inside a blocking handler.
 - After **proven** COMPLETE, new ``process_update`` / ``Application.create_task``
-  calls are **rejected** until :meth:`enter_cleanup_phase` (cleanup start).
-  Already-accepted in-flight work continues until it finishes; idle proof does
-  not replace this entry gate.
+  stay **rejected** through cleanup and after session terminal. PTB 22.8
+  ``Application.stop`` only needs a sealed-queue ``_STOP_SIGNAL`` put (no new
+  business ``process_update`` / ``create_task``); ``shutdown`` does not either.
+  Already-accepted in-flight work continues until it finishes.
 - This module never calls ``Application.stop`` / ``shutdown`` and never closes
   Bot HTTP.
 
@@ -120,6 +122,9 @@ def _queue_unfinished(queue: asyncio.Queue[Any]) -> int:
     return int(getattr(queue, "_unfinished_tasks", 0))
 
 
+_HOST_ATTR = "_antares_ptb_producer_wait_host"
+
+
 def _require_supported_app(app: Any) -> AntaresUpdateIntakeQueue:
     reasons = list(unsupported_application_reasons(app))
     queue = getattr(app, "update_queue", None)
@@ -163,21 +168,41 @@ class PtbProducerWaitHost:
         self._process_update_inflight = 0
         self._issued: ProducersCompleteAttestation | None = None
         self._producer_entries_closed = False
-        self._cleanup_phase = False
         self._orig_process_update: Any = None
         self._orig_create_task: Any = None
         self._assert_clean_install_preconditions()
         self._install_entry_trackers()
+        setattr(self._app, _HOST_ATTR, self)
 
     def _assert_clean_install_preconditions(self) -> None:
-        """Refuse install if producers already run untracked (no infinite wait)."""
+        """Install only on a never-started Application; refuse reinstall.
 
+        After ``initialize()``, a direct ``process_update`` can sit inside a
+        blocking handler with queue/create_task/processor counters still zero.
+        Requiring pre-initialize install is the checkable proof those calls
+        cannot already be running (``process_update`` itself refuses until init).
+        """
+
+        if getattr(self._app, _HOST_ATTR, None) is not None:
+            raise PtbProducerWaitError(
+                "producer-wait host already installed on this Application"
+            )
+        if self._app.running:
+            raise PtbProducerWaitError(
+                "producer-wait host must be installed before Application.start()"
+            )
+        if getattr(self._app, "_initialized", False):
+            raise PtbProducerWaitError(
+                "producer-wait host must be installed before Application.initialize(); "
+                "queue/create_task/processor counters cannot prove absence of an "
+                "in-flight direct process_update"
+            )
         unfinished = _queue_unfinished(self._queue)
         live = [t for t in _create_task_tasks(self._app) if not t.done()]
         concurrent = int(self._app.update_processor.current_concurrent_updates)
         if unfinished or live or concurrent or not self._queue.empty():
             raise PtbProducerWaitError(
-                "producer-wait host must be installed before producers are in flight; "
+                "producer-wait host requires idle Antares intake at install; "
                 f"unfinished={unfinished} create_tasks={len(live)} "
                 f"concurrent={concurrent} queue_empty={self._queue.empty()}"
             )
@@ -189,10 +214,10 @@ class PtbProducerWaitHost:
         self._orig_create_task = self._app.create_task
 
         async def tracked_process_update(update: object) -> None:
-            if self._producer_entries_closed and not self._cleanup_phase:
+            if self._producer_entries_closed:
                 raise PtbProducerWaitError(
                     "new process_update refused after producers_complete "
-                    "(entries closed until cleanup)"
+                    "(entries closed through cleanup and terminal)"
                 )
             self._process_update_inflight += 1
             self._pulse_progress()
@@ -207,12 +232,12 @@ class PtbProducerWaitHost:
             update: object | None = None,
             name: str | None = None,
         ) -> asyncio.Task[Any]:
-            if self._producer_entries_closed and not self._cleanup_phase:
+            if self._producer_entries_closed:
                 if asyncio.iscoroutine(coroutine):
                     coroutine.close()
                 raise PtbProducerWaitError(
                     "new Application.create_task refused after producers_complete "
-                    "(entries closed until cleanup)"
+                    "(entries closed through cleanup and terminal)"
                 )
             task = self._orig_create_task(coroutine, update=update, name=name)
             self._pulse_progress()
@@ -220,13 +245,6 @@ class PtbProducerWaitHost:
 
         self._app.process_update = tracked_process_update  # type: ignore[method-assign]
         self._app.create_task = gated_create_task  # type: ignore[method-assign]
-
-    def enter_cleanup_phase(self) -> None:
-        """Allow PTB stop/cleanup paths after proof; keeps intake seal."""
-
-        self.require_owner_loop()
-        self._cleanup_phase = True
-        self._pulse_progress()
 
     def _pulse_progress(self) -> None:
         self._progress.set()
@@ -512,7 +530,7 @@ class PtbProducerWaitHost:
                     if epoch2 == epoch and self._epoch_is_idle(epoch2):
                         att = self._issue_attestation()
                         self._status = ProducerWaitStatus.COMPLETE
-                        # Close new producer entries until cleanup (not only accept-time).
+                        # Close new producer entries for the rest of this lifecycle.
                         self._producer_entries_closed = True
                         snap = ProducerWaitSnapshot(
                             status=ProducerWaitStatus.COMPLETE,

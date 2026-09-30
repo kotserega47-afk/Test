@@ -56,7 +56,7 @@ def _patch_telegram_http():
         yield
 
 
-async def _running_app(
+def _build_app(
     *, concurrent_updates: bool | int = True
 ) -> tuple[Application, AntaresUpdateIntakeQueue]:
     queue = AntaresUpdateIntakeQueue()
@@ -67,10 +67,30 @@ async def _running_app(
         .update_queue(queue)
         .build()
     )
+    return app, queue
+
+
+async def _start_app(app: Application) -> None:
     with _patch_telegram_http():
         await app.initialize()
         await app.start()
-    return app, queue
+
+
+async def _app_with_host(
+    *,
+    concurrent_updates: bool | int = True,
+    clock: ControllableClock | None = None,
+) -> tuple[Application, AntaresUpdateIntakeQueue, PtbProducerWaitHost]:
+    """Install host on a built Application, then initialize+start (PTB 22.8)."""
+
+    app, queue = _build_app(concurrent_updates=concurrent_updates)
+    loop = asyncio.get_running_loop()
+    kwargs: dict = {"application": app, "loop": loop}
+    if clock is not None:
+        kwargs["clock"] = clock
+    host = PtbProducerWaitHost(**kwargs)
+    await _start_app(app)
+    return app, queue, host
 
 
 async def _shutdown_app(app: Application) -> None:
@@ -90,7 +110,9 @@ async def _await_true(predicate, *, turns: int = 200) -> None:
 
 def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
     async def _main() -> None:
-        app, queue = await _running_app(concurrent_updates=True)
+        clk = ControllableClock(8_000.0)
+        clk.bind_loop()
+        app, queue, host = await _app_with_host(concurrent_updates=True, clock=clk)
         e1, e2 = asyncio.Event(), asyncio.Event()
         r1, r2 = asyncio.Event(), asyncio.Event()
         f1, f2 = asyncio.Event(), asyncio.Event()
@@ -109,10 +131,6 @@ def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
                 f2.set()
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        loop = asyncio.get_running_loop()
-        clk = ControllableClock(8_000.0)
-        clk.bind_loop()
-        host = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
         await queue.put(object())
         await queue.put(object())
         await e1.wait()
@@ -123,8 +141,6 @@ def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
         waiter = asyncio.create_task(host.wait_producers_complete(deadline=8_030.0))
         await asyncio.sleep(0)
         assert host.owner_task is not None and not host.owner_task.done()
-        # First producer finishes while owner observes — second must not be cancelled;
-        # proof must remain absent until the second finishes.
         r1.set()
         await _await_true(lambda: f1.is_set())
         still = [t for t in live_before if not t.done()]
@@ -141,7 +157,6 @@ def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
         assert out.snapshot.producers_complete is True
         assert out.snapshot.status is ProducerWaitStatus.COMPLETE
         assert host.snapshot() == out.snapshot
-        host.enter_cleanup_phase()
         await _shutdown_app(app)
 
     asyncio.run(_main())
@@ -149,7 +164,9 @@ def test_two_live_producers_first_finish_does_not_cancel_second() -> None:
 
 def test_deadline_incomplete_does_not_cancel_producer() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        clk = ControllableClock(5_000.0)
+        clk.bind_loop()
+        app, queue, host = await _app_with_host(clock=clk)
         entered = asyncio.Event()
         release = asyncio.Event()
         saw_cancel = {"v": False}
@@ -163,10 +180,6 @@ def test_deadline_incomplete_does_not_cancel_producer() -> None:
                 raise
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        loop = asyncio.get_running_loop()
-        clk = ControllableClock(5_000.0)
-        clk.bind_loop()
-        host = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
         await queue.put(object())
         await entered.wait()
         host.seal_intake()
@@ -195,7 +208,9 @@ def test_deadline_incomplete_does_not_cancel_producer() -> None:
 
 def test_block_false_and_application_create_task_tracked() -> None:
     async def _main() -> None:
-        app, queue = await _running_app(concurrent_updates=True)
+        clk = ControllableClock(6_000.0)
+        clk.bind_loop()
+        app, queue, host = await _app_with_host(concurrent_updates=True, clock=clk)
         entered = asyncio.Event()
         release = asyncio.Event()
         finished = asyncio.Event()
@@ -210,10 +225,6 @@ def test_block_false_and_application_create_task_tracked() -> None:
             context.application.create_task(nested())
 
         app.add_handler(TypeHandler(object, handler, block=False))
-        loop = asyncio.get_running_loop()
-        clk = ControllableClock(6_000.0)
-        clk.bind_loop()
-        host = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
         await queue.put(object())
         await entered.wait()
         host.seal_intake()
@@ -236,7 +247,7 @@ def test_block_false_and_application_create_task_tracked() -> None:
 
 def test_sequential_concurrent_updates_false() -> None:
     async def _main() -> None:
-        app, queue = await _running_app(concurrent_updates=False)
+        app, queue, host = await _app_with_host(concurrent_updates=False)
         assert app.concurrent_updates == 1
         entered = asyncio.Event()
         release = asyncio.Event()
@@ -246,10 +257,12 @@ def test_sequential_concurrent_updates_false() -> None:
             await release.wait()
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
         await queue.put(object())
         await entered.wait()
-        assert host.snapshot().process_update_inflight >= 1 or host.snapshot().unfinished_tasks >= 1
+        assert (
+            host.snapshot().process_update_inflight >= 1
+            or host.snapshot().unfinished_tasks >= 1
+        )
         host.seal_intake()
         clk = ControllableClock(7_000.0)
         clk.bind_loop()
@@ -270,7 +283,7 @@ def test_sequential_concurrent_updates_false() -> None:
 
 def test_empty_queue_while_handler_running_no_proof() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        app, queue, host = await _app_with_host()
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -279,7 +292,6 @@ def test_empty_queue_while_handler_running_no_proof() -> None:
             await release.wait()
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
         await queue.put(object())
         await entered.wait()
         assert queue.empty()
@@ -304,7 +316,7 @@ def test_empty_queue_while_handler_running_no_proof() -> None:
 
 def test_waiter_cancel_does_not_cancel_producers() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        app, queue, host = await _app_with_host()
         entered = asyncio.Event()
         release = asyncio.Event()
         finished = asyncio.Event()
@@ -315,7 +327,6 @@ def test_waiter_cancel_does_not_cancel_producers() -> None:
             finished.set()
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
         await queue.put(object())
         await entered.wait()
         host.seal_intake()
@@ -337,9 +348,8 @@ def test_waiter_cancel_does_not_cancel_producers() -> None:
 
 def test_foreign_forged_stale_and_bind_rules() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        app, queue, host = await _app_with_host()
         loop = asyncio.get_running_loop()
-        host = PtbProducerWaitHost(application=app, loop=loop)
         host.seal_intake()
         out = await host.wait_producers_complete(deadline=None)
         assert out.attestation is not None
@@ -381,8 +391,7 @@ def test_foreign_forged_stale_and_bind_rules() -> None:
         assert session.snapshot().producers_complete_attested is True
 
         # Cannot bind a different issuer after attestation.
-        app2, _q2 = await _running_app()
-        host2 = PtbProducerWaitHost(application=app2, loop=loop)
+        app2, _q2, host2 = await _app_with_host()
         with pytest.raises(ShutdownSessionError, match="after producers were attested"):
             attach_producer_wait_to_shutdown_host(shut, host2)
         await _shutdown_app(app2)
@@ -453,18 +462,10 @@ def test_foreign_forged_stale_and_bind_rules() -> None:
 
 def test_late_complete_same_owner_no_new_budget() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
-        entered = asyncio.Event()
-        release = asyncio.Event()
-
-        async def handler(_update, _context) -> None:
-            entered.set()
-            await release.wait()
-
-        app.add_handler(TypeHandler(object, handler, block=True))
         loop = asyncio.get_running_loop()
         clk = ControllableClock(3_000.0)
         clk.bind_loop()
+        app, queue = _build_app()
         admission = WorkAdmission()
         bind_antares_admission(admission)
         admission.open()
@@ -477,13 +478,22 @@ def test_late_complete_same_owner_no_new_budget() -> None:
         )
         prod = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
         attach_producer_wait_to_shutdown_host(shut, prod)
+        await _start_app(app)
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler(_update, _context) -> None:
+            entered.set()
+            await release.wait()
+
+        app.add_handler(TypeHandler(object, handler, block=True))
         session = shut.arm_request_stop(had_open=True)
         await session.wait_arm_effects()
         drain_deadline = session.shutdown_deadline
         assert drain_deadline is not None
         await queue.put(object())
         await entered.wait()
-        owner_before = None
         waiter = asyncio.create_task(prod.wait_producers_complete(deadline=drain_deadline))
         await asyncio.sleep(0)
         owner_before = prod.owner_task
@@ -508,7 +518,7 @@ def test_late_complete_same_owner_no_new_budget() -> None:
 
 def test_stop_signal_still_accepted_after_seal() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        app, queue, _host = await _app_with_host()
         queue.seal()
         with pytest.raises(AntaresUpdateIntakeError):
             await queue.put(object())
@@ -527,26 +537,21 @@ def test_unsupported_plain_queue_rejected() -> None:
             .update_queue(plain)
             .build()
         )
-        with _patch_telegram_http():
-            await app.initialize()
-            await app.start()
         with pytest.raises(PtbProducerWaitError, match="update_queue"):
             PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
-        await _shutdown_app(app)
 
     asyncio.run(_main())
 
 
 def test_post_complete_process_update_and_create_task_refused() -> None:
     async def _main() -> None:
-        app, queue = await _running_app()
+        app, _queue, host = await _app_with_host()
         ran = {"process": False, "task": False}
 
         async def handler(_update, _context) -> None:
             return None
 
         app.add_handler(TypeHandler(object, handler, block=True))
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
         host.seal_intake()
         out = await host.wait_producers_complete(deadline=None)
         assert out.attestation is not None
@@ -567,48 +572,20 @@ def test_post_complete_process_update_and_create_task_refused() -> None:
             app.create_task(late_task())
         assert ran["task"] is False
 
-        # Gates survive until cleanup phase; then stop may proceed.
-        host.enter_cleanup_phase()
+        # PTB stop/shutdown needs only sealed _STOP_SIGNAL — entries stay closed.
         await _shutdown_app(app)
 
     asyncio.run(_main())
 
 
-def test_host_install_refuses_when_producer_already_in_flight() -> None:
+def test_entries_stay_closed_during_cleanup_and_after_terminal() -> None:
     async def _main() -> None:
-        app, queue = await _running_app(concurrent_updates=False)
-        entered = asyncio.Event()
-        release = asyncio.Event()
-
-        async def handler(_update, _context) -> None:
-            entered.set()
-            await release.wait()
-
-        app.add_handler(TypeHandler(object, handler, block=True))
-        await queue.put(object())
-        await entered.wait()
-        with pytest.raises(PtbProducerWaitError, match="before producers are in flight"):
-            PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
-        release.set()
-        await _await_true(lambda: queue._unfinished_tasks == 0)  # noqa: SLF001
-        # After drain, install is allowed.
-        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        app, _queue, host = await _app_with_host()
+        loop = asyncio.get_running_loop()
         host.seal_intake()
         out = await host.wait_producers_complete(deadline=None)
         assert out.attestation is not None
-        host.enter_cleanup_phase()
-        await _shutdown_app(app)
 
-    asyncio.run(_main())
-
-
-def test_entry_gates_remain_until_session_cleanup() -> None:
-    async def _main() -> None:
-        app, queue = await _running_app()
-        loop = asyncio.get_running_loop()
-        host = PtbProducerWaitHost(application=app, loop=loop)
-        host.seal_intake()
-        out = await host.wait_producers_complete(deadline=None)
         admission = WorkAdmission()
         bind_antares_admission(admission)
         admission.open()
@@ -617,22 +594,110 @@ def test_entry_gates_remain_until_session_cleanup() -> None:
         session = shut.arm_request_stop(had_open=True)
         await session.wait_arm_effects()
         session.accept_producers_complete(out.attestation)
-        ran = {"v": False}
 
-        async def boom(_update, _context) -> None:
-            ran["v"] = True
-
-        app.add_handler(TypeHandler(object, boom, block=True))
-        with pytest.raises(PtbProducerWaitError, match="process_update refused"):
-            await app.process_update(object())
-        assert ran["v"] is False
+        block = asyncio.Event()
+        cleanup_entered = asyncio.Event()
 
         async def cleanup() -> str:
+            cleanup_entered.set()
+            await block.wait()
             return "ok"
 
         session.start_cleanup(cleanup)
+        await cleanup_entered.wait()
+        ran = {"process": False, "task": False}
+
+        async def late_handler(_update, _context) -> None:
+            ran["process"] = True
+
+        app.add_handler(TypeHandler(object, late_handler, block=True))
+        with pytest.raises(PtbProducerWaitError, match="process_update refused"):
+            await app.process_update(object())
+        assert ran["process"] is False
+
+        async def late_task() -> None:
+            ran["task"] = True
+
+        with pytest.raises(PtbProducerWaitError, match="create_task refused"):
+            app.create_task(late_task())
+        assert ran["task"] is False
+
+        # Staff PTB stop/shutdown completes while cleanup is still blocked.
+        await _shutdown_app(app)
+        assert not app.running
+        assert not getattr(app, "_initialized", False)
+
+        block.set()
         await session.wait_terminal()
-        # After cleanup phase opened, stop/shutdown path is allowed.
+
+        # After terminal, entries must not reopen.
+        with pytest.raises(PtbProducerWaitError, match="process_update refused"):
+            await app.process_update(object())
+        assert ran["process"] is False
+        with pytest.raises(PtbProducerWaitError, match="create_task refused"):
+
+            async def again() -> None:
+                ran["task"] = True
+
+            app.create_task(again())
+        assert ran["task"] is False
+
+    asyncio.run(_main())
+
+
+def test_host_install_before_initialize_then_start() -> None:
+    async def _main() -> None:
+        app, queue = _build_app()
+        host = PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        with pytest.raises(PtbProducerWaitError, match="already installed"):
+            PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        await _start_app(app)
+        host.seal_intake()
+        out = await host.wait_producers_complete(deadline=None)
+        assert out.attestation is not None
+        await _shutdown_app(app)
+        assert queue.sealed
+
+    asyncio.run(_main())
+
+
+def test_host_install_refuses_direct_process_update_before_wrapper() -> None:
+    """Counters alone miss a direct process_update; pre-initialize install refuses."""
+
+    async def _main() -> None:
+        app, _queue = _build_app(concurrent_updates=False)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler(_update, _context) -> None:
+            entered.set()
+            await release.wait()
+
+        app.add_handler(TypeHandler(object, handler, block=True))
+        with _patch_telegram_http():
+            await app.initialize()
+        # Direct call: queue/create_task/processor can stay zero while handler runs.
+        pu_task = asyncio.create_task(app.process_update(object()))
+        await entered.wait()
+        # Prove the old counter-only check would have been blind to this call.
+        assert app.update_processor.current_concurrent_updates == 0
+        assert _queue_unfinished_safe(app) == 0
+        assert not [t for t in getattr(app, "_Application__create_task_tasks") if not t.done()]  # noqa: SLF001
+        with pytest.raises(
+            PtbProducerWaitError,
+            match="before Application.initialize",
+        ):
+            PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
+        # Without a host there is no COMPLETE while the handler is alive.
+        release.set()
+        await pu_task
+        # Still initialized → install remains refused (no post-hoc wrap).
+        with pytest.raises(PtbProducerWaitError, match="before Application.initialize"):
+            PtbProducerWaitHost(application=app, loop=asyncio.get_running_loop())
         await _shutdown_app(app)
 
     asyncio.run(_main())
+
+
+def _queue_unfinished_safe(app: Application) -> int:
+    return int(getattr(app.update_queue, "_unfinished_tasks", 0))

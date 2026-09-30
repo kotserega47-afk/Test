@@ -677,13 +677,8 @@ class ShutdownSession:
         self._cleanup_callback = callback
         self._cleanup_status = CleanupStatus.IN_PROGRESS
         self._state = SessionState.CLEANUP_IN_PROGRESS
-        # Entry gates stay closed for new producers until cleanup phase opens them
-        # for PTB stop/shutdown internals.
-        pw = self._host.producer_wait
-        if pw is not None:
-            enter = getattr(pw, "enter_cleanup_phase", None)
-            if callable(enter):
-                enter()
+        # Producer-wait entry gates (if bound) stay closed: PTB 22.8 stop only
+        # needs sealed-queue _STOP_SIGNAL; shutdown does not create producers.
         self._cleanup_observe_deadline = (
             self._clock.monotonic() + self._cleanup_observe_timeout
         )
