@@ -77,6 +77,7 @@
 | [TASK-2026-09-17-46](TASK-2026-09-17-46_antares_sender_gates_runtime.md) | Ownership claim + PTB inspector: GPT ACCEPTED `0d80bb2…`, docs-close, Cursor 25/64/19/14, Draft PR #49 layered base, runtime foundation only |
 | [TASK-2026-09-17-47](TASK-2026-09-17-47_antares_sender_worker_drain.md) | Sender intake seal + S1/S3 drain + worker stop: GPT ACCEPTED `230975c…`, docs-close, Cursor 36/25/27/53, Draft PR #50, not full resource stop |
 | [TASK-2026-09-17-48](TASK-2026-09-17-48_antares_sender_full_stop.md) | Sender full resource stop (HTTP+loop+thread→STOPPED): GPT ACCEPTED `7f6b5a8…`, docs-close, Cursor 36/36/25/27/53, Draft PR #51, helper не wired, не полный graceful |
+| [TASK-2026-09-17-49](TASK-2026-09-17-49_antares_shutdown_orchestration.md) | Контракт общей остановки isolated Antares + `run_ptb_lifecycle`: docs-only, Draft PR, base TASK-48 @ `90cda7c…`, runtime нет |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 

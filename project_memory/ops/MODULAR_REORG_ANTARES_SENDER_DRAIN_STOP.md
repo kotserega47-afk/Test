@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт TASK-44 **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close `49193bb…`; ownership/PTB → [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-45/`a3b9599…`; foundation → TASK-46/`0d80bb2…`; **worker drain runtime → TASK-47 ACCEPTED `230975c433e6ad9353b6f86485f010e1b89eacb0`**, docs-close on Draft PR #50; **sender full resource stop → TASK-48 ACCEPTED `7f6b5a8c211658fba92e2f6b98320b3443935cb6`**, docs-close on Draft PR #51. До TASK-48 HTTP/`loop.stop`/join/final `STOPPED` были будущим срезом. Глобальный helper / O10 / deploy **не** закрыты; TASK-49 **не** стартовал |
+| **Статус** | docs-контракт TASK-44 **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close `49193bb…`; ownership/PTB → [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-45/`a3b9599…`; foundation → TASK-46/`0d80bb2…`; **worker drain runtime → TASK-47 ACCEPTED `230975c433e6ad9353b6f86485f010e1b89eacb0`**, docs-close on Draft PR #50; **sender full resource stop → TASK-48 ACCEPTED `7f6b5a8c211658fba92e2f6b98320b3443935cb6`**, docs-close on Draft PR #51. До TASK-48 HTTP/`loop.stop`/join/final `STOPPED` были будущим срезом. Orchestration helper — [SHUTDOWN_ORCHESTRATION.md](MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) TASK-49 (docs; **не** wired). O10 / deploy **не** закрыты |
 | **База TASK-44** | закрытие TASK-43 `c17eab2fc7962f18b7702be73459afcd9d82133f` (accepted runtime `01e0c55dc84b9e6be78ff20f6b1f5b58be017601`, Draft PR #46) |
 | **Обследованный SHA (исторический survey)** | `c17eab2…` — § 1 описывает **pre-TASK-47** sender runtime |
 | **Accepted worker-drain runtime** | TASK-47 `230975c…` — § 1A; lifecycle до `WORKER_STOPPED` only (исторический срез: HTTP/loop/thread тогда не закрывались) |
@@ -15,7 +15,7 @@
 Цель TASK-47 (принят): реализовать intake seal + S1/S3 drain + worker Task stop до `WORKER_STOPPED` **без** Bot/HTTP/loop/thread close.  
 Цель TASK-48 (принят `7f6b5a8…`): довести **сам** Telegram sender до `STOPPED` (HTTP request graph, `loop.stop`, ack `_loop_stopped`, join потока). Это **не** helper и **не** полный graceful Antares.
 
-Это **не** полный graceful, **не** helper wiring, **не** executor shutdown, **не** mixed-stop (O10). TASK-49 не стартовал.
+Это **не** полный graceful, **не** helper wiring, **не** executor shutdown, **не** mixed-stop (O10). Orchestration docs — TASK-49; helper **не** wired.
 
 Имена code API (TASK-47): `drain_and_stop_sender_worker`, `SenderWorkerDrainResult`, `WorkerTerminalOutcome`, sentinel state machine — см. [TASK-47](../active_tasks/TASK-2026-09-17-47_antares_sender_worker_drain.md).
 
@@ -90,7 +90,7 @@
 | `STOPPED` | только когда loop не running и thread не alive; same-proof fast-path; foreign/no proof = refuse; restart-after-STOPPED нет |
 | `full_resource_stopped` | `True` только на настоящем terminal resource stop |
 | API | `stop_isolated_sender` |
-| Всё ещё не wired | helper, `run_ptb_lifecycle`, executor shutdown, WorkAdmission/WE/registry в один graceful path, O10, polling/serve, deploy/live Telegram; TASK-49 не стартовал |
+| Всё ещё не wired | helper, `run_ptb_lifecycle`, executor shutdown, WorkAdmission/WE/registry в один graceful path, O10, polling/serve, deploy/live Telegram; orchestration contract → TASK-49 |
 
 ### 1.2 Transport — `transport/telegram_transport.py`
 
@@ -260,7 +260,7 @@ Ownership state (TASK-47): loop thread handle; worker Task handle; lifecycle `RU
 
 **Current @ `7f6b5a8…`:** эти четыре пункта реализованы для самого Telegram sender (§ 1B). Same-proof `STOPPED` fast-path реализован.
 
-**Всё ещё future / не wired:** helper orchestration, `run_ptb_lifecycle`, executor resource shutdown, WorkAdmission/WE/registry в один graceful path, mixed-stop O10, polling/serve, deploy/live Telegram. TASK-49 не стартовал. Полный graceful Antares из одного sender `STOPPED` **не** следует.
+**Всё ещё future / не wired:** helper orchestration, `run_ptb_lifecycle`, executor resource shutdown, WorkAdmission/WE/registry в один graceful path, mixed-stop O10, polling/serve, deploy/live Telegram. Порядок orchestration зафиксирован в TASK-49 docs; code **не** wired. Полный graceful Antares из одного sender `STOPPED` **не** следует.
 
 ---
 
