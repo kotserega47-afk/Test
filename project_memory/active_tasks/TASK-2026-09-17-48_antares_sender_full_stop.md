@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; docs-close **не** выполнен) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-47 close `51af50697e783aa735241d8532b7f04e55c0f11f` (accepted runtime `230975c433e6ad9353b6f86485f010e1b89eacb0`, Draft PR #50); [SENDER_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md); [SENDER_GATES.md](../ops/MODULAR_REORG_ANTARES_SENDER_GATES.md) |
-| **PR** | Draft (this branch) `feat/task-2026-09-17-48-antares-sender-full-stop`, base `feat/task-2026-09-17-47-antares-sender-worker-drain` @ `51af506…` |
+| **PR** | Draft [#51](https://github.com/deniskotdavydov1991-wq/Test/pull/51) `feat/task-2026-09-17-48-antares-sender-full-stop`, base `feat/task-2026-09-17-47-antares-sender-worker-drain` @ `51af506…` |
 | **Риск** | medium: incorrect HTTP/loop phase or partial-repeat could leave stuck resources or false STOPPED |
 
 CODE: Telegram sender **full resource shutdown** after TASK-47 worker drain. Completes HTTP → loop.stop → thread join → `STOPPED`. **Не** helper wiring. **Не** docs-close до GPT review.
