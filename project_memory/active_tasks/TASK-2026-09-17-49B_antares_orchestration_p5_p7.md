@@ -3,20 +3,20 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-49B |
-| **Статус** | review (CODE; Draft PR; merge/deploy не выполнены) |
+| **Статус** | review (CODE; Draft PR; **не** ACCEPTED; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.A ACCEPTED/docs-close `e80aa6cdecc681a0e94e7fbbbebd17302f668496`; TASK-40/41/43; [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) |
 | **PR** | Draft [#55](https://github.com/deniskotdavydov1991-wq/Test/pull/55) `feat/task-2026-09-17-49b-antares-orchestration-p5-p7`, base `feat/task-2026-09-17-49a-antares-producer-wait` @ `e80aa6c…` |
 | **Риск** | medium: false producers_complete / WE partial / registry freeze before WE |
 
-CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session. **P8/P9 / full P10 / production readiness не заявлять**. **49.C–E не начаты**. TASK-49.A повторно **не** закрывать.
+CODE review-fix: session-bound P4–P7 owner Task + WE create/join split. **P8/P9 / full P10 / production readiness / lifecycle wiring не заявлять**. **49.B не закрывать**. **49.C–E не начаты**. TASK-49.A повторно **не** закрывать.
 
 ### Разграничение
 
 | Слой | Состояние |
 |------|-----------|
-| Реализовано | `shutdown_orchestration` P4→P7; WE lifecycle-owned stop session; regressions |
-| Подключено | drain API module (не полный `run_ptb_lifecycle` P8–P10) |
+| Реализовано | session-bound `run_owner_drain_p4_to_p7` owner Task; WE create vs join; regressions |
+| Подключено к `run_ptb_lifecycle` | **нет** (design blocker — см. ниже) |
 | Выпущено | **нет** |
 
 ---
@@ -25,20 +25,41 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 
 | Вопрос | Ответ |
 |--------|-------|
-| Application create | Caller builds Application; `run_ptb_lifecycle` initialize/start |
-| Producer host install | **Must** be before `initialize()` (TASK-49.A); orchestration requires bound host on session |
+| Application create | `apps/antares.py` builds Application **without** `AntaresUpdateIntakeQueue` (default PTB queue) |
+| Producer host install | **Must** be before `initialize()` (TASK-49.A); real entry path does **not** install |
 | Producer sources | Antares intake + wrapped `process_update` / `Application.create_task`; raw `asyncio.create_task` unsupported |
 | Supported mode | Pass when host pre-installed + Antares queue + issuer binding + post-COMPLETE entry refuse |
-| Ownership | `ShutdownSession` (49.S) = orchestration owner; WE stop = process-local owner Task; registry wait = TASK-43 API |
-| Q-HLP1 | **Separate module** `modules.antares.shutdown_orchestration` — does not duplicate ShutdownSession; lifecycle helper remains shell until later full wire |
+| Ownership | `ShutdownSession` (49.S) = sole P4–P7 owner; WE stop = process-local owner Task; registry wait = TASK-43 API |
+| Q-HLP1 | **Separate module** `modules.antares.shutdown_orchestration` — does not duplicate ShutdownSession |
 
-### Known entry-path gap (not closed in 49.B)
+### Integration boundary / design blocker (not closed in 49.B)
 
-- `apps/antares.py` / default sandbox build still use default `asyncio.Queue` — **not** `AntaresUpdateIntakeQueue`; Q-PTB1 host cannot attest on that graph until build injects Antares intake + pre-initialize install.
-- `run_ptb_lifecycle` still seals → `_await_cleanup` after `stop.wait()` and does **not** yet call `run_owner_drain_p4_to_p7` (partial boundary: drain API exists; full helper wire deferred).
-- Do **not** pass invented `producers_complete=True` into WE/registry on the unwired entry path.
+**Real entry path today**
 
-### Wiring conditions retained
+1. `apps/antares.py` → `Application.builder()…build()` → default `asyncio.Queue` (not Antares intake).
+2. `run_ptb_lifecycle` after `stop.wait()` still `admission.seal()` → `_await_cleanup(app)` using the **old** helper path.
+3. Neither installs `PtbProducerWaitHost` pre-initialize nor calls `run_owner_drain_p4_to_p7`.
+
+**Safe partial wire scheme (required before claiming lifecycle wiring)**
+
+```
+pre-init: bind AntaresUpdateIntakeQueue + install PtbProducerWaitHost once
+  → initialize/start (49.A conditions)
+  → arm ShutdownSession (49.S)
+  → P4–P7 owner join (this module; session.shutdown_deadline only)
+  → P8 sender (49.C) → P9 executor (49.D)
+  → then PTB cleanup / SESSION_TERMINAL (not before)
+```
+
+**Why unsafe in current scope:** inserting P4–P7 then jumping to today’s `_await_cleanup` **bypasses P8/P9**. Enabling that path would claim a false drain order. Therefore:
+
+- lifecycle wiring is **not** marked done;
+- the unsafe seal→cleanup shortcut is **not** enabled;
+- **design blocker** remains until a wire plan keeps P8/P9 before cleanup (or explicitly refuses full graceful).
+
+Do **not** invent `producers_complete=True` on the unwired entry path.
+
+### Wiring conditions retained (49.A)
 
 1. Single producer-host install before initialize/start  
 2. Antares intake + supported PTB graph  
@@ -48,22 +69,24 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 
 ---
 
-## Delivered
+## Delivered (review-fix)
 
-- `run_owner_drain_p4_to_p7`: P4 attestation → P5 Accepted/continuation/WE unfinished==0 → P6 WE owner-session → P7 registry (order fixed).
-- WE `stop_isolated_profile_workers`: one owner; waiter cancel ≠ owner cancel; no second sentinel; dead-before-sentinel ≠ success.
-- Partial boundary: P7 success ≠ SESSION_TERMINAL / full shutdown; P8/P9 not wired.
-- Tests: live producer blocks drain; unfinished blocks WE stop; cancel/repeat WE session; Accepted survives seal+waiter cancel; concurrent WE waiters.
+- **One** P4–P7 owner Task per `ShutdownSession`; public API joins/observes; waiter cancel ≠ phase interrupt; concurrent/repeat ≠ second orchestration.
+- Identity checks (issuer / Application / admission / owner loop) even after accepted proof; progress / partial / errors kept on owner state.
+- Deadline = `session.shutdown_deadline` only (no separate per-phase drain budget). Expiry publishes partial remainder; does not cancel Accepted/continuation or started owner ops; forbids new destructive phases; P7 success ≠ SESSION_TERMINAL.
+- WE stop: create-path unfinished gate vs join-path (tolerate this-session sentinel in `unfinished_tasks`; no second sentinel); identity before cached result; owner exception retrieved after all waiters detach.
+- Regressions: P5/P7 waiter cancel; two orchestration waiters; deadline mid-P5 and mid-started P6; late WE before freeze; registry not before WE join; WE hold-before-sentinel join; owner error after detach.
 
 ---
 
 ## Success Criteria
 
-- [x] P5–P7 order + real APIs
-- [x] WE owner-session semantics
+- [x] P5–P7 order + real APIs under session-bound owner
+- [x] WE create/join + owner-session semantics
 - [x] Q-HLP1 module layout
 - [x] Cursor pytest (see provenance)
-- [ ] GPT review
+- [ ] GPT re-review (Draft)
+- [ ] lifecycle wiring (blocked — see design blocker)
 - [ ] merge/deploy
 - [ ] 49.C sender wiring
 
@@ -73,14 +96,14 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ Test SHA `0867b48c52be1229782386ce0e4ae543aaae449b`: orchestration+WE **19**; related 40/41/43/49A/49S = **102** (do not sum) |
-| GPT | review pending |
+| Cursor | Python **3.12.10** @ Test SHA `cf48534a2b0b341e0381ac34688eeb7a746a99f9`: orchestration+WE **15**; related 40/41/43/49A/49S+49B = **110** (do not sum) |
+| GPT | prior CHANGES on `f7477f8…`; re-review pending on this HEAD |
 
 ---
 
 ## Out Of Scope
 
-49.C–E; sender/executor shutdown; Ready/merge/retarget/deploy; full shutdown claim; closing open gates outside P5–P7; re-close 49.A/49.S.
+49.C–E; sender/executor shutdown; Ready/merge/retarget/deploy; full shutdown claim; closing 49.B; enabling unsafe lifecycle wire; re-close 49.A/49.S.
 
 ---
 
@@ -89,3 +112,4 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 | Дата | Событие |
 |------|---------|
 | 2026-09-30 | CODE: P5–P7 + WE owner-session; Draft PR #55; Test SHA `0867b48…` |
+| 2026-09-30 | Review-fix: session-bound owner + WE create/join + design blocker; Test SHA `cf48534…`; Draft for GPT re-review |
