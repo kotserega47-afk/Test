@@ -3,20 +3,20 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-49A |
-| **Статус** | review (CODE; GPT review pending; Q-PTB1 **не** закрыт; merge/deploy не выполнены) |
+| **Статус** | review (CODE; GPT CHANGES → review-fix; Q-PTB1 **не** закрыт; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
-| **Связанные артефакты** | TASK-49.S ACCEPTED/docs-close `1f078eb7704c3f3d6cfd90a59b5f16ce9dc0b6c5` (accepted review `f7dd672…`, Test SHA `bab80586…`, Draft PR #53); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md); [STARTSTOP.md](../ops/MODULAR_REORG_ANTARES_STARTSTOP.md) |
+| **Связанные артефакты** | TASK-49.S ACCEPTED/docs-close `1f078eb7704c3f3d6cfd90a59b5f16ce9dc0b6c5`; [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md); [STARTSTOP.md](../ops/MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **PR** | Draft [#54](https://github.com/deniskotdavydov1991-wq/Test/pull/54) `feat/task-2026-09-17-49a-antares-producer-wait`, base `feat/task-2026-09-17-49s-antares-shutdown-session` @ `1f078eb…` |
 | **Риск** | medium: false producers_complete / seal races / foreign attestation |
 
-CODE: Q-PTB1 producer-wait primitive. **Production wiring в lifecycle/P5–P9 отсутствует**. WE/registry/sender/executor shutdown **не** подключены. **Q-PTB1 остаётся OPEN** до GPT acceptance. 49.B–E **не** начаты. TASK-39–49S повторно не закрывать.
+CODE: Q-PTB1 producer-wait primitive. **Production wiring отсутствует**. **Q-PTB1 остаётся OPEN** до GPT acceptance. 49.B–E **не** начаты.
 
 ### Разграничение
 
 | Слой | Состояние |
 |------|-----------|
-| Реализовано | `AntaresUpdateIntakeQueue`, `PtbProducerWaitHost`, attestation mint + shutdown_session bind checks, unit tests on real PTB 22.8 |
-| Подключено | **нет** (`run_ptb_lifecycle` / boot / P5–P9 не wired) |
+| Реализовано | intake seal, owner observation, issuer-bound attestation, process_update tracking, unit tests on PTB 22.8 |
+| Подключено | **нет** |
 | Выпущено | **нет** |
 
 ---
@@ -25,29 +25,30 @@ CODE: Q-PTB1 producer-wait primitive. **Production wiring в lifecycle/P5–P9 �
 
 | Вопрос | Ответ |
 |--------|-------|
-| Что создаёт работу | Updates в `Application.update_queue`; fetcher `__update_fetcher`; `__process_update_wrapper`; `Application.create_task` (`__create_task_tasks`) для concurrent updates и `block=False` handlers |
-| Как прекращаются новые producers | Seal `AntaresUpdateIntakeQueue` (refuse update `put`; allow PTB `_STOP_SIGNAL` for later `app.stop`); Updater must not be running |
-| Как доказывается завершение | After seal: queue empty + `_unfinished_tasks==0` + no live `__create_task_tasks` + `current_concurrent_updates==0`, double-checked after yield |
-| Поддерживается | Same graph as `run_ptb_lifecycle`: `SimpleUpdateProcessor`, updater present, no persistence/JobQueue, Antares intake queue, Application running, updater not running |
-| Отклоняется | Plain `asyncio.Queue`, unsupported processor/persistence/job_queue, updater running, Application not running, foreign/`for_tests` attestation on bound host |
-
-**Не** proof: stop Event, admission SEALED, empty queue without seal, no polling, caller bool, drain deadline expiry.
+| Producers | queue → fetcher; `__process_update_wrapper` / unfinished; wrapped `process_update`; `Application.create_task` set; processor concurrent count |
+| New producers stop | seal intake (allow `_STOP_SIGNAL`); updater must not run |
+| Completion | sealed idle epoch stable across `call_soon` barrier (not sleep-as-proof) |
+| Supported | lifecycle graph + Antares intake queue; `concurrent_updates` True/False; `block=False` via `Application.create_task` |
+| Rejected | plain queue; unsupported processor/persistence/job_queue; updater running; forged/stale/`for_tests` on bound issuer |
+| Constraint / blocker | untracked raw `asyncio.create_task` outside `Application.create_task` is **out of supported graph** — wiring that needs it cannot claim truthful attestation from this primitive |
 
 ---
 
-## Goal
+## Review-fix (post `f1b2204…`)
 
-Truthful `ProducersCompleteAttestation` for post-OPEN cleanup gate — without closing Application HTTP and without inventing producers_complete.
+1. Never cancel producer Tasks; only helper pulses cancelled; two-producer + deadline regressions.
+2. Attestation issued only by completed owner procedure (secret/issuer/procedure/seal); validate on accept; bind_producer_wait owner-loop + no bind after test attest.
+3. Closed set: intake seal + process_update wrap + create_task set + concurrent + unfinished; raw asyncio.create_task documented as unsupported.
+4. One owner procedure; caller deadline ≠ ending observation; late complete same owner; procedure_deadline not refreshed.
+5. COMPLETE + attestation ⇒ `snapshot.producers_complete=True`; repeat/host.snapshot agree.
 
 ---
 
 ## Success Criteria
 
-- [x] Sealed intake + idle observation on real PTB APIs (no live Telegram)
-- [x] Event/barrier scenarios 1–8
-- [x] Attestation bound to Application; shutdown_session rejects foreign/`for_tests` when bound
-- [x] Waiter cancel ≠ cancel producers; deadline → incomplete; late complete same host; repeat joins owner wait
-- [ ] GPT review / Q-PTB1 acceptance
+- [x] Review-fix items 1–5
+- [x] Real PTB scenarios (block=False, create_task, sequential)
+- [ ] GPT re-review / Q-PTB1 acceptance
 - [ ] lifecycle wiring (49.B+)
 - [ ] merge/deploy
 
@@ -57,14 +58,14 @@ Truthful `ProducersCompleteAttestation` for post-OPEN cleanup gate — without c
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ Test SHA `58cfb1cb40f29488731dcbad03bc168dd8ab7040`: producer_wait **8**; + shutdown_session + accepted_executor_work + work_admission = **140**; lifecycle unit **19** (наборы не суммировать); CI PASS не заявлять |
-| GPT | pending |
+| Cursor | Python **3.12.10** @ Test SHA `718592bec45be82b31e0cab037303f9475f13e91`: producer_wait **10**; + shutdown + admission = **142**; lifecycle **19** (не суммировать) |
+| GPT | re-review pending |
 
 ---
 
 ## Out Of Scope
 
-P5–P9 wiring; WE/registry/sender/executor stop; serve/live polling; 49.B–E; Ready/merge/retarget/deploy; closing Q-PTB1 before GPT accept; повторное закрытие TASK-39–49S.
+P5–P9 wiring; 49.B–E; Ready/merge/retarget/deploy; closing Q-PTB1 before GPT accept.
 
 ---
 
@@ -72,4 +73,6 @@ P5–P9 wiring; WE/registry/sender/executor stop; serve/live polling; 49.B–E; 
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-30 | CODE: producer-wait primitive + intake seal; Draft PR base 49.S |
+| 2026-09-30 | CODE: producer-wait primitive; Draft PR #54 |
+| 2026-09-30 | GPT CHANGES @ `f1b2204…`: cancel/attestation/closed-set/owner-deadline/outcome |
+| 2026-09-30 | Review-fix for items above |
