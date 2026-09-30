@@ -30,6 +30,7 @@ from modules.antares.shutdown_orchestration import (
     DrainPhase,
     _ATTR,
     _DrainOwnerState,
+    observe_drain_orchestration,
     run_owner_drain_p4_to_p7,
 )
 from modules.antares.shutdown_session import (
@@ -131,7 +132,9 @@ async def _arm_session_with_host(loop, clk=None, *, drain_timeout: float = 30.0)
     return app, queue, host, shut, session, admission
 
 
-def test_live_ptb_producer_blocks_p5_p6_p7() -> None:
+def test_deadline_live_producer_partial_then_late_proof_same_owner() -> None:
+    """Expiry publishes waiter partial; owner keeps observing; late proof same session."""
+
     async def _main() -> None:
         loop = asyncio.get_running_loop()
         clk = ControllableClock(10_000.0)
@@ -152,15 +155,36 @@ def test_live_ptb_producer_blocks_p5_p6_p7() -> None:
         host.seal_intake()
         drain = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
         await asyncio.sleep(0)
-        # Align with session.shutdown_deadline only (no separate producers budget).
         clk.advance(6.0)
         with pytest.raises(DrainOrchestrationError) as ei:
             await drain
-        assert "deadline" in str(ei.value).lower() or "incomplete" in str(
-            ei.value.remainder
-        ).lower()
-        assert admission.accepted_executor_futures() == ()
+        assert "drain_deadline_passed" in str(ei.value.remainder)
+        snap = observe_drain_orchestration(session)
+        assert snap is not None
+        assert snap.owner_alive is True
+        assert snap.has_terminal_error is False
+        assert snap.producers_attested is False
+        owner = getattr(session, _ATTR).owner_task
+        assert owner is not None and not owner.done()
+
         release.set()
+        # Same owner accepts late proof; no new deadline / no second owner.
+        for _ in range(400):
+            if session.snapshot().producers_complete_attested:
+                break
+            await asyncio.sleep(0.01)
+        assert session.snapshot().producers_complete_attested is True
+        assert getattr(session, _ATTR).owner_task is owner
+
+        result = await run_owner_drain_p4_to_p7(session, host)
+        assert result.producers_attested is True
+        assert result.p5_complete is True
+        assert "drain_deadline_passed" in result.remainder
+        # No new destructive P6 after expiry.
+        assert result.last_completed_phase is DrainPhase.P5_ACCEPTED_ITEMS
+        assert not getattr(session, _ATTR).p6_started
+        assert session.terminal_result() is None
+        assert getattr(session, _ATTR).owner_task is owner
         await _shutdown_app(app)
 
     asyncio.run(_main())
@@ -510,55 +534,79 @@ def test_two_orchestration_waiters_single_phase_sequence() -> None:
     asyncio.run(_main())
 
 
-def test_deadline_during_incomplete_p5_and_started_p6() -> None:
+def test_deadline_during_incomplete_p5_then_late_completion() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
         clk = ControllableClock(20_000.0)
         clk.bind_loop()
-        app, _queue, host, _shut, session, admission = await _arm_session_with_host(
+        app, _queue = _build_app()
+        admission = WorkAdmission()
+        bind_antares_admission(admission)
+        admission.open()
+        host = PtbProducerWaitHost(application=app, loop=loop, clock=clk)
+        await _start_app(app)
+        hold = threading.Event()
+        release = threading.Event()
+
+        def body():
+            hold.set()
+            release.wait(timeout=10)
+            return "late-p5"
+
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = admission.submit_if_open(ex, body).future
+            for _ in range(200):
+                if hold.is_set():
+                    break
+                await asyncio.sleep(0)
+            stop = asyncio.Event()
+            shut = ShutdownSessionHost(
+                admission=admission,
+                stop=stop,
+                loop=loop,
+                drain_timeout=2.0,
+                clock=clk,
+            )
+            attach_producer_wait_to_shutdown_host(shut, host)
+            session = shut.arm_request_stop(had_open=True)
+            await session.wait_arm_effects()
+            host.seal_intake()
+            drain = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
+            await asyncio.sleep(0)
+            clk.advance(3.0)
+            with pytest.raises(DrainOrchestrationError) as ei:
+                await drain
+            assert "drain_deadline_passed" in str(ei.value.remainder)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None and snap.owner_alive is True
+            assert not fut.done()
+            owner = getattr(session, _ATTR).owner_task
+            release.set()
+            assert fut.result(timeout=5) == "late-p5"
+            result = await run_owner_drain_p4_to_p7(session, host)
+            assert result.p5_complete is True
+            assert "drain_deadline_passed" in result.remainder
+            assert result.last_completed_phase is DrainPhase.P5_ACCEPTED_ITEMS
+            assert not getattr(session, _ATTR).p6_started
+            assert getattr(session, _ATTR).owner_task is owner
+            assert session.terminal_result() is None
+        finally:
+            ex.shutdown(wait=False, cancel_futures=False)
+            await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_deadline_partial_during_held_p6_then_rejoin() -> None:
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(30_000.0)
+        clk.bind_loop()
+        app, _queue, host, _shut, session, _admission = await _arm_session_with_host(
             loop, clk, drain_timeout=2.0
         )
         host.seal_intake()
-        # Attest P4 first so owner can enter P5, then hold WE unfinished.
-        out = await host.wait_and_accept(session, deadline=None)
-        assert out.attestation is not None
-        q = worker_mod.ensure_profile_queue("DENIS")
-        q.put(object())
-        assert q.unfinished_tasks >= 1
-
-        drain = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
-        await asyncio.sleep(0)
-        clk.advance(3.0)
-        with pytest.raises(DrainOrchestrationError) as ei:
-            await drain
-        assert "deadline" in str(ei.value).lower() or "drain_deadline_passed" in str(
-            ei.value.remainder
-        )
-        # Accepted/continuation not cancelled by deadline publish; unfinished remains.
-        assert q.unfinished_tasks >= 1
-        assert session.terminal_result() is None
-
-        # Started P6 observe path: clear unfinished, allow P6, expire before P7.
-        try:
-            q.get_nowait()
-            q.task_done()
-        except Exception:
-            pass
-
-        clk2 = ControllableClock(30_000.0)
-        clk2.bind_loop()
-        await _shutdown_app(app)
-        reset_antares_admission_for_tests()
-        worker_mod._reset_we_stop_owner_for_tests()
-        worker_mod._profile_workers = {}
-        worker_mod._profile_workers_frozen = False
-        worker_mod._profile_workers_stop_done = False
-
-        app2, _q2, host2, _s2, session2, admission2 = await _arm_session_with_host(
-            loop, clk2, drain_timeout=2.0
-        )
-        host2.seal_intake()
-        # Patch WE stop to hold after "start" so deadline can fire mid-P6.
         started = asyncio.Event()
         release_we = asyncio.Event()
 
@@ -573,21 +621,143 @@ def test_deadline_during_incomplete_p5_and_started_p6() -> None:
             "modules.antares.shutdown_orchestration.stop_isolated_profile_workers",
             new=_slow_we,
         ):
-            d2 = asyncio.create_task(run_owner_drain_p4_to_p7(session2, host2))
+            d1 = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
             await started.wait()
-            state = getattr(session2, _ATTR)
-            assert state.p6_started is True
-            clk2.advance(3.0)
-            # Waiter keeps observing started P6; finish WE then owner hits P7 gate.
+            assert observe_drain_orchestration(session).p6_started is True
+            clk.advance(3.0)
+            with pytest.raises(DrainOrchestrationError) as ei:
+                await d1
+            assert "drain_deadline_passed" in str(ei.value.remainder)
+            assert "p6_started" in str(ei.value.remainder)
+            # Partial arrived BEFORE release; owner still joining.
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.owner_alive is True
+            assert snap.p6_started is True
+            assert not release_we.is_set()
+
             worker_mod.ensure_profile_queue("DENIS")
             release_we.set()
-            with pytest.raises(DrainOrchestrationError) as ei2:
-                await d2
-            rem = ei2.value.remainder
-            assert rem is not None
-            assert "drain_deadline_passed" in rem or "we_stop_complete" in rem
-            assert session2.terminal_result() is None
-        await _shutdown_app(app2)
+            result = await run_owner_drain_p4_to_p7(session, host)
+            assert result.we_joined == ("DENIS",) or "DENIS" in result.we_joined
+            assert result.p5_complete is True
+            assert "drain_deadline_passed" in result.remainder
+            # No P7 after expiry.
+            assert not getattr(session, _ATTR).p7_started
+            assert result.last_completed_phase is DrainPhase.P6_WE_STOP
+            assert session.terminal_result() is None
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_deadline_partial_during_held_p7_then_rejoin() -> None:
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(40_000.0)
+        clk.bind_loop()
+        app, _queue, host, _shut, session, _admission = await _arm_session_with_host(
+            loop, clk, drain_timeout=2.0
+        )
+        host.seal_intake()
+        started = asyncio.Event()
+        release_reg = asyncio.Event()
+
+        async def _slow_reg(adm, *, producers_complete, timeout=None):
+            started.set()
+            await release_reg.wait()
+            return await wait_isolated_registry_daemon_ops(
+                adm, producers_complete=producers_complete, timeout=timeout
+            )
+
+        with patch(
+            "modules.antares.shutdown_orchestration.wait_isolated_registry_daemon_ops",
+            new=_slow_reg,
+        ):
+            # Start P6 before deadline so P7 can begin, then expire mid-P7.
+            d1 = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
+            await started.wait()
+            assert observe_drain_orchestration(session).p7_started is True
+            clk.advance(3.0)
+            with pytest.raises(DrainOrchestrationError) as ei:
+                await d1
+            assert "drain_deadline_passed" in str(ei.value.remainder)
+            assert "p7_started" in str(ei.value.remainder)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None and snap.owner_alive is True
+            assert not release_reg.is_set()
+
+            release_reg.set()
+            result = await run_owner_drain_p4_to_p7(session, host)
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+            assert result.remainder == ()
+            assert session.terminal_result() is None
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_waiter_cancel_cleans_only_own_helper_tasks() -> None:
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        app, _queue = _build_app()
+        admission = WorkAdmission()
+        bind_antares_admission(admission)
+        admission.open()
+        host = PtbProducerWaitHost(application=app, loop=loop)
+        await _start_app(app)
+        hold = threading.Event()
+        release = threading.Event()
+
+        def body():
+            hold.set()
+            release.wait(timeout=5)
+            return "helpers"
+
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = admission.submit_if_open(ex, body).future
+            for _ in range(200):
+                if hold.is_set():
+                    break
+                await asyncio.sleep(0)
+            stop = asyncio.Event()
+            shut = ShutdownSessionHost(
+                admission=admission, stop=stop, loop=loop, drain_timeout=30.0
+            )
+            attach_producer_wait_to_shutdown_host(shut, host)
+            session = shut.arm_request_stop(had_open=True)
+            await session.wait_arm_effects()
+            host.seal_intake()
+            before = {t for t in asyncio.all_tasks() if not t.done()}
+            waiter = asyncio.create_task(run_owner_drain_p4_to_p7(session, host))
+            await asyncio.sleep(0.05)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            await asyncio.sleep(0)
+            leftover_helpers = [
+                t
+                for t in asyncio.all_tasks()
+                if not t.done()
+                and t not in before
+                and t is not getattr(session, _ATTR).owner_task
+                and (
+                    (t.get_name() or "").startswith("antares-drain-")
+                    or (t.get_name() or "").startswith("antares-drain")
+                )
+            ]
+            assert leftover_helpers == []
+            assert not fut.done()
+            assert getattr(session, _ATTR).owner_task is not None
+            assert not getattr(session, _ATTR).owner_task.done()
+            release.set()
+            assert fut.result(timeout=5) == "helpers"
+            result = await run_owner_drain_p4_to_p7(session, host)
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+        finally:
+            ex.shutdown(wait=False, cancel_futures=False)
+            await _shutdown_app(app)
 
     asyncio.run(_main())
 

@@ -7,6 +7,12 @@ Task to that session. Public callers only join/observe it. Cancelling a waiter
 detaches that waiter only — phase transitions continue. Concurrent / repeat
 callers never start a second orchestration for the same session.
 
+Deadline snapshot vs owner completion: expiry publishes a **waiter-side** partial
+without caching a terminal owner error. The same owner keeps observing late
+producer proof and already-accepted work; no new ``shutdown_deadline`` is issued.
+After expiry, new destructive phases (P6/P7) are not started. Started P6/P7 join
+continues; waiters may take a partial and later re-join the same procedure.
+
 Supported path requires TASK-49.A conditions: producer host installed once
 before ``Application.initialize()``, Antares intake queue, Application/issuer
 binding, no untracked producers, permanent entry refuse after COMPLETE.
@@ -28,7 +34,7 @@ import asyncio
 import contextlib
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from automation.worker import (
     IsolatedProfileWorkerStopError,
@@ -45,7 +51,7 @@ from modules.antares.work_admission import WorkAdmission
 
 
 class DrainOrchestrationError(RuntimeError):
-    """Drain phase refused or failed (remainder may be attached)."""
+    """Drain phase refused, failed, or deadline partial snapshot for a waiter."""
 
     def __init__(self, message: str, *, remainder: Any | None = None) -> None:
         super().__init__(message)
@@ -61,7 +67,7 @@ class DrainPhase(enum.Enum):
 
 @dataclass(frozen=True)
 class DrainPhasesResult:
-    """Partial drain outcome — not full shutdown / not SESSION_TERMINAL."""
+    """Partial or full drain outcome — not full shutdown / not SESSION_TERMINAL."""
 
     producers_attested: bool
     p5_complete: bool
@@ -69,6 +75,25 @@ class DrainPhasesResult:
     registry_joined: tuple[str, ...]
     last_completed_phase: DrainPhase | None
     remainder: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DrainOrchestrationSnapshot:
+    """Public read-only progress of the session-bound P4–P7 owner procedure."""
+
+    last_completed_phase: DrainPhase | None
+    producers_attested: bool
+    p5_complete: bool
+    p6_started: bool
+    p7_started: bool
+    we_joined: tuple[str, ...]
+    registry_joined: tuple[str, ...]
+    remainder: tuple[str, ...]
+    owner_alive: bool
+    deadline_passed: bool
+    may_start_new_destructive_phases: bool
+    has_terminal_result: bool
+    has_terminal_error: bool
 
 
 @dataclass
@@ -84,9 +109,15 @@ class _DrainOwnerState:
     registry_joined: tuple[str, ...] = ()
     remainder: list[str] = field(default_factory=list)
     result: DrainPhasesResult | None = None
+    # Terminal hard failures only (not deadline waiter partials).
     error: BaseException | None = None
     p6_started: bool = False
     p7_started: bool = False
+    # Waiters that already received a deadline partial for this procedure.
+    deadline_partial_delivered: set[int] = field(default_factory=set)
+    # One deadline snapshot wave for waiters present when expiry is first noticed;
+    # later joiners observe the same owner through to soft/hard terminal.
+    deadline_partial_wave_done: bool = False
     progress: asyncio.Event = field(default_factory=asyncio.Event)
 
     def pulse(self) -> None:
@@ -98,6 +129,10 @@ class _DrainOwnerState:
             DrainPhase.P6_WE_STOP,
             DrainPhase.P7_REGISTRY,
         )
+        rem = list(self.remainder)
+        if self.session._drain_deadline_passed():  # noqa: SLF001
+            if "drain_deadline_passed" not in rem:
+                rem.insert(0, "drain_deadline_passed")
         return DrainPhasesResult(
             producers_attested=bool(
                 self.session.snapshot().producers_complete_attested
@@ -106,7 +141,7 @@ class _DrainOwnerState:
             we_joined=self.we_joined,
             registry_joined=self.registry_joined,
             last_completed_phase=self.last_completed_phase,
-            remainder=tuple(self.remainder),
+            remainder=tuple(rem),
         )
 
 
@@ -181,6 +216,37 @@ def _get_owner_state(session: ShutdownSession) -> _DrainOwnerState | None:
     return state if isinstance(state, _DrainOwnerState) else None
 
 
+def observe_drain_orchestration(
+    session: ShutdownSession,
+) -> DrainOrchestrationSnapshot | None:
+    """Public read-only progress of the P4–P7 owner (None if not armed)."""
+
+    state = _get_owner_state(session)
+    if state is None:
+        return None
+    owner = state.owner_task
+    alive = owner is not None and not owner.done()
+    snap = state.build_partial_result()
+    return DrainOrchestrationSnapshot(
+        last_completed_phase=state.last_completed_phase,
+        producers_attested=snap.producers_attested,
+        p5_complete=snap.p5_complete,
+        p6_started=state.p6_started,
+        p7_started=state.p7_started,
+        we_joined=state.we_joined,
+        registry_joined=state.registry_joined,
+        remainder=snap.remainder,
+        owner_alive=alive,
+        deadline_passed=bool(session._drain_deadline_passed()),  # noqa: SLF001
+        may_start_new_destructive_phases=bool(
+            session._may_start_new_destructive_phases()  # noqa: SLF001
+        ),
+        has_terminal_result=state.result is not None,
+        has_terminal_error=state.error is not None
+        and (owner is None or owner.done()),
+    )
+
+
 def _publish_drain_waiters(state: _DrainOwnerState) -> None:
     waiters = list(state.waiters)
     state.waiters.clear()
@@ -212,9 +278,15 @@ def _retrieve_drain_owner_exception(state: _DrainOwnerState) -> None:
 
 
 def _deadline_partial_error(state: _DrainOwnerState) -> DrainOrchestrationError:
-    rem = list(state.remainder)
+    """Waiter-side snapshot only — must not be cached as owner terminal error."""
+
+    rem = list(state.build_partial_result().remainder)
     if "drain_deadline_passed" not in rem:
         rem.insert(0, "drain_deadline_passed")
+    if state.p6_started and "p6_started" not in rem:
+        rem.append("p6_started")
+    if state.p7_started and "p7_started" not in rem:
+        rem.append("p7_started")
     if state.last_completed_phase is not None:
         tag = f"last_{state.last_completed_phase.value}"
         if tag not in rem:
@@ -224,6 +296,7 @@ def _deadline_partial_error(state: _DrainOwnerState) -> DrainOrchestrationError:
         if item not in rem:
             rem.append(item)
     state.remainder = rem
+    state.pulse()
     return DrainOrchestrationError(
         "shutdown deadline published partial drain snapshot; "
         "Accepted/continuation and started owner ops were not cancelled",
@@ -231,26 +304,42 @@ def _deadline_partial_error(state: _DrainOwnerState) -> DrainOrchestrationError:
     )
 
 
+def _publish_deadline_wave(state: _DrainOwnerState) -> bool:
+    """Publish one deadline partial wave to current waiters; owner keeps running.
+
+    Returns True if this call performed the wave. Later joiners do not get another
+    automatic deadline partial — they observe the same owner to soft/hard terminal.
+    """
+
+    if state.deadline_partial_wave_done:
+        return False
+    state.deadline_partial_wave_done = True
+    err = _deadline_partial_error(state)
+    for fut in list(state.waiters):
+        if fut.done():
+            continue
+        state.deadline_partial_delivered.add(id(fut))
+        fut.set_exception(err)
+    return True
+
+
 async def wait_p5_accepted_continuation_and_we_items(
     admission: WorkAdmission,
     *,
     progress: asyncio.Event | None = None,
-    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """P5: Accepted Futures done, AE continuations empty, WE unfinished_tasks==0.
 
     Does **not** cancel Futures/continuations. Empty queue alone is not drain —
-    ``unfinished_tasks`` must reach 0. Not a full graceful stop.
+    ``unfinished_tasks`` must reach 0. Not a full graceful stop. Deadline does
+    not abort this observation — caller gates new destructive phases separately.
     """
 
     await admission.wait_accepted_executor_work()
     while True:
-        if should_stop is not None and should_stop():
-            return
         cont = _continuation_states(admission)
         unfinished = _we_unfinished_profiles()
         if not cont and not unfinished:
-            # call_soon barrier: confirm idle after one scheduling turn
             ready = asyncio.Event()
             asyncio.get_running_loop().call_soon(ready.set)
             await ready.wait()
@@ -267,25 +356,21 @@ async def wait_p5_accepted_continuation_and_we_items(
 
 
 async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
-    """Single owner sequence; waiter cancel must not interrupt this Task."""
+    """Single owner sequence; waiter cancel / deadline partial must not stop this."""
 
     session = state.session
     producer_wait = state.producer_wait
     admission = session._host.admission  # noqa: SLF001
 
     try:
-        # --- P4: truthful producers_complete (session.shutdown_deadline only) ---
+        # --- P4: keep observing until attested (no owner-side deadline abort) ---
         if not session.snapshot().producers_complete_attested:
-            if not session._may_start_new_destructive_phases():  # noqa: SLF001
-                state.remainder = ["drain_deadline_passed"]
-                raise _deadline_partial_error(state)
-            outcome = await producer_wait.wait_and_accept(
-                session, deadline=session.shutdown_deadline
-            )
+            # Owner waits without a fresh budget; session.shutdown_deadline is
+            # waiter-side only. Late proof is still accepted on this session.
+            outcome = await producer_wait.wait_and_accept(session, deadline=None)
             if outcome.attestation is None:
+                # Should not happen with deadline=None unless refused/failed.
                 state.remainder = ["producers_incomplete"]
-                if session._drain_deadline_passed():  # noqa: SLF001
-                    raise _deadline_partial_error(state)
                 raise DrainOrchestrationError(
                     "PTB producers incomplete; P5–P7 refused",
                     remainder=("producers_incomplete",),
@@ -297,36 +382,25 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
                 remainder=("producers_not_attested",),
             )
         state.last_completed_phase = DrainPhase.P4_PRODUCERS
+        state.remainder = [r for r in state.remainder if r != "producers_incomplete"]
         state.pulse()
 
-        if not session._may_start_new_destructive_phases():  # noqa: SLF001
-            state.remainder = ["drain_deadline_passed", "producers_complete"]
-            raise _deadline_partial_error(state)
-
-        # --- P5 (observe until idle; deadline forbids starting P6, not cancel) ---
+        # After expiry: observe only — do not start P5→P6 destructive chain.
+        # P5 itself is observation (no cancel); still run it so late Accepted
+        # work is joined. P6/P7 remain gated.
         await wait_p5_accepted_continuation_and_we_items(
             admission,
             progress=state.progress,
-            should_stop=lambda: (
-                session._drain_deadline_passed()  # noqa: SLF001
-                and not session._may_start_new_destructive_phases()  # noqa: SLF001
-            ),
         )
-        if session._drain_deadline_passed() and (  # noqa: SLF001
-            _continuation_states(admission) or _we_unfinished_profiles()
-        ):
-            state.remainder = ["drain_deadline_passed", "p5_incomplete"]
-            raise _deadline_partial_error(state)
-        if _continuation_states(admission) or _we_unfinished_profiles():
-            # Stopped early without idle — treat as deadline/partial refuse.
-            state.remainder = ["drain_deadline_passed", "p5_incomplete"]
-            raise _deadline_partial_error(state)
         state.last_completed_phase = DrainPhase.P5_ACCEPTED_ITEMS
         state.pulse()
 
         if not session._may_start_new_destructive_phases():  # noqa: SLF001
+            # Soft terminal: deadline blocked P6; not a hard owner error.
             state.remainder = ["drain_deadline_passed", "p5_complete"]
-            raise _deadline_partial_error(state)
+            result = state.build_partial_result()
+            state.result = result
+            return result
 
         # --- P6: WE owner-session stop (no separate drain budget) ---
         state.p6_started = True
@@ -349,9 +423,10 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         state.pulse()
 
         if not session._may_start_new_destructive_phases():  # noqa: SLF001
-            # P6 started+finished; do not start new destructive P7 after expiry.
             state.remainder = ["drain_deadline_passed", "we_stop_complete"]
-            raise _deadline_partial_error(state)
+            result = state.build_partial_result()
+            state.result = result
+            return result
 
         # --- P7: registry only after successful P6 ---
         state.p7_started = True
@@ -382,12 +457,10 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         state.result = result
         return result
     except BaseException as exc:
-        if state.error is None:
-            state.error = exc
         if not isinstance(exc, asyncio.CancelledError):
-            # Preserve partial snapshot on failure/deadline.
-            if state.result is None and state.last_completed_phase is not None:
-                state.pulse()
+            if state.error is None:
+                state.error = exc
+            state.pulse()
         raise
     finally:
         _publish_drain_waiters(state)
@@ -400,8 +473,9 @@ async def run_owner_drain_p4_to_p7(
     """Join/observe the single P4→P7 owner Task bound to ``session``.
 
     Uses only ``session.shutdown_deadline`` (no separate per-phase drain budget).
-    Waiter cancellation does not interrupt owner phases. Repeat/concurrent
-    callers share the same procedure. P7 success does not publish SESSION_TERMINAL.
+    Waiter cancellation does not interrupt owner phases. Deadline publishes a
+    waiter-side partial without terminating the owner. Repeat/concurrent callers
+    share the same procedure. P7 success does not publish SESSION_TERMINAL.
     """
 
     _assert_drain_identity(session, producer_wait)
@@ -438,7 +512,6 @@ async def run_owner_drain_p4_to_p7(
                 return state.result
             if state.error is not None:
                 raise state.error
-        # Create the sole owner for this session.
         state.owner_task = loop.create_task(
             _owner_drain_p4_to_p7(state),
             name="antares-drain-p4-p7-owner",
@@ -458,7 +531,6 @@ async def run_owner_drain_p4_to_p7(
     waiter: asyncio.Future = loop.create_future()
     state.waiters.append(waiter)
 
-    # If owner already finished between create and append, publish immediately.
     if state.owner_task.done() and not waiter.done():
         _retrieve_drain_owner_exception(state)
         if state.error is not None:
@@ -467,6 +539,7 @@ async def run_owner_drain_p4_to_p7(
             waiter.set_result(state.result)
 
     deadline = session.shutdown_deadline
+    helper_tasks: list[asyncio.Task[Any]] = []
 
     async def _wait_progress_or_deadline() -> None:
         helpers: list[asyncio.Task[Any]] = [
@@ -483,6 +556,7 @@ async def run_owner_drain_p4_to_p7(
             helpers.append(
                 loop.create_task(asyncio.sleep(0.05), name="antares-drain-poll")
             )
+        helper_tasks.extend(helpers)
         try:
             await asyncio.wait(helpers, return_when=asyncio.FIRST_COMPLETED)
         finally:
@@ -490,7 +564,18 @@ async def run_owner_drain_p4_to_p7(
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*helpers, return_exceptions=True)
+            for task in helpers:
+                with contextlib.suppress(ValueError):
+                    helper_tasks.remove(task)
         state.progress.clear()
+
+    async def _cancel_own_helpers() -> None:
+        pending = [t for t in list(helper_tasks) if not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        helper_tasks.clear()
 
     try:
         while not waiter.done():
@@ -503,18 +588,18 @@ async def run_owner_drain_p4_to_p7(
                         waiter.set_result(state.result)
                 break
 
-            # Deadline publishes partial without cancelling owner / Accepted work.
-            if (
+            deadline_passed = (
                 deadline is not None
                 and session._drain_deadline_passed()  # noqa: SLF001
-                and not session._may_start_new_destructive_phases()  # noqa: SLF001
-                and not (state.p6_started or state.p7_started)
-            ):
-                err = _deadline_partial_error(state)
-                if not waiter.done():
-                    waiter.set_exception(err)
+            )
+            if deadline_passed and not state.deadline_partial_wave_done:
+                # Waiter-side partial wave; owner keeps observing / joining.
+                _publish_deadline_wave(state)
                 break
 
+            # After the deadline wave, new joiners observe until owner settles
+            # (late proof / late P5 / started P6–P7 join) — no new deadline budget.
+            wait_tasks: list[asyncio.Future[Any]] = []
             try:
                 wait_tasks = [
                     asyncio.ensure_future(asyncio.shield(waiter)),
@@ -523,15 +608,24 @@ async def run_owner_drain_p4_to_p7(
                 done, pending = await asyncio.wait(
                     wait_tasks, return_when=asyncio.FIRST_COMPLETED
                 )
+            except asyncio.CancelledError:
+                for task in wait_tasks:
+                    if not task.done():
+                        task.cancel()
+                if wait_tasks:
+                    await asyncio.gather(*wait_tasks, return_exceptions=True)
+                await _cancel_own_helpers()
+                raise
+            else:
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
                 for task in done:
-                    with contextlib.suppress(asyncio.CancelledError, asyncio.InvalidStateError):
+                    with contextlib.suppress(
+                        asyncio.CancelledError, asyncio.InvalidStateError
+                    ):
                         if not task.cancelled():
                             task.exception()
-            except asyncio.CancelledError:
-                raise
 
         return await waiter
     except asyncio.CancelledError:
@@ -541,8 +635,11 @@ async def run_owner_drain_p4_to_p7(
             pass
         if not waiter.done():
             waiter.cancel()
-        # Owner continues; error retained for later joiners.
+        await _cancel_own_helpers()
+        # Owner, producers, Accepted Futures, continuations are not cancelled.
         raise
+    finally:
+        await _cancel_own_helpers()
 
 
 def require_producer_host_pre_initialize(application: Any) -> None:
