@@ -6,7 +6,7 @@
 | **Статус** | review (подготовлено; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49 close `e331c677e15ae765db5eb97fe686ec91679c0a6d` (accepted docs `237b20efeb2aed76d24f620a9a1cc2110145344c`, Draft PR #52); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) |
-| **PR** | Draft (этот PR) `feat/task-2026-09-17-49s-antares-shutdown-session`, base `docs/task-2026-09-17-49-antares-shutdown-orchestration` @ `e331c677…` |
+| **PR** | Draft [#53](https://github.com/deniskotdavydov1991-wq/Test/pull/53) `feat/task-2026-09-17-49s-antares-shutdown-session`, base `docs/task-2026-09-17-49-antares-shutdown-orchestration` @ `e331c677…` |
 | **Риск** | medium: owner-session semantics; false overall_ok; premature cleanup without Q-PTB1 |
 
 CODE: owner shutdown-session primitive. **Production wiring отсутствует** (`run_ptb_lifecycle` / `request_antares_stop` callers / boot / handlers **не** подключены). WE/registry/sender/executor этим PR **не** останавливаются. Полный graceful Antares **не** завершён. Q-PTB1 **открыт** и блокирует зависимое подключение full cleanup. 49.A–E **не** автостарт. TASK-39–49 повторно не закрывать. 49.S **не** закрывать до GPT review.
@@ -67,7 +67,7 @@ CODE: owner shutdown-session primitive. **Production wiring отсутствуе
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10**; `tests/unit/test_antares_shutdown_session.py` + `tests/test_antares_accepted_executor_work.py` + `tests/unit/test_antares_work_admission.py` + `tests/unit/test_antares_lifecycle.py` (+ lifecycle helper smoke) — see PR report SHA |
+| Cursor | Python **3.12.10** @ `9fb9d271a4d9a0663ea95c81030a666de0e9ad04`: shutdown_session **18**; + accepted_executor_work + work_admission = **117**; lifecycle unit **20** |
 | GPT | pending review |
 
 ---
