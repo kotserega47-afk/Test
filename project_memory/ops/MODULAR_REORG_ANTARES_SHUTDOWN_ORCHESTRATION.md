@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52 @ `e331c677…`; slice **49.S** GPT ACCEPTED `f7dd672…` / docs-close Draft PR #53 (`modules.antares.shutdown_session`); production wiring **нет**; полный shutdown **не** реализован; Q-PTB1 открыт; **49.A** next (не начат) |
+| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52 @ `e331c677…`; slice **49.S** GPT ACCEPTED `f7dd672…` / docs-close Draft PR #53; slice **49.A** CODE in review (`ptb_producer_wait`); production wiring **нет**; полный shutdown **не** реализован; **Q-PTB1 OPEN** until GPT accept |
 | **База** | TASK-48 docs-close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51) |
 | **Принятый docs SHA** | `237b20efeb2aed76d24f620a9a1cc2110145344c` |
 | **Обследованный SHA** | `90cda7c…` (+ worker stop API на том же дереве); stop APIs приняты на `7f6b5a8…` |
@@ -341,7 +341,7 @@ Owner-session / cancel / result / cleanup-observer model — **в 49.S**, не �
 | Slice | Content | Depends on | Gate |
 |-------|---------|------------|------|
 | **49.S** | Shutdown-session primitive: arm on request-stop **and** cancel-after-OPEN; waiter detach; primary CancelledError; snapshot vs SESSION_TERMINAL; cleanup observer + observe budget; structured skeleton result — **ACCEPTED** `f7dd672…` / Draft PR #53 (**не** wired) | TASK-24 helper shape | **before** any P3–P9 wiring |
-| **49.A** | Q-PTB1 producer-wait primitive + truthful producers_complete | 49.S | **blocks** 49.B+ until accepted |
+| **49.A** | Q-PTB1 producer-wait primitive + truthful producers_complete — **CODE in review** (Draft PR base 49.S; **not** wired; gate stays OPEN until GPT accept) | 49.S | **blocks** 49.B+ until accepted |
 | **49.B** | Wire P5–P7; WE **owner-session** observe (may extend TASK-41 API in **that** future code PR, not this docs PR) | 49.A accepted; TASK-40/41/43 | no wiring with false producers |
 | **49.C** | P8 sender + proof plumbing from `AntaresBootPrefix.sender_ownership` | 49.B; TASK-48 | |
 | **49.D** | Production executor shutdown + EX1 | 49.C | |

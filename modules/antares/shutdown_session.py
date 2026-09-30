@@ -8,9 +8,10 @@ Future lifecycle host **must** keep the owner event loop alive until
 ``SESSION_TERMINAL`` (or process death). This primitive never closes the loop,
 never starts a new loop, and never promises bounded process exit.
 
-Q-PTB1 remains open: full post-OPEN cleanup requires an explicit
-:class:`ProducersCompleteAttestation` from a future producer-wait primitive
-(or a test harness). This module never invents ``producers_complete=True``.
+Q-PTB1 producer-wait lives in ``modules.antares.ptb_producer_wait``. Full
+post-OPEN cleanup still requires a :class:`ProducersCompleteAttestation` minted
+for the Application bound on this host (or ``for_tests`` only when unbound).
+This module never invents ``producers_complete=True``.
 """
 
 from __future__ import annotations
@@ -67,15 +68,46 @@ class ShutdownPath(enum.Enum):
 class ProducersCompleteAttestation:
     """Opaque proof that PTB producers are complete.
 
-    Production code must obtain this from an accepted Q-PTB1 primitive.
-    Tests may build one via :meth:`for_tests` only.
+    Production code must obtain this from the accepted Q-PTB1 primitive
+    (:meth:`mint_for_application`). Tests may build one via :meth:`for_tests`
+    only when the shutdown host has **no** bound Application.
     """
 
     _mark: str = field(default="producers_complete", repr=False)
+    _application_token: int | None = field(default=None, repr=False)
+    _intake_generation: int | None = field(default=None, repr=False)
 
     @classmethod
     def for_tests(cls) -> ProducersCompleteAttestation:
         return cls(_mark="test")
+
+    @classmethod
+    def mint_for_application(
+        cls, *, application_token: int, intake_generation: int
+    ) -> ProducersCompleteAttestation:
+        """Mint a production attestation bound to an Application + intake seal."""
+
+        if application_token == 0:
+            raise ValueError("application_token required")
+        if intake_generation <= 0:
+            raise ValueError("intake_generation required")
+        return cls(
+            _mark="ptb_producer_wait",
+            _application_token=int(application_token),
+            _intake_generation=int(intake_generation),
+        )
+
+    @property
+    def is_test_harness(self) -> bool:
+        return self._mark == "test"
+
+    @property
+    def application_token(self) -> int | None:
+        return self._application_token
+
+    @property
+    def intake_generation(self) -> int | None:
+        return self._intake_generation
 
 
 @dataclass(frozen=True)
@@ -566,6 +598,25 @@ class ShutdownSession:
             raise ShutdownSessionError("producers attestation only for post-OPEN path")
         if self._terminal is not None:
             raise ShutdownSessionError("session already terminal")
+        bound = self._host.application_token
+        if bound is not None:
+            if attestation.is_test_harness:
+                raise ShutdownSessionError(
+                    "for_tests attestation rejected when Application is bound"
+                )
+            if attestation.application_token != bound:
+                raise ShutdownSessionError("foreign Application attestation rejected")
+            if attestation._mark != "ptb_producer_wait":  # noqa: SLF001
+                raise ShutdownSessionError(
+                    "attestation must be minted by Q-PTB1 producer-wait"
+                )
+        elif not attestation.is_test_harness:
+            # Unbound host (shutdown_session unit tests): only for_tests harness.
+            if attestation._mark != "ptb_producer_wait":  # noqa: SLF001
+                raise ShutdownSessionError("unrecognized producers attestation")
+            raise ShutdownSessionError(
+                "Application-bound attestation requires ShutdownSessionHost.bind_application"
+            )
         self._producers_attested = True
         self._publish()
 
@@ -741,6 +792,25 @@ class ShutdownSessionHost:
         self.cleanup_observe_timeout = float(cleanup_observe_timeout)
         self.clock = clock if clock is not None else Clock()
         self._session: ShutdownSession | None = None
+        self._application: Any | None = None
+        self._application_token: int | None = None
+
+    def bind_application(self, application: Any) -> None:
+        """Bind the observed PTB Application for attestation checks (once)."""
+
+        token = id(application)
+        if self._application is not None and self._application_token != token:
+            raise ShutdownSessionError("Application already bound to a different instance")
+        self._application = application
+        self._application_token = token
+
+    @property
+    def application(self) -> Any | None:
+        return self._application
+
+    @property
+    def application_token(self) -> int | None:
+        return self._application_token
 
     @property
     def admission(self) -> WorkAdmission:
