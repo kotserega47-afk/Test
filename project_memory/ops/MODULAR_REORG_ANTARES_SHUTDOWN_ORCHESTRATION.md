@@ -2,20 +2,21 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **подготовлен** (ожидание GPT review); runtime **нет**; helper **не** wired; merge/deploy нет; TASK-49 **не** закрыт |
+| **Статус** | docs-контракт **подготовлен** (GPT CHANGES REQUESTED → правки в этом PR); runtime **нет**; helper **не** wired; merge/deploy нет; TASK-49 **не** закрыт |
 | **База** | TASK-48 docs-close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51) |
-| **Обследованный SHA** | `90cda7c…` (docs-close = worktree HEAD); stop APIs приняты на `7f6b5a8…` |
+| **Обследованный SHA** | `90cda7c…` (+ worker stop API на том же дереве); stop APIs приняты на `7f6b5a8…` |
+| **PR** | Draft [#52](https://github.com/deniskotdavydov1991-wq/Test/pull/52) |
 | **PTB helper** | [STARTSTOP.md](MODULAR_REORG_ANTARES_STARTSTOP.md) / `modules.antares.application_lifecycle.run_ptb_lifecycle` |
 | **Drain/stop** | [DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 |
-| **WE stop** | TASK-41 `stop_isolated_profile_workers` |
-| **Registry** | [REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42/43 `wait_isolated_registry_daemon_ops` |
-| **Sender** | [SENDER_DRAIN_STOP.md](MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) / [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-44–48 `stop_isolated_sender` |
+| **WE stop** | TASK-41 `automation.worker.stop_isolated_profile_workers` |
+| **Registry** | [REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42/43 |
+| **Sender** | [SENDER_DRAIN_STOP.md](MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) TASK-44–48 |
 | **Mixed gate** | [TASK-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 | **O10** | mixed-stop **открыт** |
 
 Цель: соединить **принятые** stop-механизмы с `run_ptb_lifecycle` в один проверяемый orchestration-контракт. Это **не** реализация, **не** wiring helper, **не** полный выпуск, **не** mixed-stop.
 
-На `90cda7c…` helper после `stop.wait()` делает только defensive `seal()` и PTB `_cleanup_application`. Work drain / WE / registry / sender / executor **не** вызываются (явно покрыто тестами helper). TASK-49 фиксирует **что** должно появиться в будущих code slices.
+На `90cda7c…` helper после `stop.wait()` делает только defensive `seal()` и PTB `_cleanup_application`. Work drain / WE / registry / sender / executor **не** вызываются. TASK-49 фиксирует **что** должно появиться в будущих code slices.
 
 `Sender STOPPED` (TASK-48) **сам по себе** ≠ общий graceful Antares success.
 
@@ -23,320 +24,298 @@
 
 ## 0. Жёсткие правила
 
-1. `request_antares_stop`: **`admission.seal()` затем `stop.set()`** на owner loop (`modules.antares.work_admission.request_antares_stop`). Уже Accepted work **продолжает** выполняться.
+1. `request_antares_stop`: **`admission.seal()` затем `stop.set()`** на owner loop. Уже Accepted work **продолжает** выполняться; Futures/continuation **не** cancel.
 2. `stop.set()` / отсутствие polling / пустая Queue **не** доказывают конец PTB producers.
 3. Не freeze registry, пока WE ещё может создать `schedule_registry_append`.
 4. Не stop sender intake, пока registry daemon ещё может `send_message_sync` (D30).
-5. Не cancel Accepted Futures; не использовать `_reset_job_executor_for_tests` как production shutdown.
-6. Не звать блокирующий `ThreadPoolExecutor.shutdown(wait=True)` на PTB loop и **не** после исчерпания overall deadline.
+5. Не использовать `_reset_job_executor_for_tests` как production shutdown; не `cancel_futures=True` на Accepted.
+6. Не звать `ThreadPoolExecutor.shutdown(wait=True)` на PTB loop и **не** после исчерпания shutdown deadline.
 7. Не обещать ограниченное время `exit` процесса.
-8. Один overall абсолютный monotonic deadline на весь orchestration call; фазам передавать **remaining**, не полный исходный timeout заново.
-9. Cancel waiter / повторный stop **не** дублирует sentinel / HTTP close / `loop.stop`, если фаза уже запрошена корректно.
-10. O10 / serve-polling cutover / deploy / live Telegram — **не** этот контракт.
-11. `delayed_cleanup` остаётся документированным исключением (не ждать, не join, не remainder registry).
-12. Существующий staged PTB cleanup при ошибках `initialize`/`start` **сохранить**; PTB Application Bot ≠ module sender Bot.
+8. Один absolute monotonic **shutdown deadline** на owner shutdown-сессию; фазам — **remaining**, не полный timeout заново.
+9. Cancel **waiter** ≠ cancel owner-session / Accepted / WE / registry / sender HTTP session.
+10. После `admission.open()` cancel/error **не** имеет права перейти сразу к PTB cleanup, обходя P3–P9 (§1 / §6).
+11. Не заявлять, что overall shutdown deadline ограничивает существующий `_await_cleanup` (shielded, без timeout) (§5 / §8).
+12. O10 / serve-polling / deploy / live Telegram — **не** этот контракт.
+13. `delayed_cleanup` — документированное исключение.
+14. Staged PTB cleanup **startup failure** (до OPEN) сохранить отдельным путём; PTB Application Bot ≠ module sender Bot.
+15. Модель owner-session / ошибок / structured result **обязана** быть принята **до** wiring (§10); нельзя откладывать целиком в 49.E.
+16. Q-PTB1 — design gate: **запрещён** зависимый wiring P4+/P6+/P7+ с `producers_complete=True`, пока primitive не принят.
 
 ---
 
-## 1. Обследованные surfaces @ `90cda7c…`
+## 1. Owner shutdown-сессия (нормативная модель)
 
-### 1.1 PTB helper — `modules/antares/application_lifecycle.py`
+### 1.1 Владелец
+
+**Owner shutdown-session** — одна process-local сессия graceful stop для bound admission + lifecycle helper.
+
+| Поле (семантика) | Смысл |
+|------------------|--------|
+| Owner | orchestration слой (будущий; внутри/рядом с `run_ptb_lifecycle`) |
+| Started when | первое из: успешный `request_antares_stop` **или** cancel/error **после** `admission.open()` при ещё не завершённом graceful |
+| Deadline | absolute monotonic, фиксируется в момент start сессии |
+| Waiters | любые `await` наблюдатели; cancel waiter **не** отменяет сессию |
+| Terminal | structured overall result (success или failure+remainder) |
+
+Caller lifecycle Task может быть отменён; сессия продолжает фазы P3–P9 на owner loop / выделенных Tasks. Исходный `CancelledError` **сохраняется** как `primary` (или в `caller_cancels`), но **не** заменяет обязанность довести/зафиксировать shutdown-сессию.
+
+### 1.2 Два пути до cleanup
+
+| Путь | Условие | Допустимые шаги |
+|------|---------|-----------------|
+| **Startup failure** | ошибка/reject **до** `admission.open()` (в т.ч. до/во время initialize/start; polling/unsupported reject) | seal (если admission); staged `_cleanup_application`; **без** P3–P9 resource drain; **без** sender/executor stop claim |
+| **Post-OPEN shutdown** | `admission` уже OPEN **или** уже SEALED после request stop; stop Event set **или** cancel/error во время `stop.wait` / running body | **обязаны** P3–P9 (насколько предусловия позволяют), затем P10; **запрещён** обход P3–P9 прямым P10 |
+
+Текущий код helper на cancel после OPEN делает seal + `_await_cleanup` без drain — это **дефект относительно контракта**; future wiring обязан заменить поведение на post-OPEN путь.
+
+### 1.3 Повторный stop
+
+Повторный `request_antares_stop` / повторный await наблюдателя **присоединяется** к той же owner-session (если жива) или читает её terminal result. Не стартует вторую параллельную destructive сессию.
+
+---
+
+## 2. Обследованные surfaces @ `90cda7c…`
+
+### 2.1 PTB helper — `modules/antares/application_lifecycle.py`
 
 | API | Факт |
 |-----|------|
-| `run_ptb_lifecycle(app, *, stop, enable_polling=False, admission=None)` | initialize → start → `admission.open()` → `await stop.wait()` → seal → `_await_cleanup` |
-| `_cleanup_application` | updater.stop (если running) → app.stop → app.shutdown / staged HTTP; shielded от caller cancel |
-| Startup fail | primary exception сохраняется; seal + cleanup всё равно; leftover → failure |
+| `run_ptb_lifecycle(...)` | initialize → start → `admission.open()` → `await stop.wait()` → seal → `_await_cleanup` |
+| `_await_cleanup` | `asyncio.shield` на `_cleanup_application`; **нет timeout**; caller CancelledError копится в `ptb_caller_cancels`, cleanup продолжается |
+| Startup fail | primary + seal + cleanup |
 | Drain wiring | **нет** |
 
-### 1.2 WorkAdmission — `modules/antares/work_admission.py`
+### 2.2 WorkAdmission / Accepted
 
-| API | Факт |
-|-----|------|
-| `request_antares_stop(stop, admission, *, loop=None)` | seal → set (same loop) или `call_soon_threadsafe(stop.set)` |
-| `wait_accepted_executor_work()` | ждёт пустой `_accepted_executor_futures`; **не** полный drain |
-| `submit_*_if_open` | OPEN-check + register Future under lock |
-| Seal | не cancel Accepted/Queued; ≠ sender ownership proof |
+`request_antares_stop` = seal → set. `wait_accepted_executor_work` ждёт пустой registry Futures; cancel wait ≠ cancel Futures. Seal ≠ sender ownership.
 
-### 1.3 WE stop — `automation/worker.py::stop_isolated_profile_workers`
-
-Требует: bound admission, `producers_complete=True`, SEALED, нет Accepted Futures, нет AE continuation, `unfinished_tasks==0` → freeze → sentinel → `asyncio.to_thread(join)`.
-
-`producers_complete` — **caller attestation**; код сам PTB callbacks не считает.
-
-### 1.4 Registry — `integrations/wallet_editor_registry_async.py`
-
-| API | Факт |
-|-----|------|
-| `RegistryDaemonLifecycle` | REGISTERED → STARTED → TERMINAL |
-| `wait_isolated_registry_daemon_ops(..., producers_complete=True)` | те же producers/SEALED/Accepted/continuation + `_we_profiles_unfinished()==[]` → freeze → join STARTED |
-
-D30: registry join **до** sender intake seal. Warnings из append идут в `send_message_sync`.
-
-### 1.5 Sender — `integrations/telegram_bot.py`
-
-| API | Факт |
-|-----|------|
-| Ownership | `claim_antares_sender_ownership` / `validate_antares_sender_ownership` |
-| `drain_and_stop_sender_worker` | до `WORKER_STOPPED` |
-| `stop_isolated_sender(proof, *, timeout=30)` | full path → `STOPPED`; один overall deadline; owner HTTP session владеет captured absolute deadline; `deadline_before_loop_stop` |
-
-### 1.6 Job executor — `core/job_dispatch.py`
+### 2.3 WE stop — `stop_isolated_profile_workers` (факт кода, не менять в этом PR)
 
 | Факт | Доказательство |
 |------|----------------|
-| Owner | process-global `_JOB_EXECUTOR` via `get_job_executor()` (`thread_name_prefix=job-worker`) |
-| Isolated submits | `WorkAdmission.submit_job_if_open` / `submit_if_open` / `submit_auto_enable_run_if_open` |
-| Mixed / bypass | `dispatch_job_background` / `dispatch_job_sync` / `dispatch_job_async` — **не** в admission registry |
-| Production shutdown | **нет** |
-| Test only | `_reset_job_executor_for_tests` → `shutdown(wait=False, cancel_futures=True)` — **запрещён** на Accepted path |
+| Preconditions | bound admission, `producers_complete`, SEALED, no Accepted, no continuation, `unfinished_tasks==0`, threads alive |
+| Fast-path | если `_profile_workers_stop_done` → return sorted keys (**только полный успех**) |
+| Sentinel | `sentinel_put` / `queue.put(PROFILE_WORKER_STOP)` **до** join |
+| Success flag | `_profile_workers_stop_done = True` **только после** всех join |
+| Partial mid-join | при cancel/timeout waiter: sentinel уже мог быть put; `stop_done` ещё False; повторный вызов снова требует alive threads → **already-finished thread ⇒ `worker is dead` refuse** |
+
+**Выбор TASK-49:** orchestration обязан держать **одну owner-сессию WE stop**; повторный waiter **наблюдает** её. Текущий TASK-41 success-only fast-path **не** считается поддержкой partial retry. До появления owner-session API (slice 49.S / 49.B) wiring **не** имеет права обещать partial WE retry. Runtime TASK-41 в этом docs PR **не** менять.
+
+### 2.4 Registry / Sender / Executor
+
+Как прежде: registry после WE unfinished==0; sender `stop_isolated_sender` с remaining; executor process-global `get_job_executor()`; production shutdown API **нет**; test reset запрещён.
+
+Boot holder proof: `apps.antares.AntaresBootPrefix.sender_ownership` **уже существует** (claim в `_boot_prefix`). Открыт способ **передачи** proof в helper/orchestrator (Q-OWN1), не наличие holder.
 
 ---
 
-## 2. Выбранный порядок фаз (нормативный)
-
-Владелец orchestration: будущий слой вокруг / внутри `run_ptb_lifecycle` после успешного `stop.wait()` (имя API code slice уточнит; семантика — нет). Caller владеет `Application`, loop, `stop` Event, `WorkAdmission`, sender ownership proof.
+## 3. Выбранный порядок фаз (нормативный)
 
 ```text
-0. Preconditions (bound admission, supported Application graph, claimed sender proof available)
-1. request_antares_stop: seal() → stop.set()
-2. await stop.wait()  # уже в helper; будит фазу остановки
-3. Stop update intake (serve only; sandbox/polling=False → N/A)
-4. Wait PTB producers (in-flight handlers/callbacks) — NEW truth, не голый bool
-5. wait_accepted_executor_work + continuation empty + WE unfinished_tasks==0
-6. stop_isolated_profile_workers(producers_complete=True)
-7. wait_isolated_registry_daemon_ops(producers_complete=True)
-8. stop_isolated_sender(ownership_proof, timeout=remaining)
-9. Production executor shutdown (NEW API; не test reset)
-10. PTB _cleanup_application (существующий staged cleanup)
+0. Preconditions
+1. request_antares_stop: seal() → stop.set()     # или cancel-after-OPEN стартует session без set — тогда seal+set обязаны до P3
+2. await stop.wait()  /  observe cancel-after-OPEN → session start
+3. Stop update intake (serve only / N/A)
+4. Wait PTB producers (Q-PTB1 primitive; не bool)
+5. wait_accepted_executor_work + continuation empty + WE unfinished==0
+6. WE stop owner-session (observe/join; не success-only partial lie)
+7. wait_isolated_registry_daemon_ops
+8. stop_isolated_sender(proof, timeout=remaining)
+9. Production executor shutdown (см. §4.4 / EX1)
+10. PTB _cleanup_application (P10; не подменяет P3–P9)
 ```
 
-### 2.1 Таблица фаз
+### 3.1 Таблица фаз
 
-| # | Фаза | Предусловия | Действие | Доказательство завершения | Deadline / cancel / error | Следующая |
-|---|------|-------------|----------|---------------------------|---------------------------|-----------|
-| P0 | Preconditions | isolated Antares process; admission bound or will bind; Application passes `unsupported_application_reasons` empty; sender ownership proof **claimed** for this process | observe only | checks pass | refuse orchestration start; no mutation | P1 |
-| P1 | Request stop | P0 | `request_antares_stop` | SEALED + `stop.is_set()` | idempotent seal; set on owner loop | P2 |
-| P2 | Wake helper | helper running | `await stop.wait()` returns | wait returned | cancel before wake → startup/running cleanup path only | P3 |
-| P3 | Stop updates | serve+updater running **или** N/A | updater intake stop when applicable | no new updates admitted **или** N/A attested | failure → remainder; do not skip later resource rules blindly | P4 |
-| P4 | PTB producers | SEALED | wait in-flight Application handlers / concurrent update work that can still `ensure_profile_*` / `put_nowait` | **attested** `producers_complete=True` backed by real wait, not empty queue / no polling alone | cancel wait ≠ cancel Accepted; deadline → failure+remainder; **запрещено** звать WE/registry stop с ложным True | P5 |
-| P5 | Accepted + WE items | producers complete | `wait_accepted_executor_work`; continuation map empty; profile `unfinished_tasks==0` | registry Futures empty; no AE continuation; unfinished==0 | cancel wait ≠ cancel Futures; deadline → failure+remainder; WE workers may still be alive | P6 |
-| P6 | WE resource stop | P5 + SEALED + producers True | `stop_isolated_profile_workers` | threads joined / frozen list terminal per TASK-41 | foreign admission refuse; deadline alive thread → failure; no duplicate sentinel on repeat success path | P7 |
-| P7 | Registry join | P6 (WE unfinished already 0) | `wait_isolated_registry_daemon_ops` | STARTED joined/TERMINAL; freeze held | **не** freeze раньше P6; deadline alive daemon → failure (D29); no sender yet | P8 |
-| P8 | Sender full stop | P7; ownership proof | `stop_isolated_sender(proof, timeout=remaining)` | `lifecycle_state=STOPPED` + `full_resource_stopped=True` **или** structured remainder | foreign refuse; partial HTTP/loop remain repeatable; no new `loop.stop` after exhausted deadline; sender STOPPED ≠ overall success alone | P9 |
-| P9 | Executor shutdown | P8 success **or** documented partial policy (Q-EX1); Accepted empty | production shutdown API (future): stop **new** submits; join/observe worker threads without `cancel_futures` on Accepted | no new isolated submit; threads terminal **or** explicit remainder (no process-exit promise) | **запрет** `_reset_job_executor_for_tests`; **запрет** `wait=True` after deadline; **запрет** на PTB loop blocking join of TPE | P10 |
-| P10 | PTB cleanup | always reachable after P2 (even on earlier failure — see §6) | existing `_cleanup_application` | updater/app stopped; HTTP leftovers closed or leftover reported | preserve primary exception; startup-fail cleanup path unchanged | terminal report |
+| # | Фаза | Предусловия | Действие | Доказательство | Deadline / cancel / error | Следующая |
+|---|------|-------------|----------|----------------|---------------------------|-----------|
+| P0 | Preconditions | isolated; admission bindable; Application supported; sender proof claimed (`AntaresBootPrefix.sender_ownership` or equivalent) | observe | checks pass | refuse start | P1 |
+| P1 | Request stop | P0 **или** post-OPEN cancel path needing explicit seal/set | `request_antares_stop` | SEALED + stop set | idempotent | P2 |
+| P2 | Wake / session arm | helper running; admission **OPEN** or already SEALED | `stop.wait` returns **или** cancel/error after OPEN arms shutdown-session | session started; deadline fixed | **Cancel after OPEN → P3 (не P10).** Cancel before OPEN → startup path §8. Waiter cancel ≠ session cancel | P3 |
+| P3 | Stop updates | session active | updater intake stop if serve else N/A | no new updates / N/A | failure → remainder; session continues | P4 |
+| P4 | PTB producers | SEALED | wait via **accepted** Q-PTB1 primitive | truthful `producers_complete` | cancel waiter ≠ cancel Accepted; deadline → session failure+remainder; **no** WE/registry with false True; **wiring blocked until Q-PTB1** | P5 |
+| P5 | Accepted + items | producers complete | wait Accepted + continuation empty + unfinished==0 | drained work | cancel wait ≠ cancel Futures | P6 |
+| P6 | WE stop | P5 | **owner-session** stop/observe; sentinel/join per TASK-41 semantics | all joins done **and** future `stop_done`/session terminal | current API: mid-cancel + repeat may hit dead-worker refuse — remainder, not fake success; no duplicate owner-session | P7 |
+| P7 | Registry | P6 terminal success (WE joined) | `wait_isolated_registry_daemon_ops` | daemons joined | no freeze before P6; deadline alive → failure | P8 |
+| P8 | Sender | P7 | `stop_isolated_sender(proof, remaining)` | STOPPED+full_resource **или** structured sender remainder | partial repeatable; no new loop.stop after deadline | P9 if EX1 allows else mark P9 skipped+remainder → P10 |
+| P9 | Executor | EX1 preconditions (§4.4) | production shutdown observe | threads terminal **или** remainder | no test reset; no wait=True after deadline | P10 |
+| P10 | PTB cleanup | post-OPEN session reached terminal attempt of P3–P9 **или** startup path | `_cleanup_application` via `_await_cleanup` | actions/leftover/errors | **no overall timeout claim** over shielded cleanup; hung cleanup → leftover/remainder; preserve primary CancelledError | terminal report |
 
-### 2.2 Contradiction: TASK-39 §5 vs TASK-42/41
+### 3.2 Противоречия (сохранённые решения)
 
-| Source | Stated order |
-|--------|--------------|
-| TASK-39 §5 (historical numbering) | Accepted drain → **registry join** → WE sentinel → sender |
-| TASK-42 §5 + intended helper | **`stop_isolated_profile_workers` → `wait_isolated_registry_daemon_ops` → sender** |
-| Code preconditions | Registry wait requires WE `unfinished_tasks==0`; WE stop API already joins workers |
-
-**Resolution (accepted for TASK-49):** keep **WE stop → registry → sender**. Invariant D30 preserved. TASK-39 numbering is pre-TASK-41 API era; do **not** reintroduce registry freeze while WE can still `schedule_registry_append`. Do **not** rewrite TASK-39 history; this document supersedes helper order for orchestration.
-
-### 2.3 Contradiction: helper code vs O2
-
-| Source | Behavior |
-|--------|----------|
-| `run_ptb_lifecycle` @ `90cda7c…` | `stop.wait` → seal → PTB cleanup only |
-| DRAIN_STOP O2 / this contract | insert phases P3–P9 before PTB cleanup |
-
-**Resolution:** future code slice(s) **must** change helper (or a dedicated orchestrator called from it) to run P3–P9 before P10. This docs PR does **not** implement that.
+- **TASK-39 §5 vs TASK-42:** helper order = WE → registry → sender (D30).
+- **Helper code vs contract:** сегодня post-OPEN cancel → cleanup only; wiring must run P3–P9 first.
 
 ---
 
-## 3. PTB producers (обязательное уточнение)
+## 4. Executor
 
-### 3.1 Что не является proof
+### 4.1–4.3 Ownership / submits / rules
 
-- `stop.is_set()`
-- `enable_polling=False` / updater not running
-- empty WE Queue / `qsize==0`
-- `WorkAdmission` SEALED alone
+Без изменения: process-global TPE; isolated vs mixed submits; no test reset; no cancel Accepted; no wait=True on PTB loop / after deadline; no process-exit promise.
 
-### 3.2 Что требуется
+### 4.4 EX1 — закрыто
 
-После seal orchestration **обязан** дождаться in-flight PTB Application work, которое ещё может:
+**Решение:** P9 (executor shutdown) **допускается после partial sender failure** только если **все** доказаны:
 
-- скачать/разобрать update;
-- вызвать isolated handlers / schedules / ingest paths;
-- `_ensure_profile_worker` / `put_nowait_if_open`.
+1. admission SEALED;
+2. PTB producers complete (truthful);
+3. Accepted Futures empty + continuation empty;
+4. WE stop owner-session terminal success (`stop_done` / all joins);
+5. registry wait terminal success (all STARTED joined / freeze held);
+6. sender phase **already attempted** and returned structured result (even if not STOPPED).
 
-Точный wait primitive (Application handler tasks / update processor drain / explicit in-flight counter) — **открытый code-design point Q-PTB1**, но контракт запрещает передавать `producers_complete=True` без такого доказательства.
+Если (2)–(5) не выполнены — **P9 запрещён**; executor threads остаются в remainder; `overall_ok=False`.
 
-CancelledError PTB callback **не** cancel Accepted Future и **не** drain work (§ DRAIN_STOP 2.4).
+Partial sender (например HTTP_STOPPED / LOOP_STOPPING) **не** блокирует P9 при (1)–(6). Sender refuse (foreign proof) / registry still alive / WE partial without owner-session → P9 skip.
 
----
-
-## 4. Executor ownership и shutdown
-
-### 4.1 Ownership
-
-| Owner | `core.job_dispatch.get_job_executor()` process-global TPE |
-|-------|----------------------------------------------------------|
-| Not owners | `WorkAdmission`, PTB `Application`, sender loop |
-
-### 4.2 Submit sources
-
-| Path | Counted in Accepted registry? |
-|------|-------------------------------|
-| `WorkAdmission.submit_job_if_open` / `submit_if_open` / `submit_auto_enable_run_if_open` | **yes** (isolated) |
-| `dispatch_job_background` / `sync` / `async` | **no** (mixed/bypass) |
-
-Full graceful claim for isolated Antares assumes isolated-only submits after boot. If mixed `dispatch_job_*` ran in-process, admission wait **does not** prove TPE idle — orchestration must **fail-closed** or refuse mixed (O10 remains open).
-
-### 4.3 Production shutdown rules
-
-1. Only after sender phase attempted per policy (§2 + Q-EX1).
-2. Forbid new isolated submits (admission already SEALED; also gate executor submit if needed).
-3. Do **not** `cancel_futures=True` for Accepted work.
-4. Do **not** call `_reset_job_executor_for_tests`.
-5. Do **not** `shutdown(wait=True)` on the PTB asyncio loop thread.
-6. Do **not** `shutdown(wait=True)` after overall deadline exhausted.
-7. `shutdown(wait=False, cancel_futures=False)` alone does **not** prove threads stopped — need join/observe or explicit remainder.
-8. No promise of bounded process exit.
+`overall_ok` всё равно False, пока sender не `full_resource_stopped` и executor не terminal.
 
 ---
 
-## 5. Overall deadline
+## 5. Shutdown deadline и P10
 
-| Rule | Detail |
-|------|--------|
-| Clock | one `deadline = monotonic() + timeout` at orchestration entry |
-| Propagation | each helper gets `timeout=max(0, deadline - monotonic())` or absolute where API already uses absolute |
-| Sender | `stop_isolated_sender(..., timeout=remaining)`; owner HTTP session captures **its** absolute deadline at claim (TASK-48); no extra +30s |
-| No re-budget | forbidding `timeout=30` default re-armed per phase as if fresh |
-| Expired before new destructive phase | skip scheduling new mutations (mirror sender `deadline_before_loop_stop`); observe already-requested work |
-| After deadline | no `wait=True` executor shutdown; no kill Accepted; report remainder |
+### 5.1 Когда начинается deadline
 
----
+`shutdown_deadline = monotonic() + timeout` фиксируется **в момент старта owner shutdown-session** (§1.1):
 
-## 6. Cancel, repeat, partial failure
+- при `request_antares_stop`, **или**
+- при первом cancel/error after OPEN, который армает сессию.
 
-### 6.1 Ownership of wait
+Не начинать этот deadline на boot/initialize. Startup-failure path **не** использует shutdown-session deadline для drain (там только staged cleanup).
 
-Orchestration owns the waiter Tasks/Futures that observe slice APIs. Slice owners remain:
+### 5.2 Что deadline покрывает
 
-- WE stop / registry wait / sender session — as in TASK-41/43/48;
-- PTB cleanup — `_cleanup_application` task (already cancel-shielded).
+| Покрывает | Не покрывает / не заявлять |
+|-----------|----------------------------|
+| P3–P9 waits с remaining budget | существование `_await_cleanup` без timeout |
+| отказ начинать **новые** destructive mutations после expiry | гарантированное завершение shielded PTB cleanup |
+| structured failure+remainder | bounded process exit |
 
-### 6.2 Repeat stop
+**Запрещено:** рекламировать «один общий ограниченный deadline», который сверху обрезает неограниченный `await` `_await_cleanup`.
 
-| Already done | Repeat behavior |
-|--------------|-----------------|
-| SEALED | idempotent |
-| WE stop success | TASK-41 idempotent path |
-| Registry wait done | TASK-43 idempotent |
-| Sender STOPPED + same proof | fast-path success |
-| Sender partial HTTP/LOOP | continue/observe; no duplicate Bot.shutdown / loop.stop when already requested |
+### 5.3 После expiry
 
-### 6.3 Cancel rules
+1. Не стартовать новые destructive фазы (новый WE owner-session, новый registry freeze, новый sender loop.stop, executor `wait=True`).
+2. Уже запрошенные owner-sessions **наблюдать** до их native terminal/ack, в пределах documented slice semantics (sender owner HTTP; будущий WE owner-session).
+3. Accepted / continuation **не** cancel.
+4. PTB producers still live → session failure; **не** ставить `producers_complete=True`; **не** WE/registry/sender intake seal.
+5. P10: **разрешён** best-effort `_await_cleanup` после попытки P3–P9 (или сразу на startup path). Если cleanup «завис» — это leftover/`cleanup_errors`/remainder; overall deadline **не** считается нарушенным «таймаутом cleanup», потому что cleanup вне budget; зафиксировать hung cleanup как resource leftover.
 
-- Cancel orchestration waiter **≠** cancel Accepted Futures, AE continuation, WE work, registry daemon, sender owner HTTP session.
-- PTB cleanup still runs on helper exit paths (existing behavior) unless a future slice documents otherwise — **startup failure cleanup must remain**.
+### 5.4 PTB cleanup при живых producers
 
-### 6.4 What may stay open on partial failure
-
-| Living resource | Allowed? |
-|-----------------|----------|
-| Accepted Future still running | yes until drained or remainder |
-| WE thread after failed join | yes → overall failure |
-| Registry STARTED alive past deadline | yes → failure (D29) |
-| Sender HTTP_STOPPED but loop live | yes → not overall success |
-| Executor threads | yes → remainder; no pretend success |
-| PTB Application partially cleaned | leftover fields required |
-
-**Forbidden on partial with live producers:** claiming overall graceful success; freezing registry early; sealing sender intake before registry join; cancelling Accepted work to “finish faster”.
+Post-OPEN: **сначала** исчерпать/провалить P3–P9 с remainder; **потом** P10. Не закрывать Application HTTP «поверх» живых producers как способ drain. Startup path: producers ещё не OPEN → staged cleanup ok.
 
 ---
 
-## 7. Result model (разделение)
+## 6. Cancel / repeat / partial (сводка)
 
-Будущий structured result (имена code slice) **обязан** разделять:
+### 6.1 Cancel before OPEN
 
-| Field class | Meaning |
-|-------------|---------|
-| `business_outcomes` | job/AE/registry append business errors (visible separately) |
-| `work_drained` | Accepted Futures + continuation + WE items terminal |
-| `resources_stopped` | WE threads, registry daemons, sender `full_resource_stopped`, executor threads |
-| `ptb_cleanup` | `PtbLifecycleResult` actions/leftover/errors |
-| `overall_ok` | all mandatory phases succeeded |
-| `remainder` | sealed?; futures; continuation; WE; registry; sender fields; executor; PTB leftover |
+Startup failure path §8: seal if needed; staged cleanup; preserve primary; no P3–P9.
 
-Rules:
+### 6.2 Cancel after OPEN (в т.ч. Accepted Future жив, stop ещё не set)
 
-- `work_drained=True` + living WE/registry/sender/executor ⇒ `overall_ok=False`.
-- `sender.full_resource_stopped=True` alone ⇒ **not** sufficient for `overall_ok`.
-- Delivery/intake D27/D28 ≠ sender resource failure (TASK-47/48).
+1. Arm owner shutdown-session (если ещё нет): seal + `stop.set()` (эквивалент request stop).
+2. Fix deadline.
+3. Продолжить P3–P9; **не** прыгать на P10.
+4. Accepted Future / continuation **не** cancel.
+5. Отменённый lifecycle waiter: detach; session continues; при финальном raise сохранить исходный `CancelledError` как primary (cleanup/session errors attached), не терять его.
 
----
+### 6.3 Repeat
 
-## 8. Startup failure vs graceful stop
+Join existing owner-session / read terminal. WE: observe owner-session — **не** вызывать текущий success-only/`dead worker` path как «partial retry». Sender/registry: как TASK-48/43.
 
-| Path | Behavior (keep) |
-|------|-----------------|
-| Reject before initialize (polling/unsupported) | seal if admission; raise; no false cleanup success |
-| Fail initialize/start | primary preserved; seal; staged `_cleanup_application` |
-| Graceful stop after open | P1–P10 |
+### 6.4 Partial WE (текущий API)
 
-PTB Application HTTP clients ≠ `integrations.telegram_bot` sender Bot graph. Do not call `application_lifecycle` close helpers on module sender Bot; do not call sender stop on Application bot.
+Сценарий: sentinel accepted, worker finished, waiter cancelled before `_profile_workers_stop_done`, then repeat → current code may refuse `worker is dead`. Контракт: это **known limitation**; remainder; future WE owner-session must make repeat observe joins without re-demanding alive threads. Не выдавать `_profile_workers_stop_done` fast-path за partial retry.
 
 ---
 
-## 9. Матрица будущих Event/barrier-тестов (orchestration)
+## 7. Result model
 
-Без sleep-as-proof. Реальные admission/executor/Queue/Future/registry/sender harnesses where already available. Helper wiring tests only after a code slice exists.
+| Field | Meaning |
+|-------|---------|
+| `business_outcomes` | job/AE/registry business errors |
+| `work_drained` | Accepted + continuation + WE items terminal |
+| `resources_stopped` | WE session terminal, registry joined, sender full_resource, executor terminal |
+| `ptb_cleanup` | actions / leftover / errors / hung? |
+| `overall_ok` | all mandatory post-OPEN phases succeeded |
+| `remainder` | sealed?; futures; WE partial?; registry; sender; executor; PTB leftover |
+| `primary` | original CancelledError / Exception preserved |
+
+`sender.full_resource_stopped` alone ≠ `overall_ok`.
+
+---
+
+## 8. Startup failure vs post-OPEN
+
+| Path | Behavior |
+|------|----------|
+| Reject before initialize | seal if admission; raise; no false cleanup success |
+| Fail initialize/start (**before OPEN**) | primary; seal; staged `_cleanup_application`; **no** P3–P9 |
+| Cancel/error **after OPEN** | shutdown-session P3–P9 then P10; no skip |
+| Graceful request stop | P1–P10 |
+
+---
+
+## 9. Матрица Orc*
 
 | ID | Scenario | Expectation |
 |----|----------|-------------|
-| Orc1 | late AE worker: seal, AE still queued, then `_ensure_profile_worker` | worker in final WE list; join required (D24) |
-| Orc2 | registry warning `send_message_sync` after WE `task_done` | sender not stopped until registry joined (D30) |
-| Orc3 | Accepted Future still queued in TPE | work drain incomplete; no WE freeze yet |
-| Orc4 | dead WE worker before get | failure + remainder; no retry (D12/D23) |
-| Orc5 | overall timeout mid-Accepted wait | failure; Futures not cancelled (D25) |
-| Orc6 | cancel orchestration wait then repeat | no duplicate sentinel/HTTP/loop.stop; work continues |
-| Orc7 | partial sender HTTP_STOPPED then repeat with new budget | continues to STOPPED; no second successful Bot.shutdown |
-| Orc8 | executor ownership: only test reset available | production path refuse/fail-closed until real shutdown API |
-| Orc9 | initialize failure | staged PTB cleanup; no sender stop claimed |
-| Orc10 | `producers_complete=False` | WE/registry stop refuse |
-| Orc11 | false `producers_complete=True` while handler still putting | **forbidden**; future test must catch missing producer wait |
-| Orc12 | sender STOPPED but executor threads alive | `overall_ok=False` |
-| Orc13 | mixed `dispatch_job_background` in-process | isolated graceful refuse or explicit remainder (O10 open) |
-| Orc14 | deadline before sender loop.stop | `deadline_before_loop_stop`; HTTP_STOPPED remains |
-| Orc15 | registry freeze attempted while WE unfinished>0 | refuse |
+| Orc1 | late AE worker after seal | final WE list includes worker; join (D24) |
+| Orc2 | registry warning after WE task_done | sender after registry join (D30) |
+| Orc3 | Accepted Future queued in TPE | no WE freeze yet |
+| Orc4 | dead WE worker before get | failure + remainder |
+| Orc5 | deadline mid-Accepted wait | failure; Futures not cancelled |
+| Orc6 | cancel orchestration waiter then repeat | join same session; no duplicate sentinel/HTTP/loop.stop |
+| Orc7 | partial sender then new budget | continue; no second successful Bot.shutdown |
+| Orc8 | only test executor reset | production refuse until real API |
+| Orc9 | initialize failure | staged PTB cleanup; no sender stop |
+| Orc10 | `producers_complete=False` | WE/registry refuse |
+| Orc11 | false producers_complete while handler putting | forbidden |
+| Orc12 | sender STOPPED, executor alive | overall_ok=False |
+| Orc13 | mixed dispatch_job in-process | refuse/remainder (O10) |
+| Orc14 | deadline before sender loop.stop | deadline_before_loop_stop |
+| Orc15 | registry freeze while WE unfinished>0 | refuse |
+| Orc16 | admission OPEN, Accepted Future active, stop unset, lifecycle caller cancelled | arm shutdown-session (seal+set); **do not** jump to P10; Future not cancelled; run P3–P9 |
+| Orc17 | deadline while PTB producer still live | producers incomplete; no WE/registry/sender intake; remainder; then P10 best-effort |
+| Orc18 | `_await_cleanup` hung / no timeout | leftover/hung recorded; overall deadline **not** claimed to cut shielded cleanup |
+| Orc19 | WE: sentinel put, worker exited, waiter cancelled before stop_done, then repeat on **current** API | may refuse dead worker; remainder; **not** success via stop_done fast-path |
+| Orc20 | same as Orc19 after WE owner-session API | repeat observes session; no re-require alive; no duplicate sentinel |
 
 ---
 
-## 10. Разбиение будущих code slices (не автостарт)
+## 10. Code slices (не автостарт)
 
-| Slice | Content | Depends on |
-|-------|---------|------------|
-| **49.A** | PTB producer completion primitive + truthful `producers_complete` | TASK-24 helper |
-| **49.B** | Wire P5–P7 into/after `run_ptb_lifecycle` (Accepted wait → WE stop → registry wait) | 49.A; TASK-40/41/43 |
-| **49.C** | Wire P8 `stop_isolated_sender` with remaining deadline + ownership proof plumbing | 49.B; TASK-48 |
-| **49.D** | Production executor shutdown API + P9 | 49.C; job_dispatch |
-| **49.E** | Structured overall result + Orc* tests | 49.A–D |
+Owner-session / cancel / result model — **в ранних slices**, не только в 49.E.
 
-Do **not** start these automatically from this docs PR.
+| Slice | Content | Depends on | Gate |
+|-------|---------|------------|------|
+| **49.S** | Shutdown-session primitive: arm on request-stop **and** cancel-after-OPEN; waiter detach; primary CancelledError; structured skeleton result | TASK-24 helper shape | **before** any P3–P9 wiring |
+| **49.A** | Q-PTB1 producer-wait primitive + truthful producers_complete | 49.S | **blocks** 49.B+ until accepted |
+| **49.B** | Wire P5–P7; WE **owner-session** observe (may extend TASK-41 API in **that** future code PR, not this docs PR) | 49.A accepted; TASK-40/41/43 | no wiring with false producers |
+| **49.C** | P8 sender + proof plumbing from `AntaresBootPrefix.sender_ownership` | 49.B; TASK-48 | |
+| **49.D** | Production executor shutdown + EX1 | 49.C | |
+| **49.E** | Full Orc* suite + result polish | 49.S–D | |
+
+Do **not** start automatically.
 
 ---
 
-## 11. Open questions (для GPT review; код не выбирает молча)
+## 11. Open / closed questions
 
-| ID | Topic | Constraint already fixed | Still open |
-|----|-------|--------------------------|------------|
-| Q-PTB1 | Exact PTB producer wait API | must be stronger than bool/empty queue | concrete primitive |
-| Q-EX1 | Executor shutdown if sender partial-failed | no pretend overall success | whether P9 still attempts best-effort observe |
-| Q-EX2 | Names of production executor shutdown | not test reset; no cancel Accepted | public function name |
-| Q-OWN1 | Where sender ownership proof is stored for helper | claim side-effect-free; validate exact object | boot-time claim holder API |
-| Q-HLP1 | Orchestrator inside `run_ptb_lifecycle` vs sibling function | order fixed | module layout |
-| O10 | Mixed-stop | remains open | — |
+| ID | Status | Decision / remainder |
+|----|--------|----------------------|
+| **EX1** | **CLOSED** | P9 after partial sender only if SEALED + producers + Accepted/continuation empty + WE session success + registry success + sender attempted (§4.4) |
+| Q-PTB1 | OPEN (design gate) | concrete producer-wait API; **no dependent wiring** until accepted |
+| Q-EX2 | OPEN | public name of production executor shutdown |
+| Q-OWN1 | OPEN (narrowed) | holder exists: `AntaresBootPrefix.sender_ownership`; open = how helper receives proof |
+| Q-HLP1 | OPEN | orchestrator inside helper vs sibling |
+| O10 | OPEN | mixed-stop |
 
 ---
 
 ## 12. Out of scope
 
-Runtime/tests/requirements этого PR; helper wiring; serve/`enable_polling=True`; mixed-stop O10; merge/Ready/deploy/Railway; live Telegram; изменение работающего Test/mixed; повторное закрытие TASK-39–48; автостарт slices 49.A–E; заявление «глобальный graceful готов».
+Runtime/tests/requirements этого PR; helper wiring; serve/`enable_polling=True`; mixed-stop O10; merge/Ready/deploy/Railway; live Telegram; изменение исходного Test; Move agent root; повторное закрытие TASK-39–48; автостарт slices; заявление «глобальный graceful готов»; изменение runtime TASK-41 в этом PR.
