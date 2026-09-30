@@ -237,6 +237,10 @@ def _ensure_worker_alive(*, timeout: float = 3.0) -> None:
         tg._http_request_results = {}
         tg._bot_shutdown_attempted = False
         tg._bot_shutdown_ok = False
+        tg._bot_shutdown_error_type = None
+        tg._bot_shutdown_error_text = None
+        tg._http_close_session_task = None
+        tg._http_phase_ack.clear()
     tg._loop_stopped.clear()
     if not _real_loop_is_running() or not _real_thread_is_alive():
         raise RuntimeError(
@@ -474,6 +478,9 @@ def test_fs8_bot_shutdown_failure_requests_still_attempted(monkeypatch) -> None:
     assert result.ok is False
     assert result.bot_shutdown_attempted is True
     assert result.bot_shutdown_ok is False
+    assert result.bot_shutdown_error_type == "RuntimeError"
+    assert result.bot_shutdown_error_text is not None
+    assert "bot boom" in result.bot_shutdown_error_text
     assert result.http_stopped is False
     assert bot.shutdown_calls == 1
     assert gu.shutdown_calls == 1
@@ -606,6 +613,7 @@ def test_fs13_concurrent_http_stopping_no_duplicate_close(monkeypatch) -> None:
     bot, gu, gen = _install_fake_bot(monkeypatch)
     hold = threading.Event()
     entered = threading.Event()
+    second_observing = threading.Event()
     bot._hold = hold
     bot._entered = entered
 
@@ -617,6 +625,18 @@ def test_fs13_concurrent_http_stopping_no_duplicate_close(monkeypatch) -> None:
             results.append(_run(tg.stop_isolated_sender(proof, timeout=5.0)))
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
+
+    real_await = tg._await_http_phase_terminal
+
+    async def spy_await(deadline, *, cancel_owner_on_deadline):
+        # Observer path: waiting on existing HTTP_STOPPING session.
+        if not cancel_owner_on_deadline:
+            second_observing.set()
+        return await real_await(
+            deadline, cancel_owner_on_deadline=cancel_owner_on_deadline
+        )
+
+    monkeypatch.setattr(tg, "_await_http_phase_terminal", spy_await)
 
     async def abort_loop(*_a, **_k):
         return tg._snapshot_full_stop_fields(
@@ -633,11 +653,10 @@ def test_fs13_concurrent_http_stopping_no_duplicate_close(monkeypatch) -> None:
     t1 = threading.Thread(target=runner)
     t2 = threading.Thread(target=runner)
     t1.start()
-    _wait_until(entered.is_set, timeout=3.0)
+    assert entered.wait(timeout=3.0)
     t2.start()
-    # Second waiter should observe HTTP_STOPPING without starting another close.
-    _wait_until(lambda: tg._lifecycle_state == "HTTP_STOPPING", timeout=3.0)
-    time.sleep(0.05)
+    assert second_observing.wait(timeout=3.0)
+    assert tg._lifecycle_state == "HTTP_STOPPING"
     assert bot.shutdown_calls == 1
     hold.set()
     t1.join(timeout=5)
@@ -645,10 +664,13 @@ def test_fs13_concurrent_http_stopping_no_duplicate_close(monkeypatch) -> None:
     assert not errors
     assert len(results) == 2
     assert bot.shutdown_calls == 1
-    assert tg.loop.is_running()
+    assert gu.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert _real_loop_is_running()
 
 
-def test_fs14_cancel_during_http_no_stuck_http_stopping(monkeypatch) -> None:
+def test_fs14_cancel_during_http_leaves_owner_session(monkeypatch) -> None:
+    """Caller cancel must not publish HTTP terminal; owner session continues."""
     proof = _claim()
     _force_worker_stopped(proof)
     bot, gu, gen = _install_fake_bot(monkeypatch)
@@ -656,19 +678,6 @@ def test_fs14_cancel_during_http_no_stuck_http_stopping(monkeypatch) -> None:
     entered = threading.Event()
     bot._hold = hold
     bot._entered = entered
-
-    async def cancellable():
-        task = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
-        await asyncio.to_thread(entered.wait, 3.0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    _run(cancellable())
-    hold.set()
-    _wait_until(lambda: tg._lifecycle_state != "HTTP_STOPPING", timeout=3.0)
-    assert tg._lifecycle_state == "WORKER_STOPPED"
-    assert tg._worker_task is not None and tg._worker_task.done()
 
     async def abort_loop(*_a, **_k):
         return tg._snapshot_full_stop_fields(
@@ -681,21 +690,40 @@ def test_fs14_cancel_during_http_no_stuck_http_stopping(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(tg, "_run_loop_stop_phase", abort_loop)
-    # Reset fail flags; clients may be mid-close — ensure open for clean retry.
-    gu._fail = False
-    gen._fail = False
-    if gu._client.is_closed:
-        gu._client.is_closed = False
-        gu.shutdown_calls = 0
-    if gen._client.is_closed:
-        gen._client.is_closed = False
-        gen.shutdown_calls = 0
-    bot._hold = None
-    bot._entered = None
-    again = _run(tg.stop_isolated_sender(proof, timeout=5.0))
-    assert again.lifecycle_state in ("HTTP_STOPPED", "WORKER_STOPPED") or again.ok is False
-    assert tg._lifecycle_state != "HTTP_STOPPING"
-    assert tg.loop.is_running()
+
+    async def scenario():
+        task = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
+        assert await asyncio.to_thread(entered.wait, 3.0)
+        with tg._lifecycle_lock:
+            session = tg._http_close_session_task
+            state = tg._lifecycle_state
+        assert state == "HTTP_STOPPING"
+        assert session is not None and not session.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        with tg._lifecycle_lock:
+            session_after = tg._http_close_session_task
+            state_after = tg._lifecycle_state
+        assert state_after == "HTTP_STOPPING"
+        assert session_after is not None and not session_after.done()
+        assert bot.shutdown_calls == 1
+
+        repeat = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
+        # Repeat must observe the same in-flight session (no second Bot.shutdown).
+        assert bot.shutdown_calls == 1
+        hold.set()
+        result = await repeat
+        assert bot.shutdown_calls == 1
+        assert result.lifecycle_state == "HTTP_STOPPED"
+        assert tg._lifecycle_state == "HTTP_STOPPED"
+        assert tg._http_phase_ack.is_set()
+        return result
+
+    _run(scenario())
+    assert gu.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert _real_loop_is_running()
 
 
 # ---------------------------------------------------------------------------
@@ -741,9 +769,12 @@ def test_fs16_loop_stop_schedule_failure_http_remains_stopped(monkeypatch) -> No
         result = _run(tg.stop_isolated_sender(proof, timeout=5.0))
     assert result.ok is False
     assert result.reason == "loop_stop_schedule_failed"
-    assert result.http_stopped is True or tg._lifecycle_state == "LOOP_STOPPING"
+    assert result.http_stopped is True
+    assert result.lifecycle_state == "LOOP_STOPPING"
     assert tg._lifecycle_state == "LOOP_STOPPING"
     assert tg._loop_stop_requested is False
+    assert _real_loop_is_running()
+    assert _real_thread_is_alive()
     # Repeat must not re-close HTTP (plan already done; bot already shut down).
     bot = tg.bot
     calls_before = bot.shutdown_calls
@@ -752,8 +783,13 @@ def test_fs16_loop_stop_schedule_failure_http_remains_stopped(monkeypatch) -> No
     with without_killing_sender_loop(monkeypatch, harness2):
         again = _run(tg.stop_isolated_sender(proof, timeout=2.0))
     assert again.reason == "loop_stop_schedule_failed"
+    assert again.http_stopped is True
+    assert again.lifecycle_state == "LOOP_STOPPING"
     assert bot.shutdown_calls == calls_before
-    assert tg.loop.is_running() or True  # harness may still patch; fixture clears
+    assert _real_loop_is_running()
+    assert _real_thread_is_alive()
+    assert tg._lifecycle_state == "LOOP_STOPPING"
+    assert tg._http_phase_ack.is_set()
 
 
 def test_fs17_loop_stop_accepted_timeout_before_join_then_repeat(monkeypatch) -> None:
@@ -1058,3 +1094,223 @@ def test_subprocess_public_wiring_reaches_real_stopped() -> None:
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
     assert "SUBPROCESS_STOPPED_OK" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# HC1–HC3 + probe hardening (GPT review regressions)
+# ---------------------------------------------------------------------------
+
+
+def test_hc1_cancel_leaves_http_stopping_same_session_no_second_bot(
+    monkeypatch,
+) -> None:
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, gu, gen = _install_fake_bot(monkeypatch)
+    hold = threading.Event()
+    entered = threading.Event()
+    second_observing = threading.Event()
+    bot._hold = hold
+    bot._entered = entered
+
+    real_await = tg._await_http_phase_terminal
+
+    async def spy_await(deadline, *, cancel_owner_on_deadline):
+        if not cancel_owner_on_deadline:
+            second_observing.set()
+        return await real_await(
+            deadline, cancel_owner_on_deadline=cancel_owner_on_deadline
+        )
+
+    monkeypatch.setattr(tg, "_await_http_phase_terminal", spy_await)
+
+    async def abort_loop(*_a, **_k):
+        return tg._snapshot_full_stop_fields(
+            ok=False,
+            reason="loop_aborted_hc1",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", abort_loop)
+
+    async def scenario():
+        first = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
+        assert await asyncio.to_thread(entered.wait, 3.0)
+        with tg._lifecycle_lock:
+            session = tg._http_close_session_task
+            state = tg._lifecycle_state
+        assert state == "HTTP_STOPPING"
+        assert session is not None and not session.done()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        with tg._lifecycle_lock:
+            assert tg._lifecycle_state == "HTTP_STOPPING"
+            assert tg._http_close_session_task is session
+            assert not session.done()
+        assert bot.shutdown_calls == 1
+
+        repeat = asyncio.create_task(tg.stop_isolated_sender(proof, timeout=5.0))
+        assert await asyncio.to_thread(second_observing.wait, 3.0)
+        assert bot.shutdown_calls == 1
+        hold.set()
+        result = await repeat
+        assert bot.shutdown_calls == 1
+        assert result.lifecycle_state == "HTTP_STOPPED"
+        assert result.bot_shutdown_ok is True
+        assert tg._lifecycle_state == "HTTP_STOPPED"
+        assert tg._http_phase_ack.is_set()
+        with tg._lifecycle_lock:
+            assert tg._http_close_session_task is None
+        return result
+
+    _run(scenario())
+    assert gu.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert _real_loop_is_running()
+
+
+def test_hc2_bot_shutdown_not_retried_after_success_partial_http(
+    monkeypatch,
+) -> None:
+    proof = _claim()
+    _force_worker_stopped(proof)
+    bot, gu, gen = _install_fake_bot(monkeypatch, fail_gu=True)
+
+    async def abort_loop(*_a, **_k):
+        return tg._snapshot_full_stop_fields(
+            ok=False,
+            reason="loop_aborted_hc2",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    monkeypatch.setattr(tg, "_run_loop_stop_phase", abort_loop)
+
+    first = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert first.ok is False
+    assert first.bot_shutdown_ok is True
+    assert first.lifecycle_state == "WORKER_STOPPED"
+    assert bot.shutdown_calls == 1
+    assert gu.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert any(r.leftover_open for r in first.request_close_results)
+
+    # Repair only the failed request; do not reopen gen or reset bot counters.
+    gu._fail = False
+    second = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert bot.shutdown_calls == 1
+    assert gen.shutdown_calls == 1
+    assert gu.shutdown_calls == 2
+    assert second.bot_shutdown_ok is True
+    assert second.lifecycle_state == "HTTP_STOPPED"
+    assert second.http_stopped is True
+    assert all(not r.leftover_open for r in second.request_close_results)
+
+
+def test_hc3_http_structural_observes_worker_via_sender_loop(monkeypatch) -> None:
+    proof = _claim()
+    _force_worker_stopped(proof)
+    _install_fake_bot(monkeypatch)
+    seen: list = []
+    real_run = tg._run_on_sender_loop
+
+    async def spy_run(coro_factory, deadline):
+        seen.append(coro_factory)
+        return await real_run(coro_factory, deadline)
+
+    monkeypatch.setattr(tg, "_run_on_sender_loop", spy_run)
+
+    async def abort_http(*_a, **_k):
+        return tg._snapshot_full_stop_fields(
+            ok=False,
+            reason="aborted_http_hc3",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    monkeypatch.setattr(tg, "_run_http_close_phase", abort_http)
+    result = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert result.reason == "aborted_http_hc3"
+    assert tg._worker_status_on_sender_loop in seen
+    assert result.structural_passed is True
+
+
+def test_hc_bot_shutdown_probe_raises_structured_terminal(monkeypatch) -> None:
+    proof = _claim()
+    _force_worker_stopped(proof)
+    gu = FakeRequest()
+    gen = FakeRequest()
+
+    class ProbeBoomBot:
+        def __init__(self):
+            self._request = (gu, gen)
+            self.request = gen
+            self.shutdown_calls = 0
+
+        @property
+        def shutdown(self):
+            raise RuntimeError("bot probe boom")
+
+    bot = ProbeBoomBot()
+    monkeypatch.setattr(tg, "bot", bot)
+    monkeypatch.setattr(tg, "request", gen)
+    monkeypatch.setattr(
+        tg, "inspect_sender_ptb_compatibility", lambda **_k: _ptb_for_graph(gu, gen)
+    )
+    result = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert result.ok is False
+    assert result.bot_shutdown_attempted is True
+    assert result.bot_shutdown_ok is False
+    assert result.bot_shutdown_error_type == "RuntimeError"
+    assert result.bot_shutdown_error_text is not None
+    assert "bot probe boom" in result.bot_shutdown_error_text
+    assert tg._lifecycle_state == "WORKER_STOPPED"
+    assert _real_loop_is_running()
+    # Repeat remains possible.
+    again = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert again.lifecycle_state == "WORKER_STOPPED"
+    assert again.bot_shutdown_error_type == "RuntimeError"
+
+
+def test_hc_request_shutdown_probe_raises_structured_terminal(monkeypatch) -> None:
+    proof = _claim()
+    _force_worker_stopped(proof)
+    gen = FakeRequest()
+
+    class ProbeBoomRequest:
+        def __init__(self):
+            self._client = FakeClient(closed=False)
+            self.shutdown_calls = 0
+
+        @property
+        def shutdown(self):
+            raise RuntimeError("req probe boom")
+
+    gu = ProbeBoomRequest()
+    bot = FakeBot(gu, gen)
+    monkeypatch.setattr(tg, "bot", bot)
+    monkeypatch.setattr(tg, "request", gen)
+    monkeypatch.setattr(
+        tg, "inspect_sender_ptb_compatibility", lambda **_k: _ptb_for_graph(gu, gen)
+    )
+    result = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert result.ok is False
+    assert result.bot_shutdown_ok is True
+    assert any(
+        r.error_type == "RuntimeError" and r.error_text and "req probe boom" in r.error_text
+        for r in result.request_close_results
+    )
+    assert tg._lifecycle_state == "WORKER_STOPPED"
+    assert _real_loop_is_running()
+    # Repeat remains possible without stranding HTTP_STOPPING.
+    again = _run(tg.stop_isolated_sender(proof, timeout=3.0))
+    assert again.lifecycle_state == "WORKER_STOPPED"
+    assert tg._lifecycle_state != "HTTP_STOPPING"
