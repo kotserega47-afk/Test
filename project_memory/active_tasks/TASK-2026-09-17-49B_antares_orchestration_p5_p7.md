@@ -6,7 +6,7 @@
 | **Статус** | review (CODE; Draft PR; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.A ACCEPTED/docs-close `e80aa6cdecc681a0e94e7fbbbebd17302f668496`; TASK-40/41/43; [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) |
-| **PR** | Draft (см. GitHub) `feat/task-2026-09-17-49b-antares-orchestration-p5-p7`, base `feat/task-2026-09-17-49a-antares-producer-wait` @ `e80aa6c…` |
+| **PR** | Draft [#55](https://github.com/deniskotdavydov1991-wq/Test/pull/55) `feat/task-2026-09-17-49b-antares-orchestration-p5-p7`, base `feat/task-2026-09-17-49a-antares-producer-wait` @ `e80aa6c…` |
 | **Риск** | medium: false producers_complete / WE partial / registry freeze before WE |
 
 CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session. **P8/P9 / full P10 / production readiness не заявлять**. **49.C–E не начаты**. TASK-49.A повторно **не** закрывать.
@@ -67,7 +67,7 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ Test SHA *(pending)* — see PR body |
+| Cursor | Python **3.12.10** @ Test SHA `0867b48c52be1229782386ce0e4ae543aaae449b`: orchestration+WE **19**; related 40/41/43/49A/49S = **102** (do not sum) |
 | GPT | review pending |
 
 ---
@@ -82,4 +82,4 @@ CODE: orchestration P4–P7 under owner shutdown-session + WE stop owner-session
 
 | Дата | Событие |
 |------|---------|
-| 2026-09-30 | CODE start: P5–P7 orchestration + WE owner-session |
+| 2026-09-30 | CODE: P5–P7 + WE owner-session; Draft PR #55; Test SHA `0867b48…` |
