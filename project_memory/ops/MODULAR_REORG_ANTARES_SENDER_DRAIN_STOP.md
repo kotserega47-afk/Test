@@ -1,19 +1,21 @@
-# Контракт isolated Telegram sender drain / stop ownership (TASK-44) + TASK-47 runtime note
+# Контракт isolated Telegram sender drain / stop ownership (TASK-44) + TASK-47/48 runtime notes
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт TASK-44 **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close `49193bb…`; ownership/PTB → [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-45/`a3b9599…`; foundation → TASK-46/`0d80bb2…`; **worker drain runtime → TASK-47 ACCEPTED `230975c433e6ad9353b6f86485f010e1b89eacb0`**, docs-close on Draft PR #50; **full HTTP/loop/thread stop ещё нет** (TASK-48 не стартовал) |
+| **Статус** | docs-контракт TASK-44 **принят** (`0e770a38eac570585ba698b30a39ef7162fe10b5`); close `49193bb…`; ownership/PTB → [SENDER_GATES.md](MODULAR_REORG_ANTARES_SENDER_GATES.md) TASK-45/`a3b9599…`; foundation → TASK-46/`0d80bb2…`; **worker drain runtime → TASK-47 ACCEPTED `230975c433e6ad9353b6f86485f010e1b89eacb0`**, docs-close on Draft PR #50; **sender full resource stop → TASK-48 ACCEPTED `7f6b5a8c211658fba92e2f6b98320b3443935cb6`**, docs-close on Draft PR #51. До TASK-48 HTTP/`loop.stop`/join/final `STOPPED` были будущим срезом. Глобальный helper / O10 / deploy **не** закрыты; TASK-49 **не** стартовал |
 | **База TASK-44** | закрытие TASK-43 `c17eab2fc7962f18b7702be73459afcd9d82133f` (accepted runtime `01e0c55dc84b9e6be78ff20f6b1f5b58be017601`, Draft PR #46) |
 | **Обследованный SHA (исторический survey)** | `c17eab2…` — § 1 описывает **pre-TASK-47** sender runtime |
-| **Accepted worker-drain runtime** | TASK-47 `230975c…` — § 1A; lifecycle до `WORKER_STOPPED` only |
+| **Accepted worker-drain runtime** | TASK-47 `230975c…` — § 1A; lifecycle до `WORKER_STOPPED` only (исторический срез: HTTP/loop/thread тогда не закрывались) |
+| **Accepted sender resource stop** | TASK-48 `7f6b5a8…` — § 1B; HTTP → loop → thread → `STOPPED`. **Не** глобальный graceful |
 | **Drain/stop** | [MODULAR_REORG_ANTARES_DRAIN_STOP.md](MODULAR_REORG_ANTARES_DRAIN_STOP.md) TASK-39 (S1–S3, D27/D28/D30, O3; **O10 не закрывать**) |
 | **Registry daemon** | [MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md](MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md) TASK-42/43 — join **до** sender intake seal |
 | **Mixed gate** | [TASK-2026-09-17-03](../active_tasks/TASK-2026-09-17-03_early_profile_gate.md) — **не** ослаблять |
 
 Цель TASK-44: зафиксировать **ownership**, accounting S1–S3, idle, intake seal и stop lifecycle будущего isolated sender stop.  
-Цель TASK-47 (принят): реализовать intake seal + S1/S3 drain + worker Task stop до `WORKER_STOPPED` **без** Bot/HTTP/loop/thread close.
+Цель TASK-47 (принят): реализовать intake seal + S1/S3 drain + worker Task stop до `WORKER_STOPPED` **без** Bot/HTTP/loop/thread close.  
+Цель TASK-48 (принят `7f6b5a8…`): довести **сам** Telegram sender до `STOPPED` (HTTP request graph, `loop.stop`, ack `_loop_stopped`, join потока). Это **не** helper и **не** полный graceful Antares.
 
-Это **не** полный graceful, **не** helper wiring, **не** executor shutdown, **не** mixed-stop (O10).
+Это **не** полный graceful, **не** helper wiring, **не** executor shutdown, **не** mixed-stop (O10). TASK-49 не стартовал.
 
 Имена code API (TASK-47): `drain_and_stop_sender_worker`, `SenderWorkerDrainResult`, `WorkerTerminalOutcome`, sentinel state machine — см. [TASK-47](../active_tasks/TASK-2026-09-17-47_antares_sender_worker_drain.md).
 
@@ -32,14 +34,14 @@
 9. O10 mixed-stop **остаётся открытым**; этот контракт его **не** закрывает.
 10. Helper / `run_ptb_lifecycle` **не** подключать в этом и в ближайшем code slice без отдельной задачи.
 11. Для **каждого** успешного `queue.get()` worker обязан вызвать `queue.task_done()` **ровно один раз** в `finally` — независимо от send/health/logger/diagnostics (см. § 5, SND14). То же для stop sentinel/control item. **TASK-47 accepted runtime выполняет этот invariant.**
-12. Repo pin: `requirements.txt` → `python-telegram-bot>=20.7`. Обследованный env **22.8** — **не** repo contract. Future sender HTTP close: public API + version gate / fail-closed (см. § 8).
+12. Repo pin: `requirements.txt` → `python-telegram-bot>=20.7`. Обследованный env **22.8** — **не** repo contract. Sender HTTP close (TASK-48) использует public API + capability gate / fail-closed TASK-45/46 (см. § 8), без pin 22.8.
 
 ---
 
 ## 1. Обследованные production paths (исторический survey SHA `c17eab2…`)
 
 > **Исторический контекст:** таблица ниже — **pre-TASK-47** surveyed runtime на `c17eab2…`.  
-> **Не** читать как current accepted runtime. Current worker-drain truth → § 1A / TASK-47 `230975c…`.
+> **Не** читать как current accepted runtime. Worker-drain truth → § 1A / TASK-47 `230975c…`. Full sender resource stop → § 1B / TASK-48 `7f6b5a8…`.
 
 ### 1.1 Core module — `integrations/telegram_bot.py` (survey `c17eab2…`)
 
@@ -56,8 +58,10 @@
 
 ### 1A. Accepted TASK-47 runtime (`230975c…`) — worker drain only
 
-| Факт (accepted now) | Статус |
-|---------------------|--------|
+Исторический срез: HTTP / `loop.stop` / join / final `STOPPED` здесь **ещё не** сделаны. Текущая правда после TASK-48 — § 1B.
+
+| Факт (TASK-47) | Статус |
+|----------------|--------|
 | Loop thread handle `_loop_thread` | **хранится**; thread остаётся alive после `WORKER_STOPPED` |
 | Worker Task handle `_worker_task` | **хранится**; readiness `_worker_ready` async-waitable |
 | Lifecycle | `RUNNING → DRAINING → WORKER_STOPPED` (`WORKER_STOPPED ≠` final `STOPPED`) |
@@ -69,9 +73,24 @@
 | Terminal observe | `WorkerTerminalOutcome` + `asyncio.shield`; caller cancel ≠ worker cancel |
 | `DRAINING → WORKER_STOPPED` | требует **sentinel ENQUEUED** + **clean** `WorkerTerminalOutcome`; `task.done()` alone insufficient |
 | Drain API | `drain_and_stop_sender_worker(ownership_proof, …)` after ownership → PTB → structural |
-| HTTP / Bot / request | **untouched** |
-| `loop.stop` / thread.join | **не** реализованы |
+| HTTP / Bot / request | **untouched** на этом срезе |
+| `loop.stop` / thread.join | **не** реализованы на этом срезе |
 | `full_resource_stopped` | всегда `False` в TASK-47 |
+
+### 1B. Accepted TASK-48 runtime (`7f6b5a8…`) — sender resource stop
+
+| Факт (current) | Статус |
+|----------------|--------|
+| Lifecycle | `RUNNING → DRAINING → WORKER_STOPPED → HTTP_STOPPING → HTTP_STOPPED → LOOP_STOPPING → STOPPED` |
+| Worker drain | reused TASK-47; clean stop обязателен до HTTP mutation |
+| HTTP | один owner close session на sender loop; absolute deadline; phase ack; successful `Bot.shutdown` не повторяется; partial retry repeatable |
+| Caller cancel | снимает только waiter; start сессии caller не отменяет; нет caller-thread `Task.done()` / `Task.cancel()` |
+| `loop.stop` | только после `HTTP_STOPPED`; **новый** `loop.stop` не ставится, если общий deadline уже исчерпан (`deadline_before_loop_stop`) |
+| Ack / join | `_loop_stopped`; `asyncio.to_thread` join |
+| `STOPPED` | только когда loop не running и thread не alive; same-proof fast-path; foreign/no proof = refuse; restart-after-STOPPED нет |
+| `full_resource_stopped` | `True` только на настоящем terminal resource stop |
+| API | `stop_isolated_sender` |
+| Всё ещё не wired | helper, `run_ptb_lifecycle`, executor shutdown, WorkAdmission/WE/registry в один graceful path, O10, polling/serve, deploy/live Telegram; TASK-49 не стартовал |
 
 ### 1.2 Transport — `transport/telegram_transport.py`
 
@@ -214,15 +233,15 @@ D30: registry warning после WE `task_done` → `send_message_sync`; seal **
 
 Раздельно, не «queue empty»:
 
-| Шаг | Действие | TASK-47 status |
-|-----|----------|----------------|
-| A | Intake seal | **done** |
-| B | Wait S1 == 0 | **done** |
-| C | Wait S2+S3 idle (owner-loop join / unfinished) | **done** |
-| D | Stop worker (sentinel protocol + clean terminal) | **done** → `WORKER_STOPPED` |
-| E | Close **entire sender Bot request graph** HTTP resources **на sender loop** (см. § 8) | **not started** (TASK-48+) |
-| F | Stop event loop (`loop.stop` / эквивалент) | **not started** |
-| G | Join loop thread | **not started** (handle already stored) |
+| Шаг | Действие | TASK-47 (исторически) | Current @ TASK-48 `7f6b5a8…` |
+|-----|----------|----------------------|------------------------------|
+| A | Intake seal | **done** | **done** (reuse) |
+| B | Wait S1 == 0 | **done** | **done** (reuse) |
+| C | Wait S2+S3 idle (owner-loop join / unfinished) | **done** | **done** (reuse) |
+| D | Stop worker (sentinel protocol + clean terminal) | **done** → `WORKER_STOPPED` | **done** (reuse; clean stop до HTTP) |
+| E | Close **entire sender Bot request graph** HTTP resources **на sender loop** (см. § 8) | **not started** | **done** — owner session, deadline, phase ack |
+| F | Stop event loop (`loop.stop` / эквивалент) | **not started** | **done** после `HTTP_STOPPED`; новый schedule после исчерпанного deadline **нет** |
+| G | Join loop thread | **not started** (handle already stored) | **done** — ack `_loop_stopped` + `asyncio.to_thread` |
 
 Требования к worker stop (accepted @ `230975c…`):
 
@@ -237,7 +256,11 @@ D30: registry warning после WE `task_done` → `send_message_sync`; seal **
 
 Ownership state (TASK-47): loop thread handle; worker Task handle; lifecycle `RUNNING|DRAINING|WORKER_STOPPED`; repeat shutdown semantics for worker slice.
 
-**Still future:** HTTP close, `loop.stop`, thread join, final `STOPPED`, helper wiring.
+**До TASK-48 было future:** HTTP close, `loop.stop`, thread join, final `STOPPED`.
+
+**Current @ `7f6b5a8…`:** эти четыре пункта реализованы для самого Telegram sender (§ 1B). Same-proof `STOPPED` fast-path реализован.
+
+**Всё ещё future / не wired:** helper orchestration, `run_ptb_lifecycle`, executor resource shutdown, WorkAdmission/WE/registry в один graceful path, mixed-stop O10, polling/serve, deploy/live Telegram. TASK-49 не стартовал. Полный graceful Antares из одного sender `STOPPED` **не** следует.
 
 ---
 
@@ -275,7 +298,7 @@ Private допустимы только как compatibility/diagnostic path. Co
 
 Module-level `request = HTTPXRequest(...)` — general sender request, переданный в `Bot(..., request=request)`. Это **не** автоматически единственный HTTP client Bot.
 
-В PTB Bot request graph обычно включает **более одного** request object (смысл как в `application_lifecycle._iter_bot_requests`: getUpdates + general). Future shutdown (**не** TASK-47):
+В PTB Bot request graph обычно включает **более одного** request object (смысл как в `application_lifecycle._iter_bot_requests`: getUpdates + general). Контракт shutdown (TASK-47 этого **не** делал; TASK-48 `7f6b5a8…` **делает**):
 
 1. На **sender** event loop.
 2. **Не** вызывать `modules.antares.application_lifecycle` на module sender Bot (другая ownership).
@@ -286,7 +309,7 @@ Module-level `request = HTTPXRequest(...)` — general sender request, пере�
 7. Timeout/error на любом request close → отразить в remainder; не silent success.
 8. Mixed/shared ownership stop **refuse** → HTTP **не** закрывать (SND12).
 
-**TASK-47 explicitly does not** call Bot/request shutdown or close HTTP.
+**TASK-47 explicitly does not** call Bot/request shutdown or close HTTP. **TASK-48 does**, on the sender loop, with the semantics above.
 
 ### 8.4 Remainder HTTP diagnostics (вместо одного флага)
 
@@ -328,7 +351,7 @@ Module-level `request = HTTPXRequest(...)` — general sender request, пере�
 - loop running?;
 - loop thread alive?;
 - sentinel submitted / state;
-- sender Bot **request graph** leftovers — **future** full stop (§ 8.4);
+- sender Bot **request graph** leftovers — structured diagnostics full stop (§ 8.4; реализовано TASK-48);
 - terminal intake failures (D27/D28) — **отдельно** от resource outcome;
 - reason.
 
@@ -338,7 +361,7 @@ Module-level `request = HTTPXRequest(...)` — general sender request, пере�
 |-------|--------|
 | Delivery / business / intake | `bot.send_*` API error; D27/D28 terminal intake; `task_done` выполнен → queue item terminal; delivery/intake failed **видно в diagnostics** |
 | Worker-drain resource | unclean `WorkerTerminalOutcome`; worker cancelled/exception after ENQUEUED; join hang; deadline |
-| Full resource shutdown (future) | any request graph leftover open; loop still required-stopped; thread join fail; refuse ownership |
+| Full resource shutdown (sender, TASK-48) | any request graph leftover open; loop still required-stopped; thread join fail; refuse ownership; `deadline_before_loop_stop` не ставит новый `loop.stop` |
 
 D27/D28 в failure list **не** автоматически ⇒ resource still alive (§ 4).
 
@@ -351,9 +374,9 @@ Accepted executor drain
 → WE queues/workers stop
 → registry daemon join
 → sender: ownership gate → intake seal → idle → worker (TASK-47 done @ WORKER_STOPPED)
-→ HTTP → loop → thread   ← NOT started (TASK-48+)
-→ executor resource shutdown
-→ PTB cleanup / helper orchestration
+→ HTTP → loop → thread → STOPPED   ← TASK-48 done @ `7f6b5a8…` (сам sender; **не** helper)
+→ executor resource shutdown          ← не wired
+→ PTB cleanup / helper orchestration  ← не wired
 ```
 
 Open question: если ownership gate = refuse, helper **не** должен притворяться полным graceful. Порядок выше **не** менять молча без нового review.
@@ -373,7 +396,7 @@ Open question: если ownership gate = refuse, helper **не** должен п
 | SND7 | intake sealed | новый enqueue explicit reject |
 | SND8 | cancel wait | accepted send продолжается; accounting жив; worker **не** cancelled |
 | SND9 | deadline при active S3 / terminal wait | failure + remainder; no restart/retry |
-| SND10 | successful idle + clean terminal | worker → `WORKER_STOPPED`; HTTP/loop/thread **remain** until future slice |
+| SND10 | successful idle + clean terminal | worker → `WORKER_STOPPED`; drain API оставляет HTTP/loop/thread живыми. Full stop (`stop_isolated_sender`) продолжается до `STOPPED` (TASK-48) |
 | SND11 | repeat stop after clean `WORKER_STOPPED` | idempotent success |
 | SND12 | mixed/shared ownership | **refuse** stop; global sender usable |
 | SND13 | worker unexpectedly dead / unclean terminal | explicit failure; empty queue / `task.done()` ≠ success |
@@ -394,11 +417,11 @@ Open question: если ownership gate = refuse, helper **не** должен п
 - S1/S3 accounting + seal + sentinel + clean terminal classification to `WORKER_STOPPED`.
 - Handles for loop thread / worker Task stored.
 
-Остаются (не GATE design; **не** автостарт TASK-48):
+Остаются (не GATE design; **не** автостарт TASK-49):
 
 3. Нужен ли отдельный accounting для in-flight `send_photo_sync` / `send_message_direct`, если появятся production callers.
-4. Full HTTP request-graph close + `loop.stop` + thread join + final `STOPPED`.
-5. Взаимодействие refuse-sender-stop с helper «полный graceful» claim (не ослаблять; не wire сейчас).
+4. Full HTTP request-graph close + `loop.stop` + thread join + final `STOPPED` — **закрыто TASK-48** `7f6b5a8…` для самого sender. До этого среза пункт был future.
+5. Взаимодействие refuse-sender-stop с helper «полный graceful» claim (не ослаблять; не wire сейчас). Helper / executor / WE/registry orchestration / O10 / deploy остаются открытыми.
 
 ---
 
@@ -407,5 +430,10 @@ Open question: если ownership gate = refuse, helper **не** должен п
 ### TASK-44 (docs contract)
 Runtime sender (at contract time); `requirements.txt` / PTB pin change; executor shutdown; `run_ptb_lifecycle` wiring; polling/serve; mixed-stop (O10); deploy; live Telegram; merge/retarget; повторное закрытие TASK-39–43.
 
-### TASK-47 (accepted worker drain — still out of this slice)
+### TASK-47 (accepted worker drain — historical out of that slice)
 Bot.shutdown / request shutdown; complete HTTP request graph close; `loop.stop`; loop thread join; final `STOPPED`; orchestration/helper wiring; executor shutdown; mixed-stop resolution; deploy/live Telegram; TASK-48.
+
+На момент TASK-47 эти sender-resource пункты были будущими. TASK-48 их закрыл для самого sender. Helper, executor, O10, deploy и TASK-49 этим списком **не** закрыты.
+
+### TASK-48 (accepted sender resource stop — still out)
+Helper / `run_ptb_lifecycle` wiring; executor resource shutdown; WorkAdmission/WE/registry в один graceful path; mixed-stop O10; polling/serve; deploy; live Telegram; TASK-49. `STOPPED` sender-а **не** объявляет глобальный graceful завершённым.

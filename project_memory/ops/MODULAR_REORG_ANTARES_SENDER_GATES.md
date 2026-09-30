@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** (`a3b95990b09a52848498d7518d2bc234a8f19800`); close `873c0a9…`; runtime foundation → [TASK-46](../active_tasks/TASK-2026-09-17-46_antares_sender_gates_runtime.md) accepted `0d80bb2…` / docs-close (этот коммит); merge/deploy нет; O10 открыт |
+| **Статус** | docs-контракт **принят** (`a3b95990b09a52848498d7518d2bc234a8f19800`); close `873c0a9…`; runtime foundation → [TASK-46](../active_tasks/TASK-2026-09-17-46_antares_sender_gates_runtime.md) accepted `0d80bb2…`; worker drain TASK-47 `230975c…`; sender resource stop TASK-48 ACCEPTED `7f6b5a8…` реализует описанный здесь STOPPED fast-path **для Telegram sender**. История TASK-45 ниже не переписывается: в том PR runtime не было. Helper/global graceful не wired; O10 открыт; merge/deploy нет |
 | **База** | закрытие TASK-44 `49193bb0d5353d3c528b5a6a382cf5ac22ceb718` (accepted review `0e770a38eac570585ba698b30a39ef7162fe10b5`, Draft PR #47) |
 | **Обследованный SHA** | `49193bb…` |
 | **Sender drain** | [MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md](MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md) TASK-44 — ownership **B** + S1–S3; **открытые** gate dependencies **закрываются здесь** |
@@ -15,6 +15,8 @@
 2. точная стратегия PTB version / compatibility gate.
 
 После TASK-45 будущий code slice **не** выбирает эти решения сам. Runtime в этом PR **нет**.
+
+Эта фраза описывает docs-срез TASK-45. STOPPED fast-path самого Telegram sender позже реализован TASK-48 (`7f6b5a8…`). Глобальный helper этим не подключён.
 
 ---
 
