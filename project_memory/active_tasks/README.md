@@ -80,7 +80,7 @@
 | [TASK-2026-09-17-49](TASK-2026-09-17-49_antares_shutdown_orchestration.md) | Контракт общей остановки isolated Antares + `run_ptb_lifecycle`: GPT ACCEPTED `237b20e…`, docs-close, docs-only, Draft PR #52, helper не wired; 49.S ACCEPTED → [TASK-49S](TASK-2026-09-17-49S_antares_shutdown_session.md); 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
 | [TASK-2026-09-17-49S](TASK-2026-09-17-49S_antares_shutdown_session.md) | Owner shutdown-session primitive: GPT ACCEPTED `f7dd672…`, docs-close, Cursor 33/132/19 @ `bab80586…`, Draft PR #53, production wiring нет; 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
 | [TASK-2026-09-17-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md) | Q-PTB1 producer-wait: GPT ACCEPTED `2f1435b…`, docs-close, Cursor 14/146/19 @ `6ab07757…`, Draft PR #54, wiring нет; next → [TASK-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) |
-| [TASK-2026-09-17-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) | Orchestration P5–P7: deadline snapshot ≠ owner terminal; public observe; Draft PR #55; Test SHA `5b62d6b…` (18/113); design blocker; **не** closed |
+| [TASK-2026-09-17-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) | P4–P7 API GPT ACCEPTED `e02314a…` / Test `5b62d6b…` (18/113); Draft PR #55; **open** (integration blocker); docs-close нет |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
