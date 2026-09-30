@@ -33,7 +33,7 @@ CODE: owner shutdown-session primitive. **Production wiring отсутствуе
 
 1. **Read-only `snapshot()`** — no mutation / no Event publish; drain permission/`DRAIN_SNAPSHOT` derived from current clock; `_note_drain_expired` only on owner loop (watcher). `ShutdownSessionHost.snapshot()` delegates.
 2. **Terminal remainder** — `_compute_remainder()` from proven current state + durable `_error_tags`; cleared leftovers not restated; `drain_deadline_exceeded` kept as historical diagnostic; cleanup error/cancel keeps `application_http_open`.
-3. **Task liveness** — frozen fields renamed `owner_task_alive_at_publish` / `cleanup_task_alive_at_publish`; current liveness via `current_task_liveness()`; `snapshot()` and `terminal_result.snapshot` stay identical.
+3. **Task liveness** — frozen fields renamed `owner_task_alive_at_publish` / `cleanup_task_alive_at_publish`; `_set_terminal` freezes **actual** cleanup Task liveness (callback end ≠ Task.done()); current liveness via `current_task_liveness()`; `snapshot()` and `terminal_result.snapshot` stay identical.
 
 ---
 
@@ -53,7 +53,7 @@ CODE: owner shutdown-session primitive. **Production wiring отсутствуе
 
 | Кто | Что |
 |-----|-----|
-| Cursor | Python **3.12.10** @ `15ce6a8f74105bfda7c9f347536c0b07f016afc7`: shutdown_session **33**; + accepted_executor_work + work_admission = **132**; lifecycle unit **19** (наборы не суммировать) |
+| Cursor | Python **3.12.10** @ `bab805868e37a977b1303774478bc64265d1936d`: shutdown_session **33**; + accepted_executor_work + work_admission = **132**; lifecycle unit **19** (наборы не суммировать) |
 | GPT | re-review pending |
 
 ---
@@ -72,3 +72,4 @@ Production wiring; Q-PTB1; P3–P9; WE/registry/sender/executor stop; Ready/merg
 | 2026-09-30 | GPT CHANGES REQUESTED: deadline/snapshot, loop guards, cleanup cancel, wait_until, arm primary |
 | 2026-09-30 | GPT CHANGES REQUESTED @ `42b45bf…`: read-only snapshot, true remainder, task_alive_at_publish |
 | 2026-09-30 | Review-fix: read-only snapshot / `_compute_remainder` / `current_task_liveness` |
+| 2026-09-30 | Fix: `cleanup_task_alive_at_publish` = actual Task liveness at `_set_terminal` (not constant False) |
