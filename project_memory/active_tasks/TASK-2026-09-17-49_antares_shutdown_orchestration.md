@@ -3,7 +3,7 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-49 |
-| **Статус** | review (пройден; docs-close выполнен; merge/deploy не выполнены) |
+| **Статус** | review (пройден docs; docs-close выполнен; slice 49.S в отдельном PR; merge/deploy не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-48 close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md); [DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_DRAIN_STOP.md); [REGISTRY_DAEMON.md](../ops/MODULAR_REORG_ANTARES_REGISTRY_DAEMON.md); [SENDER_DRAIN_STOP.md](../ops/MODULAR_REORG_ANTARES_SENDER_DRAIN_STOP.md); [STARTSTOP.md](../ops/MODULAR_REORG_ANTARES_STARTSTOP.md) |
 | **PR** | Draft [#52](https://github.com/deniskotdavydov1991-wq/Test/pull/52) `docs/task-2026-09-17-49-antares-shutdown-orchestration`, base `feat/task-2026-09-17-48-antares-sender-full-stop` @ `90cda7c92e56df3657c293f2e6de6ee65d2426c0` |
@@ -11,7 +11,7 @@
 
 Review **пройден**. GPT ACCEPTED docs HEAD `237b20efeb2aed76d24f620a9a1cc2110145344c`. GPT смотрел документы/diff и соответствие ранее обследованным API; pytest **не** запускал (docs-only). CI PASS **не** заявлять: на accepted HEAD найденных check-runs/statuses нет. Этот docs-коммит — закрытие TASK-49. Runtime между accepted HEAD и close **не** менялся (его и не было).
 
-Docs-контракт **принят**, **не выпущен**. PR #52 остаётся Draft/open. Merge/Ready/retarget/deploy/helper wiring **нет**. Открыты: Q-PTB1, Q-EX2, Q-OWN1, Q-HLP1, Q-REC1, O10. TASK-39–48 повторно не закрывать. Следующий этап: **49.S** (ещё **не** начат); автостарт slices **нет**.
+Docs-контракт **принят**, **не выпущен**. PR #52 остаётся Draft/open. Merge/Ready/retarget/deploy/helper wiring **нет**. Открыты: Q-PTB1, Q-EX2, Q-OWN1, Q-HLP1, Q-REC1, O10. TASK-39–48 повторно не закрывать. Следующий этап: **49.S** (отдельный code PR; не автостарт остальных slices).
 
 ---
 
@@ -77,4 +77,4 @@ Runtime/tests/requirements; helper wiring; 49.S–E автостарт; serve/po
 | 2026-09-30 | docs-контракт; Draft PR #52 |
 | 2026-09-30 | GPT review: cancel-after-OPEN, deadline/P10, WE partial, plan sync |
 | 2026-09-30 | GPT review: cleanup snapshot/terminal, P10 vs live producers, repeat after terminal, 49.S in MIGRATION |
-| 2026-09-30 | GPT ACCEPTED `237b20e…`; docs-close; runtime unchanged (none); 49.S не начат |
+| 2026-09-30 | GPT ACCEPTED `237b20e…`; docs-close; runtime unchanged (none); 49.S → отдельный code PR |

@@ -2,7 +2,7 @@
 
 | Мета | Значение |
 |------|----------|
-| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52; runtime **нет**; helper **не** wired; merge/deploy нет; следующий этап **49.S** (**не** начат) |
+| **Статус** | docs-контракт **принят** GPT ACCEPTED `237b20efeb2aed76d24f620a9a1cc2110145344c`; docs-close на Draft PR #52 @ `e331c677…`; slice **49.S** CODE in progress/review (`modules.antares.shutdown_session`); production wiring **нет**; Q-PTB1 открыт |
 | **База** | TASK-48 docs-close `90cda7c92e56df3657c293f2e6de6ee65d2426c0` (accepted runtime `7f6b5a8c211658fba92e2f6b98320b3443935cb6`, Draft PR #51) |
 | **Принятый docs SHA** | `237b20efeb2aed76d24f620a9a1cc2110145344c` |
 | **Обследованный SHA** | `90cda7c…` (+ worker stop API на том же дереве); stop APIs приняты на `7f6b5a8…` |
