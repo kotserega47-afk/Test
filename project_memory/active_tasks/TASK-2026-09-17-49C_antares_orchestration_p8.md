@@ -9,7 +9,7 @@
 | **PR** | Draft [#56](https://github.com/deniskotdavydov1991-wq/Test/pull/56) `feat/task-2026-09-17-49c-antares-orchestration-p8`, base `feat/task-2026-09-17-49b-antares-orchestration-p5-p7` @ `65afd73…` |
 | **Риск** | medium: false P8 before P7 / foreign proof / false full sender success / first-send sentinel after deadline |
 
-**GPT ACCEPTED** for the **implemented** P8 + proof plumbing + phase-aware observe scope @ tip `476a98e…` / Test SHA `dd3c558…`. **TASK-49.C не закрыта целиком**: production lifecycle wiring / P9 / SESSION_TERMINAL / full shutdown **не** выполнены. **49.B остаётся OPEN** (integration blocker). **49.D–E не начаты**. Ready/merge/retarget/deploy **нет**.
+**GPT ACCEPTED** for the **implemented** P8 + proof plumbing + phase-aware observe scope @ tip `476a98e…` / Test SHA `dd3c558…`. **TASK-49.C не закрыта целиком**: production lifecycle wiring / SESSION_TERMINAL / full shutdown **не** выполнены. **49.B остаётся OPEN** (integration blocker). **49.D started** (separate worktree/PR; does not close 49.C). Ready/merge/retarget/deploy **нет**.
 
 ### Разграничение
 

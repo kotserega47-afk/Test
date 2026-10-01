@@ -81,7 +81,8 @@
 | [TASK-2026-09-17-49S](TASK-2026-09-17-49S_antares_shutdown_session.md) | Owner shutdown-session primitive: GPT ACCEPTED `f7dd672…`, docs-close, Cursor 33/132/19 @ `bab80586…`, Draft PR #53, production wiring нет; 49.A ACCEPTED → [TASK-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md); next 49.B |
 | [TASK-2026-09-17-49A](TASK-2026-09-17-49A_antares_ptb_producer_wait.md) | Q-PTB1 producer-wait: GPT ACCEPTED `2f1435b…`, docs-close, Cursor 14/146/19 @ `6ab07757…`, Draft PR #54, wiring нет; next → [TASK-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) |
 | [TASK-2026-09-17-49B](TASK-2026-09-17-49B_antares_orchestration_p5_p7.md) | P4–P7 API GPT ACCEPTED `e02314a…` / Test `5b62d6b…` (18/113); Draft PR #55; **open** (integration blocker); docs-close нет; next → [TASK-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) |
-| [TASK-2026-09-17-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) | P8 + proof plumbing + phase-aware observe GPT ACCEPTED `476a98e…` / Test `dd3c558…` (12/66/113 + ownership 10); Draft PR #56; **open** (no lifecycle wire / no docs-close); Q-OWN1 ACCEPTED for explicit proof API only; 49.B blocker сохранён; next → 49.D (**не** автостарт) |
+| [TASK-2026-09-17-49C](TASK-2026-09-17-49C_antares_orchestration_p8.md) | P8 + proof plumbing + phase-aware observe GPT ACCEPTED `476a98e…` / Test `dd3c558…` (12/66/113 + ownership 10); Draft PR #56; **open** (no lifecycle wire / no docs-close); Q-OWN1 ACCEPTED for explicit proof API only; 49.B blocker сохранён; next → [TASK-49D](TASK-2026-09-17-49D_antares_orchestration_p9.md) |
+| [TASK-2026-09-17-49D](TASK-2026-09-17-49D_antares_orchestration_p9.md) | Production executor stop (Q-EX2) + EX1/P9: implemented, awaiting GPT review; Draft PR base 49.C; 49.B/49.C OPEN blockers kept; **не** docs-closed; 49.E **не** начат |
 
 Программа: `ops/MODULAR_REORG_SURVEY.md`, `ops/MODULAR_REORG_ADR.md`, `ops/MODULAR_REORG_MIGRATION.md`.
 
