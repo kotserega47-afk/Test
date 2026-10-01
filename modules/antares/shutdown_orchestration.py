@@ -17,9 +17,14 @@ TASK-49.C adds **P8** after successful P7: ``stop_isolated_sender`` with an
 explicit ``sender_ownership_proof`` (from ``AntaresBootPrefix.sender_ownership``
 or equivalent claim). Proof identity is checked before side effects and before
 returning any cached result. Remaining budget comes only from
-``session.shutdown_deadline``. P8 success is not SESSION_TERMINAL / full shutdown;
-P9 executor remains 49.D. Production lifecycle wiring that would bypass P9 is
-**not** enabled; the 49.B integration blocker remains.
+``session.shutdown_deadline``. A live TASK-48 partial (already-requested loop
+stop / ``LOOP_STOPPING``) is **not** cached as owner-terminal: the same owner
+keeps observing until STOPPED, a boundary soft-stop (would need a new
+destructive phase after expiry), or a final refuse. Structured
+``SenderPhaseSnapshot`` is retained for EX1/P9. P8 success is not
+SESSION_TERMINAL / full shutdown; P9 executor remains 49.D. Production
+lifecycle wiring that would bypass P9 is **not** enabled; the 49.B integration
+blocker remains.
 """
 
 from __future__ import annotations
@@ -62,6 +67,49 @@ class DrainPhase(enum.Enum):
 
 
 @dataclass(frozen=True)
+class SenderRequestCloseSnapshot:
+    """Immutable per-request close diagnostic for EX1/P9."""
+
+    role: str
+    target_index: int
+    shutdown_attempted: bool
+    shutdown_ok: bool
+    already_closed: bool
+    leftover_open: bool
+    timed_out: bool
+    error_type: str | None
+    error_text: str | None
+
+
+@dataclass(frozen=True)
+class SenderPhaseSnapshot:
+    """Immutable structured copy of TASK-48 ``SenderFullStopResult`` for EX1/P9."""
+
+    ok: bool
+    reason: str | None
+    ownership_passed: bool
+    ptb_passed: bool
+    structural_passed: bool
+    lifecycle_state: str
+    intake_sealed: bool
+    worker_stopped: bool
+    worker_terminal: bool
+    bot_shutdown_attempted: bool
+    bot_shutdown_ok: bool
+    bot_shutdown_error_type: str | None
+    bot_shutdown_error_text: str | None
+    request_close_results: tuple[SenderRequestCloseSnapshot, ...]
+    http_stopped: bool
+    loop_stop_requested: bool
+    loop_running: bool
+    loop_thread_alive: bool
+    thread_joined: bool
+    full_resource_stopped: bool
+    terminal_intake_failure_total: int
+    recent_intake_failures: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DrainPhasesResult:
     """Partial or full drain outcome — not full shutdown / not SESSION_TERMINAL."""
 
@@ -77,6 +125,7 @@ class DrainPhasesResult:
     sender_reason: str | None = None
     sender_full_resource_stopped: bool = False
     sender_lifecycle_state: str | None = None
+    sender_phase: SenderPhaseSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +150,8 @@ class DrainOrchestrationSnapshot:
     sender_ok: bool | None
     sender_reason: str | None
     sender_full_resource_stopped: bool
+    sender_observing: bool
+    sender_phase: SenderPhaseSnapshot | None
     include_p8: bool
 
 
@@ -129,6 +180,8 @@ class _DrainOwnerState:
     sender_reason: str | None = None
     sender_full_resource_stopped: bool = False
     sender_lifecycle_state: str | None = None
+    sender_phase: SenderPhaseSnapshot | None = None
+    sender_observing: bool = False
     # Waiters that already received a deadline partial for this procedure.
     deadline_partial_delivered: set[int] = field(default_factory=set)
     # One deadline snapshot wave for waiters present when expiry is first noticed;
@@ -164,6 +217,7 @@ class _DrainOwnerState:
             sender_reason=self.sender_reason,
             sender_full_resource_stopped=self.sender_full_resource_stopped,
             sender_lifecycle_state=self.sender_lifecycle_state,
+            sender_phase=self.sender_phase,
         )
 
 
@@ -271,6 +325,8 @@ def observe_drain_orchestration(
         sender_ok=state.sender_ok,
         sender_reason=state.sender_reason,
         sender_full_resource_stopped=state.sender_full_resource_stopped,
+        sender_observing=state.sender_observing,
+        sender_phase=state.sender_phase,
         include_p8=state.include_p8,
     )
 
@@ -373,14 +429,158 @@ def _bind_sender_ownership_proof(
         )
 
 
-def _record_sender_outcome(state: _DrainOwnerState, outcome: Any) -> None:
-    state.sender_attempted = True
-    state.sender_ok = bool(getattr(outcome, "ok", False))
-    state.sender_reason = getattr(outcome, "reason", None)
-    state.sender_full_resource_stopped = bool(
-        getattr(outcome, "full_resource_stopped", False)
+def _freeze_sender_outcome(outcome: Any) -> SenderPhaseSnapshot:
+    """Copy TASK-48 structured result into an immutable EX1/P9 record."""
+
+    req_raw = tuple(getattr(outcome, "request_close_results", ()) or ())
+    requests: list[SenderRequestCloseSnapshot] = []
+    for item in req_raw:
+        requests.append(
+            SenderRequestCloseSnapshot(
+                role=str(getattr(item, "role", "unknown")),
+                target_index=int(getattr(item, "target_index", -1)),
+                shutdown_attempted=bool(getattr(item, "shutdown_attempted", False)),
+                shutdown_ok=bool(getattr(item, "shutdown_ok", False)),
+                already_closed=bool(getattr(item, "already_closed", False)),
+                leftover_open=bool(getattr(item, "leftover_open", False)),
+                timed_out=bool(getattr(item, "timed_out", False)),
+                error_type=getattr(item, "error_type", None),
+                error_text=getattr(item, "error_text", None),
+            )
+        )
+    return SenderPhaseSnapshot(
+        ok=bool(getattr(outcome, "ok", False)),
+        reason=getattr(outcome, "reason", None),
+        ownership_passed=bool(getattr(outcome, "ownership_passed", False)),
+        ptb_passed=bool(getattr(outcome, "ptb_passed", False)),
+        structural_passed=bool(getattr(outcome, "structural_passed", False)),
+        lifecycle_state=str(getattr(outcome, "lifecycle_state", "")),
+        intake_sealed=bool(getattr(outcome, "intake_sealed", False)),
+        worker_stopped=bool(getattr(outcome, "worker_stopped", False)),
+        worker_terminal=bool(getattr(outcome, "worker_terminal", False)),
+        bot_shutdown_attempted=bool(getattr(outcome, "bot_shutdown_attempted", False)),
+        bot_shutdown_ok=bool(getattr(outcome, "bot_shutdown_ok", False)),
+        bot_shutdown_error_type=getattr(outcome, "bot_shutdown_error_type", None),
+        bot_shutdown_error_text=getattr(outcome, "bot_shutdown_error_text", None),
+        request_close_results=tuple(requests),
+        http_stopped=bool(getattr(outcome, "http_stopped", False)),
+        loop_stop_requested=bool(getattr(outcome, "loop_stop_requested", False)),
+        loop_running=bool(getattr(outcome, "loop_running", False)),
+        loop_thread_alive=bool(getattr(outcome, "loop_thread_alive", False)),
+        thread_joined=bool(getattr(outcome, "thread_joined", False)),
+        full_resource_stopped=bool(getattr(outcome, "full_resource_stopped", False)),
+        terminal_intake_failure_total=int(
+            getattr(outcome, "terminal_intake_failure_total", 0) or 0
+        ),
+        recent_intake_failures=tuple(
+            getattr(outcome, "recent_intake_failures", ()) or ()
+        ),
     )
-    state.sender_lifecycle_state = getattr(outcome, "lifecycle_state", None)
+
+
+def _record_sender_outcome(state: _DrainOwnerState, outcome: Any) -> None:
+    snap = _freeze_sender_outcome(outcome)
+    state.sender_phase = snap
+    state.sender_ok = snap.ok
+    state.sender_reason = snap.reason
+    state.sender_full_resource_stopped = snap.full_resource_stopped
+    state.sender_lifecycle_state = snap.lifecycle_state
+    rem = list(state.remainder)
+    if snap.full_resource_stopped and snap.ok:
+        state.remainder = [r for r in rem if r not in ("sender_partial", snap.reason)]
+    else:
+        if "sender_partial" not in rem:
+            rem.append("sender_partial")
+        if snap.reason and snap.reason not in rem:
+            rem.append(str(snap.reason))
+        state.remainder = rem
+
+
+def _classify_sender_outcome(outcome: Any) -> str:
+    """Classify TASK-48 outcome: success | live_observe | boundary | final_refuse."""
+
+    ok = bool(getattr(outcome, "ok", False))
+    full = bool(getattr(outcome, "full_resource_stopped", False))
+    if ok and full:
+        return "success"
+
+    reason = getattr(outcome, "reason", None) or ""
+    state = str(getattr(outcome, "lifecycle_state", "") or "")
+    loop_stop_requested = bool(getattr(outcome, "loop_stop_requested", False))
+    ownership_passed = bool(getattr(outcome, "ownership_passed", True))
+    ptb_passed = bool(getattr(outcome, "ptb_passed", True))
+
+    if (not ownership_passed) or reason.startswith("ownership_"):
+        return "final_refuse"
+    if (not ptb_passed) or reason.startswith("ptb_"):
+        return "final_refuse"
+    if reason.startswith("lifecycle_refuses"):
+        return "final_refuse"
+
+    # Already-started stop: observe without scheduling new destructive work.
+    if reason in (
+        "deadline_loop_stopped",
+        "deadline_thread_join",
+        "loop_still_running",
+    ):
+        if loop_stop_requested or state == "LOOP_STOPPING":
+            return "live_observe"
+    if state in ("HTTP_STOPPING", "LOOP_STOPPING", "DRAINING"):
+        return "live_observe"
+    if state == "HTTP_STOPPED" and loop_stop_requested:
+        return "live_observe"
+    if state == "WORKER_STOPPED" and bool(getattr(outcome, "worker_stopped", False)):
+        # Worker done; HTTP not started — continuing would start HTTP (destructive).
+        return "boundary"
+
+    # Would require a *new* destructive phase after budget expiry / refuse-to-start.
+    if reason in (
+        "deadline_before_loop_stop",
+        "deadline_before_drain",
+        "structural_refused",
+    ) or reason.startswith("deadline_"):
+        if reason in ("deadline_loop_stopped", "deadline_thread_join"):
+            return "live_observe"
+        return "boundary"
+
+    return "final_refuse"
+
+
+async def _await_started_sender_progress() -> None:
+    """Observe already-requested sender stop signals (no new session deadline)."""
+
+    import integrations.telegram_bot as tg
+
+    # Prefer waiting for loop-stopped; poll thread death without new drain budget.
+    if not tg._loop_stopped.is_set():
+        await asyncio.to_thread(tg._loop_stopped.wait)
+    # Non-blocking join slices until dead or briefly idle.
+    for _ in range(200):
+        if not tg._loop_thread.is_alive():
+            return
+        await asyncio.to_thread(tg._loop_thread.join, 0.05)
+        await asyncio.sleep(0)
+
+
+async def _continue_sender_stop(
+    state: _DrainOwnerState,
+    *,
+    proof: object,
+    stop_isolated_sender: Any,
+) -> Any:
+    """Continue/observe the same TASK-48 stop procedure (no second owner session)."""
+
+    remaining = _remaining_from_session(state.session)
+    if remaining > 0:
+        return await stop_isolated_sender(proof, timeout=remaining)
+    # Session budget exhausted: only observe already-started work, then re-enter
+    # stop API with zero timeout so TASK-48 can publish STOPPED without a new
+    # loop.stop schedule when stop was already requested.
+    state.sender_observing = True
+    state.pulse()
+    await _await_started_sender_progress()
+    state.pulse()
+    return await stop_isolated_sender(proof, timeout=0.0)
 
 
 def _publish_deadline_wave(state: _DrainOwnerState) -> bool:
@@ -552,39 +752,75 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         assert proof is not None
         state.p8_started = True
         state.pulse()
+        # Truthful mid-await diagnostics: attempted before the TASK-48 call.
+        state.sender_attempted = True
+        state.pulse()
         remaining = _remaining_from_session(session)
         outcome = await stop_isolated_sender(proof, timeout=remaining)
         _record_sender_outcome(state, outcome)
         state.pulse()
 
-        if outcome.ok and outcome.full_resource_stopped:
-            state.last_completed_phase = DrainPhase.P8_SENDER
-            state.remainder = []
-            result = DrainPhasesResult(
-                producers_attested=True,
-                p5_complete=True,
-                we_joined=state.we_joined,
-                registry_joined=state.registry_joined,
-                last_completed_phase=DrainPhase.P8_SENDER,
-                remainder=(),
-                sender_attempted=True,
-                sender_ok=True,
-                sender_reason=None,
-                sender_full_resource_stopped=True,
-                sender_lifecycle_state=outcome.lifecycle_state,
-            )
+        while True:
+            kind = _classify_sender_outcome(outcome)
+            if kind == "success":
+                state.sender_observing = False
+                state.last_completed_phase = DrainPhase.P8_SENDER
+                state.remainder = []
+                result = DrainPhasesResult(
+                    producers_attested=True,
+                    p5_complete=True,
+                    we_joined=state.we_joined,
+                    registry_joined=state.registry_joined,
+                    last_completed_phase=DrainPhase.P8_SENDER,
+                    remainder=(),
+                    sender_attempted=True,
+                    sender_ok=True,
+                    sender_reason=None,
+                    sender_full_resource_stopped=True,
+                    sender_lifecycle_state=getattr(
+                        outcome, "lifecycle_state", "STOPPED"
+                    ),
+                    sender_phase=state.sender_phase,
+                )
+                state.result = result
+                return result
+
+            if kind == "live_observe":
+                # Keep the same owner/session observing the already-started stop.
+                # Do not cache a terminal result; waiters/rejoin see late completion.
+                state.sender_observing = True
+                state.pulse()
+                outcome = await _continue_sender_stop(
+                    state,
+                    proof=proof,
+                    stop_isolated_sender=stop_isolated_sender,
+                )
+                _record_sender_outcome(state, outcome)
+                state.pulse()
+                continue
+
+            if kind == "boundary":
+                # Would need a new destructive phase after budget expiry — soft stop.
+                state.sender_observing = False
+                rem = ["sender_partial", "sender_boundary"]
+                if getattr(outcome, "reason", None):
+                    rem.append(str(outcome.reason))
+                state.remainder = rem
+                state.last_completed_phase = DrainPhase.P7_REGISTRY
+                result = state.build_partial_result()
+                state.result = result
+                return result
+
+            # final_refuse — structured terminal refuse (not SESSION_TERMINAL).
+            state.sender_observing = False
+            rem = ["sender_refused"]
+            if getattr(outcome, "reason", None):
+                rem.append(str(outcome.reason))
+            state.remainder = rem
+            state.last_completed_phase = DrainPhase.P7_REGISTRY
+            result = state.build_partial_result()
             state.result = result
             return result
-
-        # Structured partial / refuse from TASK-48 API — not SESSION_TERMINAL.
-        rem = ["sender_partial"]
-        if outcome.reason:
-            rem.append(str(outcome.reason))
-        state.remainder = rem
-        state.last_completed_phase = DrainPhase.P7_REGISTRY
-        result = state.build_partial_result()
-        state.result = result
-        return result
     except BaseException as exc:
         if not isinstance(exc, asyncio.CancelledError):
             if state.error is None:
