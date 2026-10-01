@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from core.job_dispatch import _reset_job_executor_for_tests, get_job_executor
+from core.job_dispatch import _reset_job_executor_for_tests, bind_job_executor_to_admission, get_job_executor
 from core.scheduler_clocks_control import (
     _reset_scheduler_clocks_state_for_tests,
     request_scheduler_clocks_reset,
@@ -233,7 +233,7 @@ def _count_executor(monkeypatch) -> list:
             hits.append((fn, args, kwargs))
             return real.submit(fn, *args, **kwargs)
 
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Wrap())
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _Wrap())
     return hits
 
 
@@ -371,7 +371,7 @@ def test_s5_submit_before_seal_future_lives(monkeypatch) -> None:
             waiter_blocked.wait(timeout=5)
             return real.submit(fn, *args, **kwargs)
 
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _HoldSubmit())
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _HoldSubmit())
 
     def _tick() -> None:
         outcome["r"] = tick(
@@ -515,7 +515,7 @@ def test_s7_submit_exception_does_not_consume(monkeypatch) -> None:
         def submit(self, *a, **k):
             raise RuntimeError("submit failed")
 
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Boom())
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _Boom())
     admission = _open()
     state = _due_interval(IsolatedScheduleState())
     result = tick(
@@ -540,7 +540,7 @@ def test_s7b_two_interval_rows_one_attempt(monkeypatch) -> None:
             type(self).n += 1
             raise RuntimeError("submit failed")
 
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Boom())
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _Boom())
     admission = _open()
     state = _due_interval(IsolatedScheduleState())
     rows = [
@@ -582,7 +582,7 @@ def test_hourly_submit_exception_same_bucket_retries(monkeypatch) -> None:
                 raise RuntimeError("submit failed")
             return real.submit(fn, *a, **k)
 
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _BoomOnce())
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _BoomOnce())
     admission = _open()
     state = IsolatedScheduleState()
     state.next_every["hourly"] = 0.0
@@ -617,7 +617,7 @@ def test_final_daily_reject_and_submit_error_do_not_commit_key(monkeypatch) -> N
             def submit(self, *a, **k):
                 raise RuntimeError("submit failed")
 
-        monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: _Boom())
+        monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: _Boom())
         boom_state = IsolatedScheduleState()
         boom_state.next_cron["hourly"] = fire_dt
         boom = tick(boom_state, now_ts=2.0, now_dt=fire_dt, schedules=rows, admission=_open())
@@ -642,7 +642,7 @@ def test_s7c_next_tick_retries_unconsumed(monkeypatch) -> None:
 
     boom = _BoomOnce()
     boom.real = get_job_executor()
-    monkeypatch.setattr("modules.antares.work_admission.get_job_executor", lambda: boom)
+    monkeypatch.setattr("modules.antares.work_admission.bind_job_executor_to_admission", lambda *_a, **_k: boom)
     admission = _open()
     state = _due_interval(IsolatedScheduleState())
     rows = [_sched("wallet", every_seconds=10)]

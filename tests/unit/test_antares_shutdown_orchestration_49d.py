@@ -21,6 +21,7 @@ from core.antares_sender_ownership import (
 from core.job_dispatch import (
     JobExecutorStopResult,
     _reset_job_executor_for_tests,
+    bind_job_executor_to_admission,
     get_job_executor,
     stop_isolated_job_executor,
 )
@@ -211,12 +212,34 @@ def _ownership_refuse(**kwargs):
     )
 
 
+def _exec_ok(**kwargs):
+    base = dict(
+        ok=True,
+        reason=None,
+        attempted=True,
+        shutdown_called=True,
+        recreate_refused=True,
+        stopping=False,
+        stopped=True,
+        executor_was_absent=False,
+        executor_object_id=1,
+        owner_admission_token=None,
+        ownership_ok=True,
+        live_thread_names=(),
+        live_thread_count=0,
+        error_type=None,
+        error_text=None,
+    )
+    base.update(kwargs)
+    return JobExecutorStopResult(**base)
+
+
 def test_ex1_full_path_stops_executor_threads() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
-        app, _q, host, _s, session, _a = await _arm(loop)
+        app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        ex = get_job_executor()
+        ex = bind_job_executor_to_admission(admission)
         release = threading.Event()
         started = threading.Event()
 
@@ -236,7 +259,6 @@ def test_ex1_full_path_stops_executor_threads() -> None:
                     session, host, sender_ownership_proof=proof
                 )
             )
-            # Allow P8→P9 to begin observing threads, then release worker.
             for _ in range(50):
                 snap = observe_drain_orchestration(session)
                 if snap is not None and snap.p9_started:
@@ -263,9 +285,9 @@ def test_ex1_full_path_stops_executor_threads() -> None:
 def test_partial_sender_allows_p9_under_ex1() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
-        app, _q, host, _s, session, _a = await _arm(loop)
+        app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        get_job_executor()  # ensure present
+        bind_job_executor_to_admission(admission)
 
         with patch(
             "integrations.telegram_bot.stop_isolated_sender",
@@ -281,7 +303,6 @@ def test_partial_sender_allows_p9_under_ex1() -> None:
         assert result.p9_skipped is False
         assert result.executor_attempted is True
         assert result.executor_stopped is True
-        # Sender remainder preserved independently of executor success.
         assert "sender_partial" in result.remainder
         assert result.sender_phase is not None
         assert session.terminal_result() is None
@@ -293,24 +314,10 @@ def test_partial_sender_allows_p9_under_ex1() -> None:
 def test_foreign_sender_ownership_skips_p9() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
-        app, _q, host, _s, session, _a = await _arm(loop)
+        app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        get_job_executor()
-        stop_exec = AsyncMock(
-            return_value=JobExecutorStopResult(
-                ok=True,
-                reason=None,
-                attempted=True,
-                shutdown_called=True,
-                stopping=False,
-                stopped=True,
-                executor_was_absent=False,
-                live_thread_names=(),
-                live_thread_count=0,
-                error_type=None,
-                error_text=None,
-            )
-        )
+        bind_job_executor_to_admission(admission)
+        stop_exec = AsyncMock(return_value=_exec_ok())
 
         with (
             patch(
@@ -331,7 +338,6 @@ def test_foreign_sender_ownership_skips_p9() -> None:
         assert "ex1_sender_ownership_refused" in result.remainder
         assert result.executor_attempted is False
         stop_exec.assert_not_awaited()
-        # Executor must not have been production-stopped as a side effect.
         assert job_dispatch._SHUTDOWN_CALLED is False
         await _shutdown_app(app)
 
@@ -371,10 +377,10 @@ def test_each_missing_ex1_gate_refuses() -> None:
             worker_mod._profile_workers_stop_done = True
             if worker_mod._we_stop_result is None:
                 worker_mod._we_stop_result = state.we_joined
+            worker_mod._we_stop_admission_token = id(admission)
             registry_mod._daemon_ops_wait_done = True
             registry_mod._daemon_ops_frozen = True
-            if registry_mod._daemon_ops_joined != state.registry_joined:
-                registry_mod._daemon_ops_joined = state.registry_joined
+            registry_mod._daemon_ops_admission_token = id(admission)
             state.sender_attempted = True
             if state.sender_phase is None and state.result is not None:
                 state.sender_phase = state.result.sender_phase
@@ -454,6 +460,16 @@ def test_each_missing_ex1_gate_refuses() -> None:
                 lambda: setattr(registry_mod, "_daemon_ops_wait_done", False),
             ),
             (
+                "ex1_we_admission_mismatch",
+                lambda: setattr(worker_mod, "_we_stop_admission_token", id(object())),
+            ),
+            (
+                "ex1_registry_admission_mismatch",
+                lambda: setattr(
+                    registry_mod, "_daemon_ops_admission_token", id(object())
+                ),
+            ),
+            (
                 "ex1_sender_not_attempted",
                 lambda: setattr(state, "sender_attempted", False),
             ),
@@ -492,11 +508,10 @@ def test_missing_ex1_gate_no_executor_side_effects() -> None:
         loop = asyncio.get_running_loop()
         app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        get_job_executor()
+        bind_job_executor_to_admission(admission)
         stop_exec = AsyncMock()
 
         async def _sender(proof_arg, *, timeout):
-            # Break WE identity after P8 would have been allowed — force skip.
             worker_mod._profile_workers_stop_done = False
             return _full_ok()
 
@@ -528,11 +543,11 @@ def test_deadline_before_p9_does_not_start_executor_shutdown() -> None:
         loop = asyncio.get_running_loop()
         clk = ControllableClock(50_000.0)
         clk.bind_loop()
-        app, _q, host, shut, session, _a = await _arm(
+        app, _q, host, shut, session, admission = await _arm(
             loop, clk, drain_timeout=5.0
         )
         proof = claim_antares_sender_ownership()
-        get_job_executor()
+        bind_job_executor_to_admission(admission)
         stop_exec = AsyncMock()
 
         reg_started = asyncio.Event()
@@ -546,6 +561,7 @@ def test_deadline_before_p9_does_not_start_executor_shutdown() -> None:
             registry_mod._daemon_ops_frozen = True
             registry_mod._daemon_ops_wait_done = True
             registry_mod._daemon_ops_joined = ()
+            registry_mod._daemon_ops_admission_token = id(adm)
             return ()
 
         with (
@@ -568,15 +584,10 @@ def test_deadline_before_p9_does_not_start_executor_shutdown() -> None:
                 )
             )
             await reg_started.wait()
-            # Expire budget during P7 so P8/P9 cannot start new destructive work.
-            # Advance past drain_timeout; then release registry to complete P7.
             clk.advance(10.0)
             reg_release.set()
-            # Owner may soft-stop before P8 if deadline blocks after P7.
             result = await drain_task
 
-        # Either P8 never started, or P9 skipped for deadline — executor must
-        # not have been invoked.
         stop_exec.assert_not_awaited()
         assert job_dispatch._SHUTDOWN_CALLED is False
         assert result.executor_attempted is False
@@ -586,15 +597,17 @@ def test_deadline_before_p9_does_not_start_executor_shutdown() -> None:
 
 
 def test_deadline_during_p9_partial_same_owner_rejoin() -> None:
+    """Deadline during started P9: waiter partial; owner observes; rejoin completes."""
+
     async def _main() -> None:
         loop = asyncio.get_running_loop()
         clk = ControllableClock(60_000.0)
         clk.bind_loop()
-        app, _q, host, shut, session, _a = await _arm(
-            loop, clk, drain_timeout=30.0
+        app, _q, host, shut, session, admission = await _arm(
+            loop, clk, drain_timeout=2.0
         )
         proof = claim_antares_sender_ownership()
-        ex = get_job_executor()
+        ex = bind_job_executor_to_admission(admission)
         release = threading.Event()
         started = threading.Event()
 
@@ -608,10 +621,9 @@ def test_deadline_during_p9_partial_same_owner_rejoin() -> None:
         p9_entered = asyncio.Event()
         real_stop = stop_isolated_job_executor
 
-        async def _gated_stop(*, timeout=30.0):
+        async def _tracking_stop(*, admission, timeout=30.0):
             p9_entered.set()
-            # Shrink remaining budget to force thread-observe partial.
-            return await real_stop(timeout=0.05)
+            return await real_stop(admission=admission, timeout=timeout)
 
         with (
             patch(
@@ -620,31 +632,177 @@ def test_deadline_during_p9_partial_same_owner_rejoin() -> None:
             ),
             patch(
                 "modules.antares.shutdown_orchestration.stop_isolated_job_executor",
-                new=_gated_stop,
+                new=_tracking_stop,
             ),
         ):
-            first = await run_owner_drain_p4_to_p9(
+            first = asyncio.create_task(
+                run_owner_drain_p4_to_p9(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await asyncio.wait_for(p9_entered.wait(), timeout=5)
+            # Expire session budget while P9 is observing live threads.
+            clk.advance(5.0)
+            with pytest.raises(DrainOrchestrationError) as ei:
+                await first
+            assert "drain_deadline_passed" in ei.value.remainder
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.p9_started is True
+            assert snap.has_terminal_result is False
+            assert snap.owner_alive is True
+
+            release.set()
+            # Late completion via the same orchestration session (no new stop budget).
+            final = await run_owner_drain_p4_to_p9(
                 session, host, sender_ownership_proof=proof
             )
 
-        assert await asyncio.wait_for(p9_entered.wait(), timeout=5)
-        assert first.executor_attempted is True
-        assert first.executor_stopped is False
-        assert first.p9_skipped is False
+        assert final.executor_attempted is True
+        assert final.executor_stopped is True
+        assert final.p9_skipped is False
         assert job_dispatch._SHUTDOWN_CALLED is True
+        await _shutdown_app(app)
 
-        release.set()
-        # Same session owner already terminal with partial — rejoin via API
-        # observes the same permanent executor stop without a new drain owner.
-        final_exec = await stop_isolated_job_executor(timeout=5.0)
-        assert final_exec.stopped is True
+    asyncio.run(_main())
 
-        # Repeat drain join returns the same cached owner result (one procedure).
-        again = await run_owner_drain_p4_to_p9(
-            session, host, sender_ownership_proof=proof
-        )
-        assert again.executor_attempted is True
-        assert again is first or again.executor_phase == first.executor_phase
+
+def test_live_sender_partial_allows_p9_while_sender_observing() -> None:
+    """Held live sender partial + budget → P9 completes; sender stays live then settles."""
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        app, _q, host, _s, session, admission = await _arm(loop)
+        proof = claim_antares_sender_ownership()
+        bind_job_executor_to_admission(admission)
+        sender_release = asyncio.Event()
+        observe_started = asyncio.Event()
+        stop_calls = 0
+
+        async def _first_stop(proof_arg, *, timeout):
+            nonlocal stop_calls
+            stop_calls += 1
+            return _partial(
+                reason="deadline_loop_stopped",
+                lifecycle_state="LOOP_STOPPING",
+                loop_stop_requested=True,
+                loop_running=True,
+                loop_thread_alive=True,
+                http_stopped=True,
+                worker_stopped=True,
+            )
+
+        async def _observe(proof_arg, *, timeout):
+            observe_started.set()
+            await sender_release.wait()
+            return _full_ok()
+
+        with (
+            patch(
+                "integrations.telegram_bot.stop_isolated_sender",
+                new=AsyncMock(side_effect=_first_stop),
+            ),
+            patch(
+                "integrations.telegram_bot.observe_started_sender_stop",
+                new=AsyncMock(side_effect=_observe),
+            ),
+        ):
+            drain = asyncio.create_task(
+                run_owner_drain_p4_to_p9(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await asyncio.wait_for(observe_started.wait(), timeout=5)
+            # While sender still live-observing, P9 should be able to finish.
+            for _ in range(100):
+                snap = observe_drain_orchestration(session)
+                if (
+                    snap is not None
+                    and snap.p9_started
+                    and snap.executor_stopped
+                    and snap.sender_observing
+                ):
+                    break
+                await asyncio.sleep(0.05)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.sender_observing is True
+            assert snap.executor_stopped is True
+            assert snap.sender_full_resource_stopped is False
+            assert snap.has_terminal_result is False
+
+            sender_release.set()
+            result = await drain
+
+        assert result.sender_full_resource_stopped is True
+        assert result.executor_stopped is True
+        assert result.p9_skipped is False
+        assert result.last_completed_phase is DrainPhase.P9_EXECUTOR
+        assert session.terminal_result() is None
+        await _shutdown_app(app)
+
+    asyncio.run(_main())
+
+
+def test_cancel_all_waiters_owner_keeps_p9_observation() -> None:
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        app, _q, host, _s, session, admission = await _arm(loop)
+        proof = claim_antares_sender_ownership()
+        ex = bind_job_executor_to_admission(admission)
+        release = threading.Event()
+        started = threading.Event()
+
+        def _hold() -> None:
+            started.set()
+            release.wait(timeout=10)
+
+        ex.submit(_hold)
+        assert started.wait(timeout=2)
+
+        p9_started = asyncio.Event()
+        real_stop = stop_isolated_job_executor
+
+        async def _tracking(*, admission, timeout=30.0):
+            p9_started.set()
+            return await real_stop(admission=admission, timeout=timeout)
+
+        with (
+            patch(
+                "integrations.telegram_bot.stop_isolated_sender",
+                new=AsyncMock(return_value=_full_ok()),
+            ),
+            patch(
+                "modules.antares.shutdown_orchestration.stop_isolated_job_executor",
+                new=_tracking,
+            ),
+        ):
+            w1 = asyncio.create_task(
+                run_owner_drain_p4_to_p9(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            w2 = asyncio.create_task(
+                run_owner_drain_p4_to_p9(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await asyncio.wait_for(p9_started.wait(), timeout=5)
+            w1.cancel()
+            w2.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await w1
+            with pytest.raises(asyncio.CancelledError):
+                await w2
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.owner_alive is True
+            assert snap.p9_started is True
+            release.set()
+            final = await run_owner_drain_p4_to_p9(
+                session, host, sender_ownership_proof=proof
+            )
+        assert final.executor_stopped is True
         await _shutdown_app(app)
 
     asyncio.run(_main())
@@ -653,19 +811,21 @@ def test_deadline_during_p9_partial_same_owner_rejoin() -> None:
 def test_concurrent_repeat_single_p9_owner() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
-        app, _q, host, _s, session, _a = await _arm(loop)
+        app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        get_job_executor()
+        bind_job_executor_to_admission(admission)
         calls = 0
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async def _slow_stop(*, timeout=30.0):
+        async def _slow_stop(*, admission, timeout=30.0):
             nonlocal calls
             calls += 1
             started.set()
             await release.wait()
-            return await stop_isolated_job_executor(timeout=timeout)
+            return await stop_isolated_job_executor(
+                admission=admission, timeout=timeout
+            )
 
         with (
             patch(
@@ -688,7 +848,6 @@ def test_concurrent_repeat_single_p9_owner() -> None:
                     session, host, sender_ownership_proof=proof
                 )
             )
-            # Cancel second waiter — must detach only.
             t2.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await t2
@@ -725,9 +884,18 @@ def test_absent_executor_not_created_on_p9() -> None:
         assert result.executor_stopped is True
         assert result.executor_phase is not None
         assert result.executor_phase.executor_was_absent is True
+        assert result.executor_phase.shutdown_called is False
+        assert result.executor_phase.recreate_refused is True
         assert job_dispatch._JOB_EXECUTOR is None
         with pytest.raises(job_dispatch.JobExecutorStoppedError):
             get_job_executor()
+        # Stable repeated diagnostics on rejoin.
+        again = await run_owner_drain_p4_to_p9(
+            session, host, sender_ownership_proof=proof
+        )
+        assert again.executor_phase is not None
+        assert again.executor_phase.executor_was_absent is True
+        assert again.executor_phase.shutdown_called is False
         await _shutdown_app(app)
 
     asyncio.run(_main())
@@ -736,9 +904,9 @@ def test_absent_executor_not_created_on_p9() -> None:
 def test_p8_only_api_does_not_run_p9() -> None:
     async def _main() -> None:
         loop = asyncio.get_running_loop()
-        app, _q, host, _s, session, _a = await _arm(loop)
+        app, _q, host, _s, session, admission = await _arm(loop)
         proof = claim_antares_sender_ownership()
-        get_job_executor()
+        bind_job_executor_to_admission(admission)
         stop_exec = AsyncMock()
         with (
             patch(

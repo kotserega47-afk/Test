@@ -14,11 +14,14 @@ After expiry, new destructive phases are not started. Started P6–P9 ops contin
 to be observed; waiters may take a partial and later re-join the same procedure.
 
 TASK-49.C adds **P8** after successful P7. TASK-49.D adds **P9** executor stop
-via ``stop_isolated_job_executor`` (Q-EX2) gated by EX1. Live sender observation
-continues until P8 settles; EX1 may then allow P9 even on structured sender
-partial. Foreign sender ownership refuse skips P9. P9 success is not
-SESSION_TERMINAL / full shutdown; sender remainder is preserved independently.
-Production lifecycle wiring remains blocked (49.B integration gap).
+via ``stop_isolated_job_executor`` (Q-EX2) gated by EX1. A structured live
+sender partial may allow P9 under EX1 **while** sender observation continues on
+the same owner (sender is not declared stopped). Foreign sender ownership
+refuse skips P9. Executor ownership is an admission bind — not thread prefix /
+sender proof. ``deadline_executor_threads`` is a waiter snapshot; the same owner
+keeps observing the started shutdown. P9 success is not SESSION_TERMINAL / full
+shutdown; sender remainder is preserved independently. Production lifecycle
+wiring remains blocked (49.B integration gap).
 """
 
 from __future__ import annotations
@@ -707,10 +710,11 @@ async def wait_p5_accepted_continuation_and_we_items(
 
 
 def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
-    """EX1: whether P9 executor stop is allowed after a settled P8 outcome.
+    """EX1: whether P9 executor stop is allowed given current phase proofs.
 
-    Checks phase **results / identity**, not merely phase numbers or empty
-    joined tuples. Foreign sender ownership refuse never allows P9.
+    Checks admission/owner **identity** for WE/registry (not joined-tuple
+    equality). Structured sender partial (including live_observe) is enough
+    when ownership passed; foreign sender ownership refuse never allows P9.
     """
 
     import automation.worker as worker_mod
@@ -718,6 +722,7 @@ def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
 
     reasons: list[str] = []
     admission = state.session._host.admission  # noqa: SLF001
+    admission_token = id(admission)
     snap = state.session.snapshot()
 
     if admission.state is not AdmissionState.SEALED:
@@ -737,8 +742,8 @@ def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
         reasons.append("ex1_we_not_stop_done")
     elif worker_mod._we_stop_result is None:
         reasons.append("ex1_we_result_missing")
-    elif state.we_joined != worker_mod._we_stop_result:
-        reasons.append("ex1_we_result_mismatch")
+    elif worker_mod._we_stop_admission_token != admission_token:
+        reasons.append("ex1_we_admission_mismatch")
     if _we_unfinished_profiles():
         reasons.append("ex1_we_unfinished")
 
@@ -748,15 +753,21 @@ def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
         reasons.append("ex1_registry_not_wait_done")
     elif not registry_mod._daemon_ops_frozen:
         reasons.append("ex1_registry_not_frozen")
-    elif state.registry_joined != registry_mod._daemon_ops_joined:
-        reasons.append("ex1_registry_result_mismatch")
+    elif registry_mod._daemon_ops_admission_token != admission_token:
+        reasons.append("ex1_registry_admission_mismatch")
 
     if state.last_completed_phase not in (
         DrainPhase.P7_REGISTRY,
         DrainPhase.P8_SENDER,
         DrainPhase.P9_EXECUTOR,
     ):
-        reasons.append("ex1_phase_before_p7_complete")
+        # During live P8 observe, last_completed stays P7 — still valid for EX1.
+        if not (
+            state.p7_started
+            and state.sender_attempted
+            and state.last_completed_phase is DrainPhase.P7_REGISTRY
+        ):
+            reasons.append("ex1_phase_before_p7_complete")
 
     if not state.sender_attempted:
         reasons.append("ex1_sender_not_attempted")
@@ -772,112 +783,133 @@ def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
     return (not reasons, tuple(reasons))
 
 
-async def _run_p9_executor_stop(state: _DrainOwnerState) -> DrainPhasesResult:
-    """Start or rejoin the single P9 executor stop under this drain owner."""
+def _apply_executor_snapshot(
+    state: _DrainOwnerState, outcome: JobExecutorStopResult
+) -> None:
+    """Publish executor diagnostics without declaring owner terminal."""
 
-    session = state.session
+    state.executor_phase = outcome
+    state.executor_ok = outcome.ok
+    state.executor_reason = outcome.reason
+    state.executor_stopped = outcome.stopped
+    state.executor_attempted = bool(state.executor_attempted or outcome.attempted)
+    rem = [
+        r
+        for r in state.remainder
+        if r
+        not in (
+            "p9_skipped",
+            "ex1_deadline_before_p9",
+            "deadline_executor_threads",
+            "executor_stopping",
+        )
+    ]
+    if not outcome.ownership_ok and outcome.reason:
+        if "p9_skipped" not in rem:
+            rem.append("p9_skipped")
+        if outcome.reason not in rem:
+            rem.append(str(outcome.reason))
+        state.p9_skipped = True
+    elif not outcome.ok:
+        if outcome.reason and outcome.reason not in rem:
+            rem.append(str(outcome.reason))
+        if outcome.stopping and not outcome.stopped:
+            if "executor_stopping" not in rem:
+                rem.append("executor_stopping")
+    if outcome.ok and outcome.stopped:
+        state.last_completed_phase = DrainPhase.P9_EXECUTOR
+        rem = [
+            r
+            for r in rem
+            if r
+            not in (
+                "deadline_executor_threads",
+                "executor_stopping",
+                "deadline_before_executor_shutdown",
+            )
+        ]
+    state.remainder = rem
+    state.pulse()
+
+
+async def _drive_p9_executor_stop(state: _DrainOwnerState) -> JobExecutorStopResult:
+    """Start (if needed) and observe the single P9 stop under this drain owner.
+
+    A ``deadline_executor_threads`` snapshot is **not** owner-terminal: the same
+    owner continues observing the already-started shutdown with ``timeout=None``
+    (no second shutdown, no new drain deadline).
+    """
+
+    admission = state.session._host.admission  # noqa: SLF001
+    import core.job_dispatch as job_dispatch
+
+    already_shutdown = bool(job_dispatch._SHUTDOWN_CALLED)
     state.p9_started = True
     state.executor_attempted = True
     state.pulse()
 
-    remaining = _remaining_from_session(session)
-    # stop_isolated_job_executor observes already-started shutdown when
-    # remaining is 0; only refuse *starting* a new shutdown when budget is gone
-    # and shutdown has not been called yet (handled inside the API + gate here).
-    import core.job_dispatch as job_dispatch
+    remaining = _remaining_from_session(state.session)
 
-    if remaining <= 0 and not job_dispatch._SHUTDOWN_CALLED:
+    if remaining <= 0 and not already_shutdown:
+        # New destructive P9 start refused after drain budget expiry.
         state.p9_skipped = True
         rem = list(state.remainder)
         for token in ("drain_deadline_passed", "p9_skipped", "ex1_deadline_before_p9"):
             if token not in rem:
                 rem.append(token)
         state.remainder = rem
-        state.executor_ok = False
-        state.executor_reason = "deadline_before_executor_shutdown"
-        state.executor_stopped = False
-        state.pulse()
-        result = state.build_partial_result()
-        state.result = result
-        return result
+        outcome = JobExecutorStopResult(
+            ok=False,
+            reason="deadline_before_executor_shutdown",
+            attempted=True,
+            shutdown_called=False,
+            recreate_refused=False,
+            stopping=False,
+            stopped=False,
+            executor_was_absent=False,
+            executor_object_id=job_dispatch._EXECUTOR_OBJECT_ID,
+            owner_admission_token=job_dispatch._OWNER_ADMISSION_TOKEN,
+            ownership_ok=True,
+            live_thread_names=(),
+            live_thread_count=0,
+            error_type=None,
+            error_text=None,
+        )
+        _apply_executor_snapshot(state, outcome)
+        return outcome
 
-    outcome = await stop_isolated_job_executor(timeout=max(0.0, remaining))
-    state.executor_phase = outcome
-    state.executor_ok = outcome.ok
-    state.executor_reason = outcome.reason
-    state.executor_stopped = outcome.stopped
-    state.executor_attempted = outcome.attempted
-    state.pulse()
-
-    # Preserve sender remainder independently of executor outcome.
-    rem = [r for r in state.remainder if r not in ("p9_skipped", "ex1_deadline_before_p9")]
-    if not outcome.ok:
-        if outcome.reason and outcome.reason not in rem:
-            rem.append(str(outcome.reason))
-        if outcome.stopping and not outcome.stopped:
-            if "executor_stopping" not in rem:
-                rem.append("executor_stopping")
-    state.remainder = rem
-
-    if outcome.ok and outcome.stopped:
-        state.last_completed_phase = DrainPhase.P9_EXECUTOR
-    state.pulse()
-    result = state.build_partial_result()
-    state.result = result
-    return result
-
-
-async def _finalize_after_sender(
-    state: _DrainOwnerState,
-    *,
-    sender_kind: str,
-) -> DrainPhasesResult:
-    """After P8 settles: optionally run P9 under EX1 on the same owner.
-
-    Live sender observation already finished before this call. Partial sender
-    (boundary) may still allow P9 when EX1 gates hold; foreign ownership refuse
-    skips P9. P9 success is not SESSION_TERMINAL.
-    """
-
-    if sender_kind == "success":
-        state.last_completed_phase = DrainPhase.P8_SENDER
-        # Clear transient observe markers; keep any non-sender remainder empty.
-        state.remainder = [
-            r
-            for r in state.remainder
-            if r not in ("sender_partial", "sender_boundary", "sender_refused")
-        ]
-    elif sender_kind == "boundary":
-        if state.last_completed_phase not in (
-            DrainPhase.P7_REGISTRY,
-            DrainPhase.P8_SENDER,
-        ):
-            state.last_completed_phase = DrainPhase.P7_REGISTRY
-        rem = list(state.remainder)
-        if "sender_partial" not in rem:
-            rem.append("sender_partial")
-        if "sender_boundary" not in rem:
-            rem.append("sender_boundary")
-        state.remainder = rem
+    # First call may use remaining waiter budget; already-started observes with
+    # the same budget slice then continues without a new deadline if partial.
+    if already_shutdown:
+        first_timeout: float | None = (max(0.0, remaining) if remaining > 0 else None)
     else:
-        # final_refuse
-        if state.last_completed_phase not in (
-            DrainPhase.P7_REGISTRY,
-            DrainPhase.P8_SENDER,
-        ):
-            state.last_completed_phase = DrainPhase.P7_REGISTRY
-        rem = list(state.remainder)
-        if "sender_refused" not in rem:
-            rem.append("sender_refused")
-        state.remainder = rem
+        first_timeout = max(0.0, remaining)
+    outcome = await stop_isolated_job_executor(
+        admission=admission, timeout=first_timeout
+    )
+    _apply_executor_snapshot(state, outcome)
 
-    state.sender_observing = False
-    state.pulse()
+    if outcome.stopped or not outcome.ownership_ok:
+        return outcome
 
-    if not state.include_p9:
-        result = state.build_partial_result()
-        state.result = result
-        return result
+    if outcome.reason == "deadline_before_executor_shutdown":
+        return outcome
+
+    if outcome.stopping and not outcome.stopped:
+        # Keep observing the same shutdown; no new budget / no second shutdown.
+        outcome = await stop_isolated_job_executor(admission=admission, timeout=None)
+        _apply_executor_snapshot(state, outcome)
+    return outcome
+
+
+async def _kick_p9_if_allowed(state: _DrainOwnerState) -> asyncio.Task | None:
+    """Start P9 under EX1 when allowed; returns the owner P9 task if created."""
+
+    if not state.include_p9 or state.p9_skipped:
+        return None
+    existing = getattr(state, "_p9_task", None)
+    if existing is not None:
+        return existing
 
     allow, skip_reasons = _evaluate_ex1(state)
     if not allow:
@@ -890,29 +922,90 @@ async def _finalize_after_sender(
                 rem.append(token)
         state.remainder = rem
         state.pulse()
-        result = state.build_partial_result()
-        state.result = result
-        return result
+        return None
+
+    import core.job_dispatch as job_dispatch
 
     if not state.session._may_start_new_destructive_phases():  # noqa: SLF001
-        # Budget gone before P9 start — do not begin executor shutdown.
-        # If a prior waiter already started P9 on this process, observe below.
-        import core.job_dispatch as job_dispatch
+        if not (job_dispatch._SHUTDOWN_CALLED or state.p9_started):
+            state.p9_skipped = True
+            rem = list(state.remainder)
+            for token in (
+                "drain_deadline_passed",
+                "p9_skipped",
+                "ex1_deadline_before_p9",
+            ):
+                if token not in rem:
+                    rem.append(token)
+            state.remainder = rem
+            state.pulse()
+            return None
 
-        if job_dispatch._SHUTDOWN_CALLED or state.p9_started:
-            return await _run_p9_executor_stop(state)
-        state.p9_skipped = True
+    task = asyncio.create_task(
+        _drive_p9_executor_stop(state), name="antares-drain-p9-owner"
+    )
+    state._p9_task = task  # noqa: SLF001
+    return task
+
+
+async def _finalize_after_sender(
+    state: _DrainOwnerState,
+    *,
+    sender_kind: str,
+    p9_task: asyncio.Task | None,
+) -> DrainPhasesResult:
+    """After P8 settles: join any P9 task; keep sender remainder independent."""
+
+    if sender_kind == "success":
+        if state.last_completed_phase is not DrainPhase.P9_EXECUTOR:
+            state.last_completed_phase = DrainPhase.P8_SENDER
+        state.remainder = [
+            r
+            for r in state.remainder
+            if r not in ("sender_partial", "sender_boundary", "sender_refused")
+        ]
+        state.sender_observing = False
+    elif sender_kind == "boundary":
+        if state.last_completed_phase not in (
+            DrainPhase.P7_REGISTRY,
+            DrainPhase.P8_SENDER,
+            DrainPhase.P9_EXECUTOR,
+        ):
+            state.last_completed_phase = DrainPhase.P7_REGISTRY
         rem = list(state.remainder)
-        for token in ("drain_deadline_passed", "p9_skipped", "ex1_deadline_before_p9"):
-            if token not in rem:
-                rem.append(token)
+        if "sender_partial" not in rem:
+            rem.append("sender_partial")
+        if "sender_boundary" not in rem:
+            rem.append("sender_boundary")
         state.remainder = rem
-        state.pulse()
-        result = state.build_partial_result()
-        state.result = result
-        return result
+        state.sender_observing = False
+    else:
+        if state.last_completed_phase not in (
+            DrainPhase.P7_REGISTRY,
+            DrainPhase.P8_SENDER,
+            DrainPhase.P9_EXECUTOR,
+        ):
+            state.last_completed_phase = DrainPhase.P7_REGISTRY
+        rem = list(state.remainder)
+        if "sender_refused" not in rem:
+            rem.append("sender_refused")
+        state.remainder = rem
+        state.sender_observing = False
+    state.pulse()
 
-    return await _run_p9_executor_stop(state)
+    if state.include_p9:
+        task = p9_task or await _kick_p9_if_allowed(state)
+        if task is not None:
+            await task
+        elif not state.p9_skipped and not state.p9_started:
+            # Kick may have skipped; ensure remainder recorded.
+            pass
+        if state.executor_stopped:
+            state.last_completed_phase = DrainPhase.P9_EXECUTOR
+
+    result = state.build_partial_result()
+    state.result = result
+    return result
 
 
 async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
@@ -1040,18 +1133,27 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         outcome = await stop_isolated_sender(proof, timeout=remaining)
         _record_sender_outcome(state, outcome)
         state.pulse()
+        p9_task: asyncio.Task | None = None
 
         while True:
             kind = _classify_sender_outcome(outcome)
             if kind == "success":
-                return await _finalize_after_sender(state, sender_kind="success")
+                return await _finalize_after_sender(
+                    state, sender_kind="success", p9_task=p9_task
+                )
 
             if kind == "live_observe":
-                # Keep the same owner/session observing the already-started stop.
-                # Do not cache a terminal result; waiters/rejoin see late completion.
-                # EX1/P9 wait until sender observation settles (preserve live observe).
+                # Keep observing sender; EX1 may start P9 under the same owner
+                # without waiting for sender observation to finish.
                 state.sender_observing = True
+                rem = list(state.remainder)
+                if "sender_partial" not in rem:
+                    rem.append("sender_partial")
+                state.remainder = rem
                 state.pulse()
+                kicked = await _kick_p9_if_allowed(state)
+                if kicked is not None:
+                    p9_task = kicked
                 outcome = await _continue_sender_stop(
                     state,
                     proof=proof,
@@ -1062,10 +1164,14 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
                 continue
 
             if kind == "boundary":
-                return await _finalize_after_sender(state, sender_kind="boundary")
+                return await _finalize_after_sender(
+                    state, sender_kind="boundary", p9_task=p9_task
+                )
 
             # final_refuse — structured terminal refuse (not SESSION_TERMINAL).
-            return await _finalize_after_sender(state, sender_kind="final_refuse")
+            return await _finalize_after_sender(
+                state, sender_kind="final_refuse", p9_task=p9_task
+            )
     except BaseException as exc:
         if not isinstance(exc, asyncio.CancelledError):
             if state.error is None:

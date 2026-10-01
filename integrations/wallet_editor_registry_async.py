@@ -41,6 +41,7 @@ _daemon_ops_lock = threading.Lock()
 _daemon_ops_frozen = False
 _daemon_ops_wait_done = False
 _daemon_ops_joined: tuple[str, ...] = ()
+_daemon_ops_admission_token: int | None = None
 _daemon_ops: dict[str, "_RegistryDaemonOp"] = {}
 
 
@@ -424,11 +425,13 @@ def _reset_registry_daemon_ops_for_tests() -> None:
     """Test-only: clear process-local daemon accounting. Not a production API."""
 
     global _daemon_ops_frozen, _daemon_ops_wait_done, _daemon_ops_joined
+    global _daemon_ops_admission_token
     with _daemon_ops_lock:
         _daemon_ops.clear()
         _daemon_ops_frozen = False
         _daemon_ops_wait_done = False
         _daemon_ops_joined = ()
+        _daemon_ops_admission_token = None
 
 
 def schedule_registry_append(
@@ -533,6 +536,7 @@ async def wait_isolated_registry_daemon_ops(
     """
 
     global _daemon_ops_frozen, _daemon_ops_wait_done, _daemon_ops_joined
+    global _daemon_ops_admission_token
     from modules.antares.work_admission import AdmissionState, bound_admission
 
     if bound_admission() is not admission:
@@ -553,6 +557,8 @@ async def wait_isolated_registry_daemon_ops(
 
     with _daemon_ops_lock:
         if _daemon_ops_wait_done:
+            if _daemon_ops_admission_token not in (None, id(admission)):
+                _raise_daemon_stop("registry wait bound to another admission")
             return _daemon_ops_joined
         _daemon_ops_frozen = True
         snapshot = list(_daemon_ops.values())
@@ -603,4 +609,5 @@ async def wait_isolated_registry_daemon_ops(
                 _daemon_ops.pop(run_id, None)
         _daemon_ops_wait_done = True
         _daemon_ops_joined = tuple(sorted(joined))
+        _daemon_ops_admission_token = id(admission)
         return _daemon_ops_joined

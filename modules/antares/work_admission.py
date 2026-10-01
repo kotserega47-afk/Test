@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import Future
 from dataclasses import dataclass
 
-from core.job_dispatch import get_job_executor
+from core.job_dispatch import bind_job_executor_to_admission
 from core.job_runner import Actor, request_job
 from modules.antares.auto_enable_continuation import (
     AutoEnableContinuationRecord,
@@ -238,7 +238,7 @@ class WorkAdmission:
         force_rules_sync: bool = False,
     ) -> AdmissionAccepted | AdmissionRejected:
         return self.submit_if_open(
-            get_job_executor(),
+            bind_job_executor_to_admission(self),
             request_job,
             job_type,
             actor,

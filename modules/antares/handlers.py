@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.job_dispatch import get_job_executor
+from core.job_dispatch import bind_job_executor_to_admission
 from core.job_runner import Actor, get_status
 from core.lock_status import get_lock_status_for_job_types
 from core.tg_command_dispatch import guard_or_deny, run_job_async
@@ -148,7 +148,7 @@ async def _admit_direct_work(
     submit_fn = submit or admission.submit_if_open
     try:
         outcome = submit_fn(
-            get_job_executor(),
+            bind_job_executor_to_admission(admission),
             fn,
             *args,
             **(kwargs or {}),
