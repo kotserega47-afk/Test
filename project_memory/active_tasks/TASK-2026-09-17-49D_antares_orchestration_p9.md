@@ -6,7 +6,7 @@
 | **Статус** | open (implemented; awaiting GPT review; Draft PR; docs-close / merge не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.C open / implemented ACCEPTED @ `38a1b4d…` (P8); TASK-49.B OPEN (integration blocker); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) §4.4 EX1 |
-| **PR** | Draft (pending create) `feat/task-2026-09-17-49d-antares-orchestration-p9`, base `feat/task-2026-09-17-49c-antares-orchestration-p8` @ `38a1b4d…` |
+| **PR** | Draft [#57](https://github.com/deniskotdavydov1991-wq/Test/pull/57) `feat/task-2026-09-17-49d-antares-orchestration-p9`, base `feat/task-2026-09-17-49c-antares-orchestration-p8` @ `38a1b4d…` |
 | **Риск** | medium: false P9 without EX1 / cancel Accepted Futures / recreate executor / block PTB loop / second owner |
 
 **Implemented scope for GPT review:** production `stop_isolated_job_executor` (Q-EX2) + EX1-gated P9 on the same session-bound drain owner (`run_owner_drain_p4_to_p9`). **TASK-49.D не закрыта**: production lifecycle/P10 wiring / SESSION_TERMINAL / full shutdown **не** выполнены. **49.B и 49.C остаются OPEN** (integration blocker сохранён). **49.E не начат**. Ready/merge/retarget/deploy **нет**.
@@ -81,7 +81,7 @@ Required order: pre-init intake/host → session → P4–P7 → P8 → **P9** �
 | Кто | Что |
 |-----|-----|
 | Cursor | cwd `C:\Users\sereg\PycharmProjects\Test_antares_orchestration_49d`; clean runtime tree @ **Test SHA** `95d083a038efd5f3a9b84603ff973dae04d4420e`; Python **3.12.10** |
-| Commands | `py -3.12 -m pytest tests/unit/test_job_executor_stop_49d.py tests/unit/test_antares_shutdown_orchestration_49d.py -q --tb=line` → **19 passed**; set A (49d+49c+49b+sender_full_stop) → **85 passed**; isolated `tests/unit/test_antares_sender_ownership.py` → **10 passed** (do not sum; O9 requires isolation from telegram_bot import) |
+| Commands | `py -3.12 -m pytest tests/unit/test_job_executor_stop_49d.py tests/unit/test_antares_shutdown_orchestration_49d.py -q --tb=line` → **19 passed**; set A (49d+49c+49b+sender_full_stop) → **85 passed**; deeper related (49b+WE+registry+49S+49A) → **98 passed**; isolated `tests/unit/test_antares_sender_ownership.py` → **10 passed** (do not sum; O9 requires isolation from telegram_bot import) |
 | GPT | pending review |
 
 ---
