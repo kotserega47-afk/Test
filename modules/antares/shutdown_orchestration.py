@@ -1,4 +1,4 @@
-"""TASK-49.B/C: post-OPEN drain orchestration P4–P8 (Q-HLP1 sibling module).
+"""TASK-49.B/C/D: post-OPEN drain orchestration P4–P9 (Q-HLP1 sibling module).
 
 Layout (Q-HLP1): **separate module** under ``modules.antares``, not inlined into
 ``run_ptb_lifecycle``. ``ShutdownSession`` / ``ShutdownSessionHost`` remain the
@@ -10,21 +10,15 @@ callers never start a second orchestration for the same session.
 Deadline snapshot vs owner completion: expiry publishes a **waiter-side** partial
 without caching a terminal owner error. The same owner keeps observing late
 producer proof and already-accepted work; no new ``shutdown_deadline`` is issued.
-After expiry, new destructive phases are not started. Started P6–P8 ops continue
+After expiry, new destructive phases are not started. Started P6–P9 ops continue
 to be observed; waiters may take a partial and later re-join the same procedure.
 
-TASK-49.C adds **P8** after successful P7: ``stop_isolated_sender`` with an
-explicit ``sender_ownership_proof`` (from ``AntaresBootPrefix.sender_ownership``
-or equivalent claim). Proof identity is checked before side effects and before
-returning any cached result. Remaining budget comes only from
-``session.shutdown_deadline``. A live TASK-48 partial (already-requested loop
-stop / ``LOOP_STOPPING``) is **not** cached as owner-terminal: the same owner
-keeps observing until STOPPED, a boundary soft-stop (would need a new
-destructive phase after expiry), or a final refuse. Structured
-``SenderPhaseSnapshot`` is retained for EX1/P9. P8 success is not
-SESSION_TERMINAL / full shutdown; P9 executor remains 49.D. Production
-lifecycle wiring that would bypass P9 is **not** enabled; the 49.B integration
-blocker remains.
+TASK-49.C adds **P8** after successful P7. TASK-49.D adds **P9** executor stop
+via ``stop_isolated_job_executor`` (Q-EX2) gated by EX1. Live sender observation
+continues until P8 settles; EX1 may then allow P9 even on structured sender
+partial. Foreign sender ownership refuse skips P9. P9 success is not
+SESSION_TERMINAL / full shutdown; sender remainder is preserved independently.
+Production lifecycle wiring remains blocked (49.B integration gap).
 """
 
 from __future__ import annotations
@@ -41,13 +35,14 @@ from automation.worker import (
     stop_isolated_profile_workers,
 )
 from core.antares_sender_ownership import validate_antares_sender_ownership
+from core.job_dispatch import JobExecutorStopResult, stop_isolated_job_executor
 from integrations.wallet_editor_registry_async import (
     IsolatedRegistryDaemonStopError,
     wait_isolated_registry_daemon_ops,
 )
 from modules.antares.ptb_producer_wait import PtbProducerWaitHost
 from modules.antares.shutdown_session import ShutdownSession
-from modules.antares.work_admission import WorkAdmission
+from modules.antares.work_admission import AdmissionState, WorkAdmission
 
 
 class DrainOrchestrationError(RuntimeError):
@@ -64,6 +59,7 @@ class DrainPhase(enum.Enum):
     P6_WE_STOP = "p6_we_stop"
     P7_REGISTRY = "p7_registry"
     P8_SENDER = "p8_sender"
+    P9_EXECUTOR = "p9_executor"
 
 
 @dataclass(frozen=True)
@@ -126,6 +122,13 @@ class DrainPhasesResult:
     sender_full_resource_stopped: bool = False
     sender_lifecycle_state: str | None = None
     sender_phase: SenderPhaseSnapshot | None = None
+    # P9 / executor diagnostics.
+    executor_attempted: bool = False
+    executor_ok: bool | None = None
+    executor_reason: str | None = None
+    executor_stopped: bool = False
+    executor_phase: JobExecutorStopResult | None = None
+    p9_skipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,7 @@ class DrainOrchestrationSnapshot:
     p6_started: bool
     p7_started: bool
     p8_started: bool
+    p9_started: bool
     we_joined: tuple[str, ...]
     registry_joined: tuple[str, ...]
     remainder: tuple[str, ...]
@@ -153,6 +157,13 @@ class DrainOrchestrationSnapshot:
     sender_observing: bool
     sender_phase: SenderPhaseSnapshot | None
     include_p8: bool
+    include_p9: bool
+    executor_attempted: bool
+    executor_ok: bool | None
+    executor_reason: str | None
+    executor_stopped: bool
+    executor_phase: JobExecutorStopResult | None
+    p9_skipped: bool
 
 
 @dataclass
@@ -162,6 +173,7 @@ class _DrainOwnerState:
     session: ShutdownSession
     producer_wait: PtbProducerWaitHost
     include_p8: bool = False
+    include_p9: bool = False
     sender_ownership_proof: object | None = None
     owner_task: asyncio.Task[Any] | None = None
     waiters: list[asyncio.Future] = field(default_factory=list)
@@ -175,6 +187,7 @@ class _DrainOwnerState:
     p6_started: bool = False
     p7_started: bool = False
     p8_started: bool = False
+    p9_started: bool = False
     sender_attempted: bool = False
     sender_ok: bool | None = None
     sender_reason: str | None = None
@@ -182,6 +195,12 @@ class _DrainOwnerState:
     sender_lifecycle_state: str | None = None
     sender_phase: SenderPhaseSnapshot | None = None
     sender_observing: bool = False
+    executor_attempted: bool = False
+    executor_ok: bool | None = None
+    executor_reason: str | None = None
+    executor_stopped: bool = False
+    executor_phase: JobExecutorStopResult | None = None
+    p9_skipped: bool = False
     # Waiters that already received a deadline partial for this procedure.
     deadline_partial_delivered: set[int] = field(default_factory=set)
     # One deadline snapshot wave for waiters present when expiry is first noticed;
@@ -198,6 +217,7 @@ class _DrainOwnerState:
             DrainPhase.P6_WE_STOP,
             DrainPhase.P7_REGISTRY,
             DrainPhase.P8_SENDER,
+            DrainPhase.P9_EXECUTOR,
         )
         rem = list(self.remainder)
         if self.session._drain_deadline_passed():  # noqa: SLF001
@@ -218,6 +238,12 @@ class _DrainOwnerState:
             sender_full_resource_stopped=self.sender_full_resource_stopped,
             sender_lifecycle_state=self.sender_lifecycle_state,
             sender_phase=self.sender_phase,
+            executor_attempted=self.executor_attempted,
+            executor_ok=self.executor_ok,
+            executor_reason=self.executor_reason,
+            executor_stopped=self.executor_stopped,
+            executor_phase=self.executor_phase,
+            p9_skipped=self.p9_skipped,
         )
 
 
@@ -310,6 +336,7 @@ def observe_drain_orchestration(
         p6_started=state.p6_started,
         p7_started=state.p7_started,
         p8_started=state.p8_started,
+        p9_started=state.p9_started,
         we_joined=state.we_joined,
         registry_joined=state.registry_joined,
         remainder=snap.remainder,
@@ -328,6 +355,13 @@ def observe_drain_orchestration(
         sender_observing=state.sender_observing,
         sender_phase=state.sender_phase,
         include_p8=state.include_p8,
+        include_p9=state.include_p9,
+        executor_attempted=state.executor_attempted,
+        executor_ok=state.executor_ok,
+        executor_reason=state.executor_reason,
+        executor_stopped=state.executor_stopped,
+        executor_phase=state.executor_phase,
+        p9_skipped=state.p9_skipped,
     )
 
 
@@ -672,6 +706,215 @@ async def wait_p5_accepted_continuation_and_we_items(
             await asyncio.sleep(0)
 
 
+def _evaluate_ex1(state: _DrainOwnerState) -> tuple[bool, tuple[str, ...]]:
+    """EX1: whether P9 executor stop is allowed after a settled P8 outcome.
+
+    Checks phase **results / identity**, not merely phase numbers or empty
+    joined tuples. Foreign sender ownership refuse never allows P9.
+    """
+
+    import automation.worker as worker_mod
+    import integrations.wallet_editor_registry_async as registry_mod
+
+    reasons: list[str] = []
+    admission = state.session._host.admission  # noqa: SLF001
+    snap = state.session.snapshot()
+
+    if admission.state is not AdmissionState.SEALED:
+        reasons.append("ex1_admission_not_sealed")
+
+    if not snap.producers_complete_attested:
+        reasons.append("ex1_producers_incomplete")
+
+    if admission.accepted_executor_futures():
+        reasons.append("ex1_accepted_futures_remain")
+    if _continuation_states(admission):
+        reasons.append("ex1_continuations_remain")
+
+    if not state.p6_started:
+        reasons.append("ex1_we_not_started")
+    elif not worker_mod._profile_workers_stop_done:
+        reasons.append("ex1_we_not_stop_done")
+    elif worker_mod._we_stop_result is None:
+        reasons.append("ex1_we_result_missing")
+    elif state.we_joined != worker_mod._we_stop_result:
+        reasons.append("ex1_we_result_mismatch")
+    if _we_unfinished_profiles():
+        reasons.append("ex1_we_unfinished")
+
+    if not state.p7_started:
+        reasons.append("ex1_registry_not_started")
+    elif not registry_mod._daemon_ops_wait_done:
+        reasons.append("ex1_registry_not_wait_done")
+    elif not registry_mod._daemon_ops_frozen:
+        reasons.append("ex1_registry_not_frozen")
+    elif state.registry_joined != registry_mod._daemon_ops_joined:
+        reasons.append("ex1_registry_result_mismatch")
+
+    if state.last_completed_phase not in (
+        DrainPhase.P7_REGISTRY,
+        DrainPhase.P8_SENDER,
+        DrainPhase.P9_EXECUTOR,
+    ):
+        reasons.append("ex1_phase_before_p7_complete")
+
+    if not state.sender_attempted:
+        reasons.append("ex1_sender_not_attempted")
+    if state.sender_phase is None:
+        reasons.append("ex1_sender_phase_missing")
+    else:
+        reason = state.sender_reason or state.sender_phase.reason
+        if (not state.sender_phase.ownership_passed) or (
+            reason is not None and str(reason).startswith("ownership_")
+        ):
+            reasons.append("ex1_sender_ownership_refused")
+
+    return (not reasons, tuple(reasons))
+
+
+async def _run_p9_executor_stop(state: _DrainOwnerState) -> DrainPhasesResult:
+    """Start or rejoin the single P9 executor stop under this drain owner."""
+
+    session = state.session
+    state.p9_started = True
+    state.executor_attempted = True
+    state.pulse()
+
+    remaining = _remaining_from_session(session)
+    # stop_isolated_job_executor observes already-started shutdown when
+    # remaining is 0; only refuse *starting* a new shutdown when budget is gone
+    # and shutdown has not been called yet (handled inside the API + gate here).
+    import core.job_dispatch as job_dispatch
+
+    if remaining <= 0 and not job_dispatch._SHUTDOWN_CALLED:
+        state.p9_skipped = True
+        rem = list(state.remainder)
+        for token in ("drain_deadline_passed", "p9_skipped", "ex1_deadline_before_p9"):
+            if token not in rem:
+                rem.append(token)
+        state.remainder = rem
+        state.executor_ok = False
+        state.executor_reason = "deadline_before_executor_shutdown"
+        state.executor_stopped = False
+        state.pulse()
+        result = state.build_partial_result()
+        state.result = result
+        return result
+
+    outcome = await stop_isolated_job_executor(timeout=max(0.0, remaining))
+    state.executor_phase = outcome
+    state.executor_ok = outcome.ok
+    state.executor_reason = outcome.reason
+    state.executor_stopped = outcome.stopped
+    state.executor_attempted = outcome.attempted
+    state.pulse()
+
+    # Preserve sender remainder independently of executor outcome.
+    rem = [r for r in state.remainder if r not in ("p9_skipped", "ex1_deadline_before_p9")]
+    if not outcome.ok:
+        if outcome.reason and outcome.reason not in rem:
+            rem.append(str(outcome.reason))
+        if outcome.stopping and not outcome.stopped:
+            if "executor_stopping" not in rem:
+                rem.append("executor_stopping")
+    state.remainder = rem
+
+    if outcome.ok and outcome.stopped:
+        state.last_completed_phase = DrainPhase.P9_EXECUTOR
+    state.pulse()
+    result = state.build_partial_result()
+    state.result = result
+    return result
+
+
+async def _finalize_after_sender(
+    state: _DrainOwnerState,
+    *,
+    sender_kind: str,
+) -> DrainPhasesResult:
+    """After P8 settles: optionally run P9 under EX1 on the same owner.
+
+    Live sender observation already finished before this call. Partial sender
+    (boundary) may still allow P9 when EX1 gates hold; foreign ownership refuse
+    skips P9. P9 success is not SESSION_TERMINAL.
+    """
+
+    if sender_kind == "success":
+        state.last_completed_phase = DrainPhase.P8_SENDER
+        # Clear transient observe markers; keep any non-sender remainder empty.
+        state.remainder = [
+            r
+            for r in state.remainder
+            if r not in ("sender_partial", "sender_boundary", "sender_refused")
+        ]
+    elif sender_kind == "boundary":
+        if state.last_completed_phase not in (
+            DrainPhase.P7_REGISTRY,
+            DrainPhase.P8_SENDER,
+        ):
+            state.last_completed_phase = DrainPhase.P7_REGISTRY
+        rem = list(state.remainder)
+        if "sender_partial" not in rem:
+            rem.append("sender_partial")
+        if "sender_boundary" not in rem:
+            rem.append("sender_boundary")
+        state.remainder = rem
+    else:
+        # final_refuse
+        if state.last_completed_phase not in (
+            DrainPhase.P7_REGISTRY,
+            DrainPhase.P8_SENDER,
+        ):
+            state.last_completed_phase = DrainPhase.P7_REGISTRY
+        rem = list(state.remainder)
+        if "sender_refused" not in rem:
+            rem.append("sender_refused")
+        state.remainder = rem
+
+    state.sender_observing = False
+    state.pulse()
+
+    if not state.include_p9:
+        result = state.build_partial_result()
+        state.result = result
+        return result
+
+    allow, skip_reasons = _evaluate_ex1(state)
+    if not allow:
+        state.p9_skipped = True
+        rem = list(state.remainder)
+        if "p9_skipped" not in rem:
+            rem.append("p9_skipped")
+        for token in skip_reasons:
+            if token not in rem:
+                rem.append(token)
+        state.remainder = rem
+        state.pulse()
+        result = state.build_partial_result()
+        state.result = result
+        return result
+
+    if not state.session._may_start_new_destructive_phases():  # noqa: SLF001
+        # Budget gone before P9 start — do not begin executor shutdown.
+        # If a prior waiter already started P9 on this process, observe below.
+        import core.job_dispatch as job_dispatch
+
+        if job_dispatch._SHUTDOWN_CALLED or state.p9_started:
+            return await _run_p9_executor_stop(state)
+        state.p9_skipped = True
+        rem = list(state.remainder)
+        for token in ("drain_deadline_passed", "p9_skipped", "ex1_deadline_before_p9"):
+            if token not in rem:
+                rem.append(token)
+        state.remainder = rem
+        state.pulse()
+        result = state.build_partial_result()
+        state.result = result
+        return result
+
+    return await _run_p9_executor_stop(state)
+
+
 async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
     """Single owner sequence; waiter cancel / deadline partial must not stop this."""
 
@@ -801,31 +1044,12 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
         while True:
             kind = _classify_sender_outcome(outcome)
             if kind == "success":
-                state.sender_observing = False
-                state.last_completed_phase = DrainPhase.P8_SENDER
-                state.remainder = []
-                result = DrainPhasesResult(
-                    producers_attested=True,
-                    p5_complete=True,
-                    we_joined=state.we_joined,
-                    registry_joined=state.registry_joined,
-                    last_completed_phase=DrainPhase.P8_SENDER,
-                    remainder=(),
-                    sender_attempted=True,
-                    sender_ok=True,
-                    sender_reason=None,
-                    sender_full_resource_stopped=True,
-                    sender_lifecycle_state=getattr(
-                        outcome, "lifecycle_state", "STOPPED"
-                    ),
-                    sender_phase=state.sender_phase,
-                )
-                state.result = result
-                return result
+                return await _finalize_after_sender(state, sender_kind="success")
 
             if kind == "live_observe":
                 # Keep the same owner/session observing the already-started stop.
                 # Do not cache a terminal result; waiters/rejoin see late completion.
+                # EX1/P9 wait until sender observation settles (preserve live observe).
                 state.sender_observing = True
                 state.pulse()
                 outcome = await _continue_sender_stop(
@@ -838,27 +1062,10 @@ async def _owner_drain_p4_to_p7(state: _DrainOwnerState) -> DrainPhasesResult:
                 continue
 
             if kind == "boundary":
-                # Would need a new destructive phase after budget expiry — soft stop.
-                state.sender_observing = False
-                rem = ["sender_partial", "sender_boundary"]
-                if getattr(outcome, "reason", None):
-                    rem.append(str(outcome.reason))
-                state.remainder = rem
-                state.last_completed_phase = DrainPhase.P7_REGISTRY
-                result = state.build_partial_result()
-                state.result = result
-                return result
+                return await _finalize_after_sender(state, sender_kind="boundary")
 
             # final_refuse — structured terminal refuse (not SESSION_TERMINAL).
-            state.sender_observing = False
-            rem = ["sender_refused"]
-            if getattr(outcome, "reason", None):
-                rem.append(str(outcome.reason))
-            state.remainder = rem
-            state.last_completed_phase = DrainPhase.P7_REGISTRY
-            result = state.build_partial_result()
-            state.result = result
-            return result
+            return await _finalize_after_sender(state, sender_kind="final_refuse")
     except BaseException as exc:
         if not isinstance(exc, asyncio.CancelledError):
             if state.error is None:
@@ -874,9 +1081,16 @@ async def _join_owner_drain(
     producer_wait: PtbProducerWaitHost,
     *,
     include_p8: bool,
+    include_p9: bool = False,
     sender_ownership_proof: object | None,
 ) -> DrainPhasesResult:
     """Shared join/observe for the single session-bound drain owner Task."""
+
+    if include_p9 and not include_p8:
+        raise DrainOrchestrationError(
+            "P9 requires P8 include mode",
+            remainder=("include_p9_requires_p8",),
+        )
 
     _assert_drain_identity(session, producer_wait)
     loop = asyncio.get_running_loop()
@@ -887,6 +1101,7 @@ async def _join_owner_drain(
             session=session,
             producer_wait=producer_wait,
             include_p8=include_p8,
+            include_p9=include_p9,
         )
         setattr(session, _ATTR, state)
     else:
@@ -904,6 +1119,11 @@ async def _join_owner_drain(
             raise DrainOrchestrationError(
                 "drain owner already armed with a different P8 include mode",
                 remainder=("include_p8_mismatch",),
+            )
+        if state.include_p9 != include_p9:
+            raise DrainOrchestrationError(
+                "drain owner already armed with a different P9 include mode",
+                remainder=("include_p9_mismatch",),
             )
 
     # Proof identity before side effects and before any cached outcome.
@@ -926,9 +1146,15 @@ async def _join_owner_drain(
                 return state.result
             if state.error is not None:
                 raise state.error
+        if include_p9:
+            owner_name = "antares-drain-p4-p9-owner"
+        elif include_p8:
+            owner_name = "antares-drain-p4-p8-owner"
+        else:
+            owner_name = "antares-drain-p4-p7-owner"
         state.owner_task = loop.create_task(
             _owner_drain_p4_to_p7(state),
-            name="antares-drain-p4-p8-owner" if include_p8 else "antares-drain-p4-p7-owner",
+            name=owner_name,
         )
 
         def _on_owner_done(task: asyncio.Task) -> None:
@@ -1056,12 +1282,13 @@ async def run_owner_drain_p4_to_p7(
     session: ShutdownSession,
     producer_wait: PtbProducerWaitHost,
 ) -> DrainPhasesResult:
-    """Join/observe the single P4→P7 owner Task bound to ``session`` (no P8)."""
+    """Join/observe the single P4→P7 owner Task bound to ``session`` (no P8/P9)."""
 
     return await _join_owner_drain(
         session,
         producer_wait,
         include_p8=False,
+        include_p9=False,
         sender_ownership_proof=None,
     )
 
@@ -1077,13 +1304,38 @@ async def run_owner_drain_p4_to_p8(
     ``sender_ownership_proof`` must be the exact process attestation (e.g.
     ``AntaresBootPrefix.sender_ownership``). Identity is checked before side
     effects and before cached results. Timeout is only the remaining
-    ``session.shutdown_deadline``. P8 success is not SESSION_TERMINAL; P9 is 49.D.
+    ``session.shutdown_deadline``. P8 success is not SESSION_TERMINAL; use
+    ``run_owner_drain_p4_to_p9`` for EX1/P9.
     """
 
     return await _join_owner_drain(
         session,
         producer_wait,
         include_p8=True,
+        include_p9=False,
+        sender_ownership_proof=sender_ownership_proof,
+    )
+
+
+async def run_owner_drain_p4_to_p9(
+    session: ShutdownSession,
+    producer_wait: PtbProducerWaitHost,
+    *,
+    sender_ownership_proof: object,
+) -> DrainPhasesResult:
+    """Join/observe P4→P9 under one session-bound owner (EX1-gated executor stop).
+
+    After P8 settles (success or structured partial), EX1 may allow P9 via
+    ``stop_isolated_job_executor`` (Q-EX2). Foreign sender ownership refuse
+    skips P9. P9 success is not SESSION_TERMINAL / full shutdown; sender
+    remainder is preserved independently of the executor outcome.
+    """
+
+    return await _join_owner_drain(
+        session,
+        producer_wait,
+        include_p8=True,
+        include_p9=True,
         sender_ownership_proof=sender_ownership_proof,
     )
 
