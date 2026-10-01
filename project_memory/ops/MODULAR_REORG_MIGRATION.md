@@ -65,7 +65,7 @@ Merge/deploy **намеренно** не входят в TASK-01…25. Merge в 
 | TASK-49 shutdown orchestration | docs-контракт **принят**; Draft PR #52; GPT ACCEPTED `237b20e…`; docs-close `e331c677…`; base TASK-48 @ `90cda7c…`; runtime **нет**; helper **не** wired; gates открыты; **не выпущено** | GPT docs/diff; pytest GPT не запускал; CI PASS не заявлять | **нет** |
 | TASK-49.S shutdown session | owner-session primitive **принят**; Draft PR #53; GPT ACCEPTED `f7dd672…`; docs-close; Test SHA `bab80586…`; base TASK-49 @ `e331c677…`; **не** wired to lifecycle; Q-PTB1 открыт; **не выпущено** | Cursor **33** / **132** / **19** (3.12.10); GPT код/diff/тесты, pytest **не** запускал | **нет** |
 | TASK-49.A Q-PTB1 producer wait | producer-wait + intake seal CODE; Draft PR base 49.S @ `1f078eb…`; **не** wired to lifecycle/P5–P9; Q-PTB1 **OPEN** until GPT accept; **не выпущено** | Cursor — см. карточку 49.A | **нет** |
-| Следующая | **49.C in review** (P8; base 49.B open/blocker) → 49.D–E (**не** автостарт) | — |
+| Следующая | **49.C open** (P8 implemented GPT ACCEPTED; base 49.B open/blocker; no lifecycle wire) → 49.D–E (**не** автостарт) | — |
 | Модули | 17 CommandHandler + Document.ALL в `modules.antares`; ingest owner `document_ingest` | — | **нет** (не в prod) |
 | Mixed gate | явный `antares`/`raccoon`/`wr` на `scheduler.py` — отказ **после выката** TASK-03 | — | **нет** |
 | Serve / polling isolated | **нет** | sandbox TASK-24 без live getUpdates | **нет** |
