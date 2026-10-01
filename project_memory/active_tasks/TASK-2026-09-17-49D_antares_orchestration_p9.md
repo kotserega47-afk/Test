@@ -3,19 +3,19 @@
 | Мета | Значение |
 |------|----------|
 | **ID** | TASK-2026-09-17-49D |
-| **Статус** | open (implemented; awaiting GPT review; Draft PR; docs-close / merge не выполнены) |
+| **Статус** | open (implemented + review-fix; awaiting GPT re-review; Draft PR; docs-close / merge не выполнены) |
 | **KB версия** | v1.10 |
 | **Связанные артефакты** | TASK-49.C open / implemented ACCEPTED @ `38a1b4d…` (P8); TASK-49.B OPEN (integration blocker); [SHUTDOWN_ORCHESTRATION.md](../ops/MODULAR_REORG_ANTARES_SHUTDOWN_ORCHESTRATION.md) §4.4 EX1 |
 | **PR** | Draft [#57](https://github.com/deniskotdavydov1991-wq/Test/pull/57) `feat/task-2026-09-17-49d-antares-orchestration-p9`, base `feat/task-2026-09-17-49c-antares-orchestration-p8` @ `38a1b4d…` |
 | **Риск** | medium: false P9 without EX1 / cancel Accepted Futures / recreate executor / block PTB loop / second owner |
 
-**Implemented scope for GPT review:** production `stop_isolated_job_executor` (Q-EX2) + EX1-gated P9 on the same session-bound drain owner (`run_owner_drain_p4_to_p9`). **TASK-49.D не закрыта**: production lifecycle/P10 wiring / SESSION_TERMINAL / full shutdown **не** выполнены. **49.B и 49.C остаются OPEN** (integration blocker сохранён). **49.E не начат**. Ready/merge/retarget/deploy **нет**.
+**Implemented scope for GPT re-review:** production `stop_isolated_job_executor` (Q-EX2) + admission-bound ownership + EX1-gated P9 on the same session-bound drain owner (`run_owner_drain_p4_to_p9`), including live-sender EX1 and non-terminal P9 observe. **TASK-49.D не закрыта**. **49.B и 49.C остаются OPEN**. **49.E не начат**. Ready/merge/retarget/deploy **нет**.
 
 ### Разграничение
 
 | Слой | Состояние |
 |------|-----------|
-| Реализовано | `stop_isolated_job_executor` (Q-EX2); `JobExecutorStopResult`; permanent stop / no recreate; no `cancel_futures=True`; async thread observe; EX1 gates; `run_owner_drain_p4_to_p9`; partial sender → P9; foreign ownership → P9 skip; sender remainder preserved; P9 ≠ SESSION_TERMINAL |
+| Реализовано | `bind_job_executor_to_admission` / ownership refuse before shutdown+cache; `stop_isolated_job_executor(admission=…)`; truthful absent (`shutdown_called=False`, `recreate_refused`); EX1 live sender partial → P9 while sender observing; `deadline_executor_threads` non-terminal + same-owner continue; WE/registry EX1 by admission token |
 | Подключено к `run_ptb_lifecycle` | **нет** (49.B integration blocker) |
 | Выпущено | **нет** |
 
@@ -23,33 +23,28 @@
 
 ## Q-EX2 (this slice)
 
-**Decision:** public production API name is **`stop_isolated_job_executor`**.
+**Decision:** public production API name is **`stop_isolated_job_executor(*, admission, timeout=…)`**.
 
-- Targets the process-global Antares pool (`thread_name_prefix="job-worker"`) only.
-- Does not create an executor only to shut it down.
-- Does not use `_reset_job_executor_for_tests`.
-- Does not cancel Accepted Futures (`cancel_futures=True` forbidden).
-- Does not block the PTB loop with `shutdown(wait=True)` / thread join on the caller loop.
-- After stop, `get_job_executor` refuses recreate (`JobExecutorStoppedError`).
-- Does not touch the default/foreign executor; mixed gate unchanged.
-- Ownership: isolated Antares job-worker pool only — no claim over a general/default TPE.
+- Ownership identity = exact `id(WorkAdmission)` from `bind_job_executor_to_admission` (not thread prefix, not sender proof).
+- Mixed / foreign / unproven → refuse **before** shutdown and **before** cached terminal.
+- Absent stop: `shutdown_called=False`, `recreate_refused=True`; identity/`was_absent` preserved after releasing live refs.
+- No create-to-stop; no test reset; no `cancel_futures=True`; no PTB-loop `wait=True`.
+- Default/foreign TPE untouched.
 
 ---
 
 ## EX1 (P9 admission)
 
-P9 allowed only when all proven (phase results / identity, not empty tuples alone):
+P9 allowed when proven (admission-bound identity, not joined-tuple equality):
 
 1. admission SEALED  
 2. truthful `producers_complete` attested  
 3. Accepted Futures empty + continuations empty  
-4. WE stop owner-session success (`_profile_workers_stop_done` + result identity)  
-5. registry wait success (`_daemon_ops_wait_done` + freeze + joined identity)  
-6. sender attempted + structured `SenderPhaseSnapshot`  
+4. WE stop done + `_we_stop_admission_token == id(admission)`  
+5. registry wait done/frozen + `_daemon_ops_admission_token == id(admission)`  
+6. sender attempted + structured `SenderPhaseSnapshot` (incl. live_observe)
 
-Partial sender (structured boundary) **allows** P9 under EX1. Foreign ownership refuse / incomplete WE/registry / missing sender outcome → P9 skipped, no executor side effects. EX1 does **not** override the session deadline gate for *starting* P9; already-started executor stop is observed separately.
-
-Same owner continues past P8 settle into P9 — no second owner; live sender observe preserved until settle; sender not declared complete merely to unlock P9.
+Live structured sender partial **may start P9** under EX1 while sender observation continues on the same owner (sender not declared stopped). Foreign ownership / incomplete WE/registry / missing sender → skip, no side effects. Deadline still gates *starting* P9; already-started stop is observed without a new deadline/second shutdown. Cancel of all waiters does not stop owner observation.
 
 ---
 
@@ -59,17 +54,15 @@ Same owner continues past P8 settle into P9 — no second owner; live sender obs
 2. Producer host not installed pre-initialize.  
 3. `run_ptb_lifecycle` does not call P4–P9.  
 
-Required order: pre-init intake/host → session → P4–P7 → P8 → **P9** → cleanup (P10 = 49.E / later).
-
 ---
 
 ## Success Criteria
 
-- [x] Q-EX2 public API + production stop semantics
-- [x] EX1-gated P9 on session-bound owner
-- [x] Target regressions (full EX1, missing gates, partial/foreign, deadline, concurrent, absent, no-resurrect)
-- [x] Cursor pytest on verified runtime SHA `95d083a…`
-- [ ] GPT review
+- [x] Q-EX2 public API + production stop semantics + admission ownership
+- [x] EX1-gated P9 incl. live sender partial
+- [x] Non-terminal P9 deadline snapshot + same-owner rejoin
+- [x] Target regressions on Test SHA `ec9cd63…`
+- [ ] GPT re-review
 - [ ] lifecycle wiring
 - [ ] docs-close / merge/deploy
 - [ ] 49.E
@@ -80,9 +73,9 @@ Required order: pre-init intake/host → session → P4–P7 → P8 → **P9** �
 
 | Кто | Что |
 |-----|-----|
-| Cursor | cwd `C:\Users\sereg\PycharmProjects\Test_antares_orchestration_49d`; clean runtime tree @ **Test SHA** `95d083a038efd5f3a9b84603ff973dae04d4420e`; Python **3.12.10** |
-| Commands | `py -3.12 -m pytest tests/unit/test_job_executor_stop_49d.py tests/unit/test_antares_shutdown_orchestration_49d.py -q --tb=line` → **19 passed**; set A (49d+49c+49b+sender_full_stop) → **85 passed**; deeper related (49b+WE+registry+49S+49A) → **98 passed**; isolated `tests/unit/test_antares_sender_ownership.py` → **10 passed** (do not sum; O9 requires isolation from telegram_bot import) |
-| GPT | pending review |
+| Cursor | cwd `C:\Users\sereg\PycharmProjects\Test_antares_orchestration_49d`; clean runtime tree @ **Test SHA** `ec9cd63d2e9650ce980ee4ff8debb06ff8c3885e`; Python **3.12.10** |
+| Commands | target `test_job_executor_stop_49d` + `test_antares_shutdown_orchestration_49d` → **23 passed**; set A (49d+49c+49b+sender_full_stop) → **89 passed**; deeper related (49b+WE+registry+49S+49A) → **98 passed**; schedules admission → **31 passed**; isolated ownership → **10 passed** (do not sum; O9 isolation) |
+| GPT | pending re-review |
 
 ---
 
