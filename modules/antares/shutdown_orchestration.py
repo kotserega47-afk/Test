@@ -507,6 +507,7 @@ def _classify_sender_outcome(outcome: Any) -> str:
     reason = getattr(outcome, "reason", None) or ""
     state = str(getattr(outcome, "lifecycle_state", "") or "")
     loop_stop_requested = bool(getattr(outcome, "loop_stop_requested", False))
+    intake_sealed = bool(getattr(outcome, "intake_sealed", False))
     ownership_passed = bool(getattr(outcome, "ownership_passed", True))
     ptb_passed = bool(getattr(outcome, "ptb_passed", True))
 
@@ -516,50 +517,63 @@ def _classify_sender_outcome(outcome: Any) -> str:
         return "final_refuse"
     if reason.startswith("lifecycle_refuses"):
         return "final_refuse"
+    if reason.startswith("observe_refused"):
+        return "boundary"
 
-    # Already-started stop: observe without scheduling new destructive work.
+    # Already-started stop: observe only with proof the destructive action began.
     if reason in (
         "deadline_loop_stopped",
         "deadline_thread_join",
         "loop_still_running",
     ):
-        if loop_stop_requested or state == "LOOP_STOPPING":
+        if loop_stop_requested:
             return "live_observe"
-    if state in ("HTTP_STOPPING", "LOOP_STOPPING", "DRAINING"):
-        return "live_observe"
-    if state == "HTTP_STOPPED" and loop_stop_requested:
-        return "live_observe"
-    if state == "WORKER_STOPPED" and bool(getattr(outcome, "worker_stopped", False)):
-        # Worker done; HTTP not started — continuing would start HTTP (destructive).
         return "boundary"
 
-    # Would require a *new* destructive phase after budget expiry / refuse-to-start.
+    if state == "LOOP_STOPPING":
+        return "live_observe" if loop_stop_requested else "boundary"
+
+    if state == "HTTP_STOPPING" or reason in (
+        "deadline_http_close",
+        "http_close_incomplete",
+    ):
+        return "live_observe"
+
+    if state == "HTTP_STOPPED":
+        return "live_observe" if loop_stop_requested else "boundary"
+
+    if state == "DRAINING" and (
+        intake_sealed
+        or reason
+        in (
+            "deadline_s1_pending",
+            "deadline_queue_join",
+            "deadline_s3_active",
+            "deadline_worker_status",
+            "deadline_worker_terminal",
+            "deadline_sentinel_ack",
+        )
+    ):
+        return "live_observe"
+
+    if state == "WORKER_STOPPED" and bool(getattr(outcome, "worker_stopped", False)):
+        # Worker done; continuing would start HTTP (destructive).
+        return "boundary"
+
     if reason in (
         "deadline_before_loop_stop",
         "deadline_before_drain",
         "structural_refused",
+        "drain_not_started",
+        "http_stopped_boundary",
     ) or reason.startswith("deadline_"):
         if reason in ("deadline_loop_stopped", "deadline_thread_join"):
+            return "live_observe" if loop_stop_requested else "boundary"
+        if reason in ("deadline_http_close", "http_close_incomplete"):
             return "live_observe"
         return "boundary"
 
     return "final_refuse"
-
-
-async def _await_started_sender_progress() -> None:
-    """Observe already-requested sender stop signals (no new session deadline)."""
-
-    import integrations.telegram_bot as tg
-
-    # Prefer waiting for loop-stopped; poll thread death without new drain budget.
-    if not tg._loop_stopped.is_set():
-        await asyncio.to_thread(tg._loop_stopped.wait)
-    # Non-blocking join slices until dead or briefly idle.
-    for _ in range(200):
-        if not tg._loop_thread.is_alive():
-            return
-        await asyncio.to_thread(tg._loop_thread.join, 0.05)
-        await asyncio.sleep(0)
 
 
 async def _continue_sender_stop(
@@ -568,19 +582,31 @@ async def _continue_sender_stop(
     proof: object,
     stop_isolated_sender: Any,
 ) -> Any:
-    """Continue/observe the same TASK-48 stop procedure (no second owner session)."""
+    """Continue/observe the same TASK-48 stop procedure (no second owner session).
+
+    Always observes the *current* started phase first (no next destructive step
+    inside that wait). If the phase settles on a between-phase boundary and the
+    session budget still allows new destructive work, resume via
+    ``stop_isolated_sender``; after expiry, return the boundary/failure snapshot.
+    """
+
+    from integrations.telegram_bot import observe_started_sender_stop
 
     remaining = _remaining_from_session(state.session)
-    if remaining > 0:
-        return await stop_isolated_sender(proof, timeout=remaining)
-    # Session budget exhausted: only observe already-started work, then re-enter
-    # stop API with zero timeout so TASK-48 can publish STOPPED without a new
-    # loop.stop schedule when stop was already requested.
     state.sender_observing = True
     state.pulse()
-    await _await_started_sender_progress()
-    state.pulse()
-    return await stop_isolated_sender(proof, timeout=0.0)
+    outcome = await observe_started_sender_stop(
+        proof,
+        timeout=(remaining if remaining > 0 else None),
+    )
+    kind = _classify_sender_outcome(outcome)
+    if kind != "boundary":
+        return outcome
+    remaining = _remaining_from_session(state.session)
+    if remaining <= 0:
+        return outcome
+    # Budget remains: next destructive phase is allowed under the same session.
+    return await stop_isolated_sender(proof, timeout=remaining)
 
 
 def _publish_deadline_wave(state: _DrainOwnerState) -> bool:

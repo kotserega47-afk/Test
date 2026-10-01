@@ -450,9 +450,9 @@ def test_deadline_during_p8_publishes_partial_while_observing() -> None:
             "integrations.telegram_bot.stop_isolated_sender",
             new=stop_mock,
         ), patch(
-            # ControllableClock already past session deadline → observe path.
-            "modules.antares.shutdown_orchestration._await_started_sender_progress",
-            new=AsyncMock(return_value=None),
+            # ControllableClock past session deadline → phase-aware observe path.
+            "integrations.telegram_bot.observe_started_sender_stop",
+            new=AsyncMock(side_effect=_dispatch),
         ):
             d1 = asyncio.create_task(
                 run_owner_drain_p4_to_p8(
@@ -538,7 +538,7 @@ def test_p4_to_p7_unchanged_without_p8() -> None:
 
 
 def test_p8_real_task48_partial_then_late_loop_stop(monkeypatch) -> None:
-    """Real stop_isolated_sender: deadline_loop_stopped then late STOPPED on same owner."""
+    """Real stop path: live LOOP_STOPPING partial, expire session, late STOPPED."""
 
     import integrations.telegram_bot as tg
     from tests.unit.test_telegram_sender_full_stop import (
@@ -583,8 +583,6 @@ def test_p8_real_task48_partial_then_late_loop_stop(monkeypatch) -> None:
                 )
             )
             await reg_started.wait()
-            # Leave enough budget for HTTP close, but short enough that the
-            # held loop-stop wait returns deadline_loop_stopped.
             clk.advance(4.6)
             reg_release.set()
 
@@ -616,27 +614,47 @@ def test_p8_real_task48_partial_then_late_loop_stop(monkeypatch) -> None:
             assert owner is not None and not owner.done()
             assert harness.stop_schedule_count == 1
 
-            # Late completion of the already-requested loop stop (same procedure).
+            # Expire the shared session budget while the started loop-stop lives.
+            clk.advance(1.0)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.may_start_new_destructive_phases is False
+            assert snap.deadline_passed is True
+            assert snap.owner_alive is True
+            assert snap.has_terminal_result is False
+
+            with pytest.raises(DrainOrchestrationError) as ei:
+                await asyncio.wait_for(drain, timeout=5.0)
+            assert "drain_deadline_passed" in str(ei.value.remainder)
+            assert getattr(session, _ATTR).owner_task is owner
+            assert not owner.done()
+
             harness._stop_faked = True
             harness.thread_alive_after_stop = False
             harness.loop_running_after_stop = False
             tg._loop_stopped.set()
 
-            result = await drain
+            result = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=5.0,
+            )
             assert result.last_completed_phase is DrainPhase.P8_SENDER
             assert result.sender_ok is True
             assert result.sender_full_resource_stopped is True
             assert result.sender_phase is not None
             assert result.sender_phase.lifecycle_state == "STOPPED"
             assert result.sender_phase.loop_stop_requested is True
-            assert result.sender_phase.thread_joined is True
             assert getattr(session, _ATTR).owner_task is owner
             assert session.shutdown_deadline == deadline_before
             assert harness.stop_schedule_count == 1
 
-            # Rejoin: cached success; no new deadline / no second destructive stop.
-            again = await run_owner_drain_p4_to_p8(
-                session, host, sender_ownership_proof=proof
+            again = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=2.0,
             )
             assert again.last_completed_phase is DrainPhase.P8_SENDER
             assert again.sender_full_resource_stopped is True
@@ -649,4 +667,285 @@ def test_p8_real_task48_partial_then_late_loop_stop(monkeypatch) -> None:
     try:
         asyncio.run(_main())
     finally:
+        _ensure_worker_alive()
+
+
+def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None:
+    """DRAINING after deadline observes worker only — no HTTP / no loop.stop."""
+
+    import time as time_mod
+
+    import integrations.telegram_bot as tg
+    from tests.unit.test_telegram_sender_full_stop import (
+        LoopStopHarness,
+        _install_fake_bot,
+        _ensure_worker_alive,
+        without_killing_sender_loop,
+    )
+
+    _ensure_worker_alive()
+    _install_fake_bot(monkeypatch)
+    proof = claim_antares_sender_ownership()
+
+    harness = LoopStopHarness()
+    hold_terminal = asyncio.Event()
+    entered_terminal = asyncio.Event()
+    real_obs = tg._observe_worker_terminal_after_sentinel
+
+    async def _held_terminal(deadline, **kwargs):
+        entered_terminal.set()
+        remaining = max(0.01, float(deadline) - time_mod.monotonic())
+        try:
+            await asyncio.wait_for(hold_terminal.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            return tg._snapshot_drain_fields(
+                ok=False,
+                reason="deadline_worker_terminal",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                queue_drained=True,
+                sentinel_submitted=True,
+                worker_terminal=False,
+            )
+        return await real_obs(time_mod.monotonic() + 5.0, **kwargs)
+
+    monkeypatch.setattr(tg, "_observe_worker_terminal_after_sentinel", _held_terminal)
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(80_000.0)
+        clk.bind_loop()
+        app, _q, host, _s, session, _admission = await _arm(
+            loop, clk, drain_timeout=5.0
+        )
+        deadline_before = session.shutdown_deadline
+        reg_started = asyncio.Event()
+        reg_release = asyncio.Event()
+
+        async def _hold_reg(adm, *, producers_complete, timeout=None):
+            reg_started.set()
+            await reg_release.wait()
+            return ()
+
+        with without_killing_sender_loop(monkeypatch, harness), patch(
+            "modules.antares.shutdown_orchestration.wait_isolated_registry_daemon_ops",
+            new=_hold_reg,
+        ):
+            drain = asyncio.create_task(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await reg_started.wait()
+            clk.advance(4.7)
+            reg_release.set()
+
+            for _ in range(500):
+                if entered_terminal.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            assert entered_terminal.is_set()
+
+            partial_seen = False
+            for _ in range(500):
+                snap = observe_drain_orchestration(session)
+                if (
+                    snap is not None
+                    and snap.sender_attempted
+                    and snap.sender_phase is not None
+                    and snap.sender_phase.lifecycle_state == "DRAINING"
+                    and snap.sender_phase.intake_sealed is True
+                    and not snap.has_terminal_result
+                    and snap.owner_alive
+                ):
+                    partial_seen = True
+                    break
+                await asyncio.sleep(0.02)
+            assert partial_seen is True
+            owner = getattr(session, _ATTR).owner_task
+            assert owner is not None and not owner.done()
+
+            clk.advance(1.0)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.may_start_new_destructive_phases is False
+
+            with pytest.raises(DrainOrchestrationError):
+                await asyncio.wait_for(drain, timeout=5.0)
+            assert not owner.done()
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+
+            hold_terminal.set()
+            result = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=5.0,
+            )
+            assert result.sender_attempted is True
+            assert result.sender_full_resource_stopped is False
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+            assert "sender_boundary" in result.remainder
+            assert result.sender_phase is not None
+            assert result.sender_phase.lifecycle_state == "WORKER_STOPPED"
+            assert result.sender_phase.worker_stopped is True
+            assert result.sender_phase.http_stopped is False
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+            assert session.shutdown_deadline == deadline_before
+            assert session.terminal_result() is None
+
+        await _shutdown_app(app)
+
+    try:
+        asyncio.run(_main())
+    finally:
+        hold_terminal.set()
+        _ensure_worker_alive()
+
+
+def test_p8_real_task48_http_stopping_late_http_after_deadline(monkeypatch) -> None:
+    """HTTP_STOPPING after deadline observes HTTP only — no loop.stop."""
+
+    import time as time_mod
+
+    import integrations.telegram_bot as tg
+    from tests.unit.test_telegram_sender_full_stop import (
+        LoopStopHarness,
+        _force_worker_stopped,
+        _install_fake_bot,
+        _ensure_worker_alive,
+        without_killing_sender_loop,
+    )
+
+    _ensure_worker_alive()
+    bot, _gu, _gen = _install_fake_bot(monkeypatch)
+    proof = claim_antares_sender_ownership()
+    _force_worker_stopped(proof)
+
+    hold = threading.Event()
+    owner_started = threading.Event()
+    harness = LoopStopHarness()
+    real_await = tg._await_http_phase_terminal
+    first_claimer_partial = {"done": False}
+
+    async def _owner_until_released() -> bool:
+        # Keep HTTP_STOPPING alive past the caller waiter partial.
+        owner_started.set()
+        while not hold.is_set():
+            await asyncio.sleep(0.02)
+        success = bool(
+            await tg._http_close_on_sender_loop(time_mod.monotonic() + 30.0)
+        )
+        with tg._lifecycle_lock:
+            tg._publish_http_phase_locked(success=success)
+        return success
+
+    async def _spy_await(deadline, *, cancel_owner_on_deadline):
+        if cancel_owner_on_deadline and not first_claimer_partial["done"]:
+            assert await asyncio.to_thread(owner_started.wait, 3.0)
+            first_claimer_partial["done"] = True
+            return tg._snapshot_full_stop_fields(
+                ok=False,
+                reason="deadline_http_close",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                worker_terminal=True,
+            )
+        return await real_await(
+            deadline, cancel_owner_on_deadline=cancel_owner_on_deadline
+        )
+
+    monkeypatch.setattr(tg, "_owner_http_close_session", _owner_until_released)
+    monkeypatch.setattr(tg, "_await_http_phase_terminal", _spy_await)
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(90_000.0)
+        clk.bind_loop()
+        app, _q, host, _s, session, _admission = await _arm(
+            loop, clk, drain_timeout=5.0
+        )
+        deadline_before = session.shutdown_deadline
+        reg_started = asyncio.Event()
+        reg_release = asyncio.Event()
+
+        async def _hold_reg(adm, *, producers_complete, timeout=None):
+            reg_started.set()
+            await reg_release.wait()
+            return ()
+
+        with without_killing_sender_loop(monkeypatch, harness), patch(
+            "modules.antares.shutdown_orchestration.wait_isolated_registry_daemon_ops",
+            new=_hold_reg,
+        ):
+            drain = asyncio.create_task(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await reg_started.wait()
+            clk.advance(4.0)
+            reg_release.set()
+
+            partial_seen = False
+            for _ in range(500):
+                snap = observe_drain_orchestration(session)
+                if (
+                    snap is not None
+                    and snap.sender_attempted
+                    and snap.sender_phase is not None
+                    and snap.sender_phase.lifecycle_state == "HTTP_STOPPING"
+                    and snap.sender_reason == "deadline_http_close"
+                    and not snap.has_terminal_result
+                    and snap.owner_alive
+                ):
+                    partial_seen = True
+                    break
+                await asyncio.sleep(0.02)
+            assert partial_seen is True
+            owner = getattr(session, _ATTR).owner_task
+            assert owner is not None and not owner.done()
+            assert tg._lifecycle_state == "HTTP_STOPPING"
+
+            clk.advance(2.0)
+            snap = observe_drain_orchestration(session)
+            assert snap is not None
+            assert snap.may_start_new_destructive_phases is False
+
+            with pytest.raises(DrainOrchestrationError):
+                await asyncio.wait_for(drain, timeout=5.0)
+            assert not owner.done()
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+
+            hold.set()
+            result = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=5.0,
+            )
+            assert result.sender_attempted is True
+            assert result.sender_full_resource_stopped is False
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+            assert "sender_boundary" in result.remainder
+            assert result.sender_phase is not None
+            assert result.sender_phase.lifecycle_state == "HTTP_STOPPED"
+            assert result.sender_phase.http_stopped is True
+            assert result.sender_phase.loop_stop_requested is False
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+            assert session.shutdown_deadline == deadline_before
+            assert session.terminal_result() is None
+
+        await _shutdown_app(app)
+
+    try:
+        asyncio.run(_main())
+    finally:
+        hold.set()
         _ensure_worker_alive()

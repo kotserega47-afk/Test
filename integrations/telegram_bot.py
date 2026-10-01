@@ -1999,6 +1999,164 @@ async def _run_http_close_phase(
         cancel_owner_on_deadline=claimed,
     )
 
+
+async def _wait_event_unbounded(event: threading.Event) -> None:
+    """Wait for a threading.Event without a monotonic deadline (phase observe)."""
+
+    while not event.is_set():
+        await asyncio.sleep(0.02)
+
+
+async def observe_started_sender_stop(
+    ownership_proof: object,
+    *,
+    timeout: float | None = None,
+) -> SenderFullStopResult:
+    """Observe an already-started stop phase; never start the next destructive one.
+
+    Phase rules (session budget may already be exhausted):
+
+    - ``DRAINING`` with intake sealed / drain owner: observe worker drain only
+      (no HTTP claim).
+    - ``HTTP_STOPPING``: observe the in-flight HTTP close only (no ``loop.stop``).
+    - ``LOOP_STOPPING`` with ``_loop_stop_requested``: observe loop/thread only.
+    - Lifecycle label alone without proof the destructive action started → soft
+      boundary snapshot (no wait on ``_loop_stopped`` / HTTP / drain).
+
+    ``timeout`` bounds the wait. ``None`` waits until the current phase publishes.
+    """
+
+    ownership = validate_antares_sender_ownership(ownership_proof)
+    if not ownership.ok:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason=f"ownership_{ownership.reason or 'refused'}",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+        )
+
+    with _lifecycle_lock:
+        state = _lifecycle_state
+        sealed = _intake_sealed
+        owner = _drain_owner_proof
+        loop_stop_req = _loop_stop_requested
+
+    if owner is not None and ownership_proof is not owner:
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="ownership_foreign_during_observe",
+            ownership_passed=False,
+            ptb_passed=False,
+            structural_passed=False,
+            worker_terminal=state in _POST_WORKER_STATES,
+        )
+
+    if state == "STOPPED":
+        return _snapshot_full_stop_fields(
+            ok=True,
+            reason=None,
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    if state == "DRAINING":
+        if not sealed:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="drain_not_started",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+            )
+        # Observe drain only — never claim HTTP.
+        if timeout is None:
+            while True:
+                drain = await drain_and_stop_sender_worker(
+                    ownership_proof,
+                    timeout=1.0,
+                )
+                if drain.worker_stopped or drain.lifecycle_state != "DRAINING":
+                    return _full_stop_from_drain(drain)
+        drain = await drain_and_stop_sender_worker(
+            ownership_proof,
+            timeout=max(0.0, float(timeout)),
+        )
+        return _full_stop_from_drain(drain)
+
+    if state == "HTTP_STOPPING":
+        # Claim already happened; observe HTTP terminal only — no loop.stop.
+        if timeout is None:
+            await _wait_event_unbounded(_http_phase_ack)
+            http_result = await _await_http_phase_terminal(
+                time.monotonic() + 0.05,
+                cancel_owner_on_deadline=False,
+            )
+        else:
+            http_result = await _await_http_phase_terminal(
+                time.monotonic() + max(0.0, float(timeout)),
+                cancel_owner_on_deadline=False,
+            )
+        if http_result is not None:
+            return http_result
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="http_stopped_boundary",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    if state == "LOOP_STOPPING":
+        if not loop_stop_req:
+            return _snapshot_full_stop_fields(
+                ok=False,
+                reason="deadline_before_loop_stop",
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                worker_terminal=True,
+            )
+        if timeout is None:
+            await _wait_event_unbounded(_loop_stopped)
+            deadline = time.monotonic() + 5.0
+        else:
+            deadline = time.monotonic() + max(0.0, float(timeout))
+        return await _run_loop_stop_phase(ownership_proof, deadline)
+
+    if state == "HTTP_STOPPED":
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="deadline_before_loop_stop",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    if state == "WORKER_STOPPED":
+        return _snapshot_full_stop_fields(
+            ok=False,
+            reason="deadline_before_drain",
+            ownership_passed=True,
+            ptb_passed=True,
+            structural_passed=True,
+            worker_terminal=True,
+        )
+
+    # RUNNING / unknown: label alone is not proof a destructive phase started.
+    return _snapshot_full_stop_fields(
+        ok=False,
+        reason=f"observe_refused:{state}",
+        ownership_passed=True,
+        ptb_passed=True,
+        structural_passed=True,
+    )
+
+
 async def _run_loop_stop_phase(
     ownership_proof: object,
     deadline: float,
