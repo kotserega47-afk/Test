@@ -520,6 +520,15 @@ def _classify_sender_outcome(outcome: Any) -> str:
     if reason.startswith("observe_refused"):
         return "boundary"
 
+    # Terminal drain failures — even when lifecycle label stays DRAINING.
+    if reason in (
+        "unexpected_dead_worker",
+        "active_s3_nonzero",
+    ) or reason.startswith("sentinel_submit_failed"):
+        return "final_refuse"
+    if reason.startswith("sentinel_ack_inconsistent"):
+        return "final_refuse"
+
     # Already-started stop: observe only with proof the destructive action began.
     if reason in (
         "deadline_loop_stopped",
@@ -541,6 +550,9 @@ def _classify_sender_outcome(outcome: Any) -> str:
 
     if state == "HTTP_STOPPED":
         return "live_observe" if loop_stop_requested else "boundary"
+
+    if reason == "drain_boundary_sentinel_not_requested":
+        return "boundary"
 
     if state == "DRAINING" and (
         intake_sealed

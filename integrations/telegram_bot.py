@@ -2007,6 +2007,196 @@ async def _wait_event_unbounded(event: threading.Event) -> None:
         await asyncio.sleep(0.02)
 
 
+async def _wait_event_until(
+    event: threading.Event,
+    deadline: float | None,
+) -> bool:
+    """Wait for ``event`` until set; ``deadline=None`` waits without budget."""
+
+    if deadline is None:
+        await _wait_event_unbounded(event)
+        return True
+    return await _wait_event(event, deadline)
+
+
+async def _wait_existing_sentinel_ack(deadline: float | None) -> BaseException | None:
+    """Wait for an already-SCHEDULED sentinel ack; never schedules a new put."""
+
+    with _lifecycle_lock:
+        state = _sentinel_state
+        if state == _SENTINEL_ENQUEUED:
+            return None
+        if state == _SENTINEL_FAILED:
+            return _sentinel_failure or RuntimeError("sentinel_put_failed")
+        if state == _SENTINEL_NOT_SUBMITTED:
+            return RuntimeError("sentinel_not_requested")
+        # SCHEDULED: wait only.
+
+    if deadline is None:
+        await _wait_event_unbounded(_sentinel_ack)
+    elif not await _wait_event(_sentinel_ack, deadline):
+        return TimeoutError("deadline_sentinel_ack")
+
+    with _lifecycle_lock:
+        if _sentinel_state == _SENTINEL_ENQUEUED:
+            return None
+        if _sentinel_state == _SENTINEL_FAILED:
+            return _sentinel_failure or RuntimeError("sentinel_put_failed")
+        return RuntimeError(f"sentinel_ack_inconsistent:{_sentinel_state}")
+
+
+async def _observe_draining_phase(
+    ownership_proof: object,
+    *,
+    timeout: float | None,
+) -> SenderFullStopResult:
+    """Observe DRAINING without HTTP claim and without first-sending sentinel.
+
+    Watches already-accepted S1/queue/S3 work. If that work finishes and sentinel
+    was never requested, returns a boundary with the worker still alive. If
+    sentinel is already SCHEDULED/ENQUEUED, waits for its terminal without a
+    new put. Terminal failures (e.g. ``unexpected_dead_worker``) are returned
+    immediately even when the lifecycle label remains ``DRAINING``.
+    """
+
+    _ = ownership_proof  # caller already validated owner identity
+    deadline = (
+        None
+        if timeout is None
+        else (time.monotonic() + max(0.0, float(timeout)))
+    )
+
+    def _drain_partial(
+        *,
+        reason: str,
+        queue_drained: bool = False,
+        sentinel_submitted: bool | None = None,
+        worker_terminal: bool | None = None,
+    ) -> SenderFullStopResult:
+        return _full_stop_from_drain(
+            _snapshot_drain_fields(
+                ok=False,
+                reason=reason,
+                ownership_passed=True,
+                ptb_passed=True,
+                structural_passed=True,
+                queue_drained=queue_drained,
+                sentinel_submitted=sentinel_submitted,
+                worker_terminal=worker_terminal,
+            )
+        )
+
+    if not await _wait_event_until(_s1_idle, deadline):
+        return _drain_partial(reason="deadline_s1_pending")
+
+    run_deadline = (
+        time.monotonic() + 86400.0 if deadline is None else deadline
+    )
+    try:
+        await _run_on_sender_loop(_queue_join_watching_worker, run_deadline)
+    except TimeoutError:
+        return _drain_partial(reason="deadline_queue_join")
+    except RuntimeError as exc:
+        if str(exc) == "unexpected_dead_worker":
+            return _drain_partial(
+                reason="unexpected_dead_worker",
+                worker_terminal=True,
+            )
+        raise
+
+    if not await _wait_event_until(_s3_idle, deadline):
+        return _drain_partial(reason="deadline_s3_active", queue_drained=True)
+
+    with _lifecycle_lock:
+        s3_nonzero = _active_user_sends != 0
+    if s3_nonzero:
+        return _drain_partial(
+            reason="active_s3_nonzero",
+            queue_drained=True,
+        )
+
+    try:
+        status = await _run_on_sender_loop(
+            _worker_status_on_sender_loop,
+            run_deadline,
+        )
+    except TimeoutError:
+        return _drain_partial(reason="deadline_worker_status", queue_drained=True)
+
+    with _lifecycle_lock:
+        sentinel_state = _sentinel_state
+
+    dead = bool(status.get("task_done"))
+    if dead and sentinel_state != _SENTINEL_ENQUEUED:
+        return _drain_partial(
+            reason="unexpected_dead_worker",
+            queue_drained=True,
+            worker_terminal=True,
+        )
+    if dead and sentinel_state == _SENTINEL_ENQUEUED:
+        return _full_stop_from_drain(
+            await _observe_worker_terminal_after_sentinel(
+                run_deadline,
+                ptb_passed=True,
+                structural_passed=True,
+                sentinel_submitted=True,
+            )
+        )
+
+    if sentinel_state == _SENTINEL_NOT_SUBMITTED:
+        # Accepted work drained; first sentinel send would be a new destructive act.
+        return _drain_partial(
+            reason="drain_boundary_sentinel_not_requested",
+            queue_drained=True,
+            sentinel_submitted=False,
+            worker_terminal=False,
+        )
+
+    if sentinel_state == _SENTINEL_FAILED:
+        err = _sentinel_failure or RuntimeError("sentinel_put_failed")
+        return _drain_partial(
+            reason=f"sentinel_submit_failed:{type(err).__name__}",
+            queue_drained=True,
+            sentinel_submitted=False,
+            worker_terminal=False,
+        )
+
+    if sentinel_state == _SENTINEL_SCHEDULED:
+        ack_err = await _wait_existing_sentinel_ack(deadline)
+        if ack_err is not None:
+            if isinstance(ack_err, TimeoutError):
+                return _drain_partial(
+                    reason="deadline_sentinel_ack",
+                    queue_drained=True,
+                    sentinel_submitted=False,
+                    worker_terminal=False,
+                )
+            return _drain_partial(
+                reason=f"sentinel_submit_failed:{type(ack_err).__name__}",
+                queue_drained=True,
+                sentinel_submitted=False,
+                worker_terminal=False,
+            )
+
+    with _lifecycle_lock:
+        if _sentinel_state != _SENTINEL_ENQUEUED:
+            return _drain_partial(
+                reason=f"sentinel_ack_inconsistent:{_sentinel_state}",
+                queue_drained=True,
+                sentinel_submitted=False,
+                worker_terminal=False,
+            )
+
+    return _full_stop_from_drain(
+        await _observe_worker_terminal_after_sentinel(
+            run_deadline,
+            ptb_passed=True,
+            structural_passed=True,
+            sentinel_submitted=True,
+        )
+    )
+
+
 async def observe_started_sender_stop(
     ownership_proof: object,
     *,
@@ -2016,14 +2206,15 @@ async def observe_started_sender_stop(
 
     Phase rules (session budget may already be exhausted):
 
-    - ``DRAINING`` with intake sealed / drain owner: observe worker drain only
-      (no HTTP claim).
+    - ``DRAINING`` with intake sealed / drain owner: observe accepted work and
+      an already-requested sentinel only (never first-send sentinel / no HTTP).
     - ``HTTP_STOPPING``: observe the in-flight HTTP close only (no ``loop.stop``).
     - ``LOOP_STOPPING`` with ``_loop_stop_requested``: observe loop/thread only.
     - Lifecycle label alone without proof the destructive action started → soft
       boundary snapshot (no wait on ``_loop_stopped`` / HTTP / drain).
 
-    ``timeout`` bounds the wait. ``None`` waits until the current phase publishes.
+    ``timeout`` bounds the wait. ``None`` waits until the current phase publishes
+    or a terminal/boundary outcome is known.
     """
 
     ownership = validate_antares_sender_ownership(ownership_proof)
@@ -2071,20 +2262,7 @@ async def observe_started_sender_stop(
                 ptb_passed=True,
                 structural_passed=True,
             )
-        # Observe drain only — never claim HTTP.
-        if timeout is None:
-            while True:
-                drain = await drain_and_stop_sender_worker(
-                    ownership_proof,
-                    timeout=1.0,
-                )
-                if drain.worker_stopped or drain.lifecycle_state != "DRAINING":
-                    return _full_stop_from_drain(drain)
-        drain = await drain_and_stop_sender_worker(
-            ownership_proof,
-            timeout=max(0.0, float(timeout)),
-        )
-        return _full_stop_from_drain(drain)
+        return await _observe_draining_phase(ownership_proof, timeout=timeout)
 
     if state == "HTTP_STOPPING":
         # Claim already happened; observe HTTP terminal only — no loop.stop.

@@ -671,7 +671,7 @@ def test_p8_real_task48_partial_then_late_loop_stop(monkeypatch) -> None:
 
 
 def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None:
-    """DRAINING after deadline observes worker only — no HTTP / no loop.stop."""
+    """Already-enqueued sentinel: late WORKER_STOPPED observed without re-send."""
 
     import time as time_mod
 
@@ -691,6 +691,12 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
     hold_terminal = asyncio.Event()
     entered_terminal = asyncio.Event()
     real_obs = tg._observe_worker_terminal_after_sentinel
+    real_enqueue = tg._enqueue_sentinel_on_loop
+    enqueue_calls = {"n": 0}
+
+    def _counting_enqueue():
+        enqueue_calls["n"] += 1
+        return real_enqueue()
 
     async def _held_terminal(deadline, **kwargs):
         entered_terminal.set()
@@ -711,6 +717,7 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
         return await real_obs(time_mod.monotonic() + 5.0, **kwargs)
 
     monkeypatch.setattr(tg, "_observe_worker_terminal_after_sentinel", _held_terminal)
+    monkeypatch.setattr(tg, "_enqueue_sentinel_on_loop", _counting_enqueue)
 
     async def _main() -> None:
         loop = asyncio.get_running_loop()
@@ -746,6 +753,8 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
                     break
                 await asyncio.sleep(0.02)
             assert entered_terminal.is_set()
+            assert enqueue_calls["n"] == 1
+            assert tg._sentinel_state == tg._SENTINEL_ENQUEUED
 
             partial_seen = False
             for _ in range(500):
@@ -776,6 +785,7 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
             assert not owner.done()
             assert harness.stop_schedule_count == 0
             assert tg._loop_stop_requested is False
+            assert enqueue_calls["n"] == 1
 
             hold_terminal.set()
             result = await asyncio.wait_for(
@@ -792,6 +802,7 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
             assert result.sender_phase.lifecycle_state == "WORKER_STOPPED"
             assert result.sender_phase.worker_stopped is True
             assert result.sender_phase.http_stopped is False
+            assert enqueue_calls["n"] == 1
             assert harness.stop_schedule_count == 0
             assert tg._loop_stop_requested is False
             assert session.shutdown_deadline == deadline_before
@@ -803,6 +814,236 @@ def test_p8_real_task48_draining_late_worker_after_deadline(monkeypatch) -> None
         asyncio.run(_main())
     finally:
         hold_terminal.set()
+        _ensure_worker_alive()
+
+
+def test_p8_draining_deadline_before_sentinel_no_first_send(monkeypatch) -> None:
+    """After deadline, accepted-work idle without sentinel → boundary, worker alive."""
+
+    import integrations.telegram_bot as tg
+    from tests.unit.test_telegram_sender_full_stop import (
+        LoopStopHarness,
+        _install_fake_bot,
+        _ensure_worker_alive,
+        without_killing_sender_loop,
+    )
+
+    _ensure_worker_alive()
+    _install_fake_bot(monkeypatch)
+    proof = claim_antares_sender_ownership()
+
+    harness = LoopStopHarness()
+    real_enqueue = tg._enqueue_sentinel_on_loop
+    enqueue_calls = {"n": 0}
+
+    def _counting_enqueue():
+        enqueue_calls["n"] += 1
+        return real_enqueue()
+
+    monkeypatch.setattr(tg, "_enqueue_sentinel_on_loop", _counting_enqueue)
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(81_000.0)
+        clk.bind_loop()
+        app, _q, host, _s, session, _admission = await _arm(
+            loop, clk, drain_timeout=5.0
+        )
+        reg_started = asyncio.Event()
+        reg_release = asyncio.Event()
+
+        async def _hold_reg(adm, *, producers_complete, timeout=None):
+            reg_started.set()
+            await reg_release.wait()
+            return ()
+
+        with without_killing_sender_loop(monkeypatch, harness), patch(
+            "modules.antares.shutdown_orchestration.wait_isolated_registry_daemon_ops",
+            new=_hold_reg,
+        ):
+            with tg._lifecycle_lock:
+                tg._pending_loop_handoffs = 1
+                tg._s1_idle.clear()
+
+            drain = asyncio.create_task(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await reg_started.wait()
+            clk.advance(4.7)
+            reg_release.set()
+
+            partial_seen = False
+            for _ in range(500):
+                snap = observe_drain_orchestration(session)
+                if (
+                    snap is not None
+                    and snap.sender_attempted
+                    and snap.sender_phase is not None
+                    and snap.sender_reason == "deadline_s1_pending"
+                    and snap.sender_phase.lifecycle_state == "DRAINING"
+                    and not snap.has_terminal_result
+                    and snap.owner_alive
+                ):
+                    partial_seen = True
+                    break
+                await asyncio.sleep(0.02)
+            assert partial_seen is True
+            assert enqueue_calls["n"] == 0
+            assert tg._sentinel_state == tg._SENTINEL_NOT_SUBMITTED
+            owner = getattr(session, _ATTR).owner_task
+            assert owner is not None and not owner.done()
+
+            clk.advance(1.0)
+            assert observe_drain_orchestration(session).may_start_new_destructive_phases is False
+            with pytest.raises(DrainOrchestrationError):
+                await asyncio.wait_for(drain, timeout=5.0)
+            assert not owner.done()
+
+            with tg._lifecycle_lock:
+                tg._pending_loop_handoffs = 0
+                tg._s1_idle.set()
+
+            result = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=5.0,
+            )
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+            assert "sender_boundary" in result.remainder
+            assert result.sender_reason == "drain_boundary_sentinel_not_requested"
+            assert result.sender_full_resource_stopped is False
+            assert result.sender_phase is not None
+            assert result.sender_phase.lifecycle_state == "DRAINING"
+            assert result.sender_phase.worker_stopped is False
+            assert result.sender_phase.http_stopped is False
+            assert enqueue_calls["n"] == 0
+            assert tg._sentinel_state == tg._SENTINEL_NOT_SUBMITTED
+            assert tg._worker_task is not None and not tg._worker_task.done()
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+            assert session.terminal_result() is None
+
+        await _shutdown_app(app)
+
+    try:
+        asyncio.run(_main())
+    finally:
+        with tg._lifecycle_lock:
+            tg._pending_loop_handoffs = 0
+            tg._s1_idle.set()
+        _ensure_worker_alive()
+
+
+def test_p8_draining_unexpected_dead_worker_terminates(monkeypatch) -> None:
+    """unexpected_dead_worker during DRAINING observe returns final remainder bounded."""
+
+    import integrations.telegram_bot as tg
+    from tests.unit.test_telegram_sender_full_stop import (
+        LoopStopHarness,
+        _install_fake_bot,
+        _ensure_worker_alive,
+        without_killing_sender_loop,
+    )
+
+    _ensure_worker_alive()
+    _install_fake_bot(monkeypatch)
+    proof = claim_antares_sender_ownership()
+
+    harness = LoopStopHarness()
+    real_enqueue = tg._enqueue_sentinel_on_loop
+    enqueue_calls = {"n": 0}
+
+    def _counting_enqueue():
+        enqueue_calls["n"] += 1
+        return real_enqueue()
+
+    monkeypatch.setattr(tg, "_enqueue_sentinel_on_loop", _counting_enqueue)
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        clk = ControllableClock(82_000.0)
+        clk.bind_loop()
+        app, _q, host, _s, session, _admission = await _arm(
+            loop, clk, drain_timeout=5.0
+        )
+        reg_started = asyncio.Event()
+        reg_release = asyncio.Event()
+
+        async def _hold_reg(adm, *, producers_complete, timeout=None):
+            reg_started.set()
+            await reg_release.wait()
+            return ()
+
+        with without_killing_sender_loop(monkeypatch, harness), patch(
+            "modules.antares.shutdown_orchestration.wait_isolated_registry_daemon_ops",
+            new=_hold_reg,
+        ):
+            with tg._lifecycle_lock:
+                tg._pending_loop_handoffs = 1
+                tg._s1_idle.clear()
+
+            drain = asyncio.create_task(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                )
+            )
+            await reg_started.wait()
+            clk.advance(4.7)
+            reg_release.set()
+
+            for _ in range(500):
+                snap = observe_drain_orchestration(session)
+                if (
+                    snap is not None
+                    and snap.sender_reason == "deadline_s1_pending"
+                    and snap.owner_alive
+                    and not snap.has_terminal_result
+                ):
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                raise AssertionError("missing deadline_s1_pending partial")
+
+            clk.advance(1.0)
+            with pytest.raises(DrainOrchestrationError):
+                await asyncio.wait_for(drain, timeout=5.0)
+
+            async def _dead_join():
+                raise RuntimeError("unexpected_dead_worker")
+
+            monkeypatch.setattr(tg, "_queue_join_watching_worker", _dead_join)
+            with tg._lifecycle_lock:
+                tg._pending_loop_handoffs = 0
+                tg._s1_idle.set()
+
+            result = await asyncio.wait_for(
+                run_owner_drain_p4_to_p8(
+                    session, host, sender_ownership_proof=proof
+                ),
+                timeout=5.0,
+            )
+            assert result.last_completed_phase is DrainPhase.P7_REGISTRY
+            assert "sender_refused" in result.remainder
+            assert "unexpected_dead_worker" in result.remainder
+            assert result.sender_full_resource_stopped is False
+            assert result.sender_phase is not None
+            assert result.sender_phase.reason == "unexpected_dead_worker"
+            assert enqueue_calls["n"] == 0
+            assert harness.stop_schedule_count == 0
+            assert tg._loop_stop_requested is False
+            assert session.terminal_result() is None
+
+        await _shutdown_app(app)
+
+    try:
+        asyncio.run(_main())
+    finally:
+        with tg._lifecycle_lock:
+            tg._pending_loop_handoffs = 0
+            tg._s1_idle.set()
         _ensure_worker_alive()
 
 
